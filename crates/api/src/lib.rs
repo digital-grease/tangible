@@ -9,6 +9,7 @@
 //! generate.
 
 pub mod health;
+pub mod import;
 pub mod state;
 
 use axum::Router;
@@ -16,6 +17,7 @@ use axum::routing::get;
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 
+pub use import::{ImportCheckpoint, ImportError, ImportOutcome, ImportPipeline, ImportRequest};
 pub use state::ApiState;
 
 /// Base path for the versioned product API.
