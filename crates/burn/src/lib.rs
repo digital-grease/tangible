@@ -7,5 +7,17 @@
 //! A successful tool exit is not verified media, so write and verify stay
 //! separate operations.
 //!
-//! Scaffold status: empty. The `BurnEngine` trait and fake engine arrive with
-//! epic E5; the xorriso adapter with epic E6.
+//! In place: the plan and report types, the `BurnEngine` contract, and a
+//! hardware-free engine backed by a file standing in for the disc. Real
+//! engine adapters follow.
+
+pub mod engine;
+pub mod fake;
+pub mod plan;
+
+pub use engine::{BurnEngine, BurnEvent, CollectingSink, EngineError, EventSink, NullSink};
+pub use fake::{CancelToken, FakeBehaviour, FakeEngine};
+pub use plan::{
+    BlankReport, BlankRequest, BurnPlan, DriveCapabilities, DriveRef, MediumInfo, PlannedInput,
+    PreflightFailure, PreflightReport, VerifyReport, WriteMode, WriteReport,
+};

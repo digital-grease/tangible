@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use tangible_api::ApiState;
 use tangible_db::{Database, DbConfig};
+use tangible_storage::{FilesystemStore, ManifestStore};
 
 use crate::config::{CommonConfig, ServeConfig};
 
@@ -78,7 +79,30 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
             .context("applying migrations at startup")?;
     }
 
-    let state = ApiState::new(database);
+    // Open the library so the read API has something to serve. A storage
+    // failure is fatal here rather than degraded: unlike the database, which
+    // /readyz reports on and which may still be starting, an unopenable
+    // library root is a configuration mistake the operator must see
+    // immediately rather than discover from empty listings.
+    let objects = FilesystemStore::open(&serve.storage_root)
+        .await
+        .with_context(|| {
+            format!(
+                "opening the library root at {}",
+                serve.storage_root.display()
+            )
+        })?;
+    let manifests = ManifestStore::open(objects)
+        .await
+        .context("opening manifest storage")?;
+
+    tracing::info!(
+        storage_root = %serve.storage_root.display(),
+        staging_root = %serve.staging_root.display(),
+        "library opened"
+    );
+
+    let state = ApiState::with_manifests(database, manifests);
 
     let listener = tokio::net::TcpListener::bind(serve.bind)
         .await

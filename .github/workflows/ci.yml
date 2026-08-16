@@ -47,16 +47,33 @@ jobs:
         run: cargo test --workspace --all-features
 
   openapi:
-    name: OpenAPI is current
+    name: OpenAPI and generated client are current
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      - name: Regenerate and diff
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: The document matches the code
         run: |
           cargo run --quiet -p tangible-app -- openapi > /tmp/openapi.json
           if ! diff -u openapi.json /tmp/openapi.json; then
             echo "::error::openapi.json is out of date. Run: just openapi"
+            exit 1
+          fi
+
+      - name: The generated client matches the document
+        run: |
+          pnpm --dir web install --frozen-lockfile
+          pnpm --dir web gen:api
+          if ! git diff --quiet -- web/src/lib/api-types.ts; then
+            git diff -- web/src/lib/api-types.ts
+            echo "::error::web/src/lib/api-types.ts is out of date. Run: just openapi"
             exit 1
           fi
 

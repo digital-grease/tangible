@@ -10,7 +10,8 @@
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "lint": "prettier --check . && eslint .",
     "format": "prettier --write .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "gen:api": "openapi-typescript ../openapi.json -o src/lib/api-types.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -21,6 +22,7 @@
     "eslint": "^9.18.0",
     "eslint-plugin-svelte": "^2.46.0",
     "globals": "^17.11.0",
+    "openapi-typescript": "^7.13.0",
     "prettier": "^3.4.0",
     "prettier-plugin-svelte": "^3.3.0",
     "svelte": "^5.19.0",

@@ -106,10 +106,13 @@ check: lint test openapi-check compose-config
 
 # --- generated artifacts -----------------------------------------------------
 
-# Regenerate the OpenAPI document.
+# Regenerate the OpenAPI document and the frontend types derived from it.
+# One recipe, because a document without matching types is a drift waiting to
+# happen.
 openapi:
     cargo run --quiet -p tangible-app -- openapi > openapi.json
-    @echo "wrote openapi.json"
+    pnpm --dir web gen:api
+    @echo "wrote openapi.json and web/src/lib/api-types.ts"
 
 # Fail if the checked-in document has drifted.
 openapi-check:
@@ -121,7 +124,13 @@ openapi-check:
         echo "openapi.json is out of date. Run: just openapi" >&2
         exit 1
     fi
-    echo "openapi.json is current"
+    pnpm --dir web gen:api
+    if ! git diff --quiet -- web/src/lib/api-types.ts; then
+        echo >&2
+        echo "web/src/lib/api-types.ts is out of date. Run: just openapi" >&2
+        exit 1
+    fi
+    echo "openapi.json and the generated client are current"
 
 # Build the test fixture corpus.
 fixtures:

@@ -16,7 +16,7 @@
           "library"
         ],
         "summary": "List artifacts, newest identifiers last.",
-        "description": "Ordering is by identifier, which for UUIDv7 is creation order.\n\n# Errors\n\n`INVALID_CURSOR` for a cursor this server did not issue, or\n`STORAGE_UNAVAILABLE` if the library cannot be read.",
+        "description": "List artifacts in creation order. Use `next_cursor` from the response to fetch the following page.",
         "operationId": "list_artifacts",
         "parameters": [
           {
@@ -85,7 +85,7 @@
           "library"
         ],
         "summary": "One artifact in detail.",
-        "description": "# Errors\n\n`INVALID_PARAMETER` for a malformed identifier, `NOT_FOUND` if no such\nartifact exists, or `MANIFEST_INVALID` if the stored manifest fails its own\nvalidation.",
+        "description": "Fetch one artifact with its components and any structural findings.",
         "operationId": "get_artifact",
         "parameters": [
           {
@@ -138,7 +138,7 @@
           "library"
         ],
         "summary": "The artifact's components.",
-        "description": "# Errors\n\n`INVALID_PARAMETER`, `NOT_FOUND`, or `MANIFEST_INVALID`.",
+        "description": "List the files making up an artifact.",
         "operationId": "list_components",
         "parameters": [
           {
@@ -184,7 +184,7 @@
           "library"
         ],
         "summary": "The artifact's full manifest, exactly as stored.",
-        "description": "Returned verbatim so an external tool receives the same bytes the library\nholds, rather than a re-serialization that might differ.\n\n# Errors\n\n`INVALID_PARAMETER`, `NOT_FOUND`, or `MANIFEST_INVALID`.",
+        "description": "Fetch the artifact manifest exactly as stored, byte for byte.",
         "operationId": "get_manifest",
         "parameters": [
           {
@@ -220,7 +220,7 @@
           "operations"
         ],
         "summary": "Liveness probe: the process is running and the runtime is responsive.",
-        "description": "Deliberately checks nothing external. A database outage must not cause an\norchestrator to kill and restart an otherwise healthy server.",
+        "description": "Liveness. Answers whenever the process can serve a request and deliberately checks no dependency, so a database outage cannot cause a restart loop.",
         "operationId": "livez",
         "responses": {
           "200": {
@@ -242,7 +242,7 @@
           "operations"
         ],
         "summary": "Readiness probe: every dependency needed to serve traffic is usable.",
-        "description": "Returns `503` when any dependency is down so that Compose and load\nbalancers withhold traffic rather than sending it into failure.",
+        "description": "Readiness. Answers 503 when any dependency is unusable so that traffic is withheld rather than sent into failure.",
         "operationId": "readyz",
         "responses": {
           "200": {

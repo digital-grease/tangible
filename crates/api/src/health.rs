@@ -66,6 +66,9 @@ pub struct DependencyCheck {
     get,
     path = "/livez",
     tag = "operations",
+    description = "Liveness. Answers whenever the process can serve a request \
+                   and deliberately checks no dependency, so a database outage \
+                   cannot cause a restart loop.",
     responses((status = 200, description = "Process is alive", body = Liveness)),
 )]
 pub async fn livez() -> Json<Liveness> {
@@ -83,6 +86,8 @@ pub async fn livez() -> Json<Liveness> {
     get,
     path = "/readyz",
     tag = "operations",
+    description = "Readiness. Answers 503 when any dependency is unusable so \
+                   that traffic is withheld rather than sent into failure.",
     responses(
         (status = 200, description = "All dependencies usable", body = Readiness),
         (status = 503, description = "At least one dependency is down", body = Readiness),

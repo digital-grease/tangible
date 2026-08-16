@@ -173,6 +173,8 @@ async fn load(state: &ApiState, id: ArtifactId) -> Result<ArtifactManifest, Prob
     get,
     path = "/api/v1/artifacts",
     tag = "library",
+    description = "List artifacts in creation order. Use `next_cursor` from the \
+                   response to fetch the following page.",
     params(PageQuery),
     responses(
         (status = 200, description = "A page of artifacts", body = ArtifactSummaryPage),
@@ -229,6 +231,8 @@ pub async fn list_artifacts(
     get,
     path = "/api/v1/artifacts/{artifact_id}",
     tag = "library",
+    description = "Fetch one artifact with its components and any structural \
+                   findings.",
     params(("artifact_id" = String, Path, description = "Artifact identifier")),
     responses(
         (status = 200, description = "The artifact", body = ArtifactDetail),
@@ -276,6 +280,8 @@ pub async fn get_artifact(
     get,
     path = "/api/v1/artifacts/{artifact_id}/manifest",
     tag = "library",
+    description = "Fetch the artifact manifest exactly as stored, byte for \
+                   byte.",
     params(("artifact_id" = String, Path, description = "Artifact identifier")),
     responses(
         (status = 200, description = "The manifest document"),
@@ -307,6 +313,7 @@ pub async fn get_manifest(
     get,
     path = "/api/v1/artifacts/{artifact_id}/components",
     tag = "library",
+    description = "List the files making up an artifact.",
     params(("artifact_id" = String, Path, description = "Artifact identifier")),
     responses(
         (status = 200, description = "The components", body = Vec<ComponentView>),
