@@ -11,15 +11,17 @@
 //! supply one, which makes "never trust a client-provided digest" a property
 //! of the API rather than a rule to remember.
 //!
-//! In place: the filesystem CAS and manifest persistence. Staging,
-//! materialization and garbage collection follow.
+//! In place: the filesystem CAS, manifest persistence, and staging.
+//! Materialization and garbage collection follow.
 
 pub mod filesystem;
 pub mod manifest_store;
 pub mod object_key;
+pub mod staging;
 
 pub use filesystem::{
     FilesystemStore, IngestLimits, Ingested, ObjectStat, STORAGE_VERSION, StorageError,
 };
 pub use manifest_store::{ManifestStore, ManifestStoreError};
 pub use object_key::ObjectKey;
+pub use staging::{StagingArea, StagingError, StagingKind, StagingManager};
