@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 axum = "0.8.9"
+base64 = "0.23.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 tangible-burn = { version = "0.1.0", path = "../burn" }
@@ -29,3 +30,4 @@ workspace = true
 
 [dev-dependencies]
 tempfile = "3.27.0"
+tower = { version = "0.5.3", features = ["util"] }

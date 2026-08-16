@@ -10,6 +10,210 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/v1/artifacts": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "List artifacts, newest identifiers last.",
+        "description": "Ordering is by identifier, which for UUIDv7 is creation order.\n\n# Errors\n\n`INVALID_CURSOR` for a cursor this server did not issue, or\n`STORAGE_UNAVAILABLE` if the library cannot be read.",
+        "operationId": "list_artifacts",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum items to return. Clamped to [`MAX_LIMIT`].",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous response's `next_cursor`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of artifacts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactSummaryPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Library unreadable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/artifacts/{artifact_id}": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "One artifact in detail.",
+        "description": "# Errors\n\n`INVALID_PARAMETER` for a malformed identifier, `NOT_FOUND` if no such\nartifact exists, or `MANIFEST_INVALID` if the stored manifest fails its own\nvalidation.",
+        "operationId": "get_artifact",
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "description": "Artifact identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Stored manifest is invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/artifacts/{artifact_id}/components": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "The artifact's components.",
+        "description": "# Errors\n\n`INVALID_PARAMETER`, `NOT_FOUND`, or `MANIFEST_INVALID`.",
+        "operationId": "list_components",
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "description": "Artifact identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The components",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ComponentView"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/artifacts/{artifact_id}/manifest": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "The artifact's full manifest, exactly as stored.",
+        "description": "Returned verbatim so an external tool receives the same bytes the library\nholds, rather than a re-serialization that might differ.\n\n# Errors\n\n`INVALID_PARAMETER`, `NOT_FOUND`, or `MANIFEST_INVALID`.",
+        "operationId": "get_manifest",
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "description": "Artifact identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The manifest document"
+          },
+          "404": {
+            "description": "No such artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/livez": {
       "get": {
         "tags": [
@@ -67,6 +271,162 @@
   },
   "components": {
     "schemas": {
+      "ArtifactDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ArtifactSummary",
+            "description": "Summary fields."
+          },
+          {
+            "type": "object",
+            "required": [
+              "format_confidence",
+              "source_kind",
+              "warnings",
+              "components"
+            ],
+            "properties": {
+              "components": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ComponentView"
+                },
+                "description": "The files making up the artifact."
+              },
+              "format_confidence": {
+                "type": "number",
+                "format": "float",
+                "description": "Detection confidence, from 0 to 1. Diagnostic only."
+              },
+              "source_kind": {
+                "type": "string",
+                "description": "Where the bytes came from."
+              },
+              "warnings": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Structural findings, if any."
+              }
+            }
+          }
+        ],
+        "description": "Everything known about one artifact, short of its full manifest."
+      },
+      "ArtifactSummary": {
+        "type": "object",
+        "description": "An artifact as it appears in a listing.\n\nDeliberately not the whole manifest: a listing of a large library should\nnot carry every component of every artifact.",
+        "required": [
+          "id",
+          "format",
+          "artifact_kind",
+          "validation_state",
+          "component_count",
+          "total_bytes",
+          "has_warnings"
+        ],
+        "properties": {
+          "artifact_kind": {
+            "type": "string",
+            "description": "Shape of the artifact."
+          },
+          "component_count": {
+            "type": "integer",
+            "description": "Number of files.",
+            "minimum": 0
+          },
+          "format": {
+            "type": "string",
+            "description": "Detected container format."
+          },
+          "has_warnings": {
+            "type": "boolean",
+            "description": "Whether anything structural is worth an operator's attention.\n\nSurfaced in the summary so a damaged artifact is visible in a list\nwithout opening it."
+          },
+          "id": {
+            "type": "string",
+            "description": "Opaque identifier."
+          },
+          "source_filename": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Filename as received, when one was recorded."
+          },
+          "total_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total size of all components.",
+            "minimum": 0
+          },
+          "validation_state": {
+            "type": "string",
+            "description": "Structural validation outcome."
+          }
+        }
+      },
+      "ArtifactSummaryPage": {
+        "type": "object",
+        "description": "A page of artifact summaries.\n\nA concrete type rather than a generic instantiation so the published\nOpenAPI names something a client generator can produce cleanly.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactSummary"
+            },
+            "description": "The artifacts in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor for the next page, or null when this is the last."
+          }
+        }
+      },
+      "ComponentView": {
+        "type": "object",
+        "description": "One file within an artifact.",
+        "required": [
+          "logical_path",
+          "role",
+          "ordinal",
+          "length_bytes",
+          "sha256"
+        ],
+        "properties": {
+          "length_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Size in bytes.",
+            "minimum": 0
+          },
+          "logical_path": {
+            "type": "string",
+            "description": "Portable path inside the artifact."
+          },
+          "ordinal": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Position within the artifact.",
+            "minimum": 0
+          },
+          "role": {
+            "type": "string",
+            "description": "What part it plays."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "Content digest, as lowercase hex."
+          }
+        }
+      },
       "DependencyCheck": {
         "type": "object",
         "description": "The state of one dependency.",
@@ -110,6 +470,48 @@
           }
         }
       },
+      "Problem": {
+        "type": "object",
+        "description": "An RFC 9457 problem document.",
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "detail"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable code. Clients branch on this, not on `detail`."
+          },
+          "detail": {
+            "type": "string",
+            "description": "Human-readable explanation. May be reworded between releases."
+          },
+          "instance": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The request path, when known."
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "description": "HTTP status code, repeated in the body as the RFC allows.",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string",
+            "description": "Short human-readable summary."
+          },
+          "type": {
+            "type": "string",
+            "description": "A URI identifying the problem type."
+          }
+        }
+      },
       "Readiness": {
         "type": "object",
         "description": "Result of a readiness probe.",
@@ -137,6 +539,10 @@
     {
       "name": "operations",
       "description": "Liveness and readiness probes"
+    },
+    {
+      "name": "library",
+      "description": "Artifacts and their components"
     }
   ]
 }

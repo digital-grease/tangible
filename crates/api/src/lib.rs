@@ -10,6 +10,9 @@
 
 pub mod health;
 pub mod import;
+pub mod pagination;
+pub mod problem;
+pub mod routes;
 pub mod state;
 
 use axum::Router;
@@ -33,10 +36,27 @@ pub const API_BASE: &str = "/api/v1";
         description = "Self-hosted disc-image preservation, management, and burning.",
         license(name = "AGPL-3.0-or-later", identifier = "AGPL-3.0-or-later"),
     ),
-    paths(health::livez, health::readyz),
-    components(schemas(health::Liveness, health::Readiness, health::DependencyCheck)),
+    paths(
+        health::livez,
+        health::readyz,
+        routes::artifacts::list_artifacts,
+        routes::artifacts::get_artifact,
+        routes::artifacts::get_manifest,
+        routes::artifacts::list_components,
+    ),
+    components(schemas(
+        health::Liveness,
+        health::Readiness,
+        health::DependencyCheck,
+        problem::Problem,
+        routes::artifacts::ArtifactSummaryPage,
+        routes::artifacts::ArtifactSummary,
+        routes::artifacts::ArtifactDetail,
+        routes::artifacts::ComponentView,
+    )),
     tags(
         (name = "operations", description = "Liveness and readiness probes"),
+        (name = "library", description = "Artifacts and their components"),
     ),
 )]
 pub struct ApiDoc;
@@ -79,6 +99,7 @@ pub fn router(state: ApiState) -> Router {
     Router::new()
         .route("/livez", get(health::livez))
         .route("/readyz", get(health::readyz))
+        .nest(API_BASE, routes::artifacts::router())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

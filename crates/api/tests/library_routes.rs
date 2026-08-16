@@ -1,0 +1,345 @@
+// SPDX-FileCopyrightText: 2026 digitalgrease
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+//! Library read routes, exercised through the real router.
+//!
+//! Requests go through axum's own routing and extraction rather than calling
+//! handlers directly, so path parsing, query deserialization and the error
+//! response shape are all covered.
+
+#![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use tangible_api::{ApiState, ImportCheckpoint, ImportPipeline, ImportRequest};
+use tangible_db::{Database, DbConfig};
+use tangible_domain::{ImportJobId, LogicalPath};
+use tangible_storage::{FilesystemStore, IngestLimits, ManifestStore, StagingManager};
+use tempfile::TempDir;
+use tower::ServiceExt as _;
+
+const SECTOR: usize = 2048;
+const SYSTEM_AREA: usize = 16 * SECTOR;
+
+/// A structurally valid ISO of `blocks` blocks.
+fn iso_image(volume_id: &str, blocks: u32) -> Vec<u8> {
+    let mut bytes = vec![0_u8; SYSTEM_AREA];
+    let mut pvd = vec![0_u8; SECTOR];
+    pvd[0] = 1;
+    pvd[1..6].copy_from_slice(b"CD001");
+    pvd[6] = 1;
+    for slot in &mut pvd[40..72] {
+        *slot = b' ';
+    }
+    pvd[40..40 + volume_id.len()].copy_from_slice(volume_id.as_bytes());
+    pvd[80..84].copy_from_slice(&blocks.to_le_bytes());
+    pvd[84..88].copy_from_slice(&blocks.to_be_bytes());
+    pvd[128..130].copy_from_slice(&2048_u16.to_le_bytes());
+    pvd[130..132].copy_from_slice(&2048_u16.to_be_bytes());
+    bytes.extend_from_slice(&pvd);
+
+    let mut terminator = vec![0_u8; SECTOR];
+    terminator[0] = 255;
+    terminator[1..6].copy_from_slice(b"CD001");
+    terminator[6] = 1;
+    bytes.extend_from_slice(&terminator);
+    bytes.resize(blocks as usize * SECTOR, 0);
+    bytes
+}
+
+struct Harness {
+    _dir: TempDir,
+    router: axum::Router,
+    artifact_ids: Vec<String>,
+}
+
+/// Build a server with `count` imported artifacts.
+async fn harness(count: usize) -> Harness {
+    let dir = TempDir::new().expect("temp dir");
+    let objects = FilesystemStore::open(dir.path().join("library"))
+        .await
+        .expect("objects");
+    let manifests = ManifestStore::open(objects.clone())
+        .await
+        .expect("manifests");
+    let staging = StagingManager::open(dir.path().join("staging"))
+        .await
+        .expect("staging");
+
+    let pipeline = ImportPipeline::new(staging, objects, manifests.clone());
+    let mut artifact_ids = Vec::new();
+    for index in 0..count {
+        let import_id = ImportJobId::generate();
+        let area = pipeline.open_area(import_id).await.expect("area");
+        let name = format!("disc-{index}.iso");
+        area.write(
+            &LogicalPath::parse(&name).expect("path"),
+            &iso_image("VOL", 20),
+        )
+        .await
+        .expect("stage");
+
+        let mut checkpoint = ImportCheckpoint::default();
+        let outcome = pipeline
+            .run(
+                &ImportRequest {
+                    import_id,
+                    source_kind: "upload".to_owned(),
+                    source_filename: Some(name),
+                    source_reference: None,
+                    limits: IngestLimits {
+                        max_bytes: None,
+                        fsync: false,
+                    },
+                },
+                &mut checkpoint,
+            )
+            .await
+            .expect("import");
+        artifact_ids.push(outcome.artifact_id.to_string());
+    }
+    artifact_ids.sort();
+
+    // The database is never reached by these routes, so a lazy pool is enough
+    // and the tests need no PostgreSQL.
+    let database = Database::connect_lazy(&DbConfig::new(
+        "postgres://tangible:tangible@127.0.0.1:1/tangible",
+    ))
+    .expect("lazy pool");
+
+    let state = ApiState::with_manifests(database, manifests);
+    Harness {
+        _dir: dir,
+        router: tangible_api::router(state),
+        artifact_ids,
+    }
+}
+
+async fn get(router: &axum::Router, uri: &str) -> (StatusCode, serde_json::Value, String) {
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    let bytes = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
+        .await
+        .expect("body");
+    let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    (status, json, content_type)
+}
+
+// --- listing -----------------------------------------------------------------
+
+#[tokio::test]
+async fn listing_returns_imported_artifacts() {
+    let harness = harness(3).await;
+    let (status, body, _) = get(&harness.router, "/api/v1/artifacts").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["items"].as_array().expect("items").len(), 3);
+    assert_eq!(body["items"][0]["format"], "iso");
+    assert!(body["items"][0]["total_bytes"].as_u64().expect("bytes") > 0);
+}
+
+#[tokio::test]
+async fn an_empty_library_lists_cleanly() {
+    // An empty collection is a normal state, not an error.
+    let harness = harness(0).await;
+    let (status, body, _) = get(&harness.router, "/api/v1/artifacts").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["items"].as_array().expect("items").is_empty());
+    assert!(body["next_cursor"].is_null());
+}
+
+#[tokio::test]
+async fn a_short_page_carries_no_cursor() {
+    let harness = harness(2).await;
+    let (_, body, _) = get(&harness.router, "/api/v1/artifacts?limit=10").await;
+    assert!(body["next_cursor"].is_null());
+}
+
+#[tokio::test]
+async fn pagination_walks_the_whole_library_without_repeating() {
+    // The property that matters: every artifact appears exactly once across
+    // the pages.
+    let harness = harness(5).await;
+
+    let mut seen = Vec::new();
+    let mut uri = "/api/v1/artifacts?limit=2".to_owned();
+    for _ in 0..10 {
+        let (status, body, _) = get(&harness.router, &uri).await;
+        assert_eq!(status, StatusCode::OK);
+        for item in body["items"].as_array().expect("items") {
+            seen.push(item["id"].as_str().expect("id").to_owned());
+        }
+        match body["next_cursor"].as_str() {
+            Some(cursor) => uri = format!("/api/v1/artifacts?limit=2&cursor={cursor}"),
+            None => break,
+        }
+    }
+
+    seen.sort();
+    assert_eq!(seen, harness.artifact_ids, "every artifact exactly once");
+}
+
+#[tokio::test]
+async fn a_forged_cursor_is_rejected_with_a_stable_code() {
+    let harness = harness(1).await;
+    let (status, body, content_type) =
+        get(&harness.router, "/api/v1/artifacts?cursor=!!!not-valid!!!").await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "INVALID_CURSOR");
+    assert!(
+        content_type.contains("application/problem+json"),
+        "problems must use the RFC media type, got {content_type:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_over_large_limit_is_clamped_rather_than_refused() {
+    let harness = harness(3).await;
+    let (status, body, _) = get(&harness.router, "/api/v1/artifacts?limit=999999").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["items"].as_array().expect("items").len(), 3);
+}
+
+// --- one artifact ------------------------------------------------------------
+
+#[tokio::test]
+async fn one_artifact_can_be_fetched() {
+    let harness = harness(1).await;
+    let id = &harness.artifact_ids[0];
+    let (status, body, _) = get(&harness.router, &format!("/api/v1/artifacts/{id}")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["id"], id.as_str());
+    assert_eq!(body["format"], "iso");
+    assert_eq!(body["source_kind"], "upload");
+    assert_eq!(body["components"].as_array().expect("components").len(), 1);
+}
+
+#[tokio::test]
+async fn an_unknown_artifact_is_a_not_found_problem() {
+    let harness = harness(1).await;
+    let missing = tangible_domain::ArtifactId::generate();
+    let (status, body, content_type) =
+        get(&harness.router, &format!("/api/v1/artifacts/{missing}")).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "NOT_FOUND");
+    assert_eq!(body["status"], 404);
+    assert!(content_type.contains("application/problem+json"));
+}
+
+#[tokio::test]
+async fn a_malformed_identifier_is_a_bad_request_not_a_not_found() {
+    // Distinguishing these matters: one means the caller sent nonsense, the
+    // other means the library does not have it.
+    let harness = harness(1).await;
+    let (status, body, _) = get(&harness.router, "/api/v1/artifacts/not-a-uuid").await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "INVALID_PARAMETER");
+}
+
+#[tokio::test]
+async fn the_problem_document_names_the_failing_resource() {
+    let harness = harness(1).await;
+    let missing = tangible_domain::ArtifactId::generate();
+    let (_, body, _) = get(&harness.router, &format!("/api/v1/artifacts/{missing}")).await;
+
+    assert!(
+        body["detail"]
+            .as_str()
+            .expect("detail")
+            .contains(&missing.to_string()),
+        "detail was {:?}",
+        body["detail"]
+    );
+}
+
+// --- components and manifest --------------------------------------------------
+
+#[tokio::test]
+async fn components_can_be_listed() {
+    let harness = harness(1).await;
+    let id = &harness.artifact_ids[0];
+    let (status, body, _) = get(
+        &harness.router,
+        &format!("/api/v1/artifacts/{id}/components"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let components = body.as_array().expect("array");
+    assert_eq!(components.len(), 1);
+    assert_eq!(components[0]["ordinal"], 0);
+    assert_eq!(
+        components[0]["sha256"].as_str().expect("digest").len(),
+        64,
+        "digests are lowercase hex"
+    );
+}
+
+#[tokio::test]
+async fn the_manifest_is_served_verbatim() {
+    // An external tool must receive the same bytes the library holds, not a
+    // re-serialization that might differ.
+    let harness = harness(1).await;
+    let id = &harness.artifact_ids[0];
+    let (status, body, _) = get(&harness.router, &format!("/api/v1/artifacts/{id}/manifest")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["schema"], "org.tangible.artifact-manifest/v1alpha1",
+        "the manifest schema identifier must be present"
+    );
+    assert_eq!(body["artifact_id"], id.as_str());
+    assert!(body["components"].is_array());
+}
+
+// --- degraded storage ----------------------------------------------------------
+
+#[tokio::test]
+async fn the_library_reports_unavailable_when_no_store_is_configured() {
+    // The server must still start and answer when storage is misconfigured,
+    // rather than refusing to boot.
+    let database = Database::connect_lazy(&DbConfig::new(
+        "postgres://tangible:tangible@127.0.0.1:1/tangible",
+    ))
+    .expect("lazy pool");
+    let router = tangible_api::router(ApiState::new(database));
+
+    let (status, body, _) = get(&router, "/api/v1/artifacts").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["code"], "STORAGE_UNAVAILABLE");
+    assert!(
+        !body["detail"].as_str().expect("detail").contains('/'),
+        "the error must not leak a filesystem path"
+    );
+}
+
+#[tokio::test]
+async fn liveness_still_answers_alongside_the_library_routes() {
+    // Nesting the library under /api/v1 must not disturb the operational
+    // probes at the root.
+    let harness = harness(0).await;
+    let (status, body, _) = get(&harness.router, "/livez").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "alive");
+}
