@@ -7,5 +7,8 @@
 //! rather than filenames, parsers read bytes and never execute them, and no
 //! image is ever mounted.
 //!
-//! Scaffold status: empty. ISO detection arrives with epic E4, CUE/BIN with
-//! epic E7.
+//! In place: ISO 9660 and UDF detection. CUE/BIN parsing follows.
+
+pub mod iso;
+
+pub use iso::{FilesystemEvidence, IsoInspection, IsoWarning, PrimaryVolume, inspect};
