@@ -1,0 +1,164 @@
+# SPDX-FileCopyrightText: 2026 digitalgrease
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# CI runs the same recipes a developer runs locally, so a green `just check`
+# means the same thing in both places.
+#
+# Hardware tests are deliberately absent. They require a real optical drive
+# and are gated behind TANGIBLE_HARDWARE_TESTS.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --all-features
+
+  openapi:
+    name: OpenAPI is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Regenerate and diff
+        run: |
+          cargo run --quiet -p tangible-app -- openapi > /tmp/openapi.json
+          if ! diff -u openapi.json /tmp/openapi.json; then
+            echo "::error::openapi.json is out of date. Run: just openapi"
+            exit 1
+          fi
+
+  integration:
+    name: Integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: tangible
+          POSTGRES_PASSWORD: tangible
+          POSTGRES_DB: tangible
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tangible"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TANGIBLE_DATABASE_URL: postgres://tangible:tangible@localhost:5432/tangible
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Migrations apply to an empty database
+        run: cargo run --quiet -p tangible-app -- migrate
+
+      - name: Migrations are idempotent
+        run: cargo run --quiet -p tangible-app -- migrate
+
+      - name: Dependencies are reachable
+        run: cargo run --quiet -p tangible-app -- doctor
+
+      - name: Integration tests
+        run: cargo test --workspace --all-features -- --ignored
+
+  deployment:
+    name: Deployment
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Every Compose combination renders
+        run: |
+          docker compose -f deploy/compose.yaml \
+            --env-file deploy/.env.example config >/dev/null
+          docker compose -f deploy/compose.yaml -f deploy/compose.dev.yaml \
+            --env-file deploy/.env.example config >/dev/null
+          TANGIBLE_WORKER_NAME=validate docker compose \
+            -f deploy/compose.yaml -f deploy/compose.hardware.yaml \
+            --env-file deploy/.env.example config >/dev/null
+
+      - name: No default stack can reach an optical drive
+        run: |
+          for combo in \
+            "-f deploy/compose.yaml" \
+            "-f deploy/compose.yaml -f deploy/compose.dev.yaml"
+          do
+            if docker compose $combo --env-file deploy/.env.example config \
+                 | grep -qE "devices:|privileged: true"; then
+              echo "::error::device or privileged access in a default stack: $combo"
+              exit 1
+            fi
+          done
+
+      - name: No image uses a floating tag
+        run: |
+          if docker compose -f deploy/compose.yaml \
+               --env-file deploy/.env.example config \
+               | grep -E "image:.*:latest"; then
+            echo "::error::production examples must pin a tag or digest"
+            exit 1
+          fi
+
+  supply-chain:
+    name: Supply chain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+      - name: Licences, advisories, bans, sources
+        run: cargo deny check
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm check
+      - run: pnpm test

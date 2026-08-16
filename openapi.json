@@ -1,0 +1,142 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Tangible",
+    "description": "Self-hosted disc-image preservation, management, and burning.",
+    "license": {
+      "name": "AGPL-3.0-or-later",
+      "identifier": "AGPL-3.0-or-later"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/livez": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Liveness probe: the process is running and the runtime is responsive.",
+        "description": "Deliberately checks nothing external. A database outage must not cause an\norchestrator to kill and restart an otherwise healthy server.",
+        "operationId": "livez",
+        "responses": {
+          "200": {
+            "description": "Process is alive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Liveness"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Readiness probe: every dependency needed to serve traffic is usable.",
+        "description": "Returns `503` when any dependency is down so that Compose and load\nbalancers withhold traffic rather than sending it into failure.",
+        "operationId": "readyz",
+        "responses": {
+          "200": {
+            "description": "All dependencies usable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "At least one dependency is down",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "DependencyCheck": {
+        "type": "object",
+        "description": "The state of one dependency.",
+        "required": [
+          "name",
+          "status"
+        ],
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Operator-facing failure summary. Never carries a connection string or\ncredential, only the error class."
+          },
+          "name": {
+            "type": "string",
+            "description": "Dependency name, e.g. `\"database\"`."
+          },
+          "status": {
+            "type": "string",
+            "description": "`\"up\"` or `\"down\"`."
+          }
+        }
+      },
+      "Liveness": {
+        "type": "object",
+        "description": "Result of a liveness probe.",
+        "required": [
+          "status",
+          "version"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Always `\"alive\"` when the process can serve a request at all."
+          },
+          "version": {
+            "type": "string",
+            "description": "Server version, from the crate version at build time."
+          }
+        }
+      },
+      "Readiness": {
+        "type": "object",
+        "description": "Result of a readiness probe.",
+        "required": [
+          "status",
+          "checks"
+        ],
+        "properties": {
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DependencyCheck"
+            },
+            "description": "Per-dependency detail, so an operator can see *what* is failing."
+          },
+          "status": {
+            "type": "string",
+            "description": "`\"ready\"` when every dependency is usable, otherwise `\"degraded\"`."
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "operations",
+      "description": "Liveness and readiness probes"
+    }
+  ]
+}

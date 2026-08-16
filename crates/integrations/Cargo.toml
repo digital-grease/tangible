@@ -1,0 +1,16 @@
+[package]
+name = "tangible-integrations"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+tangible-domain = { version = "0.1.0", path = "../domain" }
+thiserror = "2.0.19"
+tracing = "0.1.44"
+
+[lints]
+workspace = true

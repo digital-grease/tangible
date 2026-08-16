@@ -1,0 +1,79 @@
+# SPDX-FileCopyrightText: 2026 digitalgrease
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Base Compose topology: server plus database.
+#
+# This file deliberately contains NO optical-device mapping. Burn workers live
+# in compose.hardware.yaml and are opted into explicitly, so that neither the
+# default stack nor the development stack can reach a drive by accident.
+#
+# Review this file, the env file, volume mappings, ports, and image references
+# before starting the stack. Pin an image digest for production.
+
+name: tangible
+
+services:
+  server:
+    image: ghcr.io/digital-grease/tangible:v0.1.0
+    command: ["serve"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      TANGIBLE_DATABASE_URL: postgres://tangible:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/tangible
+      TANGIBLE_BIND: 0.0.0.0:8080
+      TANGIBLE_PUBLIC_URL: ${TANGIBLE_PUBLIC_URL:-http://localhost:8080}
+      TANGIBLE_STORAGE_KIND: filesystem
+      TANGIBLE_STORAGE_ROOT: /var/lib/tangible/library
+      TANGIBLE_STAGING_ROOT: /var/lib/tangible/staging
+      TANGIBLE_LOG: ${TANGIBLE_LOG:-tangible=info,tower_http=info}
+      # No engine is configured here. The server does not write discs; the
+      # burn workers do, and they select an engine themselves.
+    volumes:
+      - library:/var/lib/tangible/library
+      - staging:/var/lib/tangible/staging
+    ports:
+      - "${TANGIBLE_HTTP_PORT:-8080}:8080"
+    healthcheck:
+      # Readiness, not liveness: burn workers gate on service_healthy and must
+      # not start until the server can actually reach its database.
+      #
+      # `doctor` exits non-zero when a dependency is unusable, and needs no
+      # HTTP client in the image. It checks dependencies rather than the
+      # listener, so pair it with the restart policy above, which covers a
+      # process that is up but wedged.
+      test: ["CMD", "tangible", "doctor"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tangible
+      POSTGRES_DB: tangible
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tangible"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  library:
+  staging:
+  postgres-data:

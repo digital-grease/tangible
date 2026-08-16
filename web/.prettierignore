@@ -1,0 +1,6 @@
+# Generated or vendored: formatting these is noise and the lockfile must stay
+# byte-identical to what pnpm writes.
+pnpm-lock.yaml
+node_modules/
+.svelte-kit/
+build/

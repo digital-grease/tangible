@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: 2026 digitalgrease
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Development overrides. Use with compose.yaml:
+#
+#   docker compose -f deploy/compose.yaml -f deploy/compose.dev.yaml up
+#
+# Contains no optical-device mapping, and cannot: devices live only in
+# compose.hardware.yaml.
+
+services:
+  server:
+    # Built from the working tree rather than pulled.
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: tangible:dev
+    environment:
+      TANGIBLE_LOG: tangible=debug,tower_http=debug
+      TANGIBLE_BURN_ENGINE: fake
+      TANGIBLE_MIGRATE_ON_START: "true"
+    # A development tree changes constantly; a read-only rootfs gets in the way.
+    read_only: false
+
+  postgres:
+    # Exposed on the host so `just dev-server` can run outside the stack.
+    ports:
+      - "${TANGIBLE_DEV_DB_PORT:-5432}:5432"
+    environment:
+      POSTGRES_PASSWORD: tangible

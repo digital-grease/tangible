@@ -1,0 +1,27 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "AGPL-3.0-or-later"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Prose in these crates refers to domain terms such as UUIDv7 and SHA-256.
+# Backticking every one of them costs more readability than it buys; the rest
+# of pedantic stays on.
+doc_markdown = "allow"
+# The prohibition on panicking constructs, enforced rather than documented.
+# Test modules opt back in locally where a panic is the point of the test.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"

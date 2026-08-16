@@ -1,0 +1,67 @@
+# SPDX-FileCopyrightText: 2026 digitalgrease
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Dependency policy.
+# Tangible ships under AGPL-3.0-or-later, so permissive dependencies are fine
+# and the risk to watch is the reverse: a dependency whose terms we cannot
+# satisfy, or one with no clear licence at all.
+
+[graph]
+all-features = true
+
+[licenses]
+# Deny by default: anything not listed here fails the build and gets a human
+# decision rather than being absorbed silently.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "MPL-2.0",
+    "OpenSSL",
+    # webpki-roots: the Mozilla CA certificate bundle. A permissive data
+    # licence covering the certificate set, not code. Required for TLS to the
+    # database and to integration endpoints.
+    "CDLA-Permissive-2.0",
+    # Tangible's own crates. The `-or-later` suffix is a distinct SPDX
+    # identifier from bare AGPL-3.0 and must be listed explicitly.
+    "AGPL-3.0-or-later",
+]
+confidence-threshold = 0.93
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+# AGPLv3 section 13 paragraph 2 permits combining with GPL**v3**. It grants
+# nothing for GPL-2.0-only, so a GPL-2.0-only dependency cannot be linked.
+# The allow-list above already fails these closed; naming them here makes the
+# reason discoverable at the point someone tries to add one.
+[[bans.deny]]
+name = "cue"
+reason = "wraps libcue, which is GPL-2.0-only and cannot combine with AGPLv3. Write the CUE/TOC parsers natively; they are required for burning regardless."
+
+[[bans.deny]]
+name = "discid"
+reason = "LGPL-3.0 FFI to libdiscid for what is ~10 lines of SHA-1 and base64. Prefer cdtoc (WTFPL, pure Rust) or a local implementation."
+
+[advisories]
+yanked = "deny"
+ignore = [
+    # `paste` is unmaintained. It is not a vulnerability: the advisory records
+    # that the author archived the repository. It reaches us only transitively
+    # through utoipa-axum, a proc-macro dependency with no runtime surface.
+    # Revisit when utoipa drops it; do not add `paste` as a direct dependency.
+    { id = "RUSTSEC-2024-0436", reason = "transitive proc-macro dep via utoipa-axum; unmaintained, not vulnerable" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

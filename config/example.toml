@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: 2026 digitalgrease
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Optional file-based configuration. Every value here has a TANGIBLE_*
+# environment equivalent, which takes precedence. Copy to config/local.toml
+# for development; local.toml is never committed.
+
+[server]
+bind = "0.0.0.0:8080"
+public_url = "http://localhost:8080"
+
+[database]
+url = "postgres://tangible:tangible@localhost:5432/tangible"
+
+[storage]
+kind = "filesystem"
+root = ".dev-data/library"
+staging_root = ".dev-data/staging"
+
+[burn]
+# "fake" touches no hardware. Real engines are opt-in.
+engine = "fake"
+
+[logging]
+filter = "tangible=info,tower_http=info"
+json = false

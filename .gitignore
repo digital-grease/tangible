@@ -1,0 +1,26 @@
+# Design documentation
+docs/
+
+# Rust
+/target/
+**/*.rs.bk
+
+# Node / frontend
+node_modules/
+.svelte-kit/
+build/
+dist/
+
+# Environment and local config
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.DS_Store
+*.swp
+
+# Local development data
+.dev-data/
+config/local.toml
+deploy/.env
