@@ -14,10 +14,15 @@
 pub mod engine;
 pub mod fake;
 pub mod plan;
+pub mod worker;
 
 pub use engine::{BurnEngine, BurnEvent, CollectingSink, EngineError, EventSink, NullSink};
 pub use fake::{CancelToken, FakeBehaviour, FakeEngine};
 pub use plan::{
     BlankReport, BlankRequest, BurnPlan, DriveCapabilities, DriveRef, MediumInfo, PlannedInput,
     PreflightFailure, PreflightReport, VerifyReport, WriteMode, WriteReport,
+};
+pub use worker::{
+    EventBuffer, EventError, Lease, RecoveryDirective, RecoveryError, RecoveryPlan, RecoveryRecord,
+    RecoveryStore, WorkerEvent, WorkerStage, plan_for,
 };
