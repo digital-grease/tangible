@@ -7,6 +7,8 @@
 //! initial schema, with every constraint covered by an integration test that
 //! asserts it actually rejects. Typed repositories follow in epic E2.
 
+pub mod repositories;
+
 use std::time::Duration;
 
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
@@ -146,3 +148,5 @@ impl Database {
         MIGRATOR.run(&self.pool).await.map_err(DbError::Migrate)
     }
 }
+
+pub use repositories::{ClaimOutcome, ClaimedJob, IncomingEvent};

@@ -9,8 +9,12 @@ publish = false
 [dependencies]
 axum = "0.8.9"
 base64 = "0.23.1"
+getrandom = "0.4.3"
+hex = "0.4.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+sha2 = "0.11.0"
+subtle = "2.6.1"
 tangible-burn = { version = "0.1.0", path = "../burn" }
 tangible-db = { version = "0.1.0", path = "../db" }
 tangible-domain = { version = "0.1.0", path = "../domain" }

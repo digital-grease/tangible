@@ -1853,8 +1853,12 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64 0.23.1",
+ "getrandom 0.4.3",
+ "hex",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
+ "subtle",
  "tangible-burn",
  "tangible-db",
  "tangible-domain",
@@ -1909,6 +1913,7 @@ dependencies = [
 name = "tangible-db"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "sqlx",
  "tangible-domain",
  "thiserror",

@@ -14,6 +14,7 @@ pub mod pagination;
 pub mod problem;
 pub mod routes;
 pub mod state;
+pub mod worker_auth;
 
 use axum::Router;
 use axum::routing::get;
@@ -22,6 +23,10 @@ use utoipa::OpenApi;
 
 pub use import::{ImportCheckpoint, ImportError, ImportOutcome, ImportPipeline, ImportRequest};
 pub use state::ApiState;
+pub use worker_auth::{
+    AuthRejection, CredentialHash, EnrollmentRejection, EnrollmentToken, Secret, WorkerCredential,
+    WorkerIdentity,
+};
 
 /// Base path for the versioned product API.
 pub const API_BASE: &str = "/api/v1";
