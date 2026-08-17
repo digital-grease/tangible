@@ -214,6 +214,313 @@
         }
       }
     },
+    "/api/v1/burn-attempts/{attempt_id}/events": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Submit worker events.",
+        "description": "Submit worker events. Idempotent by sequence: resubmitting a batch already held changes nothing.",
+        "operationId": "submit_events",
+        "parameters": [
+          {
+            "name": "attempt_id",
+            "in": "path",
+            "description": "Attempt identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventBatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventAck"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed batch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "worker_credential": []
+          }
+        ]
+      }
+    },
+    "/api/v1/burn-attempts/{attempt_id}/lease/renew": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Extend a lease.",
+        "description": "Extend a lease. A refusal does not interrupt a write already in progress; it only prevents claiming more work.",
+        "operationId": "renew",
+        "parameters": [
+          {
+            "name": "attempt_id",
+            "in": "path",
+            "description": "Attempt identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Renewed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenewResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No renewable attempt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "worker_credential": []
+          }
+        ]
+      }
+    },
+    "/api/v1/worker-enrollments/consume": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Exchange a one-use enrollment token for a worker credential.",
+        "description": "Exchange a one-use enrollment token for a worker credential. The credential is returned once and cannot be recovered.",
+        "operationId": "consume_enrollment_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrollmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Enrolled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollmentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No shared protocol version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is not usable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The name is already in use",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workers/{worker_id}/claims": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Ask for work.",
+        "description": "Ask for a burn job. Answers 204 when there is nothing to do.",
+        "operationId": "claim_work",
+        "parameters": [
+          {
+            "name": "worker_id",
+            "in": "path",
+            "description": "Worker identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Work leased",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimResponse"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "Nothing to do"
+          },
+          "404": {
+            "description": "Not this worker",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The drive is already busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "worker_credential": []
+          }
+        ]
+      }
+    },
+    "/api/v1/workers/{worker_id}/heartbeat": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Report that a worker is alive.",
+        "description": "Report that a worker is alive and receive any instruction to stop taking new work.",
+        "operationId": "heartbeat",
+        "parameters": [
+          {
+            "name": "worker_id",
+            "in": "path",
+            "description": "Worker identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Acknowledged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeartbeatResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not this worker",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "worker_credential": []
+          }
+        ]
+      }
+    },
     "/livez": {
       "get": {
         "tags": [
@@ -390,6 +697,76 @@
           }
         }
       },
+      "ClaimRequest": {
+        "type": "object",
+        "description": "What a worker offers when asking for work.",
+        "required": [
+          "drive_id",
+          "engine",
+          "engine_version"
+        ],
+        "properties": {
+          "drive_id": {
+            "type": "string",
+            "description": "The drive the work would run on."
+          },
+          "engine": {
+            "type": "string",
+            "description": "The engine the worker would use."
+          },
+          "engine_version": {
+            "type": "string",
+            "description": "That engine's version."
+          }
+        }
+      },
+      "ClaimResponse": {
+        "type": "object",
+        "description": "A lease on some work.",
+        "required": [
+          "attempt_id",
+          "burn_job_id",
+          "attempt_number",
+          "artifact_id",
+          "lease_token",
+          "lease_expires_at",
+          "verification_policy"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": "string",
+            "description": "The artifact to write."
+          },
+          "attempt_id": {
+            "type": "string",
+            "description": "The attempt created for this claim."
+          },
+          "attempt_number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Which attempt this is."
+          },
+          "burn_job_id": {
+            "type": "string",
+            "description": "The job."
+          },
+          "lease_expires_at": {
+            "type": "string",
+            "description": "When the lease lapses."
+          },
+          "lease_token": {
+            "type": "string",
+            "description": "The lease token, presented on subsequent requests for this attempt."
+          },
+          "verification_policy": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Verification steps the job requires."
+          }
+        }
+      },
       "ComponentView": {
         "type": "object",
         "description": "One file within an artifact.",
@@ -449,6 +826,165 @@
           "status": {
             "type": "string",
             "description": "`\"up\"` or `\"down\"`."
+          }
+        }
+      },
+      "EnrollmentRequest": {
+        "type": "object",
+        "description": "What a worker sends to enroll.",
+        "required": [
+          "enrollment_token",
+          "name",
+          "protocol_versions",
+          "software_version"
+        ],
+        "properties": {
+          "enrollment_token": {
+            "type": "string",
+            "description": "The one-use token an administrator issued."
+          },
+          "name": {
+            "type": "string",
+            "description": "A human-meaningful name for this worker."
+          },
+          "protocol_versions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Protocol versions the worker speaks."
+          },
+          "software_version": {
+            "type": "string",
+            "description": "The worker's software version."
+          }
+        }
+      },
+      "EnrollmentResponse": {
+        "type": "object",
+        "description": "What a newly enrolled worker receives.",
+        "required": [
+          "worker_id",
+          "protocol_version",
+          "credential",
+          "heartbeat_interval_seconds",
+          "lease_duration_seconds"
+        ],
+        "properties": {
+          "credential": {
+            "type": "string",
+            "description": "The credential, returned exactly once and never recoverable."
+          },
+          "heartbeat_interval_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How often to report in."
+          },
+          "lease_duration_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How long a lease lasts."
+          },
+          "protocol_version": {
+            "type": "string",
+            "description": "The protocol version the server selected."
+          },
+          "worker_id": {
+            "type": "string",
+            "description": "Its identity."
+          }
+        }
+      },
+      "EventAck": {
+        "type": "object",
+        "description": "What the server has persisted.",
+        "required": [
+          "accepted_through_sequence"
+        ],
+        "properties": {
+          "accepted_through_sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The highest contiguous sequence held. The worker prunes against this."
+          }
+        }
+      },
+      "EventBatch": {
+        "type": "object",
+        "description": "A batch of events.",
+        "required": [
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventSubmission"
+            },
+            "description": "The events, in sequence order."
+          }
+        }
+      },
+      "EventSubmission": {
+        "type": "object",
+        "description": "One event in a submitted batch.",
+        "required": [
+          "sequence",
+          "event_type",
+          "stage",
+          "code",
+          "worker_time"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable code."
+          },
+          "data": {
+            "description": "Structured detail."
+          },
+          "event_type": {
+            "type": "string",
+            "description": "Event type."
+          },
+          "progress": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Progress from 0 to 1, when reported."
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Monotonic within the attempt."
+          },
+          "stage": {
+            "type": "string",
+            "description": "Stage it relates to."
+          },
+          "worker_time": {
+            "type": "string",
+            "description": "When the worker observed it."
+          }
+        }
+      },
+      "HeartbeatResponse": {
+        "type": "object",
+        "description": "What the server tells a worker on each heartbeat.",
+        "required": [
+          "server_time",
+          "drain"
+        ],
+        "properties": {
+          "drain": {
+            "type": "boolean",
+            "description": "Whether the worker should stop taking new work."
+          },
+          "server_time": {
+            "type": "string",
+            "description": "The server's clock, so a worker can notice drift."
           }
         }
       },
@@ -532,6 +1068,38 @@
             "description": "`\"ready\"` when every dependency is usable, otherwise `\"degraded\"`."
           }
         }
+      },
+      "RenewRequest": {
+        "type": "object",
+        "description": "What a worker sends to renew.",
+        "required": [
+          "lease_token"
+        ],
+        "properties": {
+          "lease_token": {
+            "type": "string",
+            "description": "The lease token from the claim."
+          }
+        }
+      },
+      "RenewResponse": {
+        "type": "object",
+        "description": "The renewed lease.",
+        "required": [
+          "lease_expires_at"
+        ],
+        "properties": {
+          "lease_expires_at": {
+            "type": "string",
+            "description": "The new expiry."
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "worker_credential": {
+        "type": "http",
+        "scheme": "bearer"
       }
     }
   },
@@ -543,6 +1111,10 @@
     {
       "name": "library",
       "description": "Artifacts and their components"
+    },
+    {
+      "name": "workers",
+      "description": "The burn-worker protocol"
     }
   ]
 }

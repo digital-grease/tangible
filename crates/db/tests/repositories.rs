@@ -12,8 +12,8 @@
 
 use sqlx::{Executor as _, PgPool};
 use tangible_db::repositories::{
-    ClaimOutcome, IncomingEvent, authenticate_worker, claim_next_burn_job, consume_enrollment,
-    record_events, record_heartbeat, renew_lease, set_attempt_state,
+    ClaimOutcome, EnrollmentOutcome, IncomingEvent, authenticate_worker, claim_next_burn_job,
+    consume_enrollment, record_events, record_heartbeat, renew_lease, set_attempt_state,
 };
 use tangible_db::{Database, DbConfig};
 use tangible_domain::{BurnAttemptId, DriveId, WorkerId};
@@ -586,7 +586,7 @@ async fn an_enrollment_token_cannot_be_used_twice() {
         )
         .await
         .expect("second"),
-        None,
+        Err(EnrollmentOutcome::TokenUnusable),
         "a replayed enrollment must not mint a second credential"
     );
 }
@@ -620,7 +620,7 @@ async fn concurrent_enrollment_with_one_token_yields_one_worker() {
 
     let mut created = 0;
     for handle in handles {
-        if handle.await.expect("task").is_some() {
+        if handle.await.expect("task").is_ok() {
             created += 1;
         }
     }
@@ -645,7 +645,7 @@ async fn an_expired_enrollment_token_is_refused() {
         )
         .await
         .expect("consume"),
-        None
+        Err(EnrollmentOutcome::TokenUnusable)
     );
 }
 
@@ -654,10 +654,73 @@ async fn an_expired_enrollment_token_is_refused() {
 async fn an_unknown_token_is_refused() {
     let pool = pool().await;
     assert_eq!(
-        consume_enrollment(&pool, &hash(), "w", "0.1.0", "1alpha1", "c")
-            .await
-            .expect("consume"),
-        None
+        consume_enrollment(
+            &pool,
+            &hash(),
+            &format!("w-{}", hash()),
+            "0.1.0",
+            "1alpha1",
+            "c"
+        )
+        .await
+        .expect("consume"),
+        Err(EnrollmentOutcome::TokenUnusable)
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_name_already_taken_is_reported_as_such() {
+    // Worker names are unique. An operator reusing one is making an ordinary
+    // mistake, and must not be told storage is unavailable, which is what the
+    // unique violation surfaced as before it was given its own outcome.
+    let pool = pool().await;
+    let name = format!("w-{}", hash());
+
+    let first = hash();
+    issue_enrollment(&pool, &first, 15).await;
+    consume_enrollment(
+        &pool,
+        &first,
+        &name,
+        "0.1.0",
+        "1alpha1",
+        &format!("c-{first}"),
+    )
+    .await
+    .expect("first")
+    .expect("a worker");
+
+    let second = hash();
+    issue_enrollment(&pool, &second, 15).await;
+    assert_eq!(
+        consume_enrollment(
+            &pool,
+            &second,
+            &name,
+            "0.1.0",
+            "1alpha1",
+            &format!("c-{second}")
+        )
+        .await
+        .expect("second"),
+        Err(EnrollmentOutcome::NameTaken)
+    );
+
+    // The token is untouched, so a corrected request still works.
+    assert!(
+        consume_enrollment(
+            &pool,
+            &second,
+            &format!("{name}-2"),
+            "0.1.0",
+            "1alpha1",
+            &format!("c-{second}")
+        )
+        .await
+        .expect("retry")
+        .is_ok(),
+        "a rejected name must not spend the token"
     );
 }
 

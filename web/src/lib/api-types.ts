@@ -84,6 +84,106 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/burn-attempts/{attempt_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit worker events.
+         * @description Submit worker events. Idempotent by sequence: resubmitting a batch already held changes nothing.
+         */
+        post: operations["submit_events"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/burn-attempts/{attempt_id}/lease/renew": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Extend a lease.
+         * @description Extend a lease. A refusal does not interrupt a write already in progress; it only prevents claiming more work.
+         */
+        post: operations["renew"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worker-enrollments/consume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Exchange a one-use enrollment token for a worker credential.
+         * @description Exchange a one-use enrollment token for a worker credential. The credential is returned once and cannot be recovered.
+         */
+        post: operations["consume_enrollment_token"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workers/{worker_id}/claims": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask for work.
+         * @description Ask for a burn job. Answers 204 when there is nothing to do.
+         */
+        post: operations["claim_work"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workers/{worker_id}/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Report that a worker is alive.
+         * @description Report that a worker is alive and receive any instruction to stop taking new work.
+         */
+        post: operations["heartbeat"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/livez": {
         parameters: {
             query?: never;
@@ -186,6 +286,35 @@ export interface components {
             /** @description Cursor for the next page, or null when this is the last. */
             next_cursor?: string | null;
         };
+        /** @description What a worker offers when asking for work. */
+        ClaimRequest: {
+            /** @description The drive the work would run on. */
+            drive_id: string;
+            /** @description The engine the worker would use. */
+            engine: string;
+            /** @description That engine's version. */
+            engine_version: string;
+        };
+        /** @description A lease on some work. */
+        ClaimResponse: {
+            /** @description The artifact to write. */
+            artifact_id: string;
+            /** @description The attempt created for this claim. */
+            attempt_id: string;
+            /**
+             * Format: int32
+             * @description Which attempt this is.
+             */
+            attempt_number: number;
+            /** @description The job. */
+            burn_job_id: string;
+            /** @description When the lease lapses. */
+            lease_expires_at: string;
+            /** @description The lease token, presented on subsequent requests for this attempt. */
+            lease_token: string;
+            /** @description Verification steps the job requires. */
+            verification_policy: string[];
+        };
         /** @description One file within an artifact. */
         ComponentView: {
             /**
@@ -216,6 +345,79 @@ export interface components {
             name: string;
             /** @description `"up"` or `"down"`. */
             status: string;
+        };
+        /** @description What a worker sends to enroll. */
+        EnrollmentRequest: {
+            /** @description The one-use token an administrator issued. */
+            enrollment_token: string;
+            /** @description A human-meaningful name for this worker. */
+            name: string;
+            /** @description Protocol versions the worker speaks. */
+            protocol_versions: string[];
+            /** @description The worker's software version. */
+            software_version: string;
+        };
+        /** @description What a newly enrolled worker receives. */
+        EnrollmentResponse: {
+            /** @description The credential, returned exactly once and never recoverable. */
+            credential: string;
+            /**
+             * Format: int64
+             * @description How often to report in.
+             */
+            heartbeat_interval_seconds: number;
+            /**
+             * Format: int64
+             * @description How long a lease lasts.
+             */
+            lease_duration_seconds: number;
+            /** @description The protocol version the server selected. */
+            protocol_version: string;
+            /** @description Its identity. */
+            worker_id: string;
+        };
+        /** @description What the server has persisted. */
+        EventAck: {
+            /**
+             * Format: int64
+             * @description The highest contiguous sequence held. The worker prunes against this.
+             */
+            accepted_through_sequence: number;
+        };
+        /** @description A batch of events. */
+        EventBatch: {
+            /** @description The events, in sequence order. */
+            events: components["schemas"]["EventSubmission"][];
+        };
+        /** @description One event in a submitted batch. */
+        EventSubmission: {
+            /** @description Stable machine-readable code. */
+            code: string;
+            /** @description Structured detail. */
+            data?: unknown;
+            /** @description Event type. */
+            event_type: string;
+            /**
+             * Format: float
+             * @description Progress from 0 to 1, when reported.
+             */
+            progress?: number | null;
+            /**
+             * Format: int64
+             * @description Monotonic within the attempt.
+             */
+            sequence: number;
+            /** @description Stage it relates to. */
+            stage: string;
+            /** @description When the worker observed it. */
+            worker_time: string;
+        };
+        /** @description What the server tells a worker on each heartbeat. */
+        HeartbeatResponse: {
+            /** @description Whether the worker should stop taking new work. */
+            drain: boolean;
+            /** @description The server's clock, so a worker can notice drift. */
+            server_time: string;
         };
         /** @description Result of a liveness probe. */
         Liveness: {
@@ -248,6 +450,16 @@ export interface components {
             checks: components["schemas"]["DependencyCheck"][];
             /** @description `"ready"` when every dependency is usable, otherwise `"degraded"`. */
             status: string;
+        };
+        /** @description What a worker sends to renew. */
+        RenewRequest: {
+            /** @description The lease token from the claim. */
+            lease_token: string;
+        };
+        /** @description The renewed lease. */
+        RenewResponse: {
+            /** @description The new expiry. */
+            lease_expires_at: string;
         };
     };
     responses: never;
@@ -394,6 +606,222 @@ export interface operations {
                 content?: never;
             };
             /** @description No such artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    submit_events: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Attempt identifier */
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EventBatch"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventAck"];
+                };
+            };
+            /** @description Malformed batch */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    renew: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Attempt identifier */
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenewRequest"];
+            };
+        };
+        responses: {
+            /** @description Renewed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RenewResponse"];
+                };
+            };
+            /** @description No renewable attempt */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    consume_enrollment_token: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnrollmentRequest"];
+            };
+        };
+        responses: {
+            /** @description Enrolled */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnrollmentResponse"];
+                };
+            };
+            /** @description No shared protocol version */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token is not usable */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The name is already in use */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    claim_work: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Worker identifier */
+                worker_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description Work leased */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaimResponse"];
+                };
+            };
+            /** @description Nothing to do */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not this worker */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The drive is already busy */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    heartbeat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Worker identifier */
+                worker_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Acknowledged */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HeartbeatResponse"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not this worker */
             404: {
                 headers: {
                     [name: string]: unknown;

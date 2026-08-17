@@ -36,6 +36,16 @@ pub enum ErrorCode {
     StorageUnavailable,
     /// A stored manifest failed its own validation.
     ManifestInvalid,
+    /// No usable credential was presented.
+    ///
+    /// Deliberately not split into "missing", "malformed" and "unknown": the
+    /// distinction tells a caller probing for valid credentials which guesses
+    /// were closer.
+    Unauthenticated,
+    /// The request conflicts with the current state of the resource.
+    Conflict,
+    /// The client and server share no protocol version.
+    UnsupportedProtocol,
     /// Anything unanticipated.
     Internal,
 }
@@ -50,6 +60,9 @@ impl ErrorCode {
             Self::InvalidCursor => "INVALID_CURSOR",
             Self::StorageUnavailable => "STORAGE_UNAVAILABLE",
             Self::ManifestInvalid => "MANIFEST_INVALID",
+            Self::Unauthenticated => "UNAUTHENTICATED",
+            Self::Conflict => "CONFLICT",
+            Self::UnsupportedProtocol => "UNSUPPORTED_PROTOCOL",
             Self::Internal => "INTERNAL",
         }
     }
@@ -59,13 +72,20 @@ impl ErrorCode {
     pub const fn status(&self) -> StatusCode {
         match self {
             Self::NotFound => StatusCode::NOT_FOUND,
-            Self::InvalidParameter | Self::InvalidCursor => StatusCode::BAD_REQUEST,
+            Self::InvalidParameter | Self::InvalidCursor | Self::UnsupportedProtocol => {
+                StatusCode::BAD_REQUEST
+            }
             // 503 rather than 500: the library being unreadable is usually a
             // mount or permissions problem an operator can fix, and it is
             // worth retrying.
             Self::StorageUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             // The request was fine; the stored data is not.
             Self::ManifestInvalid => StatusCode::UNPROCESSABLE_ENTITY,
+            // 401 rather than 403 throughout: worker routes have no notion of
+            // an authenticated-but-unauthorised caller. Either the credential
+            // identifies a worker or the request is anonymous.
+            Self::Unauthenticated => StatusCode::UNAUTHORIZED,
+            Self::Conflict => StatusCode::CONFLICT,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -79,6 +99,9 @@ impl ErrorCode {
             Self::InvalidCursor => "Invalid pagination cursor",
             Self::StorageUnavailable => "Storage is unavailable",
             Self::ManifestInvalid => "Stored manifest is invalid",
+            Self::Unauthenticated => "Not authenticated",
+            Self::Conflict => "Conflicting request",
+            Self::UnsupportedProtocol => "Unsupported protocol version",
             Self::Internal => "Internal error",
         }
     }
@@ -204,6 +227,9 @@ mod tests {
             ErrorCode::InvalidCursor,
             ErrorCode::StorageUnavailable,
             ErrorCode::ManifestInvalid,
+            ErrorCode::Unauthenticated,
+            ErrorCode::Conflict,
+            ErrorCode::UnsupportedProtocol,
             ErrorCode::Internal,
         ];
         let mut seen = std::collections::BTreeSet::new();

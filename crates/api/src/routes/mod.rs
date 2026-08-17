@@ -4,3 +4,4 @@
 //! HTTP routes, grouped by the resource they serve.
 
 pub mod artifacts;
+pub mod workers;

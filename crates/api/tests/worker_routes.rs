@@ -1,0 +1,825 @@
+// SPDX-FileCopyrightText: 2026 digitalgrease
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+//! The worker protocol, exercised through the real router.
+//!
+//! Requests go through axum's routing, the credential extractor and the
+//! repositories against a real PostgreSQL, because the properties worth
+//! testing here (that a credential authorises acting as exactly one worker,
+//! that an enrollment token works once) are properties of the whole path and
+//! not of any one function on it.
+//!
+//! Fixtures bind their parameters rather than formatting them into the SQL.
+//! Nothing here is untrusted, but test files get copied.
+
+#![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use sqlx::PgPool;
+use tangible_api::{ApiState, router};
+use tangible_db::{Database, DbConfig};
+use tower::ServiceExt as _;
+
+/// Serialises tests that assert on the state of the whole queue.
+///
+/// Same reason as the repository tests: claiming takes any queued job, so a
+/// test asserting "nothing to do" races anything that queues work.
+static QUEUE: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+
+async fn exclusive_queue() -> tokio::sync::MutexGuard<'static, ()> {
+    QUEUE
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await
+}
+
+async fn drain_queue(pool: &PgPool) {
+    sqlx::query("UPDATE burn_jobs SET state = 'canceled' WHERE state = 'queued'")
+        .execute(pool)
+        .await
+        .expect("drain the queue");
+}
+
+struct Harness {
+    router: axum::Router,
+    pool: PgPool,
+}
+
+async fn harness() -> Harness {
+    let url = std::env::var("TANGIBLE_TEST_DATABASE_URL")
+        .or_else(|_| std::env::var("TANGIBLE_DATABASE_URL"))
+        .expect("set TANGIBLE_TEST_DATABASE_URL to run integration tests");
+    let database = Database::connect(&DbConfig::new(url))
+        .await
+        .expect("connect");
+    database.migrate().await.expect("migrate");
+    let pool = database.pool().clone();
+
+    Harness {
+        router: router(ApiState::new(database)),
+        pool,
+    }
+}
+
+impl Harness {
+    async fn send(&self, request: Request<Body>) -> (StatusCode, serde_json::Value) {
+        let response = self
+            .router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("route the request");
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .expect("read the body");
+        // 204 carries no body; represent it as null rather than failing to parse.
+        let body = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).expect("a JSON body")
+        };
+        (status, body)
+    }
+
+    async fn post(
+        &self,
+        path: &str,
+        credential: Option<&str>,
+        body: serde_json::Value,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("content-type", "application/json");
+        if let Some(credential) = credential {
+            request = request.header("authorization", format!("Bearer {credential}"));
+        }
+        self.send(
+            request
+                .body(Body::from(body.to_string()))
+                .expect("build the request"),
+        )
+        .await
+    }
+}
+
+/// Issue an enrollment token directly, as an administrator would.
+async fn issue_token(pool: &PgPool) -> String {
+    let secret = format!("tgw_enroll_{}", uuid::Uuid::now_v7().simple());
+    sqlx::query(
+        "INSERT INTO worker_enrollments (id, token_hash, expires_at, created_by)
+         VALUES ($1, $2, now() + interval '1 hour', 'test')",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(hex_sha256(&secret))
+    .execute(pool)
+    .await
+    .expect("issue an enrollment token");
+    secret
+}
+
+/// The same hashing the server applies to a presented secret.
+fn hex_sha256(value: &str) -> String {
+    use sha2::Digest as _;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(value.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+/// Enroll a worker and return its identity and credential.
+///
+/// The name is unique per call: worker names are unique in the schema, and
+/// tests share one database.
+async fn enroll(harness: &Harness) -> (String, String) {
+    let token = issue_token(&harness.pool).await;
+    let (status, body) = harness
+        .post(
+            "/api/v1/worker-enrollments/consume",
+            None,
+            serde_json::json!({
+                "enrollment_token": token,
+                "name": format!("test-worker-{}", uuid::Uuid::now_v7()),
+                "protocol_versions": ["1alpha1"],
+                "software_version": "0.1.0",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    (
+        body["worker_id"].as_str().expect("worker_id").to_owned(),
+        body["credential"].as_str().expect("credential").to_owned(),
+    )
+}
+
+// --- enrollment ------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn enrollment_returns_a_usable_credential() {
+    let harness = harness().await;
+    let (worker_id, credential) = enroll(&harness).await;
+
+    assert!(credential.starts_with("tgw_live_"));
+
+    // Usable means usable: the credential authenticates on a real route.
+    let (status, _) = harness
+        .post(
+            &format!("/api/v1/workers/{worker_id}/heartbeat"),
+            Some(&credential),
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_enrollment_token_works_exactly_once() {
+    let harness = harness().await;
+    let token = issue_token(&harness.pool).await;
+    let request = serde_json::json!({
+        "enrollment_token": token,
+        "name": format!("test-worker-{}", uuid::Uuid::now_v7()),
+        "protocol_versions": ["1alpha1"],
+        "software_version": "0.1.0",
+    });
+
+    let (first, _) = harness
+        .post("/api/v1/worker-enrollments/consume", None, request.clone())
+        .await;
+    assert_eq!(first, StatusCode::OK);
+
+    let (second, body) = harness
+        .post("/api/v1/worker-enrollments/consume", None, request)
+        .await;
+    assert_eq!(second, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["code"], "UNAUTHENTICATED");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_unknown_and_a_spent_token_are_indistinguishable() {
+    // A caller must not be able to probe for tokens that once existed.
+    let harness = harness().await;
+    let token = issue_token(&harness.pool).await;
+    let body_for = |secret: &str| {
+        serde_json::json!({
+            "enrollment_token": secret,
+            "name": format!("test-worker-{}", uuid::Uuid::now_v7()),
+            "protocol_versions": ["1alpha1"],
+            "software_version": "0.1.0",
+        })
+    };
+
+    harness
+        .post("/api/v1/worker-enrollments/consume", None, body_for(&token))
+        .await;
+    let (spent_status, spent) = harness
+        .post("/api/v1/worker-enrollments/consume", None, body_for(&token))
+        .await;
+    let (unknown_status, unknown) = harness
+        .post(
+            "/api/v1/worker-enrollments/consume",
+            None,
+            body_for("tgw_enroll_never-existed"),
+        )
+        .await;
+
+    assert_eq!(spent_status, unknown_status);
+    assert_eq!(spent["code"], unknown["code"]);
+    assert_eq!(spent["detail"], unknown["detail"]);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_unspeakable_protocol_is_refused_without_spending_the_token() {
+    // Negotiation happens before the token is consumed, so a client that
+    // cannot talk to this server does not burn its one-use token finding out.
+    let harness = harness().await;
+    let token = issue_token(&harness.pool).await;
+
+    let (status, body) = harness
+        .post(
+            "/api/v1/worker-enrollments/consume",
+            None,
+            serde_json::json!({
+                "enrollment_token": token,
+                "name": format!("test-worker-{}", uuid::Uuid::now_v7()),
+                "protocol_versions": ["99beta"],
+                "software_version": "0.1.0",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "UNSUPPORTED_PROTOCOL");
+
+    // The token still works.
+    let (retry, _) = harness
+        .post(
+            "/api/v1/worker-enrollments/consume",
+            None,
+            serde_json::json!({
+                "enrollment_token": token,
+                "name": format!("test-worker-{}", uuid::Uuid::now_v7()),
+                "protocol_versions": ["1alpha1"],
+                "software_version": "0.1.0",
+            }),
+        )
+        .await;
+    assert_eq!(retry, StatusCode::OK);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_bad_token_answers_the_same_whether_or_not_the_name_is_taken() {
+    // Enrollment is unauthenticated, so if a taken name answered differently
+    // from a free one, anyone who could reach the server could enumerate
+    // worker names by sending junk tokens. The token is settled first
+    // precisely so this pair of requests is indistinguishable.
+    let harness = harness().await;
+    let taken = format!("test-worker-{}", uuid::Uuid::now_v7());
+    let valid = issue_token(&harness.pool).await;
+    let (created, _) = harness
+        .post(
+            "/api/v1/worker-enrollments/consume",
+            None,
+            serde_json::json!({
+                "enrollment_token": valid,
+                "name": taken,
+                "protocol_versions": ["1alpha1"],
+                "software_version": "0.1.0",
+            }),
+        )
+        .await;
+    assert_eq!(created, StatusCode::OK);
+
+    let probe = |name: String| {
+        serde_json::json!({
+            "enrollment_token": "tgw_enroll_junk",
+            "name": name,
+            "protocol_versions": ["1alpha1"],
+            "software_version": "0.1.0",
+        })
+    };
+    let (taken_status, taken_body) = harness
+        .post("/api/v1/worker-enrollments/consume", None, probe(taken))
+        .await;
+    let (free_status, free_body) = harness
+        .post(
+            "/api/v1/worker-enrollments/consume",
+            None,
+            probe(format!("test-worker-{}", uuid::Uuid::now_v7())),
+        )
+        .await;
+
+    assert_eq!(taken_status, StatusCode::UNAUTHORIZED);
+    assert_eq!(taken_status, free_status);
+    assert_eq!(taken_body["code"], free_body["code"]);
+    assert_eq!(taken_body["detail"], free_body["detail"]);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_taken_name_with_a_good_token_is_a_conflict() {
+    // Once the token is known good, the name collision is the operator's own
+    // mistake and is worth saying plainly.
+    let harness = harness().await;
+    let name = format!("test-worker-{}", uuid::Uuid::now_v7());
+    let request = |token: String| {
+        serde_json::json!({
+            "enrollment_token": token,
+            "name": name,
+            "protocol_versions": ["1alpha1"],
+            "software_version": "0.1.0",
+        })
+    };
+
+    let first = issue_token(&harness.pool).await;
+    let (created, _) = harness
+        .post("/api/v1/worker-enrollments/consume", None, request(first))
+        .await;
+    assert_eq!(created, StatusCode::OK);
+
+    let second = issue_token(&harness.pool).await;
+    let (status, body) = harness
+        .post(
+            "/api/v1/worker-enrollments/consume",
+            None,
+            request(second.clone()),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["code"], "CONFLICT");
+
+    // A rejected name must not spend the token.
+    let (retry, _) = harness
+        .post(
+            "/api/v1/worker-enrollments/consume",
+            None,
+            serde_json::json!({
+                "enrollment_token": second,
+                "name": format!("{name}-2"),
+                "protocol_versions": ["1alpha1"],
+                "software_version": "0.1.0",
+            }),
+        )
+        .await;
+    assert_eq!(retry, StatusCode::OK);
+}
+
+// --- authentication --------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_worker_cannot_act_as_another_worker() {
+    // The reason the path is checked against the identity at all. Without it,
+    // any enrolled worker could drive somebody else's hardware by editing a
+    // URL, and every worker in the fleet holds a valid credential.
+    let harness = harness().await;
+    let (_, credential_a) = enroll(&harness).await;
+    let (worker_b, _) = enroll(&harness).await;
+
+    let (status, body) = harness
+        .post(
+            &format!("/api/v1/workers/{worker_b}/heartbeat"),
+            Some(&credential_a),
+            serde_json::json!({}),
+        )
+        .await;
+
+    // Not-found rather than forbidden: confirming that worker B exists is
+    // information worker A has no business having.
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "NOT_FOUND");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn claiming_as_another_worker_is_refused() {
+    // The same check on the route that actually starts hardware moving.
+    let harness = harness().await;
+    let (_, credential_a) = enroll(&harness).await;
+    let (worker_b, _) = enroll(&harness).await;
+
+    let (status, _) = harness
+        .post(
+            &format!("/api/v1/workers/{worker_b}/claims"),
+            Some(&credential_a),
+            serde_json::json!({
+                "drive_id": uuid::Uuid::now_v7().to_string(),
+                "engine": "fake",
+                "engine_version": "0.1.0",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn requests_without_a_credential_are_refused() {
+    let harness = harness().await;
+    let (worker_id, _) = enroll(&harness).await;
+
+    let (status, body) = harness
+        .post(
+            &format!("/api/v1/workers/{worker_id}/heartbeat"),
+            None,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["code"], "UNAUTHENTICATED");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_credential_of_the_wrong_kind_is_refused() {
+    // A user session token presented to a worker route must fail on kind,
+    // before any lookup, whatever the store happens to contain.
+    let harness = harness().await;
+    let (worker_id, _) = enroll(&harness).await;
+
+    let (status, _) = harness
+        .post(
+            &format!("/api/v1/workers/{worker_id}/heartbeat"),
+            Some("tgu_live_some-user-session"),
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_revoked_worker_is_refused() {
+    let harness = harness().await;
+    let (worker_id, credential) = enroll(&harness).await;
+
+    // Both columns together: the schema refuses a revocation with no record of
+    // when it happened.
+    sqlx::query("UPDATE workers SET status = 'revoked', revoked_at = now() WHERE id = $1::uuid")
+        .bind(&worker_id)
+        .execute(&harness.pool)
+        .await
+        .expect("revoke");
+
+    let (status, _) = harness
+        .post(
+            &format!("/api/v1/workers/{worker_id}/heartbeat"),
+            Some(&credential),
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+// --- claiming --------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_empty_queue_answers_no_content() {
+    // Polling an empty queue is the common case and must not read as an error.
+    let _queue = exclusive_queue().await;
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let (worker_id, credential) = enroll(&harness).await;
+    let drive = seed_drive(&harness.pool, &worker_id).await;
+
+    let (status, body) = harness
+        .post(
+            &format!("/api/v1/workers/{worker_id}/claims"),
+            Some(&credential),
+            serde_json::json!({
+                "drive_id": drive,
+                "engine": "fake",
+                "engine_version": "0.1.0",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(body, serde_json::Value::Null);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_claim_leases_work_and_the_lease_can_be_renewed() {
+    let _queue = exclusive_queue().await;
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let (worker_id, credential) = enroll(&harness).await;
+    let drive = seed_drive(&harness.pool, &worker_id).await;
+    queue_job(&harness.pool).await;
+
+    let (status, claim) = harness
+        .post(
+            &format!("/api/v1/workers/{worker_id}/claims"),
+            Some(&credential),
+            serde_json::json!({
+                "drive_id": drive,
+                "engine": "fake",
+                "engine_version": "0.1.0",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{claim}");
+    assert_eq!(claim["attempt_number"], 1);
+
+    let attempt = claim["attempt_id"].as_str().expect("attempt_id");
+    let lease = claim["lease_token"].as_str().expect("lease_token");
+    assert!(lease.starts_with("tgw_lease_"));
+
+    let (renewed, body) = harness
+        .post(
+            &format!("/api/v1/burn-attempts/{attempt}/lease/renew"),
+            Some(&credential),
+            serde_json::json!({ "lease_token": lease }),
+        )
+        .await;
+    assert_eq!(renewed, StatusCode::OK, "{body}");
+    assert!(body["lease_expires_at"].is_string());
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_lease_cannot_be_renewed_without_its_token() {
+    // Being *a* worker is not enough; renewal requires holding the lease.
+    // Otherwise any worker could keep another's attempt alive indefinitely.
+    let _queue = exclusive_queue().await;
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let (worker_id, credential) = enroll(&harness).await;
+    let drive = seed_drive(&harness.pool, &worker_id).await;
+    queue_job(&harness.pool).await;
+
+    let (_, claim) = harness
+        .post(
+            &format!("/api/v1/workers/{worker_id}/claims"),
+            Some(&credential),
+            serde_json::json!({
+                "drive_id": drive,
+                "engine": "fake",
+                "engine_version": "0.1.0",
+            }),
+        )
+        .await;
+    let attempt = claim["attempt_id"].as_str().expect("attempt_id");
+
+    let (_, other_credential) = enroll(&harness).await;
+    let (status, _) = harness
+        .post(
+            &format!("/api/v1/burn-attempts/{attempt}/lease/renew"),
+            Some(&other_credential),
+            serde_json::json!({ "lease_token": "tgw_lease_guessed" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_busy_drive_reports_a_conflict() {
+    let _queue = exclusive_queue().await;
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let (worker_id, credential) = enroll(&harness).await;
+    let drive = seed_drive(&harness.pool, &worker_id).await;
+    queue_job(&harness.pool).await;
+    queue_job(&harness.pool).await;
+
+    let claim = serde_json::json!({
+        "drive_id": drive,
+        "engine": "fake",
+        "engine_version": "0.1.0",
+    });
+    let path = format!("/api/v1/workers/{worker_id}/claims");
+
+    let (first, _) = harness.post(&path, Some(&credential), claim.clone()).await;
+    assert_eq!(first, StatusCode::OK);
+
+    // One drive, one attempt: the second claim must not hand this worker a
+    // second job for hardware already writing.
+    let (second, body) = harness.post(&path, Some(&credential), claim).await;
+    assert_eq!(second, StatusCode::CONFLICT);
+    assert_eq!(body["code"], "CONFLICT");
+}
+
+// --- events ----------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn resubmitting_events_is_idempotent() {
+    // What lets a worker resend everything unacknowledged after an outage
+    // without knowing what arrived.
+    let _queue = exclusive_queue().await;
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let attempt = claimed_attempt(&harness).await;
+    let path = format!("/api/v1/burn-attempts/{}/events", attempt.id);
+
+    let batch = serde_json::json!({
+        "events": [
+            event(1, "stage_changed", "preflight"),
+            event(2, "progress", "write"),
+        ]
+    });
+
+    let (first, ack) = harness
+        .post(&path, Some(&attempt.credential), batch.clone())
+        .await;
+    assert_eq!(first, StatusCode::OK, "{ack}");
+    assert_eq!(ack["accepted_through_sequence"], 2);
+
+    let (second, again) = harness.post(&path, Some(&attempt.credential), batch).await;
+    assert_eq!(second, StatusCode::OK);
+    assert_eq!(again["accepted_through_sequence"], 2);
+
+    let stored: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM burn_events WHERE attempt_id = $1::uuid")
+            .bind(&attempt.id)
+            .fetch_one(&harness.pool)
+            .await
+            .expect("count events");
+    assert_eq!(stored, 2, "a replayed batch must not duplicate rows");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn acknowledgement_stops_at_a_gap() {
+    // Acknowledging the maximum would tell the worker to discard events it
+    // still holds and the server does not.
+    let _queue = exclusive_queue().await;
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let attempt = claimed_attempt(&harness).await;
+
+    let (status, ack) = harness
+        .post(
+            &format!("/api/v1/burn-attempts/{}/events", attempt.id),
+            Some(&attempt.credential),
+            serde_json::json!({
+                "events": [
+                    event(1, "progress", "write"),
+                    event(2, "progress", "write"),
+                    event(5, "progress", "write"),
+                ]
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+    assert_eq!(ack["accepted_through_sequence"], 2);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_oversized_batch_is_refused() {
+    let harness = harness().await;
+    let (_, credential) = enroll(&harness).await;
+    let events: Vec<_> = (1..=600).map(|n| event(n, "progress", "write")).collect();
+
+    let (status, body) = harness
+        .post(
+            &format!("/api/v1/burn-attempts/{}/events", uuid::Uuid::now_v7()),
+            Some(&credential),
+            serde_json::json!({ "events": events }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "INVALID_PARAMETER");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_malformed_identifier_is_a_bad_request_not_a_server_error() {
+    let harness = harness().await;
+    let (_, credential) = enroll(&harness).await;
+
+    let (status, body) = harness
+        .post(
+            "/api/v1/burn-attempts/not-a-uuid/events",
+            Some(&credential),
+            serde_json::json!({ "events": [] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "INVALID_PARAMETER");
+}
+
+// --- fixtures --------------------------------------------------------------
+
+fn event(sequence: i64, event_type: &str, stage: &str) -> serde_json::Value {
+    serde_json::json!({
+        "sequence": sequence,
+        "event_type": event_type,
+        "stage": stage,
+        "code": "TEST",
+        "progress": 0.5,
+        "data": {},
+        "worker_time": "2026-01-01T00:00:00Z",
+    })
+}
+
+/// An attempt leased through the real claim route.
+struct Attempt {
+    id: String,
+    credential: String,
+}
+
+/// Enroll a worker, give it a drive and a job, and claim it.
+///
+/// Only safe to call while holding the queue lock.
+async fn claimed_attempt(harness: &Harness) -> Attempt {
+    let (worker_id, credential) = enroll(harness).await;
+    let drive = seed_drive(&harness.pool, &worker_id).await;
+    queue_job(&harness.pool).await;
+
+    let (status, claim) = harness
+        .post(
+            &format!("/api/v1/workers/{worker_id}/claims"),
+            Some(&credential),
+            serde_json::json!({
+                "drive_id": drive,
+                "engine": "fake",
+                "engine_version": "0.1.0",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{claim}");
+
+    Attempt {
+        id: claim["attempt_id"].as_str().expect("attempt_id").to_owned(),
+        credential,
+    }
+}
+
+/// Attach a drive to an enrolled worker.
+async fn seed_drive(pool: &PgPool, worker_id: &str) -> String {
+    let drive = uuid::Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO drives (id, worker_id, configured_name, device_alias)
+         VALUES ($1, $2::uuid, 'd1', '/dev/disc-block')",
+    )
+    .bind(drive)
+    .bind(worker_id)
+    .execute(pool)
+    .await
+    .expect("attach a drive");
+    drive.to_string()
+}
+
+/// Queue one burn job against a fresh catalog chain.
+async fn queue_job(pool: &PgPool) -> String {
+    let ids: Vec<uuid::Uuid> = (0..6).map(|_| uuid::Uuid::now_v7()).collect();
+    let digest = uuid::Uuid::now_v7().simple().to_string().repeat(2);
+
+    sqlx::query("INSERT INTO cas_objects (sha256, size_bytes) VALUES ($1, 10)")
+        .bind(&digest)
+        .execute(pool)
+        .await
+        .expect("seed a stored object");
+    sqlx::query("INSERT INTO titles (id, display_title, sort_title) VALUES ($1, 'T', 'T')")
+        .bind(ids[0])
+        .execute(pool)
+        .await
+        .expect("seed a title");
+    sqlx::query("INSERT INTO editions (id, title_id, display_name) VALUES ($1, $2, 'E')")
+        .bind(ids[1])
+        .bind(ids[0])
+        .execute(pool)
+        .await
+        .expect("seed an edition");
+    sqlx::query("INSERT INTO disc_sets (id, edition_id, name) VALUES ($1, $2, 'S')")
+        .bind(ids[2])
+        .bind(ids[1])
+        .execute(pool)
+        .await
+        .expect("seed a disc set");
+    sqlx::query("INSERT INTO discs (id, disc_set_id, sequence_number) VALUES ($1, $2, 1)")
+        .bind(ids[3])
+        .bind(ids[2])
+        .execute(pool)
+        .await
+        .expect("seed a disc");
+    sqlx::query(
+        "INSERT INTO artifacts
+             (id, origin, manifest_version, total_bytes, component_count, validation_state)
+         VALUES ($1, 'imported_original', 'v1alpha1', 10, 1, 'valid')",
+    )
+    .bind(ids[4])
+    .execute(pool)
+    .await
+    .expect("seed an artifact");
+    sqlx::query(
+        "INSERT INTO burn_jobs (id, disc_id, artifact_id, created_by) VALUES ($1, $2, $3, 'test')",
+    )
+    .bind(ids[5])
+    .bind(ids[3])
+    .bind(ids[4])
+    .execute(pool)
+    .await
+    .expect("queue a job");
+
+    ids[5].to_string()
+}

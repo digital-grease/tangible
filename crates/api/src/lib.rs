@@ -48,6 +48,11 @@ pub const API_BASE: &str = "/api/v1";
         routes::artifacts::get_artifact,
         routes::artifacts::get_manifest,
         routes::artifacts::list_components,
+        routes::workers::consume_enrollment_token,
+        routes::workers::heartbeat,
+        routes::workers::claim_work,
+        routes::workers::renew,
+        routes::workers::submit_events,
     ),
     components(schemas(
         health::Liveness,
@@ -58,13 +63,45 @@ pub const API_BASE: &str = "/api/v1";
         routes::artifacts::ArtifactSummary,
         routes::artifacts::ArtifactDetail,
         routes::artifacts::ComponentView,
+        routes::workers::EnrollmentRequest,
+        routes::workers::EnrollmentResponse,
+        routes::workers::HeartbeatResponse,
+        routes::workers::ClaimRequest,
+        routes::workers::ClaimResponse,
+        routes::workers::RenewRequest,
+        routes::workers::RenewResponse,
+        routes::workers::EventBatch,
+        routes::workers::EventSubmission,
+        routes::workers::EventAck,
     )),
+    modifiers(&WorkerSecurity),
     tags(
         (name = "operations", description = "Liveness and readiness probes"),
         (name = "library", description = "Artifacts and their components"),
+        (name = "workers", description = "The burn-worker protocol"),
     ),
 )]
 pub struct ApiDoc;
+
+/// Declare the worker credential scheme in the generated document.
+///
+/// utoipa cannot infer a security scheme from a `security(...)` reference
+/// alone, so it is registered here; without this the routes would advertise a
+/// scheme the document never defines, and a generated client would omit the
+/// header entirely.
+struct WorkerSecurity;
+
+impl utoipa::Modify for WorkerSecurity {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        use utoipa::openapi::security::{Http, HttpAuthScheme, SecurityScheme};
+
+        let components = openapi.components.get_or_insert_with(Default::default);
+        components.add_security_scheme(
+            "worker_credential",
+            SecurityScheme::Http(Http::new(HttpAuthScheme::Bearer)),
+        );
+    }
+}
 
 /// Serialize the OpenAPI document as pretty-printed JSON.
 ///
@@ -105,6 +142,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/livez", get(health::livez))
         .route("/readyz", get(health::readyz))
         .nest(API_BASE, routes::artifacts::router())
+        .nest(API_BASE, routes::workers::router())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

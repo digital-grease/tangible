@@ -67,6 +67,21 @@ pub enum ClaimOutcome {
     DriveBusy,
 }
 
+/// Why an enrollment could not be completed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnrollmentOutcome {
+    /// The token does not exist, has been used, was revoked, or has expired.
+    ///
+    /// One variant covering all four on purpose. A caller able to tell them
+    /// apart could confirm that a guessed token once existed, so nothing
+    /// downstream is given the chance to leak the difference.
+    TokenUnusable,
+    /// Another worker already uses that name.
+    ///
+    /// Safe to report precisely: it concerns the request, not the token.
+    NameTaken,
+}
+
 /// Claim the next queued burn job for a drive.
 ///
 /// The concurrency-critical function in the system. Two workers polling at the
@@ -355,13 +370,20 @@ async fn highest_contiguous_sequence(
 
 /// Exchange an enrollment token for a worker.
 ///
-/// The one-use guarantee is the `WHERE state = 'unused'` clause combined with
-/// `RETURNING`: PostgreSQL applies the update to at most one row and reports
-/// whether it did, so two simultaneous requests with the same token cannot
-/// both succeed. Checking then updating would leave a window between them.
+/// The one-use guarantee is the `SELECT ... FOR UPDATE` that opens the
+/// transaction. A second request for the same token blocks on that row lock,
+/// and when the first commits, PostgreSQL re-evaluates the predicate against
+/// the now-consumed row and finds nothing. Two simultaneous requests therefore
+/// cannot both succeed, without an unlocked check-then-update window between
+/// them.
 ///
-/// Returns `None` when the token does not exist, has been used, was revoked,
-/// or has expired. The caller must not distinguish those to its own caller.
+/// Reports [`EnrollmentOutcome::TokenUnusable`] when the token does not exist,
+/// has been used, was revoked, or has expired. Those are deliberately one
+/// outcome: a caller that could tell them apart could probe for tokens that
+/// once existed.
+///
+/// A name already in use is reported separately, because it is an ordinary
+/// mistake an operator can fix and says nothing about any token.
 ///
 /// # Errors
 ///
@@ -373,20 +395,41 @@ pub async fn consume_enrollment(
     software_version: &str,
     protocol_version: &str,
     credential_hash: &str,
-) -> Result<Option<WorkerId>, DbError> {
+) -> Result<Result<WorkerId, EnrollmentOutcome>, DbError> {
     let mut tx = pool.begin().await.map_err(DbError::Query)?;
 
-    // The worker is inserted first, because the enrollment row's
-    // consumed-is-whole constraint requires the state, the timestamp and the
-    // worker to be set together. Marking the token used and filling in the
-    // worker afterwards violates it in between, which the constraint caught,
-    // and which is exactly the intermediate state it exists to forbid.
+    // The token is settled before anything else is touched. Inserting the
+    // worker first would make this route answer differently for a name that
+    // exists than for one that does not, turning an unauthenticated endpoint
+    // into an oracle for worker names: send any junk token and read the status.
     //
-    // Ordering it this way is safe because the whole thing is one transaction:
-    // if the token turns out to be unusable, the worker insert rolls back with
-    // it and no orphan is left.
+    // FOR UPDATE, not a bare SELECT: it holds the row for the rest of the
+    // transaction, so a concurrent request waits here rather than reading
+    // 'unused' alongside this one.
+    let enrollment = sqlx::query(
+        "SELECT id FROM worker_enrollments
+         WHERE token_hash = $1 AND state = 'unused' AND expires_at > now()
+         FOR UPDATE",
+    )
+    .bind(token_hash)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
+
+    let Some(enrollment) = enrollment else {
+        tx.rollback().await.map_err(DbError::Query)?;
+        return Ok(Err(EnrollmentOutcome::TokenUnusable));
+    };
+    let enrollment_id: uuid::Uuid = enrollment.try_get("id").map_err(DbError::Query)?;
+
+    // The worker is inserted before the token is marked consumed, because the
+    // enrollment row's consumed-is-whole constraint requires the state, the
+    // timestamp and the worker to be set together. Marking the token used and
+    // filling in the worker afterwards violates it in between, which the
+    // constraint caught, and which is exactly the intermediate state it exists
+    // to forbid.
     let worker_id = WorkerId::generate();
-    sqlx::query(
+    let inserted = sqlx::query(
         "INSERT INTO workers
              (id, name, status, software_version, protocol_version, credential_hash)
          VALUES ($1, $2, 'pending', $3, $4, $5)",
@@ -397,32 +440,35 @@ pub async fn consume_enrollment(
     .bind(protocol_version)
     .bind(credential_hash)
     .execute(&mut *tx)
-    .await
-    .map_err(DbError::Query)?;
+    .await;
 
-    // One conditional update carries the whole transition. Two simultaneous
-    // requests cannot both match `state = 'unused'`, so only one can succeed;
-    // checking first and updating after would leave a window where both see it.
-    let claimed = sqlx::query(
-        "UPDATE worker_enrollments
-         SET state = 'consumed', consumed_at = now(), consumed_by_worker_id = $2
-         WHERE token_hash = $1 AND state = 'unused' AND expires_at > now()
-         RETURNING id",
-    )
-    .bind(token_hash)
-    .bind(worker_id.as_uuid())
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(DbError::Query)?;
-
-    if claimed.is_none() {
-        // Rolls back the worker insert too.
-        tx.rollback().await.map_err(DbError::Query)?;
-        return Ok(None);
+    if let Err(error) = inserted {
+        // Worker names are unique, so a second worker enrolling under a name
+        // already taken lands here. Reported as its own outcome rather than a
+        // database failure: it is a request the operator can correct, and
+        // calling it a storage fault points them at the wrong problem.
+        if is_unique_violation(&error) {
+            tx.rollback().await.map_err(DbError::Query)?;
+            return Ok(Err(EnrollmentOutcome::NameTaken));
+        }
+        return Err(DbError::Query(error));
     }
 
+    // Addressed by id, which this transaction holds locked: no other request
+    // can have changed the row out from under it since the check above.
+    sqlx::query(
+        "UPDATE worker_enrollments
+         SET state = 'consumed', consumed_at = now(), consumed_by_worker_id = $2
+         WHERE id = $1",
+    )
+    .bind(enrollment_id)
+    .bind(worker_id.as_uuid())
+    .execute(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
+
     tx.commit().await.map_err(DbError::Query)?;
-    Ok(Some(worker_id))
+    Ok(Ok(worker_id))
 }
 
 /// Find a worker by its credential hash.

@@ -1858,6 +1858,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "sqlx",
  "subtle",
  "tangible-burn",
  "tangible-db",
@@ -1874,6 +1875,7 @@ dependencies = [
  "tracing",
  "utoipa",
  "utoipa-axum",
+ "uuid",
 ]
 
 [[package]]

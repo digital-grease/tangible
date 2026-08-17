@@ -33,5 +33,7 @@ utoipa-axum = "0.2.0"
 workspace = true
 
 [dev-dependencies]
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "uuid", "time"] }
 tempfile = "3.27.0"
 tower = { version = "0.5.3", features = ["util"] }
+uuid = { version = "1.24.0", features = ["v7"] }
