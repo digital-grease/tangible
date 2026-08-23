@@ -16,7 +16,9 @@
 //! work against the database alone, and commits.
 
 use sqlx::{PgPool, Postgres, Row, Transaction};
-use tangible_domain::{BurnAttemptId, BurnJobId, DriveId, WorkerId};
+use std::str::FromStr as _;
+
+use tangible_domain::{BurnAttemptId, BurnAttemptState, BurnJobId, DriveId, WorkerId};
 use time::OffsetDateTime;
 
 use crate::DbError;
@@ -541,4 +543,220 @@ pub async fn set_attempt_state(
     .await
     .map_err(DbError::Query)?;
     Ok(result.rows_affected() > 0)
+}
+
+/// What a worker reports when it finishes an attempt.
+///
+/// Every field the completion writes, gathered into one struct so the call
+/// site reads as a record rather than a queue of positional arguments.
+#[derive(Debug, Clone, Copy)]
+pub struct AttemptCompletion<'a> {
+    /// The terminal state the attempt reached.
+    pub state: BurnAttemptState,
+    /// The engine's own account of the write.
+    pub write_report: &'a serde_json::Value,
+    /// The read-back comparison, when one ran.
+    pub verify_report: Option<&'a serde_json::Value>,
+    /// Media profile of the disc in the drive.
+    pub media_profile: &'a str,
+    /// Manufacturer identifier, when the drive reported one.
+    pub manufacturer_id: Option<&'a str>,
+    /// Media serial, when the drive reported one.
+    pub media_serial: Option<&'a str>,
+    /// Which verification the policy asked for.
+    pub verification_level: &'a str,
+    /// How that verification turned out.
+    pub verification_result: &'a str,
+    /// The resulting condition of the disc.
+    pub copy_status: &'a str,
+    /// A stable failure code, when the attempt failed.
+    pub error_code: Option<&'a str>,
+    /// Human-readable failure detail, when the attempt failed.
+    pub error_detail: Option<&'a str>,
+}
+
+/// What completing an attempt produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompletionRecord {
+    /// The disc recorded, if the attempt consumed media.
+    pub physical_copy_id: Option<uuid::Uuid>,
+    /// Whether the attempt had already been completed by an earlier request.
+    ///
+    /// The worker is told the same thing either way. This exists so the server
+    /// can tell a retry from a first report in its logs.
+    pub already_completed: bool,
+}
+
+/// Why an attempt could not be completed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompletionOutcome {
+    /// No attempt with that identifier holds that lease.
+    ///
+    /// One outcome for "no such attempt" and "not your lease" together: a
+    /// caller able to distinguish them could confirm which attempt
+    /// identifiers exist.
+    NoSuchLeasedAttempt,
+}
+
+/// Record the end of a burn attempt.
+///
+/// Idempotent, because completion is precisely the request a worker retries
+/// after a network failure, and it is the request that creates a physical
+/// disc record. A second report of an already-finished attempt returns what
+/// the first produced rather than recording a second disc, which the unique
+/// constraint on `physical_copies.burn_attempt_id` would refuse anyway. Doing
+/// it here means the worker sees success on its retry instead of an error it
+/// cannot act on.
+///
+/// A physical copy is recorded exactly when the attempt consumed media, using
+/// the same judgement the `physical_copies_require_write` trigger enforces. A
+/// ruined disc is still a disc: it must be trackable so it can be destroyed
+/// rather than shelved and reused.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn complete_attempt(
+    pool: &PgPool,
+    attempt_id: BurnAttemptId,
+    lease_token_hash: &str,
+    completion: AttemptCompletion<'_>,
+) -> Result<Result<CompletionRecord, CompletionOutcome>, DbError> {
+    let mut tx = pool.begin().await.map_err(DbError::Query)?;
+
+    // The lease hash is part of the predicate, so a completion presented by
+    // anything but the holder matches no row. FOR UPDATE OF the attempt alone:
+    // the joined job and copy are read, not modified under this lock.
+    let existing = sqlx::query(
+        "SELECT a.state, a.burn_job_id, j.disc_id, j.artifact_id, c.id AS copy_id
+         FROM burn_attempts a
+         JOIN burn_jobs j ON j.id = a.burn_job_id
+         LEFT JOIN physical_copies c ON c.burn_attempt_id = a.id
+         WHERE a.id = $1 AND a.lease_token_hash = $2
+         FOR UPDATE OF a",
+    )
+    .bind(attempt_id.as_uuid())
+    .bind(lease_token_hash)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
+
+    let Some(existing) = existing else {
+        tx.rollback().await.map_err(DbError::Query)?;
+        return Ok(Err(CompletionOutcome::NoSuchLeasedAttempt));
+    };
+
+    let current: String = existing.try_get("state").map_err(DbError::Query)?;
+    let copy_id: Option<uuid::Uuid> = existing.try_get("copy_id").map_err(DbError::Query)?;
+
+    // Already finished: report what the first completion produced. Rewriting
+    // the reports would let a late duplicate overwrite the account of a burn
+    // that has already been reconciled.
+    if BurnAttemptState::from_str(&current).is_ok_and(|state| state.is_terminal()) {
+        tx.commit().await.map_err(DbError::Query)?;
+        return Ok(Ok(CompletionRecord {
+            physical_copy_id: copy_id,
+            already_completed: true,
+        }));
+    }
+
+    let burn_job_id: uuid::Uuid = existing.try_get("burn_job_id").map_err(DbError::Query)?;
+    let disc_id: uuid::Uuid = existing.try_get("disc_id").map_err(DbError::Query)?;
+    let artifact_id: uuid::Uuid = existing.try_get("artifact_id").map_err(DbError::Query)?;
+
+    sqlx::query(
+        "UPDATE burn_attempts
+         SET state = $2, write_report_json = $3, verify_report_json = $4,
+             error_code = $5, error_detail = $6, ended_at = now()
+         WHERE id = $1",
+    )
+    .bind(attempt_id.as_uuid())
+    .bind(completion.state.as_str())
+    .bind(completion.write_report)
+    .bind(completion.verify_report)
+    .bind(completion.error_code)
+    .bind(completion.error_detail)
+    .execute(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
+
+    let physical_copy_id = if completion.state.consumed_media() {
+        let id = uuid::Uuid::now_v7();
+        sqlx::query(
+            "INSERT INTO physical_copies
+                 (id, disc_id, artifact_id, burn_attempt_id, status, media_profile,
+                  manufacturer_id, media_serial, verification_level, verification_result)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        )
+        .bind(id)
+        .bind(disc_id)
+        .bind(artifact_id)
+        .bind(attempt_id.as_uuid())
+        .bind(completion.copy_status)
+        .bind(completion.media_profile)
+        .bind(completion.manufacturer_id)
+        .bind(completion.media_serial)
+        .bind(completion.verification_level)
+        .bind(completion.verification_result)
+        .execute(&mut *tx)
+        .await
+        .map_err(DbError::Query)?;
+        Some(id)
+    } else {
+        None
+    };
+
+    // The job follows the attempt. Only a verified attempt completes a job:
+    // anything else leaves work an operator may want to retry, and calling a
+    // ruined disc "complete" would hide it.
+    let job_state = if completion.state.is_success() {
+        "complete"
+    } else {
+        "failed"
+    };
+    sqlx::query(
+        "UPDATE burn_jobs
+         SET state = $2, updated_at = now(), completed_at = now()
+         WHERE id = $1",
+    )
+    .bind(burn_job_id)
+    .bind(job_state)
+    .execute(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
+
+    tx.commit().await.map_err(DbError::Query)?;
+
+    Ok(Ok(CompletionRecord {
+        physical_copy_id,
+        already_completed: false,
+    }))
+}
+
+/// The state of an attempt, if it belongs to this worker.
+///
+/// Scoped to the worker in the query rather than checked afterwards, so a
+/// recovery cannot be answered using another worker's attempt.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn attempt_state_for_worker(
+    pool: &PgPool,
+    attempt_id: BurnAttemptId,
+    worker_id: WorkerId,
+) -> Result<Option<BurnAttemptState>, DbError> {
+    let row = sqlx::query("SELECT state FROM burn_attempts WHERE id = $1 AND worker_id = $2")
+        .bind(attempt_id.as_uuid())
+        .bind(worker_id.as_uuid())
+        .fetch_optional(pool)
+        .await
+        .map_err(DbError::Query)?;
+
+    let Some(row) = row else { return Ok(None) };
+    let state: String = row.try_get("state").map_err(DbError::Query)?;
+    // An unparseable state means the column and the enum have diverged, which
+    // is a bug rather than a missing row; treating it as absent would answer a
+    // recovery with "discard", so it is reported as unknown instead.
+    Ok(BurnAttemptState::from_str(&state).ok())
 }

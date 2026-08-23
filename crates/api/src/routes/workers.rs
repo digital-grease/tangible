@@ -25,11 +25,13 @@ use axum::http::request::Parts;
 use axum::routing::post;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use tangible_burn::worker::{RecoveryDirective, plan_for};
 use tangible_db::repositories::{
-    ClaimOutcome, EnrollmentOutcome, IncomingEvent, authenticate_worker, claim_next_burn_job,
-    consume_enrollment, record_events, record_heartbeat, renew_lease,
+    AttemptCompletion, ClaimOutcome, EnrollmentOutcome, IncomingEvent, attempt_state_for_worker,
+    authenticate_worker, claim_next_burn_job, complete_attempt, consume_enrollment, record_events,
+    record_heartbeat, renew_lease,
 };
-use tangible_domain::{BurnAttemptId, DriveId, WorkerId};
+use tangible_domain::{BurnAttemptId, BurnAttemptState, DriveId, WorkerId};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 
@@ -622,6 +624,368 @@ fn parse_attempt(raw: &str) -> Result<BurnAttemptId, Problem> {
         .map_err(|_| Problem::invalid_parameter("attempt_id", "not a valid identifier"))
 }
 
+// --- completion ---------------------------------------------------------------------
+
+/// The engine's account of the write.
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
+pub struct WriteReport {
+    /// `success` or a failure description.
+    pub state: String,
+    /// Which engine wrote.
+    pub engine: String,
+    /// That engine's version.
+    pub engine_version: String,
+    /// When writing began.
+    pub started_at: String,
+    /// When it ended.
+    pub completed_at: String,
+}
+
+/// The read-back comparison, when one ran.
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
+pub struct VerificationReport {
+    /// Which verification ran.
+    pub policy: String,
+    /// `match`, `mismatch`, or `skipped`.
+    pub state: String,
+    /// How much was read back.
+    pub bytes_read: i64,
+    /// The digest the artifact should have.
+    pub expected_sha256: String,
+    /// The digest actually read from the disc.
+    pub observed_sha256: String,
+}
+
+/// What was in the drive.
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
+pub struct PhysicalMedium {
+    /// Media profile, such as `bd-r-25`.
+    pub profile: String,
+    /// Manufacturer identifier, when the drive reported one.
+    pub manufacturer_id: Option<String>,
+    /// Media serial, when the drive reported one.
+    pub serial: Option<String>,
+}
+
+/// What a worker sends when it finishes.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CompletionRequest {
+    /// The lease token from the claim.
+    pub lease_token: String,
+    /// The last event sequence the worker emitted.
+    pub last_sequence: i64,
+    /// The engine's account of the write.
+    pub write_report: WriteReport,
+    /// The read-back comparison, when one ran.
+    pub verification_report: Option<VerificationReport>,
+    /// What was in the drive.
+    pub physical_medium: PhysicalMedium,
+}
+
+/// What the server acknowledges.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CompletionResponse {
+    /// Always true when the server has the completion recorded.
+    pub acknowledged: bool,
+    /// The disc recorded, when the attempt consumed media.
+    pub physical_copy_id: Option<String>,
+    /// Whether the drive should eject.
+    pub eject: bool,
+}
+
+/// How a completion maps onto stored state.
+///
+/// One place for the whole mapping, so the attempt state, the disc's condition
+/// and the recorded verification result cannot drift apart. Getting this wrong
+/// is how a disc that does not hold what was intended ends up filed as a good
+/// copy.
+struct Resolved {
+    state: BurnAttemptState,
+    copy_status: &'static str,
+    verification_result: &'static str,
+    error_code: Option<&'static str>,
+}
+
+fn resolve(request: &CompletionRequest) -> Resolved {
+    let wrote = request.write_report.state == "success";
+    let verification = request
+        .verification_report
+        .as_ref()
+        .map(|r| r.state.as_str());
+
+    match (wrote, verification) {
+        // The only clean success: written and read back matching.
+        (true, Some("match")) => Resolved {
+            state: BurnAttemptState::Verified,
+            copy_status: "verified",
+            verification_result: "passed",
+            error_code: None,
+        },
+        // Physically written, holds the wrong bytes. The disc exists and must
+        // be tracked so it can be destroyed rather than shelved.
+        (true, Some("mismatch")) => Resolved {
+            state: BurnAttemptState::VerificationFailed,
+            copy_status: "verification_failed",
+            verification_result: "failed",
+            error_code: Some("VERIFICATION_MISMATCH"),
+        },
+        // Written but unverified. Recorded honestly as unverified rather than
+        // assumed good, because nothing read it back.
+        (true, _) => Resolved {
+            state: BurnAttemptState::Written,
+            copy_status: "produced_unverified",
+            verification_result: "not_performed",
+            error_code: None,
+        },
+        // The write failed. Media was being consumed when it did, so the disc
+        // is real and probably ruined: still recorded, still trackable.
+        (false, _) => Resolved {
+            state: BurnAttemptState::WriteFailed,
+            copy_status: "degraded",
+            verification_result: "not_performed",
+            error_code: Some("WRITE_FAILED"),
+        },
+    }
+}
+
+/// Record the end of an attempt.
+///
+/// Idempotent: a worker retrying after a lost response gets the same answer,
+/// including the same physical copy, rather than recording a second disc.
+///
+/// # Errors
+///
+/// `NOT_FOUND` if no attempt with that identifier holds that lease.
+#[utoipa::path(
+    post,
+    path = "/api/v1/burn-attempts/{attempt_id}/complete",
+    tag = "workers",
+    description = "Record the end of an attempt. Idempotent: retrying after a \
+                   lost response returns the same physical copy rather than \
+                   recording a second disc.",
+    params(("attempt_id" = String, Path, description = "Attempt identifier")),
+    request_body = CompletionRequest,
+    responses(
+        (status = 200, description = "Recorded", body = CompletionResponse),
+        (status = 404, description = "No such leased attempt", body = Problem),
+    ),
+    security(("worker_credential" = [])),
+)]
+pub async fn complete(
+    State(state): State<ApiState>,
+    _identity: WorkerIdentity,
+    Path(attempt_id): Path<String>,
+    Json(request): Json<CompletionRequest>,
+) -> Result<Json<CompletionResponse>, Problem> {
+    let attempt_id = parse_attempt(&attempt_id)?;
+    let lease = Secret::from_supplied(request.lease_token.clone());
+    let resolved = resolve(&request);
+
+    let write_report = serde_json::to_value(&request.write_report).map_err(|error| {
+        tracing::error!(error = ?error, "could not serialize a write report");
+        unavailable("the write report could not be stored")
+    })?;
+    let verify_report = request
+        .verification_report
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|error| {
+            tracing::error!(error = ?error, "could not serialize a verification report");
+            unavailable("the verification report could not be stored")
+        })?;
+
+    let completion = AttemptCompletion {
+        state: resolved.state,
+        write_report: &write_report,
+        verify_report: verify_report.as_ref(),
+        media_profile: &request.physical_medium.profile,
+        manufacturer_id: request.physical_medium.manufacturer_id.as_deref(),
+        media_serial: request.physical_medium.serial.as_deref(),
+        verification_level: request
+            .verification_report
+            .as_ref()
+            .map_or("none", |report| report.policy.as_str()),
+        verification_result: resolved.verification_result,
+        copy_status: resolved.copy_status,
+        error_code: resolved.error_code,
+        error_detail: None,
+    };
+
+    let recorded = complete_attempt(
+        state.database().pool(),
+        attempt_id,
+        lease.hash().as_str(),
+        completion,
+    )
+    .await
+    .map_err(|error| {
+        tracing::error!(error = ?error, "completion failed");
+        unavailable("the completion could not be recorded")
+    })?
+    .map_err(|_| Problem::not_found("leased attempt", &attempt_id.to_string()))?;
+
+    if recorded.already_completed {
+        tracing::info!(attempt_id = %attempt_id, "a completed attempt was reported again");
+    } else {
+        tracing::info!(
+            attempt_id = %attempt_id,
+            state = resolved.state.as_str(),
+            last_sequence = request.last_sequence,
+            "burn attempt completed"
+        );
+    }
+
+    Ok(Json(CompletionResponse {
+        acknowledged: true,
+        physical_copy_id: recorded.physical_copy_id.map(|id| id.to_string()),
+        // Only on a clean success. A disc that failed verification should stay
+        // where an operator will find it rather than be handed back as though
+        // it were good.
+        eject: resolved.state.is_success(),
+    }))
+}
+
+// --- recovery -------------------------------------------------------------------------
+
+/// What a worker reports when it restarts holding local state.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct RecoveryRequest {
+    /// The attempt the worker was running.
+    pub attempt_id: String,
+    /// The stage the worker believes it reached.
+    pub local_stage: String,
+    /// The last event sequence it emitted.
+    pub last_event_sequence: i64,
+    /// Whether the engine process is still running.
+    pub engine_process_state: String,
+}
+
+/// What the worker must do.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RecoveryResponse {
+    /// One of the protocol's recovery directives.
+    pub directive: String,
+    /// Whether local state may be dropped.
+    pub discard_local_state: bool,
+    /// Whether the worker may take new work.
+    pub may_accept_new_work: bool,
+    /// Always false. Restarting a write is never a recovery action.
+    pub may_write: bool,
+}
+
+/// Decide what a recovering worker may do.
+///
+/// The governing rule is that no answer may cause a second write. Where the
+/// worker's account and the server's disagree, the more dangerous reading
+/// wins: a worker that might have written is never told to discard.
+fn directive_for(
+    server_state: Option<BurnAttemptState>,
+    local_stage: Option<BurnAttemptState>,
+    engine_running: bool,
+) -> RecoveryDirective {
+    // The worker's own claim to have started writing is enough to rule out a
+    // discard, whatever the server believes. The server's record can lag: the
+    // event carrying "writing" may never have arrived.
+    let worker_may_have_written = local_stage.is_some_and(|stage| stage.consumed_media());
+
+    match server_state {
+        // The write is still going. Reattach and keep reporting.
+        Some(BurnAttemptState::Writing) if engine_running => RecoveryDirective::ResumeReporting,
+        // A write whose engine is gone. Whether the laser finished is
+        // unknowable from here, and that is precisely the case where guessing
+        // destroys a second disc.
+        Some(BurnAttemptState::Writing) => RecoveryDirective::MarkNeedsAttention,
+        Some(BurnAttemptState::Written | BurnAttemptState::Verifying) => {
+            RecoveryDirective::ResumeVerification
+        }
+        // The server already holds the outcome, including any physical copy.
+        // Nothing local adds to it. The directive's name speaks of pre-write
+        // state, but what it grants (discard, accept new work, never write)
+        // is exactly right here.
+        Some(state) if state.is_terminal() => RecoveryDirective::DiscardPrewriteState,
+        // Either the server has no record of this attempt for this worker, or
+        // it has one that never reached a write. Both come down to the
+        // worker's own account: if it never wrote, its local state is
+        // meaningless and can go; if it may have, a human must reconcile a
+        // disc the server cannot account for.
+        None | Some(_) => {
+            if worker_may_have_written {
+                RecoveryDirective::MarkNeedsAttention
+            } else {
+                RecoveryDirective::DiscardPrewriteState
+            }
+        }
+    }
+}
+
+/// Reconcile a worker that restarted holding local state.
+///
+/// The protocol also defines a `worker_revoked` directive. It is unreachable
+/// here by construction: a revoked worker fails authentication and receives
+/// 401 before any handler runs, which tells it the same thing sooner.
+///
+/// # Errors
+///
+/// `NOT_FOUND` if the path names a different worker.
+#[utoipa::path(
+    post,
+    path = "/api/v1/workers/{worker_id}/recoveries",
+    tag = "workers",
+    description = "Reconcile a worker that restarted holding local state. No \
+                   directive ever permits writing.",
+    params(("worker_id" = String, Path, description = "Worker identifier")),
+    request_body = RecoveryRequest,
+    responses(
+        (status = 200, description = "Directive issued", body = RecoveryResponse),
+        (status = 404, description = "Not this worker", body = Problem),
+    ),
+    security(("worker_credential" = [])),
+)]
+pub async fn recover(
+    State(state): State<ApiState>,
+    identity: WorkerIdentity,
+    Path(worker_id): Path<String>,
+    Json(request): Json<RecoveryRequest>,
+) -> Result<Json<RecoveryResponse>, Problem> {
+    let worker_id = same_worker(identity, &worker_id)?;
+    let attempt_id = parse_attempt(&request.attempt_id)?;
+
+    let server_state = attempt_state_for_worker(state.database().pool(), attempt_id, worker_id)
+        .await
+        .map_err(|error| {
+            tracing::error!(error = ?error, "recovery lookup failed");
+            unavailable("the attempt could not be read")
+        })?;
+
+    // An unrecognised stage is treated as absent rather than rejected: the
+    // worker is already in trouble, and the decision below defaults to the
+    // cautious answer when it cannot tell.
+    let local_stage = request.local_stage.parse::<BurnAttemptState>().ok();
+    let engine_running = request.engine_process_state == "running";
+
+    let directive = directive_for(server_state, local_stage, engine_running);
+    let plan = plan_for(directive);
+
+    tracing::info!(
+        worker_id = %worker_id,
+        attempt_id = %attempt_id,
+        directive = ?directive,
+        server_state = ?server_state,
+        "recovery reconciled"
+    );
+
+    Ok(Json(RecoveryResponse {
+        directive: serde_json::to_value(directive)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "mark_needs_attention".to_owned()),
+        discard_local_state: plan.discard_local_state,
+        may_accept_new_work: plan.may_accept_new_work,
+        may_write: plan.may_write,
+    }))
+}
+
 /// The worker protocol routes.
 pub fn router() -> Router<ApiState> {
     Router::new()
@@ -631,6 +995,226 @@ pub fn router() -> Router<ApiState> {
         )
         .route("/workers/{worker_id}/heartbeat", post(heartbeat))
         .route("/workers/{worker_id}/claims", post(claim_work))
+        .route("/workers/{worker_id}/recoveries", post(recover))
         .route("/burn-attempts/{attempt_id}/lease/renew", post(renew))
         .route("/burn-attempts/{attempt_id}/events", post(submit_events))
+        .route("/burn-attempts/{attempt_id}/complete", post(complete))
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    fn completion(write: &str, verification: Option<&str>) -> CompletionRequest {
+        CompletionRequest {
+            lease_token: "tgw_lease_x".to_owned(),
+            last_sequence: 1,
+            write_report: WriteReport {
+                state: write.to_owned(),
+                engine: "fake".to_owned(),
+                engine_version: "0.1.0".to_owned(),
+                started_at: "2026-01-01T00:00:00Z".to_owned(),
+                completed_at: "2026-01-01T00:10:00Z".to_owned(),
+            },
+            verification_report: verification.map(|state| VerificationReport {
+                policy: "full_sector_readback".to_owned(),
+                state: state.to_owned(),
+                bytes_read: 10,
+                expected_sha256: "a".repeat(64),
+                observed_sha256: "a".repeat(64),
+            }),
+            physical_medium: PhysicalMedium {
+                profile: "bd-r-25".to_owned(),
+                manufacturer_id: None,
+                serial: None,
+            },
+        }
+    }
+
+    // --- completion mapping ------------------------------------------------
+
+    #[test]
+    fn only_a_verified_write_is_a_success() {
+        assert_eq!(
+            resolve(&completion("success", Some("match"))).state,
+            BurnAttemptState::Verified
+        );
+        for outcome in ["mismatch", "skipped", "anything-else"] {
+            assert_ne!(
+                resolve(&completion("success", Some(outcome))).state,
+                BurnAttemptState::Verified,
+                "{outcome} must not read as a verified burn"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unverified_write_is_not_recorded_as_verified() {
+        // Nothing read the disc back, so claiming it matches would be an
+        // invention. It is recorded as produced-unverified instead.
+        let resolved = resolve(&completion("success", None));
+        assert_eq!(resolved.state, BurnAttemptState::Written);
+        assert_eq!(resolved.copy_status, "produced_unverified");
+        assert_eq!(resolved.verification_result, "not_performed");
+    }
+
+    #[test]
+    fn a_mismatch_is_recorded_as_a_disc_that_exists_and_is_wrong() {
+        // The distinction that matters: the disc is physically real, so it
+        // must be trackable in order to be destroyed, but it must never be
+        // filed as a good copy.
+        let resolved = resolve(&completion("success", Some("mismatch")));
+        assert_eq!(resolved.state, BurnAttemptState::VerificationFailed);
+        assert!(resolved.state.consumed_media());
+        assert!(!resolved.state.is_success());
+        assert_eq!(resolved.copy_status, "verification_failed");
+    }
+
+    #[test]
+    fn a_failed_write_still_records_a_disc() {
+        // Media was being consumed when the write failed, so a physical disc
+        // exists. An untracked ruined disc gets shelved and reused.
+        let resolved = resolve(&completion("failed", None));
+        assert_eq!(resolved.state, BurnAttemptState::WriteFailed);
+        assert!(resolved.state.consumed_media());
+        assert!(resolved.error_code.is_some());
+    }
+
+    #[test]
+    fn every_resolution_agrees_with_the_physical_copy_trigger() {
+        // The route decides whether a disc exists; the database enforces the
+        // same judgement in require_completed_write. If they ever disagree,
+        // completion fails at the constraint instead of at review.
+        let permitted = [
+            "writing",
+            "written",
+            "verifying",
+            "verified",
+            "verification_failed",
+            "write_failed",
+            "interrupted",
+        ];
+        for write in ["success", "failed"] {
+            for verification in [None, Some("match"), Some("mismatch"), Some("skipped")] {
+                let resolved = resolve(&completion(write, verification));
+                if resolved.state.consumed_media() {
+                    assert!(
+                        permitted.contains(&resolved.state.as_str()),
+                        "{} would be refused by the trigger",
+                        resolved.state.as_str()
+                    );
+                }
+            }
+        }
+    }
+
+    // --- recovery ----------------------------------------------------------
+
+    #[test]
+    fn no_recovery_directive_ever_permits_writing() {
+        // The one property the whole route exists to guarantee. A worker that
+        // restarts cannot know whether the laser already ran.
+        for server in BurnAttemptState::all() {
+            for local in BurnAttemptState::all() {
+                for running in [true, false] {
+                    let directive = directive_for(Some(*server), Some(*local), running);
+                    assert!(
+                        !plan_for(directive).may_write,
+                        "{server:?}/{local:?} produced a directive permitting a write"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_worker_that_may_have_written_is_never_told_to_discard() {
+        // Discarding is only safe when nothing physical happened. The worker's
+        // own account is enough to rule it out, because the server's record
+        // can lag: the event carrying "writing" may never have arrived.
+        for local in BurnAttemptState::all()
+            .iter()
+            .filter(|s| s.consumed_media())
+        {
+            for running in [true, false] {
+                assert_ne!(
+                    directive_for(None, Some(*local), running),
+                    RecoveryDirective::DiscardPrewriteState,
+                    "an unknown attempt with local stage {local:?} must not be discarded"
+                );
+                for server in [
+                    BurnAttemptState::Claimed,
+                    BurnAttemptState::Staging,
+                    BurnAttemptState::Preflighting,
+                ] {
+                    assert_ne!(
+                        directive_for(Some(server), Some(*local), running),
+                        RecoveryDirective::DiscardPrewriteState,
+                        "{server:?} disagreeing with local {local:?} must not be discarded"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_interrupted_write_with_no_engine_needs_attention() {
+        assert_eq!(
+            directive_for(
+                Some(BurnAttemptState::Writing),
+                Some(BurnAttemptState::Writing),
+                false
+            ),
+            RecoveryDirective::MarkNeedsAttention
+        );
+    }
+
+    #[test]
+    fn a_live_write_resumes_reporting() {
+        assert_eq!(
+            directive_for(
+                Some(BurnAttemptState::Writing),
+                Some(BurnAttemptState::Writing),
+                true
+            ),
+            RecoveryDirective::ResumeReporting
+        );
+    }
+
+    #[test]
+    fn a_finished_write_resumes_verification() {
+        for state in [BurnAttemptState::Written, BurnAttemptState::Verifying] {
+            assert_eq!(
+                directive_for(Some(state), Some(state), false),
+                RecoveryDirective::ResumeVerification
+            );
+        }
+    }
+
+    #[test]
+    fn a_settled_attempt_lets_the_worker_move_on() {
+        // The common case after a crash between completing and clearing local
+        // state. The server already holds the outcome, so holding the worker
+        // would strand a drive for nothing.
+        for state in BurnAttemptState::all().iter().filter(|s| s.is_terminal()) {
+            let directive = directive_for(Some(*state), Some(*state), false);
+            assert_eq!(directive, RecoveryDirective::DiscardPrewriteState);
+            assert!(plan_for(directive).may_accept_new_work);
+        }
+    }
+
+    #[test]
+    fn an_unparseable_local_stage_does_not_widen_permissions() {
+        // A worker reporting a stage this server does not know is already in
+        // trouble. Treating it as absent must not turn a cautious answer into
+        // a permissive one for anything that consumed media.
+        for server in BurnAttemptState::all()
+            .iter()
+            .filter(|s| s.consumed_media())
+        {
+            let directive = directive_for(Some(*server), None, false);
+            assert!(!plan_for(directive).may_write);
+        }
+    }
 }

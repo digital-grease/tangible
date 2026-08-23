@@ -53,6 +53,8 @@ pub const API_BASE: &str = "/api/v1";
         routes::workers::claim_work,
         routes::workers::renew,
         routes::workers::submit_events,
+        routes::workers::complete,
+        routes::workers::recover,
     ),
     components(schemas(
         health::Liveness,
@@ -73,6 +75,13 @@ pub const API_BASE: &str = "/api/v1";
         routes::workers::EventBatch,
         routes::workers::EventSubmission,
         routes::workers::EventAck,
+        routes::workers::CompletionRequest,
+        routes::workers::CompletionResponse,
+        routes::workers::WriteReport,
+        routes::workers::VerificationReport,
+        routes::workers::PhysicalMedium,
+        routes::workers::RecoveryRequest,
+        routes::workers::RecoveryResponse,
     )),
     modifiers(&WorkerSecurity),
     tags(

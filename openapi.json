@@ -214,6 +214,64 @@
         }
       }
     },
+    "/api/v1/burn-attempts/{attempt_id}/complete": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Record the end of an attempt.",
+        "description": "Record the end of an attempt. Idempotent: retrying after a lost response returns the same physical copy rather than recording a second disc.",
+        "operationId": "complete",
+        "parameters": [
+          {
+            "name": "attempt_id",
+            "in": "path",
+            "description": "Attempt identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompletionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompletionResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such leased attempt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "worker_credential": []
+          }
+        ]
+      }
+    },
     "/api/v1/burn-attempts/{attempt_id}/events": {
       "post": {
         "tags": [
@@ -521,6 +579,64 @@
         ]
       }
     },
+    "/api/v1/workers/{worker_id}/recoveries": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Reconcile a worker that restarted holding local state.",
+        "description": "Reconcile a worker that restarted holding local state. No directive ever permits writing.",
+        "operationId": "recover",
+        "parameters": [
+          {
+            "name": "worker_id",
+            "in": "path",
+            "description": "Worker identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoveryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Directive issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not this worker",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "worker_credential": []
+          }
+        ]
+      }
+    },
     "/livez": {
       "get": {
         "tags": [
@@ -767,6 +883,71 @@
           }
         }
       },
+      "CompletionRequest": {
+        "type": "object",
+        "description": "What a worker sends when it finishes.",
+        "required": [
+          "lease_token",
+          "last_sequence",
+          "write_report",
+          "physical_medium"
+        ],
+        "properties": {
+          "last_sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The last event sequence the worker emitted."
+          },
+          "lease_token": {
+            "type": "string",
+            "description": "The lease token from the claim."
+          },
+          "physical_medium": {
+            "$ref": "#/components/schemas/PhysicalMedium",
+            "description": "What was in the drive."
+          },
+          "verification_report": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VerificationReport",
+                "description": "The read-back comparison, when one ran."
+              }
+            ]
+          },
+          "write_report": {
+            "$ref": "#/components/schemas/WriteReport",
+            "description": "The engine's account of the write."
+          }
+        }
+      },
+      "CompletionResponse": {
+        "type": "object",
+        "description": "What the server acknowledges.",
+        "required": [
+          "acknowledged",
+          "eject"
+        ],
+        "properties": {
+          "acknowledged": {
+            "type": "boolean",
+            "description": "Always true when the server has the completion recorded."
+          },
+          "eject": {
+            "type": "boolean",
+            "description": "Whether the drive should eject."
+          },
+          "physical_copy_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The disc recorded, when the attempt consumed media."
+          }
+        }
+      },
       "ComponentView": {
         "type": "object",
         "description": "One file within an artifact.",
@@ -1006,6 +1187,33 @@
           }
         }
       },
+      "PhysicalMedium": {
+        "type": "object",
+        "description": "What was in the drive.",
+        "required": [
+          "profile"
+        ],
+        "properties": {
+          "manufacturer_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Manufacturer identifier, when the drive reported one."
+          },
+          "profile": {
+            "type": "string",
+            "description": "Media profile, such as `bd-r-25`."
+          },
+          "serial": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Media serial, when the drive reported one."
+          }
+        }
+      },
       "Problem": {
         "type": "object",
         "description": "An RFC 9457 problem document.",
@@ -1069,6 +1277,63 @@
           }
         }
       },
+      "RecoveryRequest": {
+        "type": "object",
+        "description": "What a worker reports when it restarts holding local state.",
+        "required": [
+          "attempt_id",
+          "local_stage",
+          "last_event_sequence",
+          "engine_process_state"
+        ],
+        "properties": {
+          "attempt_id": {
+            "type": "string",
+            "description": "The attempt the worker was running."
+          },
+          "engine_process_state": {
+            "type": "string",
+            "description": "Whether the engine process is still running."
+          },
+          "last_event_sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The last event sequence it emitted."
+          },
+          "local_stage": {
+            "type": "string",
+            "description": "The stage the worker believes it reached."
+          }
+        }
+      },
+      "RecoveryResponse": {
+        "type": "object",
+        "description": "What the worker must do.",
+        "required": [
+          "directive",
+          "discard_local_state",
+          "may_accept_new_work",
+          "may_write"
+        ],
+        "properties": {
+          "directive": {
+            "type": "string",
+            "description": "One of the protocol's recovery directives."
+          },
+          "discard_local_state": {
+            "type": "boolean",
+            "description": "Whether local state may be dropped."
+          },
+          "may_accept_new_work": {
+            "type": "boolean",
+            "description": "Whether the worker may take new work."
+          },
+          "may_write": {
+            "type": "boolean",
+            "description": "Always false. Restarting a write is never a recovery action."
+          }
+        }
+      },
       "RenewRequest": {
         "type": "object",
         "description": "What a worker sends to renew.",
@@ -1092,6 +1357,73 @@
           "lease_expires_at": {
             "type": "string",
             "description": "The new expiry."
+          }
+        }
+      },
+      "VerificationReport": {
+        "type": "object",
+        "description": "The read-back comparison, when one ran.",
+        "required": [
+          "policy",
+          "state",
+          "bytes_read",
+          "expected_sha256",
+          "observed_sha256"
+        ],
+        "properties": {
+          "bytes_read": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How much was read back."
+          },
+          "expected_sha256": {
+            "type": "string",
+            "description": "The digest the artifact should have."
+          },
+          "observed_sha256": {
+            "type": "string",
+            "description": "The digest actually read from the disc."
+          },
+          "policy": {
+            "type": "string",
+            "description": "Which verification ran."
+          },
+          "state": {
+            "type": "string",
+            "description": "`match`, `mismatch`, or `skipped`."
+          }
+        }
+      },
+      "WriteReport": {
+        "type": "object",
+        "description": "The engine's account of the write.",
+        "required": [
+          "state",
+          "engine",
+          "engine_version",
+          "started_at",
+          "completed_at"
+        ],
+        "properties": {
+          "completed_at": {
+            "type": "string",
+            "description": "When it ended."
+          },
+          "engine": {
+            "type": "string",
+            "description": "Which engine wrote."
+          },
+          "engine_version": {
+            "type": "string",
+            "description": "That engine's version."
+          },
+          "started_at": {
+            "type": "string",
+            "description": "When writing began."
+          },
+          "state": {
+            "type": "string",
+            "description": "`success` or a failure description."
           }
         }
       }

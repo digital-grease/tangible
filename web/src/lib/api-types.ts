@@ -84,6 +84,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/burn-attempts/{attempt_id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record the end of an attempt.
+         * @description Record the end of an attempt. Idempotent: retrying after a lost response returns the same physical copy rather than recording a second disc.
+         */
+        post: operations["complete"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/burn-attempts/{attempt_id}/events": {
         parameters: {
             query?: never;
@@ -178,6 +198,26 @@ export interface paths {
          * @description Report that a worker is alive and receive any instruction to stop taking new work.
          */
         post: operations["heartbeat"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workers/{worker_id}/recoveries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reconcile a worker that restarted holding local state.
+         * @description Reconcile a worker that restarted holding local state. No directive ever permits writing.
+         */
+        post: operations["recover"];
         delete?: never;
         options?: never;
         head?: never;
@@ -315,6 +355,30 @@ export interface components {
             /** @description Verification steps the job requires. */
             verification_policy: string[];
         };
+        /** @description What a worker sends when it finishes. */
+        CompletionRequest: {
+            /**
+             * Format: int64
+             * @description The last event sequence the worker emitted.
+             */
+            last_sequence: number;
+            /** @description The lease token from the claim. */
+            lease_token: string;
+            /** @description What was in the drive. */
+            physical_medium: components["schemas"]["PhysicalMedium"];
+            verification_report?: null | components["schemas"]["VerificationReport"];
+            /** @description The engine's account of the write. */
+            write_report: components["schemas"]["WriteReport"];
+        };
+        /** @description What the server acknowledges. */
+        CompletionResponse: {
+            /** @description Always true when the server has the completion recorded. */
+            acknowledged: boolean;
+            /** @description Whether the drive should eject. */
+            eject: boolean;
+            /** @description The disc recorded, when the attempt consumed media. */
+            physical_copy_id?: string | null;
+        };
         /** @description One file within an artifact. */
         ComponentView: {
             /**
@@ -426,6 +490,15 @@ export interface components {
             /** @description Server version, from the crate version at build time. */
             version: string;
         };
+        /** @description What was in the drive. */
+        PhysicalMedium: {
+            /** @description Manufacturer identifier, when the drive reported one. */
+            manufacturer_id?: string | null;
+            /** @description Media profile, such as `bd-r-25`. */
+            profile: string;
+            /** @description Media serial, when the drive reported one. */
+            serial?: string | null;
+        };
         /** @description An RFC 9457 problem document. */
         Problem: {
             /** @description Stable machine-readable code. Clients branch on this, not on `detail`. */
@@ -451,6 +524,31 @@ export interface components {
             /** @description `"ready"` when every dependency is usable, otherwise `"degraded"`. */
             status: string;
         };
+        /** @description What a worker reports when it restarts holding local state. */
+        RecoveryRequest: {
+            /** @description The attempt the worker was running. */
+            attempt_id: string;
+            /** @description Whether the engine process is still running. */
+            engine_process_state: string;
+            /**
+             * Format: int64
+             * @description The last event sequence it emitted.
+             */
+            last_event_sequence: number;
+            /** @description The stage the worker believes it reached. */
+            local_stage: string;
+        };
+        /** @description What the worker must do. */
+        RecoveryResponse: {
+            /** @description One of the protocol's recovery directives. */
+            directive: string;
+            /** @description Whether local state may be dropped. */
+            discard_local_state: boolean;
+            /** @description Whether the worker may take new work. */
+            may_accept_new_work: boolean;
+            /** @description Always false. Restarting a write is never a recovery action. */
+            may_write: boolean;
+        };
         /** @description What a worker sends to renew. */
         RenewRequest: {
             /** @description The lease token from the claim. */
@@ -460,6 +558,35 @@ export interface components {
         RenewResponse: {
             /** @description The new expiry. */
             lease_expires_at: string;
+        };
+        /** @description The read-back comparison, when one ran. */
+        VerificationReport: {
+            /**
+             * Format: int64
+             * @description How much was read back.
+             */
+            bytes_read: number;
+            /** @description The digest the artifact should have. */
+            expected_sha256: string;
+            /** @description The digest actually read from the disc. */
+            observed_sha256: string;
+            /** @description Which verification ran. */
+            policy: string;
+            /** @description `match`, `mismatch`, or `skipped`. */
+            state: string;
+        };
+        /** @description The engine's account of the write. */
+        WriteReport: {
+            /** @description When it ended. */
+            completed_at: string;
+            /** @description Which engine wrote. */
+            engine: string;
+            /** @description That engine's version. */
+            engine_version: string;
+            /** @description When writing began. */
+            started_at: string;
+            /** @description `success` or a failure description. */
+            state: string;
         };
     };
     responses: never;
@@ -606,6 +733,42 @@ export interface operations {
                 content?: never;
             };
             /** @description No such artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    complete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Attempt identifier */
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompletionRequest"];
+            };
+        };
+        responses: {
+            /** @description Recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompletionResponse"];
+                };
+            };
+            /** @description No such leased attempt */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -819,6 +982,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not this worker */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    recover: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Worker identifier */
+                worker_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoveryRequest"];
+            };
+        };
+        responses: {
+            /** @description Directive issued */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryResponse"];
                 };
             };
             /** @description Not this worker */

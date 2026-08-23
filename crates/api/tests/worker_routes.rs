@@ -707,6 +707,279 @@ async fn a_malformed_identifier_is_a_bad_request_not_a_server_error() {
     assert_eq!(body["code"], "INVALID_PARAMETER");
 }
 
+// --- completion ------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_verified_completion_records_a_disc() {
+    let _queue = exclusive_queue().await;
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let attempt = claimed_attempt(&harness).await;
+
+    let (status, body) = harness
+        .post(
+            &format!("/api/v1/burn-attempts/{}/complete", attempt.id),
+            Some(&attempt.credential),
+            completion(&attempt.lease, "success", Some("match")),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["acknowledged"], true);
+    assert_eq!(body["eject"], true);
+
+    let copy_id = body["physical_copy_id"].as_str().expect("a physical copy");
+    let (attempt_state, copy_status): (String, String) = sqlx::query_as(
+        "SELECT a.state, c.status
+         FROM burn_attempts a JOIN physical_copies c ON c.burn_attempt_id = a.id
+         WHERE a.id = $1::uuid",
+    )
+    .bind(&attempt.id)
+    .fetch_one(&harness.pool)
+    .await
+    .expect("read back the attempt");
+    assert_eq!(attempt_state, "verified");
+    assert_eq!(copy_status, "verified");
+
+    // The job follows the attempt.
+    let job_state: String = sqlx::query_scalar(
+        "SELECT j.state FROM burn_jobs j
+         JOIN burn_attempts a ON a.burn_job_id = j.id WHERE a.id = $1::uuid",
+    )
+    .bind(&attempt.id)
+    .fetch_one(&harness.pool)
+    .await
+    .expect("read back the job");
+    assert_eq!(job_state, "complete");
+
+    // Retrying returns the same disc rather than recording a second one.
+    let (retry, again) = harness
+        .post(
+            &format!("/api/v1/burn-attempts/{}/complete", attempt.id),
+            Some(&attempt.credential),
+            completion(&attempt.lease, "success", Some("match")),
+        )
+        .await;
+    assert_eq!(retry, StatusCode::OK);
+    assert_eq!(again["physical_copy_id"], copy_id);
+
+    let copies: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM physical_copies WHERE burn_attempt_id = $1::uuid")
+            .bind(&attempt.id)
+            .fetch_one(&harness.pool)
+            .await
+            .expect("count copies");
+    assert_eq!(
+        copies, 1,
+        "a retried completion must not burn a second disc"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_failed_write_is_still_recorded_as_a_disc() {
+    // Media was being consumed when the write failed, so a disc exists. An
+    // untracked ruined disc gets shelved and reused.
+    let _queue = exclusive_queue().await;
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let attempt = claimed_attempt(&harness).await;
+
+    let (status, body) = harness
+        .post(
+            &format!("/api/v1/burn-attempts/{}/complete", attempt.id),
+            Some(&attempt.credential),
+            completion(&attempt.lease, "failed", None),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["physical_copy_id"].is_string());
+
+    // Not ejected: a bad disc should stay where an operator will find it.
+    assert_eq!(body["eject"], false);
+
+    let job_state: String = sqlx::query_scalar(
+        "SELECT j.state FROM burn_jobs j
+         JOIN burn_attempts a ON a.burn_job_id = j.id WHERE a.id = $1::uuid",
+    )
+    .bind(&attempt.id)
+    .fetch_one(&harness.pool)
+    .await
+    .expect("read back the job");
+    assert_eq!(job_state, "failed");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_completion_without_the_lease_is_refused() {
+    // Completion creates the physical disc record. Anyone able to forge one
+    // could invent burn history for hardware they never touched.
+    let _queue = exclusive_queue().await;
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let attempt = claimed_attempt(&harness).await;
+
+    let (status, _) = harness
+        .post(
+            &format!("/api/v1/burn-attempts/{}/complete", attempt.id),
+            Some(&attempt.credential),
+            completion("tgw_lease_guessed", "success", Some("match")),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let copies: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM physical_copies WHERE burn_attempt_id = $1::uuid")
+            .bind(&attempt.id)
+            .fetch_one(&harness.pool)
+            .await
+            .expect("count copies");
+    assert_eq!(copies, 0);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn completing_frees_the_drive() {
+    // The one-active-attempt-per-drive index blocks a second claim until the
+    // first attempt is terminal, so completion has to actually release it.
+    let _queue = exclusive_queue().await;
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let attempt = claimed_attempt(&harness).await;
+    queue_job(&harness.pool).await;
+
+    let claim = serde_json::json!({
+        "drive_id": attempt.drive,
+        "engine": "fake",
+        "engine_version": "0.1.0",
+    });
+    let path = format!("/api/v1/workers/{}/claims", attempt.worker);
+
+    let (busy, _) = harness
+        .post(&path, Some(&attempt.credential), claim.clone())
+        .await;
+    assert_eq!(busy, StatusCode::CONFLICT);
+
+    harness
+        .post(
+            &format!("/api/v1/burn-attempts/{}/complete", attempt.id),
+            Some(&attempt.credential),
+            completion(&attempt.lease, "success", Some("match")),
+        )
+        .await;
+
+    let (freed, body) = harness.post(&path, Some(&attempt.credential), claim).await;
+    assert_eq!(freed, StatusCode::OK, "{body}");
+}
+
+// --- recovery --------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_recovery_never_permits_a_write() {
+    let _queue = exclusive_queue().await;
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let attempt = claimed_attempt(&harness).await;
+
+    for stage in ["claimed", "writing", "written", "verifying"] {
+        let (status, body) = harness
+            .post(
+                &format!("/api/v1/workers/{}/recoveries", attempt.worker),
+                Some(&attempt.credential),
+                serde_json::json!({
+                    "attempt_id": attempt.id,
+                    "local_stage": stage,
+                    "last_event_sequence": 4,
+                    "engine_process_state": "not_running",
+                }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["may_write"], false, "stage {stage} permitted a write");
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_worker_that_wrote_is_held_rather_than_told_to_discard() {
+    // The server's record says the attempt was only claimed; the worker says
+    // it was writing. The dangerous reading wins.
+    let _queue = exclusive_queue().await;
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let attempt = claimed_attempt(&harness).await;
+
+    let (status, body) = harness
+        .post(
+            &format!("/api/v1/workers/{}/recoveries", attempt.worker),
+            Some(&attempt.credential),
+            serde_json::json!({
+                "attempt_id": attempt.id,
+                "local_stage": "writing",
+                "last_event_sequence": 9,
+                "engine_process_state": "not_running",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["directive"], "mark_needs_attention");
+    assert_eq!(body["discard_local_state"], false);
+    assert_eq!(body["may_accept_new_work"], false);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_recovery_for_another_workers_attempt_is_not_answered() {
+    // Answering with another worker's attempt state would let one worker
+    // decide what another does with a disc.
+    let _queue = exclusive_queue().await;
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let attempt = claimed_attempt(&harness).await;
+
+    let (other_id, other_credential) = enroll(&harness).await;
+    let (status, body) = harness
+        .post(
+            &format!("/api/v1/workers/{other_id}/recoveries"),
+            Some(&other_credential),
+            serde_json::json!({
+                "attempt_id": attempt.id,
+                "local_stage": "claimed",
+                "last_event_sequence": 0,
+                "engine_process_state": "not_running",
+            }),
+        )
+        .await;
+
+    // Not this worker's attempt, so it is answered as unknown rather than
+    // with the real attempt's state.
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["directive"], "discard_prewrite_state");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn recovering_as_another_worker_is_refused() {
+    let harness = harness().await;
+    let (_, credential_a) = enroll(&harness).await;
+    let (worker_b, _) = enroll(&harness).await;
+
+    let (status, _) = harness
+        .post(
+            &format!("/api/v1/workers/{worker_b}/recoveries"),
+            Some(&credential_a),
+            serde_json::json!({
+                "attempt_id": uuid::Uuid::now_v7().to_string(),
+                "local_stage": "claimed",
+                "last_event_sequence": 0,
+                "engine_process_state": "not_running",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
 // --- fixtures --------------------------------------------------------------
 
 fn event(sequence: i64, event_type: &str, stage: &str) -> serde_json::Value {
@@ -725,6 +998,9 @@ fn event(sequence: i64, event_type: &str, stage: &str) -> serde_json::Value {
 struct Attempt {
     id: String,
     credential: String,
+    lease: String,
+    drive: String,
+    worker: String,
 }
 
 /// Enroll a worker, give it a drive and a job, and claim it.
@@ -750,8 +1026,37 @@ async fn claimed_attempt(harness: &Harness) -> Attempt {
 
     Attempt {
         id: claim["attempt_id"].as_str().expect("attempt_id").to_owned(),
+        lease: claim["lease_token"]
+            .as_str()
+            .expect("lease_token")
+            .to_owned(),
         credential,
+        drive,
+        worker: worker_id,
     }
+}
+
+/// A completion body.
+fn completion(lease: &str, write: &str, verification: Option<&str>) -> serde_json::Value {
+    serde_json::json!({
+        "lease_token": lease,
+        "last_sequence": 12,
+        "write_report": {
+            "state": write,
+            "engine": "fake",
+            "engine_version": "0.1.0",
+            "started_at": "2026-01-01T00:00:00Z",
+            "completed_at": "2026-01-01T00:10:00Z",
+        },
+        "verification_report": verification.map(|state| serde_json::json!({
+            "policy": "full_sector_readback",
+            "state": state,
+            "bytes_read": 10,
+            "expected_sha256": "a".repeat(64),
+            "observed_sha256": "a".repeat(64),
+        })),
+        "physical_medium": { "profile": "bd-r-25" },
+    })
 }
 
 /// Attach a drive to an enrolled worker.
