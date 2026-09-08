@@ -210,6 +210,18 @@ pub trait BurnEngine: Send + Sync {
     /// The engine's version, recorded so an old result can be explained.
     fn version(&self) -> String;
 
+    /// Whether this engine opens the drive its plan names.
+    ///
+    /// A worker takes an exclusive claim on that drive before it takes any
+    /// work, and an engine that touches no hardware must not make it try: the
+    /// fake engine's disc is a file in a temporary directory, and a test that
+    /// claimed `/dev/disc-block` would fail on a machine without one and
+    /// fight a real worker on a machine with one.
+    ///
+    /// Answered by every engine rather than defaulted, so a new adapter that
+    /// does drive a laser cannot inherit its way out of the claim.
+    fn uses_hardware(&self) -> bool;
+
     /// What the drive reports it can do.
     ///
     /// # Errors

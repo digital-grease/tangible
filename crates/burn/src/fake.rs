@@ -185,6 +185,11 @@ impl BurnEngine for FakeEngine {
         env!("CARGO_PKG_VERSION").to_owned()
     }
 
+    /// Never. The disc is a file, and there is nothing to hold exclusively.
+    fn uses_hardware(&self) -> bool {
+        false
+    }
+
     async fn probe_drive(&self, drive: &DriveRef) -> Result<DriveCapabilities, EngineError> {
         if self.behaviour.drive_unavailable {
             return Err(EngineError::DriveUnavailable {

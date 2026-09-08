@@ -19,6 +19,12 @@ time = { version = "0.3.55", features = ["serde", "formatting", "parsing"] }
 tokio = { version = "1.53.1", features = ["process", "time", "rt", "io-util", "fs", "rt-multi-thread", "macros"] }
 tracing = "0.1.44"
 
+# The device lock opens a drive with O_NONBLOCK, because an optical drive with
+# an empty tray refuses an ordinary open. One constant, on the only platform
+# that has optical drives passed into containers.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.186"
+
 [lints]
 workspace = true
 

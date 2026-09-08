@@ -33,6 +33,7 @@ use crate::client::{
     Leased, PhysicalMediumBody, VerificationReportBody, WorkerClient, WorkerIdentity,
     WriteReportBody, identity_path, rfc3339,
 };
+use crate::device_lock::{DeviceLock, DeviceLockError};
 use crate::engine::{BurnEngine, BurnEvent, EngineError, EventSink};
 use crate::plan::{
     BurnPlan, DriveRef, MediumInfo, PlannedInput, PreflightFailure, VerifyReport, WriteMode,
@@ -121,6 +122,14 @@ pub enum RunnerError {
         source: std::io::Error,
     },
 
+    /// The drive could not be claimed exclusively.
+    ///
+    /// Terminal, and deliberately so. Two workers sharing one drive is a
+    /// deployment mistake, and the second one carrying on quietly is how two
+    /// jobs come to be writing through one laser.
+    #[error("the drive could not be claimed")]
+    Drive(#[from] DeviceLockError),
+
     /// An attempt was in flight and its outcome cannot be established here.
     ///
     /// Terminal on purpose. The worker stops taking work and waits for a
@@ -171,6 +180,8 @@ pub struct WorkerRuntime<E: BurnEngine> {
     settings: WorkerSettings,
     client: WorkerClient,
     engine: E,
+    /// Held for as long as this worker runs, for engines that drive hardware.
+    drive: Option<DeviceLock>,
 }
 
 impl<E: BurnEngine> WorkerRuntime<E> {
@@ -185,6 +196,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             settings,
             client,
             engine,
+            drive: None,
         })
     }
 
@@ -391,10 +403,29 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         }
     }
 
+    /// Take the drive, for an engine that writes to one.
+    ///
+    /// # Errors
+    ///
+    /// [`RunnerError::Drive`] if something else holds it.
+    fn claim_drive(&mut self) -> Result<(), RunnerError> {
+        if !self.engine.uses_hardware() {
+            return Ok(());
+        }
+
+        // Released first, so a runtime that is run a second time reclaims its
+        // own drive rather than colliding with itself.
+        self.drive = None;
+        self.drive = Some(DeviceLock::acquire(&self.settings.device_alias)?);
+        tracing::info!(alias = %self.settings.device_alias, "drive claimed");
+        Ok(())
+    }
+
     /// Run until `shutdown` resolves.
     ///
     /// # Errors
     ///
+    /// [`RunnerError::Drive`] if this worker cannot have its drive,
     /// [`RunnerError::NeedsAttention`] if a previous attempt cannot be
     /// reconciled, [`RunnerError::NotEnrolled`] without a credential, or
     /// [`RunnerError::Client`] if the credential is revoked.
@@ -402,6 +433,11 @@ impl<E: BurnEngine> WorkerRuntime<E> {
     where
         S: Future<Output = ()> + Send,
     {
+        // Before enrolling, and before announcing a drive. A worker that
+        // cannot have this drive should not appear in the server's list of
+        // workers that have one.
+        self.claim_drive()?;
+
         let mut identity = self.identify().await?;
         let drive_id = self.announce(&mut identity).await?;
         self.reconcile(&identity).await?;
@@ -667,6 +703,33 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         }
         for warning in &preflight.warnings {
             tracing::info!(warning = %warning, "preflight warning");
+        }
+
+        // The last question preflight asks, and the one the engine cannot:
+        // it is about this worker rather than about the medium. The drive was
+        // claimed at startup, and an alias that now resolves elsewhere means
+        // the thing about to be written is not the thing being held.
+        if let Some(drive) = &self.drive
+            && !drive.identity_intact()
+        {
+            tracing::error!(alias = %self.settings.device_alias, "the claimed drive changed");
+            note(buffer, WorkerStage::Preflighting, "DRIVE_LOCK_LOST");
+            return Ok(AttemptOutcome {
+                write: write_report_body(
+                    "not_attempted",
+                    self.engine.name(),
+                    &self.engine.version(),
+                ),
+                verification: None,
+                medium: medium_body,
+                failure: Some(FailureBody {
+                    code: "DRIVE_LOCK_LOST".to_owned(),
+                    detail: Some(format!(
+                        "{} no longer names the drive this worker claimed",
+                        drive.path().display()
+                    )),
+                }),
+            });
         }
 
         self.write_and_verify(lease, &plan, &record, medium_body, buffer)

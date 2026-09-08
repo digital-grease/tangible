@@ -12,6 +12,7 @@
 //! engine adapters follow.
 
 pub mod client;
+pub mod device_lock;
 pub mod engine;
 pub mod fake;
 pub mod plan;
@@ -24,6 +25,7 @@ pub use client::{
     Enrolled, FailureBody, Leased, PhysicalMediumBody, VerificationReportBody, WorkerClient,
     WorkerIdentity, WriteReportBody,
 };
+pub use device_lock::{DeviceLock, DeviceLockError};
 pub use engine::{BurnEngine, BurnEvent, CollectingSink, EngineError, EventSink, NullSink};
 pub use fake::{CancelToken, FakeBehaviour, FakeEngine};
 pub use plan::{

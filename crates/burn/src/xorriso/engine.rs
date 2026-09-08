@@ -275,6 +275,12 @@ impl BurnEngine for XorrisoEngine {
         self.version.clone()
     }
 
+    /// Always, including against a file target: two runs writing one target
+    /// ruin it whether or not the target spins.
+    fn uses_hardware(&self) -> bool {
+        true
+    }
+
     async fn probe_drive(&self, drive: &DriveRef) -> Result<DriveCapabilities, EngineError> {
         self.check_cancelled()?;
         let run = self.run(&command::devices(), PROBE_TIMEOUT).await?;

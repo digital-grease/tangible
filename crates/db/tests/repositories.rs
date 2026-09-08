@@ -20,12 +20,14 @@ use tangible_db::{Database, DbConfig};
 use tangible_domain::{BurnAttemptId, BurnJobId, BurnJobState, DriveId, WorkerId};
 use time::OffsetDateTime;
 
-/// Serialises tests that assert on the state of the whole queue.
+/// Serialises every test that touches the claimable queue.
 ///
 /// The claim takes any queued job rather than one scoped to the caller, so a
 /// test asserting "no work anywhere" races every other test that queues
-/// something. The concurrency tests deliberately do *not* take this: they need
-/// the contention.
+/// something. The rule is therefore wider than it first reads: queueing a
+/// claimable job needs this lock just as much as asserting on the queue does,
+/// because an unlocked insert is precisely what a locked assertion trips over.
+/// The concurrency tests hold it too, and contend among themselves within it.
 static QUEUE: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
 
 async fn exclusive_queue() -> tokio::sync::MutexGuard<'static, ()> {
@@ -850,6 +852,10 @@ async fn two_simultaneous_creates_under_one_key_produce_one_job() {
     // key, find nothing, and insert; one loses, and losing must mean being
     // handed the winner's job rather than an error the caller would retry:
     // which is how a dropped response turns into a second disc.
+    //
+    // Holds the queue lock because it leaves claimable jobs behind, not
+    // because it asserts on the queue.
+    let _queue = exclusive_queue().await;
     let pool = pool().await;
     let world = seed(&pool).await;
     let policy = vec!["full_sector_readback".to_owned()];
@@ -882,6 +888,7 @@ async fn two_simultaneous_creates_under_one_key_produce_one_job() {
 async fn a_job_queued_without_a_key_is_its_own_job() {
     // Idempotency is opt-in. Two deliberate requests for two discs must
     // produce two jobs.
+    let _queue = exclusive_queue().await;
     let pool = pool().await;
     let world = seed(&pool).await;
     let policy = vec!["full_sector_readback".to_owned()];
