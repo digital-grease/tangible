@@ -401,6 +401,51 @@ impl FilesystemStore {
         }
     }
 
+    /// Open a byte range of an object for streaming.
+    ///
+    /// The reader a caller serving a download wants: an image may be tens of
+    /// gigabytes, and [`Self::read_range`] materializes what it reads. This
+    /// hands back a bounded reader instead, so bytes go from the file to the
+    /// socket without the whole object existing in memory at once.
+    ///
+    /// # Errors
+    ///
+    /// [`StorageError::NotFound`] if the object is absent, or
+    /// [`StorageError::Io`] if it cannot be opened or positioned.
+    pub async fn open_range(
+        &self,
+        digest: &Sha256Digest,
+        offset: u64,
+        length: u64,
+    ) -> Result<tokio::io::Take<fs::File>, StorageError> {
+        let path = self.object_path(digest);
+        let mut file = fs::File::open(&path).await.map_err(|source| {
+            if source.kind() == ErrorKind::NotFound {
+                StorageError::NotFound {
+                    digest: digest.to_hex(),
+                }
+            } else {
+                StorageError::Io {
+                    operation: "opening an object",
+                    path: path.clone(),
+                    source,
+                }
+            }
+        })?;
+
+        if offset > 0 {
+            file.seek(std::io::SeekFrom::Start(offset))
+                .await
+                .map_err(|source| StorageError::Io {
+                    operation: "seeking within an object",
+                    path,
+                    source,
+                })?;
+        }
+
+        Ok(file.take(length))
+    }
+
     /// Read a byte range from an object.
     ///
     /// Ranges exist so a burn worker can stage a large image in pieces and a

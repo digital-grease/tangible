@@ -1,0 +1,6 @@
+xorriso 1.5.6 : RockRidge filesystem manipulator, libburnia project.
+
+Beginning to scan for devices ...
+xorriso : SORRY : No drives found
+xorriso : NOTE : Tolerated problem event of severity 'SORRY'
+xorriso : NOTE : -return_with SORRY 32 triggered by problem severity SORRY

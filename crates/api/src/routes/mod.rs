@@ -4,4 +4,8 @@
 //! HTTP routes, grouped by the resource they serve.
 
 pub mod artifacts;
+pub mod burns;
+pub mod catalog;
+pub mod imports;
+pub mod physical_copies;
 pub mod workers;

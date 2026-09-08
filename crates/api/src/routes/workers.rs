@@ -25,13 +25,13 @@ use axum::http::request::Parts;
 use axum::routing::post;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
-use tangible_burn::worker::{RecoveryDirective, plan_for};
+use tangible_burn::worker::{RecoveryDirective, WorkerStage, plan_for};
 use tangible_db::repositories::{
-    AttemptCompletion, ClaimOutcome, EnrollmentOutcome, IncomingEvent, attempt_state_for_worker,
-    authenticate_worker, claim_next_burn_job, complete_attempt, consume_enrollment, record_events,
-    record_heartbeat, renew_lease,
+    AttemptCompletion, ClaimOutcome, DriveReport, EnrollmentOutcome, IncomingEvent, ReportedStage,
+    attempt_state_for_worker, authenticate_worker, claim_next_burn_job, complete_attempt,
+    consume_enrollment, record_capabilities, record_events, record_heartbeat, renew_lease,
 };
-use tangible_domain::{BurnAttemptId, BurnAttemptState, DriveId, WorkerId};
+use tangible_domain::{BurnAttemptId, BurnAttemptState, DriveId, EjectPolicy, WorkerId};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 
@@ -304,6 +304,229 @@ pub async fn heartbeat(
     }))
 }
 
+// --- capabilities ----------------------------------------------------------------
+
+/// One engine a worker can run.
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
+pub struct EngineReport {
+    /// Engine name, such as `xorriso`.
+    pub name: String,
+    /// Its version, as the engine reports it.
+    pub version: String,
+}
+
+/// What a worker says about one drive.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct DriveReportBody {
+    /// Worker-local stable alias, such as `/dev/disc-block`.
+    ///
+    /// Supplied by the worker and never a host device node. Together with the
+    /// worker it is the drive's identity, which is why the same alias
+    /// reported twice updates one drive rather than creating a second.
+    pub device_alias: String,
+    /// Human-meaningful name an operator chose.
+    pub configured_name: String,
+    /// Reported vendor.
+    #[serde(default)]
+    pub vendor: Option<String>,
+    /// Reported model.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Reported firmware revision.
+    #[serde(default)]
+    pub firmware: Option<String>,
+    /// SHA-256 of the drive serial, hashed by the worker.
+    ///
+    /// Hashed before it is sent, so the raw serial never leaves the machine
+    /// that read it. The server only needs to recognise a drive, not to name
+    /// its hardware in an export.
+    #[serde(default)]
+    pub serial_hash: Option<String>,
+    /// Current drive status.
+    pub status: String,
+    /// What the drive says it can do.
+    #[serde(default)]
+    pub capabilities: serde_json::Value,
+}
+
+/// A worker's account of itself.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CapabilityReport {
+    /// The worker's software version.
+    pub software_version: String,
+    /// Engines it can run.
+    #[serde(default)]
+    pub engines: Vec<EngineReport>,
+    /// The drive it operates.
+    pub drive: DriveReportBody,
+    /// Free bytes in its staging cache.
+    #[serde(default)]
+    pub cache_free_bytes: Option<i64>,
+}
+
+/// What the server assigned.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CapabilityResponse {
+    /// The drive's identifier, to be used when claiming work.
+    ///
+    /// Assigned by the server rather than supplied: public identifiers are
+    /// the server's to issue, and a worker that could choose one could claim
+    /// another worker's drive.
+    pub drive_id: String,
+}
+
+/// Drive statuses a worker may report.
+///
+/// Matched here as well as in the column so a bad value is a clear refusal
+/// rather than a constraint violation reported as a storage failure.
+const REPORTABLE_DRIVE_STATUSES: &[&str] = &[
+    "unknown",
+    "ready_empty",
+    "ready_with_media",
+    "busy",
+    "tray_open",
+    "missing",
+    "error",
+    "disabled",
+];
+
+/// Longest free-text field accepted, matching the columns.
+const MAX_DRIVE_FIELD: usize = 200;
+
+/// Record what a worker and its drive can do.
+///
+/// Evidence, not permission. A drive claiming a profile may still fail to
+/// write it, which is why preflight inspects the medium rather than trusting
+/// this report.
+///
+/// Idempotent by worker and device alias: a restarting worker gets the same
+/// drive identifier back instead of accumulating a drive row per restart and
+/// leaving burn history pointing at hardware nobody can find.
+///
+/// # Errors
+///
+/// `NOT_FOUND` if the path names a different worker, or `VALIDATION_FAILED`
+/// for a report the schema will not accept.
+#[utoipa::path(
+    put,
+    path = "/api/v1/workers/{worker_id}/capabilities",
+    tag = "workers",
+    description = "Report what this worker and its drive can do, and receive \
+                   the drive identifier to claim work with.",
+    params(("worker_id" = String, Path, description = "Worker identifier")),
+    request_body = CapabilityReport,
+    responses(
+        (status = 200, description = "Recorded", body = CapabilityResponse),
+        (status = 401, description = "Not authenticated", body = Problem),
+        (status = 404, description = "Not this worker", body = Problem),
+        (status = 422, description = "The report will not be accepted", body = Problem),
+    ),
+    security(("worker_credential" = [])),
+)]
+pub async fn report_capabilities(
+    State(state): State<ApiState>,
+    identity: WorkerIdentity,
+    Path(worker_id): Path<String>,
+    Json(report): Json<CapabilityReport>,
+) -> Result<Json<CapabilityResponse>, Problem> {
+    let worker_id = same_worker(identity, &worker_id)?;
+
+    let invalid = |detail: &str| Problem::new(ErrorCode::ValidationFailed, detail.to_owned());
+    let bounded_field = |value: &str, name: &str| {
+        if value.is_empty() || value.len() > MAX_DRIVE_FIELD {
+            Err(invalid(&format!(
+                "{name} must be between 1 and {MAX_DRIVE_FIELD} characters"
+            )))
+        } else {
+            Ok(())
+        }
+    };
+
+    bounded_field(&report.drive.device_alias, "device_alias")?;
+    bounded_field(&report.drive.configured_name, "configured_name")?;
+    bounded_field(&report.software_version, "software_version")?;
+    for (value, name) in [
+        (&report.drive.vendor, "vendor"),
+        (&report.drive.model, "model"),
+        (&report.drive.firmware, "firmware"),
+    ] {
+        if let Some(value) = value
+            && value.len() > MAX_DRIVE_FIELD
+        {
+            return Err(invalid(&format!(
+                "{name} must be at most {MAX_DRIVE_FIELD} characters"
+            )));
+        }
+    }
+
+    if !REPORTABLE_DRIVE_STATUSES.contains(&report.drive.status.as_str()) {
+        return Err(invalid("that is not a drive status this server knows"));
+    }
+
+    if let Some(hash) = &report.drive.serial_hash
+        && !(hash.len() == 64
+            && hash
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()))
+    {
+        return Err(invalid(
+            "serial_hash must be a lowercase hexadecimal SHA-256 digest",
+        ));
+    }
+
+    // Capabilities are stored as an object. A bare array or string would be
+    // accepted by JSONB and then confuse every reader of the column.
+    let capabilities = if report.drive.capabilities.is_null() {
+        serde_json::json!({})
+    } else if report.drive.capabilities.is_object() {
+        report.drive.capabilities.clone()
+    } else {
+        return Err(invalid("capabilities must be an object"));
+    };
+
+    let worker_capabilities = serde_json::json!({
+        "engines": report
+            .engines
+            .iter()
+            .map(|engine| serde_json::json!({ "name": engine.name, "version": engine.version }))
+            .collect::<Vec<_>>(),
+        "cache_free_bytes": report.cache_free_bytes,
+    });
+
+    let drive_id = record_capabilities(
+        state.database().pool(),
+        worker_id,
+        &report.software_version,
+        &worker_capabilities,
+        DriveReport {
+            device_alias: &report.drive.device_alias,
+            configured_name: &report.drive.configured_name,
+            vendor: report.drive.vendor.as_deref(),
+            model: report.drive.model.as_deref(),
+            firmware: report.drive.firmware.as_deref(),
+            serial_hash: report.drive.serial_hash.as_deref(),
+            status: &report.drive.status,
+            capabilities: &capabilities,
+        },
+    )
+    .await
+    .map_err(|error| {
+        tracing::error!(error = ?error, "could not record capabilities");
+        unavailable("the capability report could not be recorded")
+    })?;
+
+    tracing::info!(
+        worker_id = %worker_id,
+        drive_id = %drive_id,
+        alias = %report.drive.device_alias,
+        "capabilities recorded"
+    );
+
+    Ok(Json(CapabilityResponse {
+        drive_id: drive_id.to_string(),
+    }))
+}
+
 // --- claiming --------------------------------------------------------------------
 
 /// What a worker offers when asking for work.
@@ -317,6 +540,26 @@ pub struct ClaimRequest {
     pub engine_version: String,
 }
 
+/// Where a worker fetches what it is to write.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ClaimedArtifact {
+    /// The artifact.
+    pub artifact_id: String,
+    /// Path to fetch the manifest from, relative to the server.
+    ///
+    /// A path rather than an absolute URL: the worker already knows which
+    /// server it is talking to, and a server that told it otherwise would be
+    /// redirecting a staging download somewhere the operator never
+    /// configured.
+    pub manifest_url: String,
+    /// Digest of the manifest as published, when the library is readable.
+    ///
+    /// The worker checks what it downloads against this. It does not make the
+    /// manifest trustworthy (it came from the same server), but it catches a
+    /// document altered or truncated between publication and the download.
+    pub manifest_sha256: Option<String>,
+}
+
 /// A lease on some work.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ClaimResponse {
@@ -326,14 +569,22 @@ pub struct ClaimResponse {
     pub burn_job_id: String,
     /// Which attempt this is.
     pub attempt_number: i32,
-    /// The artifact to write.
-    pub artifact_id: String,
+    /// What to write, and where to fetch it.
+    pub artifact: ClaimedArtifact,
     /// The lease token, presented on subsequent requests for this attempt.
     pub lease_token: String,
     /// When the lease lapses.
     pub lease_expires_at: String,
     /// Verification steps the job requires.
     pub verification_policy: Vec<String>,
+    /// What to do with the disc when the attempt ends.
+    pub eject_policy: String,
+    /// Media profile the operator asked for, if any.
+    ///
+    /// Advisory until claims filter on drive capability: a worker whose drive
+    /// cannot write this must fail preflight rather than write the wrong
+    /// medium.
+    pub requested_media_profile: Option<String>,
 }
 
 /// Ask for work.
@@ -413,17 +664,50 @@ pub async fn claim_work(
                 burn_job_id = %job.burn_job_id,
                 "burn job leased"
             );
+            // Absent rather than fabricated when the library is unreadable:
+            // the worker then stages without the extra check instead of
+            // comparing against a digest of nothing.
+            let manifest_sha256 = match state.manifests() {
+                None => None,
+                Some(manifests) => {
+                    match manifests
+                        .digest(tangible_domain::ArtifactId::from_uuid(job.artifact_id))
+                        .await
+                    {
+                        Ok(digest) => Some(digest.to_hex()),
+                        Err(error) => {
+                            tracing::warn!(
+                                artifact_id = %job.artifact_id,
+                                error = ?error,
+                                "could not digest a manifest for a claim"
+                            );
+                            None
+                        }
+                    }
+                }
+            };
+
             Ok(Json(ClaimResponse {
                 attempt_id: job.attempt_id.to_string(),
                 burn_job_id: job.burn_job_id.to_string(),
                 attempt_number: job.attempt_number,
-                artifact_id: job.artifact_id.to_string(),
+                artifact: ClaimedArtifact {
+                    artifact_id: job.artifact_id.to_string(),
+                    manifest_url: format!(
+                        "{}/artifacts/{}/manifest",
+                        crate::API_BASE,
+                        job.artifact_id
+                    ),
+                    manifest_sha256,
+                },
                 lease_token: lease.expose().to_owned(),
                 lease_expires_at: job
                     .lease_expires_at
                     .format(&time::format_description::well_known::Rfc3339)
                     .unwrap_or_default(),
                 verification_policy: job.verification_policy,
+                eject_policy: job.eject_policy,
+                requested_media_profile: job.requested_media_profile,
             })
             .into_response())
         }
@@ -541,6 +825,28 @@ pub struct EventAck {
     pub accepted_through_sequence: i64,
 }
 
+/// Longest failure code stored, matching the column.
+const MAX_ERROR_CODE: usize = 100;
+
+/// Longest failure detail stored, matching the column.
+const MAX_ERROR_DETAIL: usize = 10_000;
+
+/// Truncate to a column's limit, on a character boundary.
+///
+/// Truncated rather than refused. Completion is reported after the disc is
+/// burned, and failing it over an oversized message would lose the record of a
+/// disc that physically exists.
+fn bounded(value: &str, limit: usize) -> String {
+    if value.len() <= limit {
+        return value.to_owned();
+    }
+    let mut end = limit;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_owned()
+}
+
 /// Largest batch accepted in one request.
 ///
 /// Bounded so a worker cannot ask the server to absorb an unlimited backlog in
@@ -585,6 +891,19 @@ pub async fn submit_events(
         ));
     }
 
+    // What the worker says it is doing, taken from the last event that names
+    // a stage this build knows. Events arrive in sequence order, so the last
+    // one is the most recent; a stage from an older release is skipped rather
+    // than guessed at, which leaves the record where it was instead of moving
+    // it somewhere invented.
+    let reported = batch
+        .events
+        .iter()
+        .rev()
+        .find_map(|event| event.stage.parse::<WorkerStage>().ok())
+        .and_then(|stage| stage.job_state().zip(stage.attempt_state()))
+        .map(|(job, attempt)| ReportedStage { job, attempt });
+
     let mut events = Vec::with_capacity(batch.events.len());
     for event in batch.events {
         let worker_timestamp = OffsetDateTime::parse(
@@ -607,7 +926,7 @@ pub async fn submit_events(
         });
     }
 
-    let through = record_events(state.database().pool(), attempt_id, &events)
+    let through = record_events(state.database().pool(), attempt_id, &events, reported)
         .await
         .map_err(|error| {
             tracing::error!(error = ?error, "recording events failed");
@@ -667,6 +986,20 @@ pub struct PhysicalMedium {
     pub serial: Option<String>,
 }
 
+/// Why an attempt did not succeed.
+///
+/// Sent alongside the reports rather than inferred from them, because the
+/// reports say *what* happened and this says why. Without it a failed burn
+/// tells an operator only that it failed.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct FailureReport {
+    /// Stable machine-readable code, such as `PREFLIGHT_MEDIUM_NOT_BLANK`.
+    pub code: String,
+    /// Human-readable detail, bounded by the server before storage.
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
 /// What a worker sends when it finishes.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CompletionRequest {
@@ -680,6 +1013,9 @@ pub struct CompletionRequest {
     pub verification_report: Option<VerificationReport>,
     /// What was in the drive.
     pub physical_medium: PhysicalMedium,
+    /// Why it failed, when it did.
+    #[serde(default)]
+    pub failure: Option<FailureReport>,
 }
 
 /// What the server acknowledges.
@@ -712,6 +1048,19 @@ fn resolve(request: &CompletionRequest) -> Resolved {
         .verification_report
         .as_ref()
         .map(|r| r.state.as_str());
+
+    // A write that never started consumed nothing. Checked first, because
+    // every other arm below assumes the laser ran: recording a preflight
+    // failure as a failed write would invent a disc that does not exist and
+    // put it in the inventory to be hunted for.
+    if request.write_report.state == "not_attempted" {
+        return Resolved {
+            state: BurnAttemptState::FailedBeforeWrite,
+            copy_status: "unknown",
+            verification_result: "not_performed",
+            error_code: Some("WRITE_NOT_ATTEMPTED"),
+        };
+    }
 
     match (wrote, verification) {
         // The only clean success: written and read back matching.
@@ -781,6 +1130,16 @@ pub async fn complete(
     let lease = Secret::from_supplied(request.lease_token.clone());
     let resolved = resolve(&request);
 
+    let reported_code = request
+        .failure
+        .as_ref()
+        .map(|failure| bounded(&failure.code, MAX_ERROR_CODE));
+    let reported_detail = request
+        .failure
+        .as_ref()
+        .and_then(|failure| failure.detail.as_ref())
+        .map(|detail| bounded(detail, MAX_ERROR_DETAIL));
+
     let write_report = serde_json::to_value(&request.write_report).map_err(|error| {
         tracing::error!(error = ?error, "could not serialize a write report");
         unavailable("the write report could not be stored")
@@ -808,8 +1167,12 @@ pub async fn complete(
             .map_or("none", |report| report.policy.as_str()),
         verification_result: resolved.verification_result,
         copy_status: resolved.copy_status,
-        error_code: resolved.error_code,
-        error_detail: None,
+        // The worker's own code when it sent one: it knows which check
+        // stopped it, and the resolved code only knows the shape of the
+        // outcome. Both are bounded here because the columns are, and a
+        // completion must never fail on a length: the disc is already burned.
+        error_code: reported_code.as_deref().or(resolved.error_code),
+        error_detail: reported_detail.as_deref(),
     };
 
     let recorded = complete_attempt(
@@ -836,13 +1199,20 @@ pub async fn complete(
         );
     }
 
+    // The operator's policy decides, not the route. The default ejects only a
+    // verified disc, so one that failed verification stays where somebody will
+    // find it rather than being handed back as though it were good; an
+    // operator who asked for `always` gets always.
+    let eject = recorded
+        .eject_policy
+        .parse::<EjectPolicy>()
+        .unwrap_or_default()
+        .ejects_after(resolved.state.is_success());
+
     Ok(Json(CompletionResponse {
         acknowledged: true,
         physical_copy_id: recorded.physical_copy_id.map(|id| id.to_string()),
-        // Only on a clean success. A disc that failed verification should stay
-        // where an operator will find it rather than be handed back as though
-        // it were good.
-        eject: resolved.state.is_success(),
+        eject,
     }))
 }
 
@@ -993,6 +1363,10 @@ pub fn router() -> Router<ApiState> {
             "/worker-enrollments/consume",
             post(consume_enrollment_token),
         )
+        .route(
+            "/workers/{worker_id}/capabilities",
+            axum::routing::put(report_capabilities),
+        )
         .route("/workers/{worker_id}/heartbeat", post(heartbeat))
         .route("/workers/{worker_id}/claims", post(claim_work))
         .route("/workers/{worker_id}/recoveries", post(recover))
@@ -1029,6 +1403,7 @@ mod tests {
                 manufacturer_id: None,
                 serial: None,
             },
+            failure: None,
         }
     }
 
@@ -1072,6 +1447,61 @@ mod tests {
     }
 
     #[test]
+    fn a_write_that_never_started_records_no_disc() {
+        // A preflight that refused the medium, or a cancellation before the
+        // laser ran. Recording it as a failed write would invent a disc and
+        // put it in the inventory to be hunted for.
+        let resolved = resolve(&completion("not_attempted", None));
+        assert_eq!(resolved.state, BurnAttemptState::FailedBeforeWrite);
+        assert!(!resolved.state.consumed_media());
+        assert_eq!(resolved.error_code, Some("WRITE_NOT_ATTEMPTED"));
+    }
+
+    #[test]
+    fn a_write_that_never_started_is_not_rescued_by_a_verification_report() {
+        // Whatever else the worker sends, no write means no disc.
+        for verification in [None, Some("match"), Some("mismatch")] {
+            let resolved = resolve(&completion("not_attempted", verification));
+            assert!(
+                !resolved.state.consumed_media(),
+                "{verification:?} must not conjure a disc"
+            );
+        }
+    }
+
+    #[test]
+    fn the_eject_decision_follows_the_operator_s_policy() {
+        // The default keeps a disc that failed verification in the drive.
+        assert!(EjectPolicy::EjectOnSuccess.ejects_after(true));
+        assert!(!EjectPolicy::EjectOnSuccess.ejects_after(false));
+        // An unknown policy falls back to the default rather than ejecting a
+        // bad disc.
+        assert_eq!(
+            "melting".parse::<EjectPolicy>().unwrap_or_default(),
+            EjectPolicy::EjectOnSuccess
+        );
+    }
+
+    #[test]
+    fn an_oversized_failure_message_is_truncated_rather_than_refused() {
+        // Completion is reported after the disc is burned. Failing it over a
+        // long message would lose the record of a disc that exists.
+        let long = "x".repeat(MAX_ERROR_DETAIL + 500);
+        assert_eq!(bounded(&long, MAX_ERROR_DETAIL).len(), MAX_ERROR_DETAIL);
+        assert_eq!(bounded("short", MAX_ERROR_DETAIL), "short");
+    }
+
+    #[test]
+    fn truncation_does_not_split_a_character() {
+        // A message in any language must not be cut mid-codepoint, which
+        // would make the stored text invalid rather than merely shorter.
+        let text = "é".repeat(10);
+        let cut = bounded(&text, 5);
+        assert!(text.starts_with(&cut));
+        assert!(cut.len() <= 5);
+    }
+
+    #[test]
     fn a_failed_write_still_records_a_disc() {
         // Media was being consumed when the write failed, so a physical disc
         // exists. An untracked ruined disc gets shelved and reused.
@@ -1095,7 +1525,7 @@ mod tests {
             "write_failed",
             "interrupted",
         ];
-        for write in ["success", "failed"] {
+        for write in ["success", "failed", "not_attempted"] {
             for verification in [None, Some("match"), Some("mismatch"), Some("skipped")] {
                 let resolved = resolve(&completion(write, verification));
                 if resolved.state.consumed_media() {

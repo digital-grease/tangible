@@ -25,9 +25,9 @@ pub use burn::{BurnAttemptState, BurnJobState, BurnTransitionError};
 pub use digest::{DigestParseError, Sha256Digest};
 pub use enums::{
     ArtifactFormat, ArtifactKind, ArtifactOrigin, CompatibilityClaim, ComponentRole,
-    DiscRelationship, DriveStatus, EnumParseError, HashAlgorithm, IntegrationKind, LossCharacter,
-    MediaFamily, PhysicalCopyStatus, QuarantineState, SetKind, TitleKind, ValidationState,
-    VerificationStep, WorkerStatus,
+    DiscRelationship, DriveStatus, EjectPolicy, EnumParseError, HashAlgorithm, IntegrationKind,
+    LossCharacter, MediaFamily, PhysicalCopyStatus, QuarantineState, SetKind, TitleKind,
+    ValidationState, VerificationStep, WorkerStatus,
 };
 pub use id::{
     ArtifactId, BurnAttemptId, BurnJobId, ComponentId, DiscId, DiscSetId, DriveId, EditionId,

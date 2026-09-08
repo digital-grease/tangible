@@ -707,7 +707,262 @@ async fn a_malformed_identifier_is_a_bad_request_not_a_server_error() {
     assert_eq!(body["code"], "INVALID_PARAMETER");
 }
 
+// --- capabilities ------------------------------------------------------------
+
+fn capability_body(alias: &str) -> serde_json::Value {
+    serde_json::json!({
+        "software_version": "0.1.0",
+        "engines": [{ "name": "fake", "version": "0.1.0" }],
+        "drive": {
+            "device_alias": alias,
+            "configured_name": "workshop",
+            "vendor": "PIONEER",
+            "model": "BDR-212",
+            "status": "ready_empty",
+            "capabilities": { "write_profiles": ["CD-R"] },
+        },
+        "cache_free_bytes": 500_000_000_000_i64,
+    })
+}
+
+async fn put(
+    harness: &Harness,
+    path: &str,
+    credential: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let request = Request::builder()
+        .method("PUT")
+        .uri(path)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {credential}"))
+        .body(Body::from(body.to_string()))
+        .expect("build the request");
+    harness.send(request).await
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_worker_reporting_a_drive_is_given_an_identifier_for_it() {
+    let harness = harness().await;
+    let (worker_id, credential) = enroll(&harness).await;
+
+    let (status, body) = put(
+        &harness,
+        &format!("/api/v1/workers/{worker_id}/capabilities"),
+        &credential,
+        capability_body("/dev/disc-block"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let drive_id = body["drive_id"].as_str().expect("a drive id");
+    let (alias, status_value): (String, String) =
+        sqlx::query_as("SELECT device_alias, status FROM drives WHERE id = $1::uuid")
+            .bind(drive_id)
+            .fetch_one(&harness.pool)
+            .await
+            .expect("the drive");
+    assert_eq!(alias, "/dev/disc-block");
+    assert_eq!(status_value, "ready_empty");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_restarting_worker_reports_the_same_drive_rather_than_a_second_one() {
+    // Identity is the worker plus the alias. A new row per restart would
+    // leave burn history pointing at drives nobody can find.
+    let harness = harness().await;
+    let (worker_id, credential) = enroll(&harness).await;
+    let path = format!("/api/v1/workers/{worker_id}/capabilities");
+
+    let (_, first) = put(
+        &harness,
+        &path,
+        &credential,
+        capability_body("/dev/disc-block"),
+    )
+    .await;
+    let (_, second) = put(
+        &harness,
+        &path,
+        &credential,
+        capability_body("/dev/disc-block"),
+    )
+    .await;
+    assert_eq!(first["drive_id"], second["drive_id"]);
+
+    let drives: i64 = sqlx::query_scalar("SELECT count(*) FROM drives WHERE worker_id = $1::uuid")
+        .bind(&worker_id)
+        .fetch_one(&harness.pool)
+        .await
+        .expect("count");
+    assert_eq!(drives, 1);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_second_drive_on_one_worker_is_its_own_drive() {
+    let harness = harness().await;
+    let (worker_id, credential) = enroll(&harness).await;
+    let path = format!("/api/v1/workers/{worker_id}/capabilities");
+
+    let (_, first) = put(&harness, &path, &credential, capability_body("/dev/disc-a")).await;
+    let (_, second) = put(&harness, &path, &credential, capability_body("/dev/disc-b")).await;
+    assert_ne!(first["drive_id"], second["drive_id"]);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_capability_report_for_another_worker_is_refused() {
+    // Same rule as every other worker route: a credential authorises acting
+    // as that worker and no other.
+    let harness = harness().await;
+    let (_, credential) = enroll(&harness).await;
+    let (other_id, _) = enroll(&harness).await;
+
+    let (status, _) = put(
+        &harness,
+        &format!("/api/v1/workers/{other_id}/capabilities"),
+        &credential,
+        capability_body("/dev/disc-block"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_unknown_drive_status_is_refused_rather_than_stored() {
+    let harness = harness().await;
+    let (worker_id, credential) = enroll(&harness).await;
+    let mut body = capability_body("/dev/disc-block");
+    body["drive"]["status"] = serde_json::json!("melting");
+
+    let (status, problem) = put(
+        &harness,
+        &format!("/api/v1/workers/{worker_id}/capabilities"),
+        &credential,
+        body,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(problem["code"], "VALIDATION_FAILED");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_raw_serial_is_not_accepted_where_a_hash_belongs() {
+    // The field is a hash because the raw serial identifies hardware an
+    // operator may not want in an export. Accepting a plain string would
+    // quietly store one.
+    let harness = harness().await;
+    let (worker_id, credential) = enroll(&harness).await;
+    let mut body = capability_body("/dev/disc-block");
+    body["drive"]["serial_hash"] = serde_json::json!("ABC123-SERIAL");
+
+    let (status, problem) = put(
+        &harness,
+        &format!("/api/v1/workers/{worker_id}/capabilities"),
+        &credential,
+        body,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(problem["code"], "VALIDATION_FAILED");
+}
+
 // --- completion ------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_write_that_never_started_records_no_disc() {
+    // A preflight that refused the medium. The laser never ran, so there is
+    // no disc, and recording one would send an operator hunting for a
+    // physical object that does not exist.
+    let _queue = exclusive_queue().await;
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let attempt = claimed_attempt(&harness).await;
+
+    let mut body = completion(&attempt.lease, "not_attempted", None);
+    body["failure"] = serde_json::json!({
+        "code": "PREFLIGHT_MEDIUM_NOT_BLANK",
+        "detail": "the disc in the drive already holds one session",
+    });
+
+    let (status, response) = harness
+        .post(
+            &format!("/api/v1/burn-attempts/{}/complete", attempt.id),
+            Some(&attempt.credential),
+            body,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    assert!(
+        response["physical_copy_id"].is_null(),
+        "no media was consumed: {response}"
+    );
+    assert_eq!(response["eject"], false);
+
+    let (state, code, detail): (String, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT state, error_code, error_detail FROM burn_attempts WHERE id = $1::uuid",
+    )
+    .bind(&attempt.id)
+    .fetch_one(&harness.pool)
+    .await
+    .expect("read back the attempt");
+    assert_eq!(state, "failed_before_write");
+    // The worker's own code, not the generic one: it knows which check
+    // stopped it.
+    assert_eq!(code.as_deref(), Some("PREFLIGHT_MEDIUM_NOT_BLANK"));
+    assert!(
+        detail.expect("detail").contains("one session"),
+        "the reason must survive to the operator"
+    );
+
+    let copies: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM physical_copies WHERE burn_attempt_id = $1::uuid")
+            .bind(&attempt.id)
+            .fetch_one(&harness.pool)
+            .await
+            .expect("count");
+    assert_eq!(copies, 0);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn the_eject_answer_follows_the_jobs_policy() {
+    // A disc that failed verification stays in the drive by default. An
+    // operator who asked for `always` gets always, because it is their
+    // decision and not the route's.
+    let _queue = exclusive_queue().await;
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let attempt = claimed_attempt(&harness).await;
+    sqlx::query(
+        "UPDATE burn_jobs SET eject_policy = 'always'
+         WHERE id = (SELECT burn_job_id FROM burn_attempts WHERE id = $1::uuid)",
+    )
+    .bind(&attempt.id)
+    .execute(&harness.pool)
+    .await
+    .expect("set the policy");
+
+    let (status, body) = harness
+        .post(
+            &format!("/api/v1/burn-attempts/{}/complete", attempt.id),
+            Some(&attempt.credential),
+            completion(&attempt.lease, "success", Some("mismatch")),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["eject"], true, "the operator asked for always");
+    assert!(
+        body["physical_copy_id"].is_string(),
+        "the bad disc is still recorded"
+    );
+}
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]

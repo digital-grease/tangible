@@ -337,6 +337,33 @@ string_enum! {
     }
 }
 
+string_enum! {
+    /// What to do with the medium once an attempt ends.
+    ///
+    /// A closed set rather than a boolean, because the interesting choice is
+    /// the middle one: eject a disc that verified, and leave a disc that did
+    /// not where an operator will find it rather than handing it back as
+    /// though it were good.
+    EjectPolicy {
+        Never => "never",
+        EjectOnSuccess => "eject_on_success",
+        Always => "always",
+    }
+    default = EjectOnSuccess
+}
+
+impl EjectPolicy {
+    /// Whether an attempt ending in `success` should eject.
+    #[must_use]
+    pub const fn ejects_after(&self, success: bool) -> bool {
+        match self {
+            Self::Never => false,
+            Self::EjectOnSuccess => success,
+            Self::Always => true,
+        }
+    }
+}
+
 impl VerificationStep {
     /// Whether this step compares written media against the source bytes.
     ///
@@ -430,6 +457,61 @@ string_enum! {
     default = Unknown
 }
 
+impl PhysicalCopyStatus {
+    /// Whether this disc's story has ended.
+    ///
+    /// Only destruction. A disc that is lost may be found; one that failed
+    /// verification may be checked again and found readable, or worse. A disc
+    /// that has been destroyed is gone, and the record stays only so the
+    /// history of what was burned remains true.
+    #[must_use]
+    pub const fn is_terminal(&self) -> bool {
+        matches!(self, Self::Destroyed)
+    }
+
+    /// Whether this disc should be taken out of circulation.
+    ///
+    /// The question an operator is really asking when they look at a shelf:
+    /// can I use this, or should it go in the bin? Anything not known to hold
+    /// what was intended answers the same way, because a disc that might be
+    /// wrong is worse than no disc: it gets filed, found later, and trusted.
+    #[must_use]
+    pub const fn should_be_destroyed(&self) -> bool {
+        matches!(self, Self::VerificationFailed | Self::Degraded)
+    }
+
+    /// Whether an operator may record this as the disc's new condition.
+    ///
+    /// The record of a burn is not editable, but the condition of the disc it
+    /// produced is: discs rot, get scratched, get lost, and get thrown away,
+    /// and none of that changes what was written.
+    ///
+    /// Two things are refused. A destroyed disc accepts nothing further,
+    /// because it no longer exists to have a condition. And nothing may be
+    /// promoted to `verified` by hand: that word means a disc was read back
+    /// and matched, and only a check can establish it.
+    #[must_use]
+    pub fn accepts_condition(self, next: Self) -> bool {
+        if self.is_terminal() {
+            return false;
+        }
+        !matches!(next, Self::Verified | Self::VerificationFailed)
+    }
+
+    /// The condition a completed check establishes.
+    ///
+    /// The one path to `verified`, and the reason it is a separate method: a
+    /// check is evidence, and evidence is what that word is supposed to mean.
+    #[must_use]
+    pub const fn after_check(matched: bool) -> Self {
+        if matched {
+            Self::Verified
+        } else {
+            Self::VerificationFailed
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {
@@ -477,11 +559,99 @@ mod tests {
             DiscRelationship,
             LossCharacter,
             VerificationStep,
+            EjectPolicy,
             WorkerStatus,
             DriveStatus,
             IntegrationKind,
             PhysicalCopyStatus,
         );
+    }
+
+    #[test]
+    fn only_destruction_ends_a_discs_story() {
+        // A lost disc may be found; a degraded one may be checked again.
+        assert!(PhysicalCopyStatus::Destroyed.is_terminal());
+        for open in [
+            PhysicalCopyStatus::Lost,
+            PhysicalCopyStatus::Degraded,
+            PhysicalCopyStatus::VerificationFailed,
+            PhysicalCopyStatus::ProducedUnverified,
+            PhysicalCopyStatus::Verified,
+        ] {
+            assert!(!open.is_terminal(), "{open}");
+        }
+    }
+
+    #[test]
+    fn a_disc_that_might_be_wrong_is_flagged_for_destruction() {
+        // Worse than no disc: it gets filed, found later, and trusted.
+        assert!(PhysicalCopyStatus::VerificationFailed.should_be_destroyed());
+        assert!(PhysicalCopyStatus::Degraded.should_be_destroyed());
+        assert!(!PhysicalCopyStatus::Verified.should_be_destroyed());
+        // Unverified is not the same as wrong. Nothing read it, so nothing is
+        // known, and destroying it would be a decision the system made for an
+        // operator who might simply want to check it.
+        assert!(!PhysicalCopyStatus::ProducedUnverified.should_be_destroyed());
+    }
+
+    #[test]
+    fn nothing_becomes_verified_without_a_check() {
+        // The word means a disc was read back and matched. Letting an
+        // operator type it would make the strongest claim in the system the
+        // cheapest one to make.
+        for from in PhysicalCopyStatus::all() {
+            assert!(
+                !from.accepts_condition(PhysicalCopyStatus::Verified),
+                "{from} must not be promoted to verified by hand"
+            );
+            assert!(!from.accepts_condition(PhysicalCopyStatus::VerificationFailed));
+        }
+        assert_eq!(
+            PhysicalCopyStatus::after_check(true),
+            PhysicalCopyStatus::Verified
+        );
+        assert_eq!(
+            PhysicalCopyStatus::after_check(false),
+            PhysicalCopyStatus::VerificationFailed
+        );
+    }
+
+    #[test]
+    fn a_destroyed_disc_accepts_no_further_condition() {
+        for next in PhysicalCopyStatus::all() {
+            assert!(
+                !PhysicalCopyStatus::Destroyed.accepts_condition(*next),
+                "{next}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_operator_may_record_what_happened_to_a_disc() {
+        // Discs rot, get scratched, get lost and get thrown away, and none of
+        // that changes what was written to them.
+        for next in [
+            PhysicalCopyStatus::Degraded,
+            PhysicalCopyStatus::Lost,
+            PhysicalCopyStatus::Destroyed,
+            PhysicalCopyStatus::Unknown,
+        ] {
+            assert!(
+                PhysicalCopyStatus::Verified.accepts_condition(next),
+                "{next}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_disc_that_failed_verification_is_not_handed_back() {
+        // The middle policy is the reason this is an enum and not a boolean:
+        // a disc that verified is ejected, and one that did not stays in the
+        // drive where an operator will find it.
+        assert!(EjectPolicy::EjectOnSuccess.ejects_after(true));
+        assert!(!EjectPolicy::EjectOnSuccess.ejects_after(false));
+        assert!(!EjectPolicy::Never.ejects_after(true));
+        assert!(EjectPolicy::Always.ejects_after(false));
     }
 
     #[test]

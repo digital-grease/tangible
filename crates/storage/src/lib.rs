@@ -18,6 +18,7 @@ pub mod filesystem;
 pub mod manifest_store;
 pub mod object_key;
 pub mod staging;
+pub mod watch_roots;
 
 pub use filesystem::{
     FilesystemStore, IngestLimits, Ingested, ObjectStat, STORAGE_VERSION, StorageError,
@@ -25,3 +26,4 @@ pub use filesystem::{
 pub use manifest_store::{ManifestStore, ManifestStoreError};
 pub use object_key::ObjectKey;
 pub use staging::{StagingArea, StagingError, StagingKind, StagingManager};
+pub use watch_roots::{WatchRootError, WatchRoots};

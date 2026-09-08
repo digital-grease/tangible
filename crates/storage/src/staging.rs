@@ -332,6 +332,28 @@ impl StagingArea {
         Ok(target)
     }
 
+    /// Open a staged path for streaming, creating parents as needed.
+    ///
+    /// The writer an upload wants: an image may be tens of gigabytes and
+    /// [`Self::write`] takes the whole thing in memory. Path validation
+    /// happens here, so a caller streaming into the returned file cannot
+    /// place bytes outside the area.
+    ///
+    /// # Errors
+    ///
+    /// [`StagingError::Symlink`], [`StagingError::Escape`], or
+    /// [`StagingError::Io`].
+    pub async fn create_file(&self, logical: &LogicalPath) -> Result<fs::File, StagingError> {
+        let target = self.prepare_parent(logical).await?;
+        fs::File::create(&target)
+            .await
+            .map_err(|source| StagingError::Io {
+                operation: "creating a staged file",
+                path: target,
+                source,
+            })
+    }
+
     /// Write bytes to a staged path, creating parents as needed.
     ///
     /// # Errors

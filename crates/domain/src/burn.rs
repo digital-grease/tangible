@@ -148,6 +148,18 @@ pub enum BurnTransitionError {
         /// The state the caller tried to write from.
         from: BurnJobState,
     },
+
+    /// A retry was requested for a job that cannot take one.
+    ///
+    /// Separate from the invalid-edge error because a retry is an operator
+    /// command rather than a transition, and the operator is owed the reason:
+    /// a finished job is not retried but repeated, and a job needing
+    /// attention has a disc unaccounted for.
+    #[error("a burn job in state {state} cannot be retried")]
+    NotRetryable {
+        /// Current state.
+        state: String,
+    },
 }
 
 impl BurnJobState {
@@ -300,6 +312,112 @@ impl BurnJobState {
         }
         Ok(Self::Canceled)
     }
+
+    /// Requeue a job so a worker can attempt it again.
+    ///
+    /// A command rather than a transition: the job machine treats failure as
+    /// terminal, and it is the operator, not the system, who decides that
+    /// another disc should be spent.
+    ///
+    /// # Errors
+    ///
+    /// [`BurnTransitionError::NotRetryable`] for a job that finished cleanly,
+    /// one that needs a human, or one still running.
+    pub fn retry(self) -> Result<Self, BurnTransitionError> {
+        match self {
+            // Failed and cancelled are what a retry exists for: neither has
+            // an attempt in flight, and neither is finished work.
+            //
+            // Queued is included so a repeated request is a no-op rather than
+            // an error. What the operator asked for is already true, and
+            // reporting that as a failure would invite them to press again.
+            Self::Queued | Self::Failed | Self::Canceled => Ok(Self::Queued),
+            // Complete is refused because burning another disc is a new job.
+            // Reusing this one would file two physical discs under a single
+            // record and lose which attempt produced which.
+            //
+            // NeedsAttention is refused because it means a disc's fate is
+            // unaccounted for. Queueing a second write while that is true is
+            // the one thing the burn rules never permit.
+            _ => Err(BurnTransitionError::NotRetryable {
+                state: self.to_string(),
+            }),
+        }
+    }
+
+    /// Record that a person has accounted for the disc.
+    ///
+    /// `NeedsAttention` means a disc may exist that the system cannot account
+    /// for, and it is deliberately a dead end: nothing automatic may release
+    /// it, because the release is a claim about the physical world. A person
+    /// looks, records what they found against the disc's own inventory entry,
+    /// and then says so here.
+    ///
+    /// The job becomes `Failed` rather than anything more optimistic. Whatever
+    /// was found, this attempt did not produce a verified disc, and a retry
+    /// from `Failed` is the ordinary path to another one.
+    ///
+    /// # Errors
+    ///
+    /// [`BurnTransitionError::InvalidJob`] for a job that is not asking for
+    /// attention. There is nothing to resolve.
+    pub fn resolve_attention(self) -> Result<Self, BurnTransitionError> {
+        if self == Self::NeedsAttention {
+            Ok(Self::Failed)
+        } else {
+            Err(BurnTransitionError::InvalidJob {
+                from: self,
+                to: Self::Failed,
+            })
+        }
+    }
+
+    /// Position along the lifecycle, for comparing reported progress.
+    ///
+    /// Terminal states rank above every live one, so nothing arriving late
+    /// from a worker can move a job that has already settled.
+    #[must_use]
+    pub const fn progress_rank(&self) -> u8 {
+        match self {
+            Self::Queued => 0,
+            Self::Leased => 1,
+            Self::Staging => 2,
+            Self::WaitingForMedia => 3,
+            Self::Preflighting => 4,
+            Self::Ready => 5,
+            Self::Writing => 6,
+            Self::Finalizing => 7,
+            Self::Verifying => 8,
+            Self::Complete | Self::Failed | Self::Canceled | Self::NeedsAttention => u8::MAX,
+        }
+    }
+
+    /// Whether a stage a worker reports may be adopted as the job's state.
+    ///
+    /// The server learns what a burn is doing from the worker's events, and
+    /// those events are the only account of a stage the server never drives
+    /// itself. Adopting them is therefore not a transition through the
+    /// machine but the recording of an observation, and it follows a
+    /// different rule.
+    ///
+    /// Before the medium is touched a worker may legitimately move backwards:
+    /// preflight can reject the disc that was inserted and go back to waiting
+    /// for media. Once writing has started, only forward: a job that has
+    /// begun consuming a disc must never be recorded, or reasoned about, as
+    /// though it had not.
+    #[must_use]
+    pub fn accepts_report(self, reported: Self) -> bool {
+        // A settled job is history. Events that arrive after completion are
+        // still stored; they simply do not reopen the job.
+        if self.is_terminal() || reported.is_terminal() {
+            return false;
+        }
+        if self.has_started_writing() {
+            reported.progress_rank() >= self.progress_rank()
+        } else {
+            true
+        }
+    }
 }
 
 impl BurnAttemptState {
@@ -410,6 +528,46 @@ impl BurnAttemptState {
             Self::WriteFailed => self.consumed_media(),
             Self::FailedBeforeWrite | Self::Canceled => !self.consumed_media(),
             _ => self.successors().contains(&to),
+        }
+    }
+
+    /// Position along the lifecycle, for comparing reported progress.
+    ///
+    /// Terminal states rank above every live one, so a late event cannot move
+    /// an attempt whose outcome is already recorded.
+    #[must_use]
+    pub const fn progress_rank(&self) -> u8 {
+        match self {
+            Self::Claimed => 0,
+            Self::Staging => 1,
+            Self::Preflighting => 2,
+            Self::Writing => 3,
+            Self::Written => 4,
+            Self::Verifying => 5,
+            Self::Verified
+            | Self::VerificationFailed
+            | Self::WriteFailed
+            | Self::FailedBeforeWrite
+            | Self::Canceled
+            | Self::Interrupted => u8::MAX,
+        }
+    }
+
+    /// Whether a stage a worker reports may be adopted as the attempt's state.
+    ///
+    /// The same rule as [`BurnJobState::accepts_report`], drawn at the line
+    /// that matters here: an attempt that has consumed media only ever moves
+    /// forward, because the alternative is a record that says no disc was
+    /// spent when one was.
+    #[must_use]
+    pub fn accepts_report(self, reported: Self) -> bool {
+        if self.is_terminal() || reported.is_terminal() {
+            return false;
+        }
+        if self.consumed_media() {
+            reported.progress_rank() >= self.progress_rank()
+        } else {
+            true
         }
     }
 
@@ -610,6 +768,173 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_failed_or_cancelled_job_can_be_retried() {
+        // The two states a retry exists for: no attempt in flight, no
+        // finished work to duplicate.
+        for retryable in [BurnJobState::Failed, BurnJobState::Canceled] {
+            assert_eq!(retryable.retry(), Ok(BurnJobState::Queued), "{retryable}");
+        }
+    }
+
+    #[test]
+    fn retrying_an_already_queued_job_changes_nothing() {
+        // A repeated request must not read as a failure: what the operator
+        // asked for is already true.
+        assert_eq!(BurnJobState::Queued.retry(), Ok(BurnJobState::Queued));
+    }
+
+    #[test]
+    fn a_completed_job_is_repeated_rather_than_retried() {
+        // Reusing a finished job for a second disc would file two physical
+        // copies under one record.
+        assert_eq!(
+            BurnJobState::Complete.retry(),
+            Err(BurnTransitionError::NotRetryable {
+                state: "complete".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn a_job_needing_attention_is_not_retryable() {
+        // Its disc is unaccounted for. Queueing another write while that is
+        // true is the one thing the burn rules never permit.
+        assert!(BurnJobState::NeedsAttention.retry().is_err());
+    }
+
+    #[test]
+    fn a_running_job_cannot_be_retried() {
+        for live in BurnJobState::all()
+            .iter()
+            .copied()
+            .filter(|state| !state.is_terminal() && *state != BurnJobState::Queued)
+        {
+            assert!(live.retry().is_err(), "{live} is still running");
+        }
+    }
+
+    #[test]
+    fn a_job_needing_attention_is_released_only_by_a_person() {
+        // The release is a claim about the physical world: somebody looked.
+        assert_eq!(
+            BurnJobState::NeedsAttention.resolve_attention(),
+            Ok(BurnJobState::Failed)
+        );
+        // And it lands on failed, not on anything more optimistic: whatever
+        // was found, this attempt produced no verified disc.
+        assert_eq!(
+            BurnJobState::NeedsAttention
+                .resolve_attention()
+                .and_then(BurnJobState::retry),
+            Ok(BurnJobState::Queued),
+            "resolving must put a retry back within reach"
+        );
+    }
+
+    #[test]
+    fn nothing_else_has_attention_to_resolve() {
+        for other in BurnJobState::all()
+            .iter()
+            .copied()
+            .filter(|state| *state != BurnJobState::NeedsAttention)
+        {
+            assert!(other.resolve_attention().is_err(), "{other}");
+        }
+    }
+
+    #[test]
+    fn a_job_that_has_started_writing_never_accepts_an_earlier_stage() {
+        // The safety-critical direction. A worker whose events arrive out of
+        // order, or which reports a stage the server did not expect, must not
+        // be able to make a burn look as though it had not begun.
+        for writing in [
+            BurnJobState::Writing,
+            BurnJobState::Finalizing,
+            BurnJobState::Verifying,
+        ] {
+            for earlier in BurnJobState::all()
+                .iter()
+                .copied()
+                .filter(|state| state.progress_rank() < writing.progress_rank())
+            {
+                assert!(
+                    !writing.accepts_report(earlier),
+                    "{writing} must not accept a report of {earlier}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_job_waiting_for_media_again_is_recorded_as_waiting() {
+        // Preflight rejecting the inserted disc is an ordinary backwards
+        // move, and showing "preflighting" while an operator is being asked
+        // for another disc would be a lie.
+        assert!(BurnJobState::Preflighting.accepts_report(BurnJobState::WaitingForMedia));
+        assert!(BurnJobState::Ready.accepts_report(BurnJobState::WaitingForMedia));
+    }
+
+    #[test]
+    fn a_settled_job_accepts_no_report() {
+        // Events after completion are still stored as history; they do not
+        // reopen the job.
+        for terminal in BurnJobState::all()
+            .iter()
+            .copied()
+            .filter(BurnJobState::is_terminal)
+        {
+            for reported in BurnJobState::all().iter().copied() {
+                assert!(
+                    !terminal.accepts_report(reported),
+                    "{terminal} must not accept {reported}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_report_can_settle_a_job() {
+        // Terminal state is the completion route's to write, from the
+        // worker's reports. A stage event must never reach it.
+        for live in BurnJobState::all()
+            .iter()
+            .copied()
+            .filter(|state| !state.is_terminal())
+        {
+            for terminal in BurnJobState::all()
+                .iter()
+                .copied()
+                .filter(BurnJobState::is_terminal)
+            {
+                assert!(!live.accepts_report(terminal), "{live} accepted {terminal}");
+            }
+        }
+    }
+
+    #[test]
+    fn job_ranks_increase_along_the_happy_path() {
+        let path = [
+            BurnJobState::Queued,
+            BurnJobState::Leased,
+            BurnJobState::Staging,
+            BurnJobState::WaitingForMedia,
+            BurnJobState::Preflighting,
+            BurnJobState::Ready,
+            BurnJobState::Writing,
+            BurnJobState::Finalizing,
+            BurnJobState::Verifying,
+        ];
+        for pair in path.windows(2) {
+            assert!(
+                pair[0].progress_rank() < pair[1].progress_rank(),
+                "{} must rank below {}",
+                pair[0],
+                pair[1]
+            );
+        }
+    }
+
     // --- attempt machine ----------------------------------------------------
 
     #[test]
@@ -735,6 +1060,121 @@ mod tests {
                 "{consumed} destroyed a disc; cancelling would hide it"
             );
         }
+    }
+
+    #[test]
+    fn an_attempt_that_consumed_media_never_accepts_an_earlier_stage() {
+        // A record that says no disc was spent when one was is worse than a
+        // stale one: it is the record an operator uses to decide whether a
+        // disc in the drive can be reused.
+        for consumed in BurnAttemptState::all()
+            .iter()
+            .copied()
+            .filter(|state| state.consumed_media() && !state.is_terminal())
+        {
+            for earlier in BurnAttemptState::all()
+                .iter()
+                .copied()
+                .filter(|state| state.progress_rank() < consumed.progress_rank())
+            {
+                assert!(
+                    !consumed.accepts_report(earlier),
+                    "{consumed} must not accept a report of {earlier}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_pre_write_attempt_follows_whatever_the_worker_reports() {
+        // Nothing physical has happened yet, so the worker's account is
+        // simply the truth, in either direction.
+        for from in [
+            BurnAttemptState::Claimed,
+            BurnAttemptState::Staging,
+            BurnAttemptState::Preflighting,
+        ] {
+            for reported in [
+                BurnAttemptState::Claimed,
+                BurnAttemptState::Staging,
+                BurnAttemptState::Preflighting,
+                BurnAttemptState::Writing,
+            ] {
+                assert!(from.accepts_report(reported), "{from} -> {reported}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_settled_attempt_accepts_no_report() {
+        for terminal in BurnAttemptState::all()
+            .iter()
+            .copied()
+            .filter(BurnAttemptState::is_terminal)
+        {
+            for reported in BurnAttemptState::all().iter().copied() {
+                assert!(
+                    !terminal.accepts_report(reported),
+                    "{terminal} must not accept {reported}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_report_can_settle_an_attempt() {
+        // Only completion writes an outcome. If a stage event could, a worker
+        // that reported "verified" would be recording its own success.
+        for live in BurnAttemptState::all()
+            .iter()
+            .copied()
+            .filter(|state| !state.is_terminal())
+        {
+            for terminal in BurnAttemptState::all()
+                .iter()
+                .copied()
+                .filter(BurnAttemptState::is_terminal)
+            {
+                assert!(!live.accepts_report(terminal), "{live} accepted {terminal}");
+            }
+        }
+    }
+
+    #[test]
+    fn attempt_ranks_increase_along_the_happy_path() {
+        let path = [
+            BurnAttemptState::Claimed,
+            BurnAttemptState::Staging,
+            BurnAttemptState::Preflighting,
+            BurnAttemptState::Writing,
+            BurnAttemptState::Written,
+            BurnAttemptState::Verifying,
+        ];
+        for pair in path.windows(2) {
+            assert!(
+                pair[0].progress_rank() < pair[1].progress_rank(),
+                "{} must rank below {}",
+                pair[0],
+                pair[1]
+            );
+        }
+    }
+
+    #[test]
+    fn the_media_boundary_is_where_reports_stop_going_backwards() {
+        // Stated once as a property rather than implied by the cases above:
+        // the dividing line is consuming media, for attempts, and starting to
+        // write, for jobs.
+        assert!(
+            BurnAttemptState::Preflighting.accepts_report(BurnAttemptState::Staging),
+            "nothing physical has happened before a write"
+        );
+        assert!(
+            !BurnAttemptState::Writing.accepts_report(BurnAttemptState::Preflighting),
+            "a disc is being consumed"
+        );
+        assert!(BurnJobState::Preflighting.accepts_report(BurnJobState::Staging));
+        assert!(!BurnJobState::Writing.accepts_report(BurnJobState::Preflighting));
     }
 
     // --- persistence --------------------------------------------------------

@@ -11,18 +11,27 @@
 //! hardware-free engine backed by a file standing in for the disc. Real
 //! engine adapters follow.
 
+pub mod client;
 pub mod engine;
 pub mod fake;
 pub mod plan;
+pub mod runner;
 pub mod worker;
+pub mod xorriso;
 
+pub use client::{
+    Capabilities, ClientError, Completion, CompletionAck, DriveDescription, EngineDescription,
+    Enrolled, FailureBody, Leased, PhysicalMediumBody, VerificationReportBody, WorkerClient,
+    WorkerIdentity, WriteReportBody,
+};
 pub use engine::{BurnEngine, BurnEvent, CollectingSink, EngineError, EventSink, NullSink};
 pub use fake::{CancelToken, FakeBehaviour, FakeEngine};
 pub use plan::{
     BlankReport, BlankRequest, BurnPlan, DriveCapabilities, DriveRef, MediumInfo, PlannedInput,
     PreflightFailure, PreflightReport, VerifyReport, WriteMode, WriteReport,
 };
+pub use runner::{RunnerError, WorkerRuntime, WorkerSettings};
 pub use worker::{
     EventBuffer, EventError, Lease, RecoveryDirective, RecoveryError, RecoveryPlan, RecoveryRecord,
-    RecoveryStore, WorkerEvent, WorkerStage, plan_for,
+    RecoveryStore, UnknownStage, WorkerEvent, WorkerStage, plan_for,
 };

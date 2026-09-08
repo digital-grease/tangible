@@ -128,6 +128,10 @@
         Target compatibility unknown. Structural validity does not establish that a written disc
         will be accepted by any particular player, console or drive.
       </p>
+      <p>
+        <a href={`/burns/new?artifact=${view.data.id}`}>Create burn job</a>
+        — queues a burn. Nothing is written until a worker claims it and its preflight passes.
+      </p>
     </section>
 
     <section aria-labelledby="manifest-heading">

@@ -1,0 +1,18 @@
+xorriso 1.5.6 : RockRidge filesystem manipulator, libburnia project.
+
+Drive current: -outdev 'stdio:/tmp/big-target.iso'
+Media current: stdio file, overwriteable
+Media status : is blank
+Media summary: 0 sessions, 0 data blocks, 0 data,  226g free
+xorriso : NOTE : -blank as_needed: no need for action detected
+Beginning to write data track.
+xorriso : UPDATE :    5 of  115 MB written (fifo  0%) [buf  50%]
+xorriso : UPDATE :   92 of  115 MB written (fifo  0%) [buf  50%]  59.7x.
+Writing to 'stdio:/tmp/big-target.iso' completed successfully.
+
+xorriso : NOTE : Re-assessing -outdev 'stdio:/tmp/big-target.iso'
+Drive current: -outdev 'stdio:/tmp/big-target.iso'
+Media current: stdio file, overwriteable
+Media status : is written , is appendable
+Media summary: 1 session, 58777 data blocks,  115m data,  226g free
+EXIT=0

@@ -33,6 +33,18 @@ pub enum DbError {
     /// A query failed.
     #[error("database query failed")]
     Query(#[source] sqlx::Error),
+    /// A stored enum value is not one this build understands.
+    ///
+    /// Means the column's CHECK constraint and the domain enum have drifted
+    /// apart. Reported rather than defaulted, because every default available
+    /// here would be a guess about the state of a burn.
+    #[error("stored {column} value is not one this build understands")]
+    Enum {
+        /// Which column.
+        column: &'static str,
+        /// What was stored. Enum values are not secrets.
+        value: String,
+    },
 }
 
 /// Pool configuration. Defaults suit development; production overrides come

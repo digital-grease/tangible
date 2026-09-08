@@ -44,6 +44,27 @@ pub enum ErrorCode {
     Unauthenticated,
     /// The request conflicts with the current state of the resource.
     Conflict,
+    /// An idempotency key was reused for a different request.
+    ///
+    /// Distinct from a plain conflict because the fix is different: the caller
+    /// must use a new key, not wait and retry.
+    IdempotencyConflict,
+    /// The request was well formed but asks for something impossible.
+    ValidationFailed,
+    /// The request names a resource that does not exist.
+    ///
+    /// Distinct from `NOT_FOUND`, which is about the route's own subject. This
+    /// one is about something the body referred to, and 404 for it would read
+    /// as "no such endpoint".
+    ReferenceNotFound,
+    /// A disc is already being written.
+    ///
+    /// Its own code because it is the one refusal an operator must not read as
+    /// "try again": the request was understood and denied, and denying it is
+    /// what keeps the disc intact.
+    WriteInProgress,
+    /// The burn job's state does not admit a retry.
+    NotRetryable,
     /// The client and server share no protocol version.
     UnsupportedProtocol,
     /// Anything unanticipated.
@@ -62,6 +83,11 @@ impl ErrorCode {
             Self::ManifestInvalid => "MANIFEST_INVALID",
             Self::Unauthenticated => "UNAUTHENTICATED",
             Self::Conflict => "CONFLICT",
+            Self::IdempotencyConflict => "IDEMPOTENCY_CONFLICT",
+            Self::ValidationFailed => "VALIDATION_FAILED",
+            Self::ReferenceNotFound => "REFERENCE_NOT_FOUND",
+            Self::WriteInProgress => "WRITE_IN_PROGRESS",
+            Self::NotRetryable => "NOT_RETRYABLE",
             Self::UnsupportedProtocol => "UNSUPPORTED_PROTOCOL",
             Self::Internal => "INTERNAL",
         }
@@ -79,13 +105,22 @@ impl ErrorCode {
             // mount or permissions problem an operator can fix, and it is
             // worth retrying.
             Self::StorageUnavailable => StatusCode::SERVICE_UNAVAILABLE,
-            // The request was fine; the stored data is not.
-            Self::ManifestInvalid => StatusCode::UNPROCESSABLE_ENTITY,
+            // Three readings of the same status. The request was fine and the
+            // stored data is not; or the request was well formed and the
+            // server will not act on it; or it named something that does not
+            // exist. None of them is a syntax error, which is what 400 would
+            // claim.
+            Self::ManifestInvalid | Self::ValidationFailed | Self::ReferenceNotFound => {
+                StatusCode::UNPROCESSABLE_ENTITY
+            }
             // 401 rather than 403 throughout: worker routes have no notion of
             // an authenticated-but-unauthorised caller. Either the credential
             // identifies a worker or the request is anonymous.
             Self::Unauthenticated => StatusCode::UNAUTHORIZED,
-            Self::Conflict => StatusCode::CONFLICT,
+            Self::Conflict
+            | Self::IdempotencyConflict
+            | Self::WriteInProgress
+            | Self::NotRetryable => StatusCode::CONFLICT,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -101,6 +136,11 @@ impl ErrorCode {
             Self::ManifestInvalid => "Stored manifest is invalid",
             Self::Unauthenticated => "Not authenticated",
             Self::Conflict => "Conflicting request",
+            Self::IdempotencyConflict => "Idempotency key reused",
+            Self::ValidationFailed => "Request is not valid",
+            Self::ReferenceNotFound => "Referenced resource does not exist",
+            Self::WriteInProgress => "A write is already in progress",
+            Self::NotRetryable => "Burn job cannot be retried",
             Self::UnsupportedProtocol => "Unsupported protocol version",
             Self::Internal => "Internal error",
         }
@@ -229,6 +269,11 @@ mod tests {
             ErrorCode::ManifestInvalid,
             ErrorCode::Unauthenticated,
             ErrorCode::Conflict,
+            ErrorCode::IdempotencyConflict,
+            ErrorCode::ValidationFailed,
+            ErrorCode::ReferenceNotFound,
+            ErrorCode::WriteInProgress,
+            ErrorCode::NotRetryable,
             ErrorCode::UnsupportedProtocol,
             ErrorCode::Internal,
         ];

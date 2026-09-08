@@ -6,7 +6,11 @@
 
   const links = [
     { href: '/', label: 'System' },
+    { href: '/imports', label: 'Imports' },
     { href: '/library', label: 'Library' },
+    { href: '/catalog', label: 'Catalog' },
+    { href: '/burns', label: 'Burns' },
+    { href: '/discs', label: 'Discs' },
   ];
 </script>
 

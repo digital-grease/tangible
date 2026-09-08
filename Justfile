@@ -62,6 +62,16 @@ dev-server:
 dev-web:
     pnpm --dir web dev
 
+# Run a burn worker on the host against the local server.
+#
+# The token is needed only on the first run: the credential it is exchanged for
+# is stored under .dev-data/worker and reused after that.
+dev-worker token="":
+    cargo run -p tangible-app -- burn-worker \
+        --server-url http://localhost:8080 \
+        --worker-name dev-worker \
+        {{ if token == "" { "" } else { "--enrollment-token " + token } }}
+
 # --- quality -----------------------------------------------------------------
 
 # Format everything.
@@ -85,6 +95,14 @@ test:
 test-integration: dev-db
     TANGIBLE_TEST_DATABASE_URL=postgres://tangible:tangible@localhost:5432/tangible \
         cargo test --workspace --all-features -- --ignored
+
+# Tests that run the real xorriso against a file target. No drive involved.
+#
+# Skipped rather than failed when xorriso is missing, so a developer without it
+# still gets a green suite. Set TANGIBLE_XORRISO_BIN to point at a binary that
+# is not on PATH.
+test-xorriso:
+    TANGIBLE_XORRISO_TESTS=1 cargo test -p tangible-burn --test xorriso_engine --all-features
 
 # Tests that touch a real optical drive. Never run in normal CI.
 test-hardware:

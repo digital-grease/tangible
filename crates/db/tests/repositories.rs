@@ -12,11 +12,12 @@
 
 use sqlx::{Executor as _, PgPool};
 use tangible_db::repositories::{
-    ClaimOutcome, EnrollmentOutcome, IncomingEvent, authenticate_worker, claim_next_burn_job,
-    consume_enrollment, record_events, record_heartbeat, renew_lease, set_attempt_state,
+    ClaimOutcome, EnrollmentOutcome, IncomingEvent, NewBurnJob, authenticate_worker,
+    cancel_burn_job, claim_next_burn_job, consume_enrollment, create_burn_job, record_events,
+    record_heartbeat, renew_lease, set_attempt_state,
 };
 use tangible_db::{Database, DbConfig};
-use tangible_domain::{BurnAttemptId, DriveId, WorkerId};
+use tangible_domain::{BurnAttemptId, BurnJobId, BurnJobState, DriveId, WorkerId};
 use time::OffsetDateTime;
 
 /// Serialises tests that assert on the state of the whole queue.
@@ -450,7 +451,7 @@ async fn events_are_recorded_and_acknowledged() {
     let pool = pool().await;
     let attempt = attempt_with_events(&pool).await;
 
-    let through = record_events(&pool, attempt, &[event(1), event(2), event(3)])
+    let through = record_events(&pool, attempt, &[event(1), event(2), event(3)], None)
         .await
         .expect("record");
     assert_eq!(through, 3);
@@ -466,11 +467,15 @@ async fn resubmitting_a_batch_is_idempotent() {
 
     let batch = [event(1), event(2), event(3)];
     assert_eq!(
-        record_events(&pool, attempt, &batch).await.expect("first"),
+        record_events(&pool, attempt, &batch, None)
+            .await
+            .expect("first"),
         3
     );
     assert_eq!(
-        record_events(&pool, attempt, &batch).await.expect("second"),
+        record_events(&pool, attempt, &batch, None)
+            .await
+            .expect("second"),
         3,
         "a replay changes nothing"
     );
@@ -491,12 +496,12 @@ async fn acknowledgement_stops_at_a_gap() {
     let pool = pool().await;
     let attempt = attempt_with_events(&pool).await;
 
-    let through = record_events(&pool, attempt, &[event(1), event(2), event(5)])
+    let through = record_events(&pool, attempt, &[event(1), event(2), event(5)], None)
         .await
         .expect("record");
     assert_eq!(through, 2, "3 and 4 are missing, so 5 is not acknowledged");
 
-    let through = record_events(&pool, attempt, &[event(3), event(4)])
+    let through = record_events(&pool, attempt, &[event(3), event(4)], None)
         .await
         .expect("fill the gap");
     assert_eq!(through, 5, "the gap closed, so everything is acknowledged");
@@ -507,11 +512,16 @@ async fn acknowledgement_stops_at_a_gap() {
 async fn an_empty_batch_reports_what_is_already_held() {
     let pool = pool().await;
     let attempt = attempt_with_events(&pool).await;
-    record_events(&pool, attempt, &[event(1)])
+    record_events(&pool, attempt, &[event(1)], None)
         .await
         .expect("record");
 
-    assert_eq!(record_events(&pool, attempt, &[]).await.expect("empty"), 1);
+    assert_eq!(
+        record_events(&pool, attempt, &[], None)
+            .await
+            .expect("empty"),
+        1
+    );
 }
 
 // --- enrollment --------------------------------------------------------------------
@@ -816,4 +826,141 @@ async fn a_heartbeat_does_not_resurrect_a_draining_worker() {
         .await
         .expect("status");
     assert_eq!(status, "draining");
+}
+
+// --- queueing ------------------------------------------------------------------
+
+fn new_job<'a>(world: &World, policy: &'a [String], key: Option<&'a str>) -> NewBurnJob<'a> {
+    NewBurnJob {
+        disc_id: world.disc,
+        artifact_id: world.artifact,
+        requested_media_profile: None,
+        verification_policy: policy,
+        eject_policy: "eject_on_success",
+        priority: 0,
+        created_by: "test",
+        idempotency_key: key,
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn two_simultaneous_creates_under_one_key_produce_one_job() {
+    // The window the unique index exists to close. Both requests look up the
+    // key, find nothing, and insert; one loses, and losing must mean being
+    // handed the winner's job rather than an error the caller would retry:
+    // which is how a dropped response turns into a second disc.
+    let pool = pool().await;
+    let world = seed(&pool).await;
+    let policy = vec!["full_sector_readback".to_owned()];
+    let key = format!("race-{}", uuid::Uuid::now_v7());
+
+    let first = create_burn_job(&pool, new_job(&world, &policy, Some(&key)));
+    let second = create_burn_job(&pool, new_job(&world, &policy, Some(&key)));
+    let (first, second) = tokio::join!(first, second);
+
+    let first = first.expect("query").expect("created");
+    let second = second.expect("query").expect("created");
+    assert_eq!(first.job.id, second.job.id, "the key produced two jobs");
+
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM burn_jobs WHERE idempotency_key = $1")
+            .bind(&key)
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+    assert_eq!(count, 1);
+    // Exactly one of them created it; the other replayed.
+    assert!(
+        first.replayed != second.replayed,
+        "one create must be a replay of the other"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_job_queued_without_a_key_is_its_own_job() {
+    // Idempotency is opt-in. Two deliberate requests for two discs must
+    // produce two jobs.
+    let pool = pool().await;
+    let world = seed(&pool).await;
+    let policy = vec!["full_sector_readback".to_owned()];
+
+    let first = create_burn_job(&pool, new_job(&world, &policy, None))
+        .await
+        .expect("query")
+        .expect("created");
+    let second = create_burn_job(&pool, new_job(&world, &policy, None))
+        .await
+        .expect("query")
+        .expect("created");
+
+    assert_ne!(first.job.id, second.job.id);
+    assert!(!first.replayed && !second.replayed);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn cancelling_while_a_worker_claims_never_leaves_both_true() {
+    // Whichever wins, the pair must stay consistent: a cancelled job with a
+    // live attempt would be a drive nobody is watching, and a leased job that
+    // reported itself cancelled would tell an operator a burn had stopped
+    // while it had not.
+    let _queue = exclusive_queue().await;
+    let pool = pool().await;
+    drain_queue(&pool).await;
+    let world = seed(&pool).await;
+    let policy = vec!["full_sector_readback".to_owned()];
+    let created = create_burn_job(&pool, new_job(&world, &policy, None))
+        .await
+        .expect("query")
+        .expect("created");
+
+    let lease = format!("lease-{}", uuid::Uuid::now_v7());
+    let cancelling = cancel_burn_job(&pool, created.job.id);
+    let claiming = claim_next_burn_job(
+        &pool,
+        world.worker,
+        world.drive,
+        "fake",
+        "0.1.0",
+        &lease,
+        90,
+    );
+    let (cancelled, claimed) = tokio::join!(cancelling, claiming);
+    cancelled.expect("cancel query").ok();
+    claimed.expect("claim query").ok();
+
+    let state: String = sqlx::query_scalar("SELECT state FROM burn_jobs WHERE id = $1")
+        .bind(created.job.id.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .expect("state");
+    let active: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM burn_attempts
+         WHERE burn_job_id = $1
+           AND state IN ('claimed', 'staging', 'preflighting', 'writing', 'written', 'verifying')",
+    )
+    .bind(created.job.id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("count");
+
+    match state.parse::<BurnJobState>().expect("a known state") {
+        BurnJobState::Canceled => assert_eq!(active, 0, "a cancelled job kept a live attempt"),
+        BurnJobState::Leased => assert_eq!(active, 1, "a leased job has exactly one attempt"),
+        other => panic!("unexpected state {other}"),
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn cancelling_an_unknown_job_is_reported_rather_than_silently_succeeding() {
+    let pool = pool().await;
+    assert!(
+        cancel_burn_job(&pool, BurnJobId::generate())
+            .await
+            .expect("query")
+            .is_err()
+    );
 }

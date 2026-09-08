@@ -28,6 +28,11 @@ services:
       TANGIBLE_STORAGE_ROOT: /var/lib/tangible/library
       TANGIBLE_STAGING_ROOT: /var/lib/tangible/staging
       TANGIBLE_LOG: ${TANGIBLE_LOG:-tangible=info,tower_http=info}
+      # Directories imports may be taken from, as id=path,id=path. Empty by
+      # default: with none configured, no request can name a path on this host
+      # at all. Anything listed here must also be mounted below.
+      TANGIBLE_WATCH_ROOTS: ${TANGIBLE_WATCH_ROOTS:-}
+      TANGIBLE_MAX_UPLOAD_BYTES: ${TANGIBLE_MAX_UPLOAD_BYTES:-68719476736}
       # No engine is configured here. The server does not write discs; the
       # burn workers do, and they select an engine themselves.
     volumes:

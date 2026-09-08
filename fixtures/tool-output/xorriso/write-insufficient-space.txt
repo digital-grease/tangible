@@ -1,0 +1,12 @@
+xorriso 1.5.6 : RockRidge filesystem manipulator, libburnia project.
+
+Drive current: -outdev 'stdio:/small/target.iso'
+Media current: stdio file, overwriteable
+Media status : is blank
+Media summary: 0 sessions, 0 data blocks, 0 data, 8128k free
+xorriso : NOTE : -blank as_needed: no need for action detected
+xorriso : FAILURE : Image size 58927s exceeds free space on media 4096s
+xorriso : NOTE : Gave up -outdev ''
+xorriso : FAILURE : -as cdrecord: Job could not be performed properly.
+xorriso : aborting : -abort_on 'FAILURE' encountered 'FAILURE'
+EXIT=5

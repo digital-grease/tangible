@@ -243,6 +243,48 @@ impl ManifestStore {
         Ok(ArtifactManifest::from_json(&text)?)
     }
 
+    /// Digest of a published manifest, exactly as stored.
+    ///
+    /// A worker fetches the manifest over HTTP and stages from what it says,
+    /// so it is told the digest when its work is leased and checks the bytes
+    /// it received against it. That does not make the manifest trustworthy
+    /// (it came from the same server), but it does catch a document altered or
+    /// truncated between publication and the download.
+    ///
+    /// # Errors
+    ///
+    /// [`ManifestStoreError::NotFound`] if no manifest is published for the
+    /// artifact, or [`ManifestStoreError::Io`] on a read failure.
+    pub async fn digest(
+        &self,
+        artifact_id: ArtifactId,
+    ) -> Result<tangible_domain::Sha256Digest, ManifestStoreError> {
+        use sha2::Digest as _;
+
+        let path = self.manifest_path(artifact_id);
+        let bytes = match fs::read(&path).await {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                return Err(ManifestStoreError::NotFound {
+                    artifact_id: artifact_id.to_string(),
+                });
+            }
+            Err(source) => {
+                return Err(ManifestStoreError::Io {
+                    operation: "reading a manifest",
+                    path,
+                    source,
+                });
+            }
+        };
+
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(&bytes);
+        Ok(tangible_domain::Sha256Digest::from_bytes(
+            hasher.finalize().into(),
+        ))
+    }
+
     /// Every artifact that has a manifest.
     ///
     /// Used to rebuild the catalog from storage alone. Entries that are not

@@ -313,6 +313,165 @@ async fn the_manifest_is_served_verbatim() {
     assert!(body["components"].is_array());
 }
 
+// --- component bytes -----------------------------------------------------------
+
+/// Fetch bytes, returning the status, headers of interest, and the body.
+async fn fetch_bytes(
+    router: &axum::Router,
+    uri: &str,
+    range: Option<&str>,
+) -> (StatusCode, Vec<u8>, String, String) {
+    let mut request = Request::builder().uri(uri);
+    if let Some(range) = range {
+        request = request.header(axum::http::header::RANGE, range);
+    }
+    let response = router
+        .clone()
+        .oneshot(request.body(Body::empty()).expect("request"))
+        .await
+        .expect("response");
+
+    let status = response.status();
+    let header = |name: axum::http::HeaderName| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let content_range = header(axum::http::header::CONTENT_RANGE);
+    let accept_ranges = header(axum::http::header::ACCEPT_RANGES);
+    let bytes = axum::body::to_bytes(response.into_body(), 8 * 1024 * 1024)
+        .await
+        .expect("body")
+        .to_vec();
+    (status, bytes, content_range, accept_ranges)
+}
+
+/// The component identifier of an artifact's only file.
+async fn only_component(router: &axum::Router, artifact: &str) -> String {
+    let (status, body, _) = get(router, &format!("/api/v1/artifacts/{artifact}/manifest")).await;
+    assert_eq!(status, StatusCode::OK);
+    body["components"][0]["id"]
+        .as_str()
+        .expect("a component id")
+        .to_owned()
+}
+
+#[tokio::test]
+async fn a_component_serves_the_bytes_that_were_imported() {
+    let harness = harness(1).await;
+    let artifact = &harness.artifact_ids[0];
+    let component = only_component(&harness.router, artifact).await;
+
+    let (status, bytes, _, accept_ranges) = fetch_bytes(
+        &harness.router,
+        &format!("/api/v1/artifacts/{artifact}/components/{component}/content"),
+        None,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(bytes, iso_image("VOL", 20), "the bytes must be unaltered");
+    assert_eq!(accept_ranges, "bytes", "resumable downloads are advertised");
+}
+
+#[tokio::test]
+async fn a_range_request_returns_exactly_that_window() {
+    // How a worker resumes staging a partly-downloaded image, so the window
+    // has to be exact.
+    let harness = harness(1).await;
+    let artifact = &harness.artifact_ids[0];
+    let component = only_component(&harness.router, artifact).await;
+    let image = iso_image("VOL", 20);
+
+    let (status, bytes, content_range, _) = fetch_bytes(
+        &harness.router,
+        &format!("/api/v1/artifacts/{artifact}/components/{component}/content"),
+        Some("bytes=32768-32787"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+    assert_eq!(bytes, image[32768..=32787]);
+    assert_eq!(
+        content_range,
+        format!("bytes 32768-32787/{}", image.len()),
+        "the client is told what it received and of what whole"
+    );
+}
+
+#[tokio::test]
+async fn resuming_from_an_offset_returns_the_rest() {
+    let harness = harness(1).await;
+    let artifact = &harness.artifact_ids[0];
+    let component = only_component(&harness.router, artifact).await;
+    let image = iso_image("VOL", 20);
+    let resume_from = image.len() - 100;
+
+    let (status, bytes, _, _) = fetch_bytes(
+        &harness.router,
+        &format!("/api/v1/artifacts/{artifact}/components/{component}/content"),
+        Some(&format!("bytes={resume_from}-")),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+    assert_eq!(bytes, image[resume_from..]);
+}
+
+#[tokio::test]
+async fn a_range_beyond_the_object_is_refused_with_its_size() {
+    let harness = harness(1).await;
+    let artifact = &harness.artifact_ids[0];
+    let component = only_component(&harness.router, artifact).await;
+    let image = iso_image("VOL", 20);
+
+    let (status, _, content_range, _) = fetch_bytes(
+        &harness.router,
+        &format!("/api/v1/artifacts/{artifact}/components/{component}/content"),
+        Some("bytes=99999999-"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::RANGE_NOT_SATISFIABLE);
+    assert_eq!(
+        content_range,
+        format!("bytes */{}", image.len()),
+        "the refusal tells the client how big the object actually is"
+    );
+}
+
+#[tokio::test]
+async fn an_unknown_component_is_not_found() {
+    let harness = harness(1).await;
+    let artifact = &harness.artifact_ids[0];
+    let missing = tangible_domain::ComponentId::generate();
+
+    let (status, body, _) = get(
+        &harness.router,
+        &format!("/api/v1/artifacts/{artifact}/components/{missing}/content"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "NOT_FOUND");
+}
+
+#[tokio::test]
+async fn a_malformed_component_identifier_is_rejected() {
+    let harness = harness(1).await;
+    let artifact = &harness.artifact_ids[0];
+
+    let (status, body, _) = get(
+        &harness.router,
+        &format!("/api/v1/artifacts/{artifact}/components/not-a-uuid/content"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "INVALID_PARAMETER");
+}
+
 // --- degraded storage ----------------------------------------------------------
 
 #[tokio::test]

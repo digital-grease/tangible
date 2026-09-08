@@ -13,8 +13,8 @@ use std::time::Duration;
 
 use serde_json::json;
 use tangible_burn::{
-    EventBuffer, EventError, Lease, RecoveryDirective, RecoveryRecord, RecoveryStore, WorkerStage,
-    plan_for,
+    EventBuffer, EventError, Lease, RecoveryDirective, RecoveryRecord, RecoveryStore, UnknownStage,
+    WorkerStage, plan_for,
 };
 use tangible_domain::{ArtifactId, BurnAttemptId, BurnJobId, Sha256Digest};
 use tempfile::TempDir;
@@ -274,6 +274,125 @@ fn the_media_consumption_boundary_is_the_write() {
             !after.is_safely_cancellable(),
             "{after:?} consumed media, so cancelling is not clean"
         );
+    }
+}
+
+#[test]
+fn every_stage_round_trips_through_text_and_serde() {
+    // The text form is what crosses the wire in an event, and the mapping
+    // below is keyed off it. If `as_str` and the serde representation ever
+    // disagreed, the server would silently stop recognising stages.
+    for stage in WorkerStage::all() {
+        let text = stage.as_str();
+        assert_eq!(&text.parse::<WorkerStage>().expect("parse"), stage);
+        assert_eq!(
+            serde_json::to_string(stage).expect("serialize"),
+            format!("\"{text}\"")
+        );
+    }
+}
+
+#[test]
+fn an_unknown_stage_is_reported_rather_than_guessed() {
+    // A worker speaking of a stage this build has never heard of is a version
+    // mismatch. Defaulting it to some point in the lifecycle would be an
+    // invention, and the callers that matter treat it as no information.
+    assert_eq!(
+        "melting".parse::<WorkerStage>(),
+        Err(UnknownStage {
+            value: "melting".to_owned()
+        })
+    );
+}
+
+#[test]
+fn no_stage_maps_onto_a_settled_job_or_attempt() {
+    // Only the completion request may settle a burn. If a stage could, a
+    // worker reporting "verifying" would be recording its own success.
+    for stage in WorkerStage::all() {
+        if let Some(job) = stage.job_state() {
+            assert!(!job.is_terminal(), "{stage} maps to terminal {job}");
+        }
+        if let Some(attempt) = stage.attempt_state() {
+            assert!(!attempt.is_terminal(), "{stage} maps to terminal {attempt}");
+        }
+    }
+}
+
+#[test]
+fn a_stage_that_consumed_media_maps_onto_states_that_say_so() {
+    // The mapping is what the server records; if it understated the stage,
+    // the record would say no disc was spent when one was.
+    for stage in WorkerStage::all()
+        .iter()
+        .filter(|stage| stage.may_have_consumed_media())
+    {
+        if let Some(attempt) = stage.attempt_state() {
+            assert!(
+                attempt.consumed_media(),
+                "{stage} maps to {attempt}, which claims no media was consumed"
+            );
+        }
+        if let Some(job) = stage.job_state() {
+            assert!(
+                job.has_started_writing(),
+                "{stage} maps to {job}, which claims writing had not begun"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_pre_write_stage_never_maps_onto_a_writing_state() {
+    // The other direction: overstating is how a job that could still be
+    // cancelled cleanly becomes uncancellable.
+    for stage in WorkerStage::all()
+        .iter()
+        .filter(|stage| !stage.may_have_consumed_media())
+    {
+        assert!(
+            !stage
+                .job_state()
+                .is_some_and(|job| job.has_started_writing())
+        );
+        assert!(
+            !stage
+                .attempt_state()
+                .is_some_and(|attempt| attempt.consumed_media())
+        );
+    }
+}
+
+#[test]
+fn the_completing_stage_settles_nothing() {
+    // The worker has finished and is waiting to be acknowledged. What it
+    // actually wrote and verified arrives with the completion request.
+    assert_eq!(WorkerStage::Completing.job_state(), None);
+    assert_eq!(WorkerStage::Completing.attempt_state(), None);
+}
+
+#[test]
+fn stage_mappings_advance_in_step_with_the_stages() {
+    // Two stages share an attempt state and none goes backwards, which is
+    // what lets the server adopt a report without checking the order of
+    // arrival.
+    let mut previous_job = 0;
+    let mut previous_attempt = 0;
+    for stage in WorkerStage::all() {
+        if let Some(job) = stage.job_state() {
+            assert!(
+                job.progress_rank() >= previous_job,
+                "{stage} went backwards"
+            );
+            previous_job = job.progress_rank();
+        }
+        if let Some(attempt) = stage.attempt_state() {
+            assert!(
+                attempt.progress_rank() >= previous_attempt,
+                "{stage} went backwards"
+            );
+            previous_attempt = attempt.progress_rank();
+        }
     }
 }
 

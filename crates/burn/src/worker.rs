@@ -28,7 +28,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tangible_domain::{ArtifactId, BurnAttemptId, BurnJobId, Sha256Digest};
+use tangible_domain::{
+    ArtifactId, BurnAttemptId, BurnAttemptState, BurnJobId, BurnJobState, Sha256Digest,
+};
 use time::OffsetDateTime;
 
 /// The stage a worker believes it is in.
@@ -78,6 +80,117 @@ impl WorkerStage {
             Self::Claimed | Self::Staging | Self::WaitingForMedia | Self::Preflighting
         )
     }
+
+    /// The wire value, matching the serde representation.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Claimed => "claimed",
+            Self::Staging => "staging",
+            Self::WaitingForMedia => "waiting_for_media",
+            Self::Preflighting => "preflighting",
+            Self::Writing => "writing",
+            Self::Finalizing => "finalizing",
+            Self::Verifying => "verifying",
+            Self::Completing => "completing",
+        }
+    }
+
+    /// Every variant, in lifecycle order.
+    #[must_use]
+    pub const fn all() -> &'static [Self] {
+        &[
+            Self::Claimed,
+            Self::Staging,
+            Self::WaitingForMedia,
+            Self::Preflighting,
+            Self::Writing,
+            Self::Finalizing,
+            Self::Verifying,
+            Self::Completing,
+        ]
+    }
+
+    /// The job state this stage corresponds to.
+    ///
+    /// How the server learns what a burn is doing: it drives none of these
+    /// stages itself, so the worker's reports are the only account of them.
+    ///
+    /// [`Self::Completing`] maps to nothing. The worker has finished and is
+    /// waiting to be acknowledged, and the completion request (which carries
+    /// what was actually written and verified) is what settles the job.
+    /// Guessing an outcome from the stage alone would let a worker's
+    /// intention stand in for its result.
+    #[must_use]
+    pub const fn job_state(&self) -> Option<BurnJobState> {
+        match self {
+            Self::Claimed => Some(BurnJobState::Leased),
+            Self::Staging => Some(BurnJobState::Staging),
+            Self::WaitingForMedia => Some(BurnJobState::WaitingForMedia),
+            Self::Preflighting => Some(BurnJobState::Preflighting),
+            Self::Writing => Some(BurnJobState::Writing),
+            Self::Finalizing => Some(BurnJobState::Finalizing),
+            Self::Verifying => Some(BurnJobState::Verifying),
+            Self::Completing => None,
+        }
+    }
+
+    /// The attempt state this stage corresponds to.
+    ///
+    /// Two stages have no attempt state of their own and borrow the nearest
+    /// honest one:
+    ///
+    /// - waiting for media is recorded as preflighting, because that is what
+    ///   the worker is doing while it waits (inspecting the drive until
+    ///   something usable appears), and the attempt is holding the drive
+    ///   throughout;
+    /// - finalizing is recorded as writing, because the engine is still
+    ///   running. `Written` means an engine exited cleanly, which only the
+    ///   completion request can establish.
+    #[must_use]
+    pub const fn attempt_state(&self) -> Option<BurnAttemptState> {
+        match self {
+            Self::Claimed => Some(BurnAttemptState::Claimed),
+            Self::Staging => Some(BurnAttemptState::Staging),
+            Self::WaitingForMedia | Self::Preflighting => Some(BurnAttemptState::Preflighting),
+            Self::Writing | Self::Finalizing => Some(BurnAttemptState::Writing),
+            Self::Verifying => Some(BurnAttemptState::Verifying),
+            Self::Completing => None,
+        }
+    }
+}
+
+impl std::fmt::Display for WorkerStage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for WorkerStage {
+    type Err = UnknownStage;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::all()
+            .iter()
+            .copied()
+            .find(|stage| stage.as_str() == value)
+            .ok_or_else(|| UnknownStage {
+                value: value.to_owned(),
+            })
+    }
+}
+
+/// A stage name this build does not know.
+///
+/// Reported rather than defaulted: a worker speaking of a stage the server
+/// has never heard of is a version mismatch, and the callers that matter
+/// treat an unknown stage as "no information" rather than as any particular
+/// point in the lifecycle.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("unknown worker stage {value}")]
+pub struct UnknownStage {
+    /// What was reported.
+    pub value: String,
 }
 
 /// One event a worker reports.

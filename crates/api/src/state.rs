@@ -6,7 +6,9 @@
 use std::sync::Arc;
 
 use tangible_db::Database;
-use tangible_storage::ManifestStore;
+use tangible_storage::{ManifestStore, WatchRoots};
+
+use crate::import::ImportPipeline;
 
 /// State cloned into every request handler.
 ///
@@ -24,6 +26,23 @@ struct Inner {
     /// returns an option rather than panicking: the server must still start
     /// and report readiness when storage is misconfigured.
     manifests: Option<ManifestStore>,
+    /// Absent for the same reason: importing needs storage, and a server
+    /// without it should say so on the import route rather than fail to boot.
+    imports: Option<ImportContext>,
+}
+
+/// What the import routes need beyond the database.
+#[derive(Debug, Clone)]
+pub struct ImportContext {
+    /// Runs imports, and owns the staging area uploads land in.
+    pub pipeline: ImportPipeline,
+    /// Directories an administrator has said may be imported from.
+    ///
+    /// Empty is the safe default: with none configured, no watched-folder
+    /// import can name a path at all.
+    pub roots: WatchRoots,
+    /// Largest upload accepted, in bytes.
+    pub max_upload_bytes: u64,
 }
 
 impl ApiState {
@@ -34,6 +53,7 @@ impl ApiState {
             inner: Arc::new(Inner {
                 database,
                 manifests: None,
+                imports: None,
             }),
         }
     }
@@ -45,6 +65,19 @@ impl ApiState {
             inner: Arc::new(Inner {
                 database,
                 manifests: Some(manifests),
+                imports: None,
+            }),
+        }
+    }
+
+    /// Attach the import context, enabling the import routes.
+    #[must_use]
+    pub fn with_imports(self, imports: ImportContext) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                database: self.inner.database.clone(),
+                manifests: self.inner.manifests.clone(),
+                imports: Some(imports),
             }),
         }
     }
@@ -53,6 +86,12 @@ impl ApiState {
     #[must_use]
     pub fn manifests(&self) -> Option<&ManifestStore> {
         self.inner.manifests.as_ref()
+    }
+
+    /// The import context, when storage is configured.
+    #[must_use]
+    pub fn imports(&self) -> Option<&ImportContext> {
+        self.inner.imports.as_ref()
     }
 
     /// The application database.

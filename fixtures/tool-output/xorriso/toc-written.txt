@@ -1,0 +1,16 @@
+xorriso 1.5.6 : RockRidge filesystem manipulator, libburnia project.
+
+Drive current: -outdev 'stdio:/tmp/target.iso'
+Media current: stdio file, overwriteable
+Media status : is written , is appendable
+Media summary: 1 session, 1649 data blocks, 3298k data,  226g free
+Drive current: -outdev 'stdio:/tmp/target.iso'
+Drive access : exclusive:unrestricted
+Drive type   : vendor 'YOYODYNE' product 'WARP DRIVE' revision 'FX01'
+Media current: stdio file, overwriteable
+Media status : is written , is appendable
+Media blocks : 1664 readable , 118388244 writable , 118389908 overall
+TOC layout   : Idx ,  sbsector ,       Size , Volume Id
+ISO session  :   1 ,         0 ,      1649s , TESTVOL
+Media summary: 1 session, 1649 data blocks, 3298k data,  226g free
+Media nwa    : 1664s

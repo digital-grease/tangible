@@ -337,6 +337,246 @@ fn parse_id(raw: &str) -> Result<ArtifactId, Problem> {
         .map_err(|_| Problem::invalid_parameter("artifact_id", "not a valid identifier"))
 }
 
+// --- component bytes ------------------------------------------------------------
+
+/// What a `Range` header asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Requested {
+    /// Send the whole object.
+    ///
+    /// Also what an unparseable or multi-part range gets. RFC 9110 permits
+    /// ignoring a range a server does not wish to honour, and a client that
+    /// asked for something this does not implement is better served the whole
+    /// object than refused.
+    Whole,
+    /// Send this window.
+    Range {
+        /// First byte, inclusive.
+        start: u64,
+        /// How many bytes.
+        length: u64,
+    },
+    /// The range lies outside the object.
+    Unsatisfiable,
+}
+
+/// Interpret a `Range` header against a known object length.
+///
+/// Byte ranges are how a worker resumes staging a partly-downloaded image, so
+/// this has to be exact: an off-by-one here corrupts a burn rather than
+/// producing a visibly wrong page.
+fn requested_range(header: Option<&str>, total: u64) -> Requested {
+    let Some(header) = header else {
+        return Requested::Whole;
+    };
+    let Some(spec) = header.trim().strip_prefix("bytes=") else {
+        return Requested::Whole;
+    };
+    // One range only. Multipart responses are not implemented, and answering
+    // a multi-range request with just the first part would be wrong.
+    if spec.contains(',') {
+        return Requested::Whole;
+    }
+    let spec = spec.trim();
+    let Some((first, last)) = spec.split_once('-') else {
+        return Requested::Whole;
+    };
+
+    // A suffix range: the last N bytes.
+    if first.is_empty() {
+        let Ok(suffix) = last.parse::<u64>() else {
+            return Requested::Whole;
+        };
+        if suffix == 0 || total == 0 {
+            return Requested::Unsatisfiable;
+        }
+        let length = suffix.min(total);
+        return Requested::Range {
+            start: total - length,
+            length,
+        };
+    }
+
+    let Ok(start) = first.parse::<u64>() else {
+        return Requested::Whole;
+    };
+    if start >= total {
+        // Includes an empty object, for which every range is unsatisfiable.
+        return Requested::Unsatisfiable;
+    }
+
+    let end = if last.is_empty() {
+        total - 1
+    } else {
+        match last.parse::<u64>() {
+            // Clamped to the object rather than refused: asking for more than
+            // exists is how a client says "the rest".
+            Ok(end) => end.min(total - 1),
+            Err(_) => return Requested::Whole,
+        }
+    };
+    if end < start {
+        return Requested::Whole;
+    }
+
+    Requested::Range {
+        start,
+        length: end - start + 1,
+    }
+}
+
+/// Stream one component's bytes.
+///
+/// The route a burn worker stages from, which is why it streams rather than
+/// reading the object into memory: a Blu-ray image is tens of gigabytes and
+/// the server holds one buffer at a time either way.
+///
+/// The bytes are not re-verified here. The manifest carries every component's
+/// digest, and the worker hashes as it writes, so the check happens where a
+/// mismatch can still stop a burn rather than where it would only slow a
+/// download.
+///
+/// # Errors
+///
+/// `INVALID_PARAMETER` for a malformed identifier, `NOT_FOUND` if no such
+/// artifact or component exists, or `STORAGE_UNAVAILABLE` if the object is
+/// missing from the store the manifest says holds it.
+#[utoipa::path(
+    get,
+    path = "/api/v1/artifacts/{artifact_id}/components/{component_id}/content",
+    tag = "library",
+    description = "Stream one component's bytes. Supports a single byte range, \
+                   which is how a worker resumes an interrupted download.",
+    params(
+        ("artifact_id" = String, Path, description = "Artifact identifier"),
+        ("component_id" = String, Path, description = "Component identifier"),
+        ("Range" = Option<String>, Header, description = "Single byte range, e.g. bytes=0-1023"),
+    ),
+    responses(
+        (status = 200, description = "The whole component"),
+        (status = 206, description = "The requested range"),
+        (status = 404, description = "No such artifact or component", body = Problem),
+        (status = 416, description = "The range lies outside the object", body = Problem),
+    ),
+)]
+pub async fn component_content(
+    State(state): State<ApiState>,
+    Path((artifact_id, component_id)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
+) -> Result<axum::response::Response, Problem> {
+    use axum::http::{StatusCode, header};
+
+    let id = parse_id(&artifact_id)?;
+    let component_id = component_id
+        .parse::<tangible_domain::ComponentId>()
+        .map_err(|_| Problem::invalid_parameter("component_id", "not a valid identifier"))?;
+
+    let manifest = load(&state, id).await?;
+    let component = manifest
+        .components
+        .iter()
+        .find(|component| component.id == component_id)
+        .ok_or_else(|| Problem::not_found("component", &component_id.to_string()))?;
+
+    let Some(objects) = state
+        .manifests()
+        .map(tangible_storage::ManifestStore::objects)
+    else {
+        return Err(Problem::storage_unavailable());
+    };
+
+    // The manifest's length is the contract, but the object on disk is what
+    // will be sent. Disagreement means the store has been altered underneath
+    // the catalog, which is worth refusing rather than serving.
+    let object = objects
+        .stat(&component.content.sha256)
+        .await
+        .map_err(|error| {
+            tracing::error!(error = ?error, "could not stat a component object");
+            Problem::storage_unavailable()
+        })?
+        .ok_or_else(|| {
+            tracing::error!(
+                artifact_id = %id,
+                "a manifest references an object the store does not hold"
+            );
+            Problem::storage_unavailable()
+        })?;
+    if object.size_bytes != component.length_bytes {
+        tracing::error!(
+            artifact_id = %id,
+            expected = component.length_bytes,
+            found = object.size_bytes,
+            "a stored object no longer matches the length its manifest records"
+        );
+        return Err(Problem::storage_unavailable());
+    }
+
+    let total = object.size_bytes;
+    let range = requested_range(
+        headers
+            .get(header::RANGE)
+            .and_then(|value| value.to_str().ok()),
+        total,
+    );
+
+    let (status, start, length) = match range {
+        Requested::Whole => (StatusCode::OK, 0, total),
+        Requested::Range { start, length } => (StatusCode::PARTIAL_CONTENT, start, length),
+        Requested::Unsatisfiable => {
+            let mut response = Problem::new(
+                ErrorCode::InvalidParameter,
+                "the requested range lies outside this component",
+            )
+            .into_response();
+            *response.status_mut() = StatusCode::RANGE_NOT_SATISFIABLE;
+            response.headers_mut().insert(
+                header::CONTENT_RANGE,
+                axum::http::HeaderValue::from_str(&format!("bytes */{total}"))
+                    .unwrap_or(axum::http::HeaderValue::from_static("bytes */0")),
+            );
+            return Ok(response);
+        }
+    };
+
+    let reader = objects
+        .open_range(&component.content.sha256, start, length)
+        .await
+        .map_err(|error| {
+            tracing::error!(error = ?error, "could not open a component object");
+            Problem::storage_unavailable()
+        })?;
+
+    let media_type = component
+        .media_type
+        .clone()
+        .unwrap_or_else(|| "application/octet-stream".to_owned());
+
+    let mut response = axum::response::Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, media_type)
+        .header(header::CONTENT_LENGTH, length)
+        .header(header::ACCEPT_RANGES, "bytes")
+        .body(axum::body::Body::from_stream(
+            tokio_util::io::ReaderStream::new(reader),
+        ))
+        .map_err(|error| {
+            tracing::error!(error = ?error, "could not build a content response");
+            Problem::new(ErrorCode::Internal, "the component could not be served")
+        })?;
+
+    if status == StatusCode::PARTIAL_CONTENT {
+        let end = start + length - 1;
+        if let Ok(value) =
+            axum::http::HeaderValue::from_str(&format!("bytes {start}-{end}/{total}"))
+        {
+            response.headers_mut().insert(header::CONTENT_RANGE, value);
+        }
+    }
+
+    Ok(response)
+}
+
 /// The library routes.
 pub fn router() -> Router<ApiState> {
     Router::new()
@@ -344,4 +584,134 @@ pub fn router() -> Router<ApiState> {
         .route("/artifacts/{artifact_id}", get(get_artifact))
         .route("/artifacts/{artifact_id}/manifest", get(get_manifest))
         .route("/artifacts/{artifact_id}/components", get(list_components))
+        .route(
+            "/artifacts/{artifact_id}/components/{component_id}/content",
+            get(component_content),
+        )
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_range_header_means_the_whole_object() {
+        assert_eq!(requested_range(None, 100), Requested::Whole);
+    }
+
+    #[test]
+    fn a_closed_range_is_inclusive_at_both_ends() {
+        // The off-by-one that would corrupt a staged image. bytes=0-0 is one
+        // byte, not zero and not two.
+        assert_eq!(
+            requested_range(Some("bytes=0-0"), 100),
+            Requested::Range {
+                start: 0,
+                length: 1
+            }
+        );
+        assert_eq!(
+            requested_range(Some("bytes=10-19"), 100),
+            Requested::Range {
+                start: 10,
+                length: 10
+            }
+        );
+    }
+
+    #[test]
+    fn an_open_range_runs_to_the_end() {
+        assert_eq!(
+            requested_range(Some("bytes=90-"), 100),
+            Requested::Range {
+                start: 90,
+                length: 10
+            }
+        );
+    }
+
+    #[test]
+    fn a_suffix_range_counts_back_from_the_end() {
+        assert_eq!(
+            requested_range(Some("bytes=-10"), 100),
+            Requested::Range {
+                start: 90,
+                length: 10
+            }
+        );
+        // A suffix larger than the object is the whole object, which is what
+        // a resuming client asking for "the last lot" means.
+        assert_eq!(
+            requested_range(Some("bytes=-500"), 100),
+            Requested::Range {
+                start: 0,
+                length: 100
+            }
+        );
+    }
+
+    #[test]
+    fn an_end_past_the_object_is_clamped_rather_than_refused() {
+        // Asking for more than exists is how a client says "the rest".
+        assert_eq!(
+            requested_range(Some("bytes=95-500"), 100),
+            Requested::Range {
+                start: 95,
+                length: 5
+            }
+        );
+    }
+
+    #[test]
+    fn a_start_past_the_object_is_unsatisfiable() {
+        assert_eq!(
+            requested_range(Some("bytes=100-"), 100),
+            Requested::Unsatisfiable
+        );
+        assert_eq!(
+            requested_range(Some("bytes=200-300"), 100),
+            Requested::Unsatisfiable
+        );
+    }
+
+    #[test]
+    fn every_range_over_an_empty_object_is_unsatisfiable() {
+        assert_eq!(
+            requested_range(Some("bytes=0-"), 0),
+            Requested::Unsatisfiable
+        );
+        assert_eq!(
+            requested_range(Some("bytes=-1"), 0),
+            Requested::Unsatisfiable
+        );
+    }
+
+    #[test]
+    fn a_zero_length_suffix_is_unsatisfiable() {
+        // "the last nothing" has no meaningful answer.
+        assert_eq!(
+            requested_range(Some("bytes=-0"), 100),
+            Requested::Unsatisfiable
+        );
+    }
+
+    #[test]
+    fn anything_this_does_not_implement_falls_back_to_the_whole_object() {
+        // Permitted by RFC 9110, and better for a client than a refusal.
+        for header in [
+            "bytes=0-10,20-30",
+            "items=0-10",
+            "bytes=abc-def",
+            "bytes=",
+            "nonsense",
+            "bytes=10-5",
+        ] {
+            assert_eq!(
+                requested_range(Some(header), 100),
+                Requested::Whole,
+                "{header} should have been ignored"
+            );
+        }
+    }
 }

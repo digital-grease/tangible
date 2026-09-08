@@ -147,6 +147,41 @@ pub enum EngineError {
         reason: String,
     },
 
+    /// There is no disc in the drive.
+    ///
+    /// Distinct from an unsuitable medium because the remedy is different:
+    /// one is fixed by putting a disc in, the other by putting a different
+    /// disc in, and a worker waiting for media has to know which it is
+    /// waiting for.
+    #[error("drive {alias} holds no medium")]
+    NoMedium {
+        /// The device alias.
+        alias: String,
+    },
+
+    /// The engine cannot do what was asked.
+    ///
+    /// A capability statement rather than a failure: an engine that writes
+    /// prepared images saying it cannot write a track layout is answering
+    /// correctly.
+    #[error("unsupported: {what}")]
+    Unsupported {
+        /// What was asked for.
+        what: String,
+    },
+
+    /// The tool did not answer in time.
+    ///
+    /// Only ever raised for the operations that have a timeout. A write does
+    /// not: interrupting one guarantees a ruined disc.
+    #[error("{operation} did not answer within {seconds}s")]
+    Timeout {
+        /// What was being waited on.
+        operation: &'static str,
+        /// How long it was given.
+        seconds: u64,
+    },
+
     /// The operation was cancelled.
     #[error("operation cancelled")]
     Cancelled,

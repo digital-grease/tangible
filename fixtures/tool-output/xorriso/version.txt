@@ -1,0 +1,14 @@
+xorriso 1.5.6 : RockRidge filesystem manipulator, libburnia project.
+
+xorriso 1.5.6
+ISO 9660 Rock Ridge filesystem manipulator and CD/DVD/BD burn program
+Copyright (C) 2023, Thomas Schmitt <scdbackup@gmx.net>, libburnia project.
+xorriso version   :  1.5.6
+Version timestamp :  2023.06.07.180001
+Build timestamp   :  -none-given-
+libisofs   in use :  1.5.6  (min. 1.5.6)
+libburn    in use :  1.5.6  (min. 1.5.6)
+libburn OS adapter:  internal GNU/Linux SG_IO adapter sg-linux
+libisoburn in use :  1.5.6  (min. 1.5.6)
+Provided under GNU GPL version 2 or later.
+There is NO WARRANTY, to the extent permitted by law.

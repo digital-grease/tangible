@@ -64,6 +64,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/artifacts/{artifact_id}/components/{component_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream one component's bytes.
+         * @description Stream one component's bytes. Supports a single byte range, which is how a worker resumes an interrupted download.
+         */
+        get: operations["component_content"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/artifacts/{artifact_id}/manifest": {
         parameters: {
             query?: never;
@@ -76,6 +96,26 @@ export interface paths {
          * @description Fetch the artifact manifest exactly as stored, byte for byte.
          */
         get: operations["get_manifest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/burn-attempts/{attempt_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One attempt, with the reports it produced.
+         * @description Fetch one burn attempt, including the engine's write report and the read-back comparison when there is one.
+         */
+        get: operations["get_attempt"];
         put?: never;
         post?: never;
         delete?: never;
@@ -111,7 +151,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * The events recorded for one attempt, in sequence order.
+         * @description List the events a worker reported for an attempt, in sequence order. Pass the response's `next_after` as `after` to continue.
+         */
+        get: operations["list_events"];
         put?: never;
         /**
          * Submit worker events.
@@ -144,6 +188,514 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/burn-jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List burn jobs, newest first.
+         * @description List burn jobs, newest first. Filter by state, artifact, or disc; page with `next_cursor`.
+         */
+        get: operations["list_jobs"];
+        put?: never;
+        /**
+         * Queue a burn job.
+         * @description Queue a burn job. Idempotent when an Idempotency-Key header is supplied: a repeat returns the first job rather than spending a second disc.
+         */
+        post: operations["create_job"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/burn-jobs/{burn_job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One burn job, with every attempt made at it.
+         * @description Fetch one burn job with its attempts. Each attempt past the first spent a disc.
+         */
+        get: operations["get_job"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/burn-jobs/{burn_job_id}/attempts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The attempts made at one job, oldest first.
+         * @description List the attempts made at a burn job, oldest first.
+         */
+        get: operations["list_attempts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/burn-jobs/{burn_job_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel a burn job that has not started writing.
+         * @description Cancel a burn job that has not started writing. Refused once a disc is being consumed, because stopping a write ruins the medium.
+         */
+        post: operations["cancel_job"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/burn-jobs/{burn_job_id}/resolve-attention": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record that a person has accounted for a burn's disc.
+         * @description Record that a person has accounted for a burn's disc. Releases a job stuck at needs_attention, leaving it failed so it can be retried.
+         */
+        post: operations["resolve_attention"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/burn-jobs/{burn_job_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Requeue a failed or cancelled job for another attempt.
+         * @description Requeue a failed or cancelled burn job. Previous attempts are left as they are: a retry spends another disc and records another attempt.
+         */
+        post: operations["retry_job"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/disc-sets/{disc_set_id}/discs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The discs in a set.
+         * @description List the discs in a set, in order.
+         */
+        get: operations["list_set_discs"];
+        put?: never;
+        /**
+         * Record a disc within a set.
+         * @description Record one disc in a set. Disc numbers are unique within the set.
+         */
+        post: operations["create_set_disc"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/discs/{disc_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One disc.
+         * @description Fetch one disc, the canonical object of this system.
+         */
+        get: operations["get_one_disc"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/discs/{disc_id}/artifact-links": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Link an artifact to the disc it represents.
+         * @description Link an artifact to a disc, saying what it is to that disc. Linking again updates the claim rather than failing.
+         */
+        post: operations["link_artifact"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/discs/{disc_id}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The artifacts linked to a disc.
+         * @description List the artifacts linked to a disc.
+         */
+        get: operations["list_linked_artifacts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/editions/{edition_id}/disc-sets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One edition, with its disc sets.
+         * @description List the disc sets of an edition.
+         */
+        get: operations["list_edition_sets"];
+        put?: never;
+        /**
+         * Record a disc set within an edition.
+         * @description Record what an edition shipped as.
+         */
+        post: operations["create_edition_set"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/import-sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What may be imported from.
+         * @description List the watched roots configured for importing, and the upload size limit.
+         */
+        get: operations["list_sources"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/imports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List imports, newest first.
+         * @description List imports, newest first.
+         */
+        get: operations["list_imports"];
+        put?: never;
+        /**
+         * Import a file from a watched folder.
+         * @description Import a file from a configured watched root. The server never accepts a host path: name a root and a relative path beneath it.
+         */
+        post: operations["create_import"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/imports/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload a file and import it.
+         * @description Upload a file as the request body and queue it for import. Streamed to disk as it arrives; the size limit is enforced on the bytes, not on a header.
+         */
+        post: operations["upload_import"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/imports/{import_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One import.
+         * @description Fetch one import, including how far it has got and any structural findings so far.
+         */
+        get: operations["get_import"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/imports/{import_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop an import.
+         * @description Stop an import. Honoured at any stage: nothing physical is consumed by importing.
+         */
+        post: operations["cancel_import"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/imports/{import_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Try an import again.
+         * @description Try a failed or cancelled import again, resuming from the last stage that completed.
+         */
+        post: operations["retry_import"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/physical-copies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the discs this system has produced.
+         * @description List discs, newest first. Filter by catalog disc, artifact, or condition.
+         */
+        get: operations["list_copies"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/physical-copies/{copy_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One disc, with every check recorded for it.
+         * @description Fetch one disc and its check history, newest check first.
+         */
+        get: operations["get_copy"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Record what an operator knows about a disc.
+         * @description Record a disc's label, whereabouts, notes or condition. Absent fields are left alone. `verified` cannot be set by hand: record a check.
+         */
+        patch: operations["update_copy"];
+        trace?: never;
+    };
+    "/api/v1/physical-copies/{copy_id}/checks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record a check performed on a disc.
+         * @description Record a check. The disc's condition follows what the check found: this is the only path to `verified`.
+         */
+        post: operations["record_check"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/physical-copies/{copy_id}/mark-destroyed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record that a disc has been destroyed.
+         * @description Record that a disc has been destroyed. Irreversible: the record remains, but nothing further can be recorded against it.
+         */
+        post: operations["mark_destroyed"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/titles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List titles, in sort order.
+         * @description List titles in sort order. Pass `search` to filter by name and `next_after` from the response to continue.
+         */
+        get: operations["list_all_titles"];
+        put?: never;
+        /**
+         * Record a title.
+         * @description Record a work. Editions, disc sets and discs hang off it.
+         */
+        post: operations["create_new_title"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/titles/{title_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One title.
+         * @description Fetch one title.
+         */
+        get: operations["get_one_title"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/titles/{title_id}/editions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The editions of a title.
+         * @description List the editions of a title.
+         */
+        get: operations["list_title_editions"];
+        put?: never;
+        /**
+         * Record an edition of a title.
+         * @description Record a particular release of a title.
+         */
+        post: operations["create_title_edition"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/worker-enrollments/consume": {
         parameters: {
             query?: never;
@@ -158,6 +710,26 @@ export interface paths {
          * @description Exchange a one-use enrollment token for a worker credential. The credential is returned once and cannot be recovered.
          */
         post: operations["consume_enrollment_token"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workers/{worker_id}/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Record what a worker and its drive can do.
+         * @description Report what this worker and its drive can do, and receive the drive identifier to claim work with.
+         */
+        put: operations["report_capabilities"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -326,6 +898,224 @@ export interface components {
             /** @description Cursor for the next page, or null when this is the last. */
             next_cursor?: string | null;
         };
+        /** @description One attempt with the reports it produced. */
+        BurnAttemptDetail: components["schemas"]["BurnAttemptView"] & {
+            /** @description The read-back comparison, when one ran. */
+            verify_report?: unknown;
+            /** @description The engine's account of the write, once there is one. */
+            write_report?: unknown;
+        };
+        /** @description One execution of a burn job. */
+        BurnAttemptView: {
+            /**
+             * Format: int32
+             * @description Which attempt this is, starting at 1.
+             */
+            attempt_number: number;
+            /** @description The job it belongs to. */
+            burn_job_id: string;
+            /** @description Whether this attempt consumed a disc. */
+            consumed_media: boolean;
+            /** @description The drive it ran on. */
+            drive_id: string;
+            /** @description When it ended, if it has. */
+            ended_at?: string | null;
+            /** @description Which engine wrote. */
+            engine: string;
+            /** @description That engine's version. */
+            engine_version: string;
+            /** @description A stable failure code, when it failed. */
+            error_code?: string | null;
+            /** @description Human-readable failure detail, when it failed. */
+            error_detail?: string | null;
+            /** @description Opaque identifier. */
+            id: string;
+            /**
+             * Format: int64
+             * @description Highest event sequence held for it.
+             */
+            last_event_sequence?: number | null;
+            /** @description The disc this attempt produced, if it produced one. */
+            physical_copy_id?: string | null;
+            /** @description When it started. */
+            started_at: string;
+            /** @description Where it got to. */
+            state: string;
+            /** @description The worker that ran it. */
+            worker_id: string;
+        };
+        /** @description A page of events. */
+        BurnEventPage: {
+            /** @description The events, in sequence order. */
+            items: components["schemas"]["BurnEventView"][];
+            /**
+             * Format: int64
+             * @description Sequence to pass as `after` to continue, or null at the end.
+             *
+             *     A sequence rather than an opaque cursor: sequences are already the
+             *     currency of this timeline (the worker numbers events with them and
+             *     the server acknowledges them), so hiding them here would be a
+             *     different vocabulary for the same thing.
+             */
+            next_after?: number | null;
+        };
+        /** @description One recorded event. */
+        BurnEventView: {
+            /** @description Stable machine-readable code. */
+            code: string;
+            /** @description Structured detail. */
+            data: unknown;
+            /** @description Event type, such as `stage_changed`. */
+            event_type: string;
+            /**
+             * Format: float
+             * @description Progress from 0 to 1, when reported.
+             */
+            fraction?: number | null;
+            /** @description When the worker observed it. */
+            observed_at: string;
+            /** @description When the server stored it. */
+            received_at: string;
+            /**
+             * Format: int64
+             * @description Monotonic within the attempt.
+             */
+            sequence: number;
+            /** @description Stage it relates to. */
+            stage: string;
+        };
+        /** @description A newly queued job, with anything an operator should know about it. */
+        BurnJobCreated: components["schemas"]["BurnJobView"] & {
+            /**
+             * @description Things worth knowing before the disc is spent.
+             *
+             *     Warnings, not refusals: an operator may knowingly burn an artifact
+             *     that validated with warnings, and the system's job is to say so rather
+             *     than to decide for them.
+             */
+            warnings: string[];
+        };
+        /** @description A burn job with its attempts. */
+        BurnJobDetail: components["schemas"]["BurnJobView"] & {
+            /** @description Every attempt made, oldest first. */
+            attempts: components["schemas"]["BurnAttemptView"][];
+        };
+        /** @description A page of burn jobs. */
+        BurnJobPage: {
+            /** @description The jobs in this page, newest first. */
+            items: components["schemas"]["BurnJobView"][];
+            /** @description Cursor for the next page, or null when this is the last. */
+            next_cursor?: string | null;
+        };
+        /** @description A burn job. */
+        BurnJobView: {
+            /** @description The artifact being written. */
+            artifact_id: string;
+            /**
+             * Format: int64
+             * @description How many attempts have been made, including failed ones.
+             *
+             *     Each attempt past the first spent a disc, so this is not a retry
+             *     counter but a count of media consumed.
+             */
+            attempt_count: number;
+            /** @description When it finished, if it has. */
+            completed_at?: string | null;
+            /** @description When it was queued. */
+            created_at: string;
+            /** @description Who asked for it. */
+            created_by: string;
+            /** @description The disc this copy represents. */
+            disc_id: string;
+            /** @description What to do with the disc afterwards. */
+            eject_policy: string;
+            /**
+             * @description Whether a disc is being or has been consumed.
+             *
+             *     Derived from the state so a client does not have to know which states
+             *     those are. It is what decides whether cancelling is still offered.
+             */
+            has_started_writing: boolean;
+            /** @description Opaque identifier. */
+            id: string;
+            /**
+             * Format: int32
+             * @description Queue priority; higher is claimed first.
+             */
+            priority: number;
+            progress?: null | components["schemas"]["BurnProgress"];
+            /** @description Media profile requested, when one was. */
+            requested_media_profile?: string | null;
+            /** @description Lifecycle state. */
+            state: string;
+            /** @description When it last changed. */
+            updated_at: string;
+            /** @description Ordered verification steps. */
+            verification_policy: string[];
+        };
+        /** @description What a worker last said it was doing. */
+        BurnProgress: {
+            /** @description Stable machine-readable code for the event. */
+            code: string;
+            /**
+             * Format: float
+             * @description Progress within that stage, from 0 to 1, when the stage reports it.
+             */
+            fraction?: number | null;
+            /** @description When the worker observed it. */
+            observed_at: string;
+            /** @description The stage the worker reported. */
+            stage: string;
+        };
+        /** @description A worker's account of itself. */
+        CapabilityReport: {
+            /**
+             * Format: int64
+             * @description Free bytes in its staging cache.
+             */
+            cache_free_bytes?: number | null;
+            /** @description The drive it operates. */
+            drive: components["schemas"]["DriveReportBody"];
+            /** @description Engines it can run. */
+            engines?: components["schemas"]["EngineReport"][];
+            /** @description The worker's software version. */
+            software_version: string;
+        };
+        /** @description What the server assigned. */
+        CapabilityResponse: {
+            /**
+             * @description The drive's identifier, to be used when claiming work.
+             *
+             *     Assigned by the server rather than supplied: public identifiers are
+             *     the server's to issue, and a worker that could choose one could claim
+             *     another worker's drive.
+             */
+            drive_id: string;
+        };
+        /** @description One check performed on a disc. */
+        CheckView: {
+            /**
+             * Format: int64
+             * @description How much was read.
+             */
+            bytes_read?: number | null;
+            /** @description When. */
+            checked_at: string;
+            /** @description Who checked. */
+            checked_by: string;
+            /** @description Which drive read it. */
+            checked_with?: string | null;
+            /** @description Opaque identifier. */
+            id: string;
+            /** @description What was done. */
+            method: string;
+            /** @description Operator's notes. */
+            notes?: string | null;
+            /** @description The digest read back, when the method produces one. */
+            observed_sha256?: string | null;
+            /** @description What was found. */
+            result: string;
+        };
         /** @description What a worker offers when asking for work. */
         ClaimRequest: {
             /** @description The drive the work would run on. */
@@ -337,8 +1127,8 @@ export interface components {
         };
         /** @description A lease on some work. */
         ClaimResponse: {
-            /** @description The artifact to write. */
-            artifact_id: string;
+            /** @description What to write, and where to fetch it. */
+            artifact: components["schemas"]["ClaimedArtifact"];
             /** @description The attempt created for this claim. */
             attempt_id: string;
             /**
@@ -348,15 +1138,48 @@ export interface components {
             attempt_number: number;
             /** @description The job. */
             burn_job_id: string;
+            /** @description What to do with the disc when the attempt ends. */
+            eject_policy: string;
             /** @description When the lease lapses. */
             lease_expires_at: string;
             /** @description The lease token, presented on subsequent requests for this attempt. */
             lease_token: string;
+            /**
+             * @description Media profile the operator asked for, if any.
+             *
+             *     Advisory until claims filter on drive capability: a worker whose drive
+             *     cannot write this must fail preflight rather than write the wrong
+             *     medium.
+             */
+            requested_media_profile?: string | null;
             /** @description Verification steps the job requires. */
             verification_policy: string[];
         };
+        /** @description Where a worker fetches what it is to write. */
+        ClaimedArtifact: {
+            /** @description The artifact. */
+            artifact_id: string;
+            /**
+             * @description Digest of the manifest as published, when the library is readable.
+             *
+             *     The worker checks what it downloads against this. It does not make the
+             *     manifest trustworthy (it came from the same server), but it catches a
+             *     document altered or truncated between publication and the download.
+             */
+            manifest_sha256?: string | null;
+            /**
+             * @description Path to fetch the manifest from, relative to the server.
+             *
+             *     A path rather than an absolute URL: the worker already knows which
+             *     server it is talking to, and a server that told it otherwise would be
+             *     redirecting a staging download somewhere the operator never
+             *     configured.
+             */
+            manifest_url: string;
+        };
         /** @description What a worker sends when it finishes. */
         CompletionRequest: {
+            failure?: null | components["schemas"]["FailureReport"];
             /**
              * Format: int64
              * @description The last event sequence the worker emitted.
@@ -398,6 +1221,80 @@ export interface components {
             /** @description Content digest, as lowercase hex. */
             sha256: string;
         };
+        /** @description What an operator sends to queue a burn. */
+        CreateBurnJobRequest: {
+            /** @description The artifact to write. */
+            artifact_id: string;
+            /** @description The disc the copy represents. */
+            disc_id: string;
+            /** @description What to do with the disc afterwards. Defaults to ejecting on success. */
+            eject_policy?: string | null;
+            /**
+             * Format: int64
+             * @description Queue priority; higher is claimed first. Defaults to 0.
+             */
+            priority?: number | null;
+            /** @description Media profile to require, or null for whatever fits. */
+            requested_media_profile?: string | null;
+            /** @description Ordered verification steps. Defaults to a full read-back. */
+            verification_policy?: string[] | null;
+        };
+        /** @description A new disc. */
+        CreateDiscRequest: {
+            /** @description What it is called, when it has a name of its own. */
+            display_name?: string | null;
+            /** @description What kind of medium it is. Defaults to unknown. */
+            media_family?: string | null;
+            /** @description Which region it plays in. */
+            region?: string | null;
+            /**
+             * Format: int32
+             * @description Which disc of the set it is. Starts at 1.
+             */
+            sequence_number: number;
+        };
+        /** @description A new disc set. */
+        CreateDiscSetRequest: {
+            /**
+             * Format: int32
+             * @description How many discs it should contain.
+             */
+            disc_count_expected?: number | null;
+            /** @description What the set is called. */
+            name: string;
+            /** @description What shape of set it is. Defaults to unknown. */
+            set_kind?: string | null;
+        };
+        /** @description A new edition. */
+        CreateEditionRequest: {
+            /** @description What this release is called. */
+            display_name: string;
+            /** @description Who published it. */
+            publisher?: string | null;
+            /** @description Which region it was sold in. */
+            region?: string | null;
+        };
+        /** @description What an operator sends to import from a watched folder. */
+        CreateImportRequest: {
+            /** @description Which configured root the file is under. */
+            path_id: string;
+            /** @description Where beneath that root, as a relative path. */
+            relative_path: string;
+        };
+        /** @description A new title. */
+        CreateTitleRequest: {
+            /** @description What it is called. */
+            display_title: string;
+            /** @description What kind of work it is. Defaults to unknown. */
+            kind?: string | null;
+            /**
+             * Format: int32
+             * @description When it was released.
+             */
+            release_year?: number | null;
+            /** @description What it sorts as. Defaults to the display title. */
+            sort_title?: string | null;
+        };
         /** @description The state of one dependency. */
         DependencyCheck: {
             /**
@@ -409,6 +1306,141 @@ export interface components {
             name: string;
             /** @description `"up"` or `"down"`. */
             status: string;
+        };
+        /** @description An artifact linked to a disc. */
+        DiscArtifactView: {
+            /** @description The artifact. */
+            artifact_id: string;
+            /**
+             * Format: float
+             * @description How confident the link is, from 0 to 1.
+             */
+            confidence: number;
+            /** @description What the artifact is to the disc. */
+            relationship: string;
+        };
+        /** @description The discs an edition shipped as. */
+        DiscSetView: {
+            /** @description When it was catalogued. */
+            created_at: string;
+            /**
+             * Format: int64
+             * @description How many are catalogued.
+             *
+             *     Beside the expected count so an incomplete set is visible without
+             *     counting rows by eye.
+             */
+            disc_count: number;
+            /**
+             * Format: int32
+             * @description How many discs it should contain.
+             */
+            disc_count_expected?: number | null;
+            /** @description The edition it belongs to. */
+            edition_id: string;
+            /** @description Opaque identifier. */
+            id: string;
+            /** @description What the set is called. */
+            name: string;
+            /** @description What shape of set it is. */
+            set_kind: string;
+        };
+        /** @description One disc. */
+        DiscView: {
+            /**
+             * Format: int64
+             * @description How many artifacts are linked to it.
+             */
+            artifact_count: number;
+            /**
+             * @description What reproduction is expected to achieve.
+             *
+             *     `unknown` unless evidence has been recorded, which is the schema's own
+             *     rule: anything stronger must be backed by something.
+             */
+            compatibility_claim: string;
+            /**
+             * Format: int64
+             * @description How many physical copies of it this system has made.
+             */
+            copy_count: number;
+            /** @description When it was catalogued. */
+            created_at: string;
+            /** @description The set it belongs to. */
+            disc_set_id: string;
+            /** @description What it is called, when it has a name of its own. */
+            display_name?: string | null;
+            /** @description Opaque identifier. */
+            id: string;
+            /** @description What kind of medium it is. */
+            media_family: string;
+            /** @description Which region it plays in. */
+            region?: string | null;
+            /**
+             * Format: int32
+             * @description Which disc of the set it is.
+             */
+            sequence_number: number;
+            /** @description The volume label read from an image of it. */
+            volume_label?: string | null;
+        };
+        /** @description What a worker says about one drive. */
+        DriveReportBody: {
+            /** @description What the drive says it can do. */
+            capabilities?: unknown;
+            /** @description Human-meaningful name an operator chose. */
+            configured_name: string;
+            /**
+             * @description Worker-local stable alias, such as `/dev/disc-block`.
+             *
+             *     Supplied by the worker and never a host device node. Together with the
+             *     worker it is the drive's identity, which is why the same alias
+             *     reported twice updates one drive rather than creating a second.
+             */
+            device_alias: string;
+            /** @description Reported firmware revision. */
+            firmware?: string | null;
+            /** @description Reported model. */
+            model?: string | null;
+            /**
+             * @description SHA-256 of the drive serial, hashed by the worker.
+             *
+             *     Hashed before it is sent, so the raw serial never leaves the machine
+             *     that read it. The server only needs to recognise a drive, not to name
+             *     its hardware in an export.
+             */
+            serial_hash?: string | null;
+            /** @description Current drive status. */
+            status: string;
+            /** @description Reported vendor. */
+            vendor?: string | null;
+        };
+        /** @description A particular release of a title. */
+        EditionView: {
+            /** @description When it was catalogued. */
+            created_at: string;
+            /** @description What this release is called. */
+            display_name: string;
+            /** @description Opaque identifier. */
+            id: string;
+            /** @description Who published it. */
+            publisher?: string | null;
+            /** @description Which region it was sold in. */
+            region?: string | null;
+            /**
+             * Format: int64
+             * @description How many disc sets it has.
+             */
+            set_count: number;
+            /** @description The title it belongs to. */
+            title_id: string;
+        };
+        /** @description One engine a worker can run. */
+        EngineReport: {
+            /** @description Engine name, such as `xorriso`. */
+            name: string;
+            /** @description Its version, as the engine reports it. */
+            version: string;
         };
         /** @description What a worker sends to enroll. */
         EnrollmentRequest: {
@@ -476,6 +1508,19 @@ export interface components {
             /** @description When the worker observed it. */
             worker_time: string;
         };
+        /**
+         * @description Why an attempt did not succeed.
+         *
+         *     Sent alongside the reports rather than inferred from them, because the
+         *     reports say *what* happened and this says why. Without it a failed burn
+         *     tells an operator only that it failed.
+         */
+        FailureReport: {
+            /** @description Stable machine-readable code, such as `PREFLIGHT_MEDIUM_NOT_BLANK`. */
+            code: string;
+            /** @description Human-readable detail, bounded by the server before storage. */
+            detail?: string | null;
+        };
         /** @description What the server tells a worker on each heartbeat. */
         HeartbeatResponse: {
             /** @description Whether the worker should stop taking new work. */
@@ -483,12 +1528,160 @@ export interface components {
             /** @description The server's clock, so a worker can notice drift. */
             server_time: string;
         };
+        /** @description A page of imports. */
+        ImportPage: {
+            /** @description The imports in this page, newest first. */
+            items: components["schemas"]["ImportView"][];
+            /** @description Cursor for the next page, or null when this is the last. */
+            next_cursor?: string | null;
+        };
+        /** @description Where imports may be taken from. */
+        ImportSources: {
+            /**
+             * Format: int64
+             * @description Largest upload the server will accept, in bytes.
+             */
+            max_upload_bytes: number;
+            /**
+             * @description Identifiers of the watched roots an administrator configured.
+             *
+             *     Identifiers only. The paths behind them are the host's business and
+             *     are never exposed.
+             */
+            watch_roots: string[];
+        };
+        /** @description An import job. */
+        ImportView: {
+            /** @description The artifact it produced, once it has. */
+            artifact_id?: string | null;
+            /**
+             * Format: int64
+             * @description How many bytes are expected, when the source said.
+             */
+            bytes_expected?: number | null;
+            /**
+             * Format: int64
+             * @description How many have arrived.
+             */
+            bytes_received: number;
+            /** @description When it finished, if it has. */
+            completed_at?: string | null;
+            /** @description When it was requested. */
+            created_at: string;
+            /** @description Who asked. */
+            created_by: string;
+            /** @description A stable failure code, when it failed. */
+            error_code?: string | null;
+            /** @description Human-readable failure detail, when it failed. */
+            error_detail?: string | null;
+            /** @description Opaque identifier. */
+            id: string;
+            /** @description Whether the import has finished, one way or another. */
+            is_settled: boolean;
+            /**
+             * @description Whether a retry would resume rather than start again.
+             *
+             *     Surfaced because it is the question an operator asks before pressing
+             *     retry on a large import.
+             */
+            resumes_from?: string | null;
+            /** @description The filename as received, when one was recorded. */
+            source_filename?: string | null;
+            /** @description Where the bytes come from. */
+            source_kind: string;
+            /** @description Lifecycle state. */
+            state: string;
+            /** @description When it last changed. */
+            updated_at: string;
+            /**
+             * @description Structural observations gathered so far.
+             *
+             *     Present as soon as inspection has run, so a warning is visible before
+             *     the import finishes rather than only afterwards.
+             */
+            warnings: string[];
+        };
+        /** @description A link between an artifact and a disc. */
+        LinkArtifactRequest: {
+            /** @description The artifact. */
+            artifact_id: string;
+            /**
+             * Format: float
+             * @description How confident the link is, from 0 to 1. Defaults to certain, because
+             *     an operator linking by hand is the strongest evidence there is.
+             */
+            confidence?: number | null;
+            /** @description What the artifact is to the disc. Defaults to a representation of it. */
+            relationship?: string | null;
+        };
         /** @description Result of a liveness probe. */
         Liveness: {
             /** @description Always `"alive"` when the process can serve a request at all. */
             status: string;
             /** @description Server version, from the crate version at build time. */
             version: string;
+        };
+        /** @description A disc with its check history. */
+        PhysicalCopyDetail: components["schemas"]["PhysicalCopyView"] & {
+            /** @description Every check recorded, newest first. */
+            checks: components["schemas"]["CheckView"][];
+        };
+        /** @description A page of discs. */
+        PhysicalCopyPage: {
+            /** @description The discs in this page, newest first. */
+            items: components["schemas"]["PhysicalCopyView"][];
+            /** @description Cursor for the next page, or null when this is the last. */
+            next_cursor?: string | null;
+        };
+        /** @description A disc in the inventory. */
+        PhysicalCopyView: {
+            /** @description The artifact written to it. */
+            artifact_id: string;
+            /** @description The attempt that produced it. */
+            burn_attempt_id: string;
+            /**
+             * Format: int64
+             * @description How many checks have been recorded.
+             */
+            check_count: number;
+            /** @description When it was burned. */
+            created_at: string;
+            /** @description The catalog disc this is a copy of. */
+            disc_id: string;
+            /** @description Opaque identifier. */
+            id: string;
+            /** @description Whether anything further can be recorded about it. */
+            is_settled: boolean;
+            /** @description What is written on the disc itself. */
+            label?: string | null;
+            /** @description When it was last read back. */
+            last_checked_at?: string | null;
+            /** @description Manufacturer identifier, when the drive reported one. */
+            manufacturer_id?: string | null;
+            /** @description Media profile of the medium. */
+            media_profile: string;
+            /** @description Media serial, when the drive reported one. */
+            media_serial?: string | null;
+            /** @description Operator's notes. */
+            notes?: string | null;
+            /**
+             * @description Whether it should be taken out of circulation.
+             *
+             *     Derived from the condition so a client does not have to know which
+             *     conditions mean "bin this". It is the question an operator is really
+             *     asking when they look at a shelf.
+             */
+            should_be_destroyed: boolean;
+            /** @description Its condition. */
+            status: string;
+            /** @description Where it is kept. */
+            storage_location?: string | null;
+            /** @description When the record last changed. */
+            updated_at: string;
+            /** @description What verification ran when it was burned. */
+            verification_level: string;
+            /** @description How that turned out. */
+            verification_result: string;
         };
         /** @description What was in the drive. */
         PhysicalMedium: {
@@ -524,6 +1717,24 @@ export interface components {
             /** @description `"ready"` when every dependency is usable, otherwise `"degraded"`. */
             status: string;
         };
+        /** @description What a check found. */
+        RecordCheckRequest: {
+            /**
+             * Format: int64
+             * @description How much was read.
+             */
+            bytes_read?: number | null;
+            /** @description Which drive read it. */
+            checked_with?: string | null;
+            /** @description What was done, from the verification vocabulary. */
+            method: string;
+            /** @description Operator's notes. */
+            notes?: string | null;
+            /** @description The digest read back, when the method produces one. */
+            observed_sha256?: string | null;
+            /** @description `passed`, `failed`, `partial`, or `not_performed`. */
+            result: string;
+        };
         /** @description What a worker reports when it restarts holding local state. */
         RecoveryRequest: {
             /** @description The attempt the worker was running. */
@@ -558,6 +1769,63 @@ export interface components {
         RenewResponse: {
             /** @description The new expiry. */
             lease_expires_at: string;
+        };
+        /** @description A page of titles. */
+        TitlePage: {
+            /** @description The titles in this page, in sort order. */
+            items: components["schemas"]["TitleView"][];
+            /**
+             * @description The sort key to pass as `after` to continue, or null at the end.
+             *
+             *     The sort title rather than an opaque cursor, because the ordering is
+             *     alphabetical and a client showing "continue from R" should be able to
+             *     say so.
+             */
+            next_after?: string | null;
+        };
+        /** @description A work. */
+        TitleView: {
+            /** @description When it was catalogued. */
+            created_at: string;
+            /** @description What it is called. */
+            display_title: string;
+            /**
+             * Format: int64
+             * @description How many editions it has.
+             */
+            edition_count: number;
+            /** @description Opaque identifier. */
+            id: string;
+            /** @description What kind of work it is. */
+            kind: string;
+            /**
+             * Format: int32
+             * @description When it was released.
+             */
+            release_year?: number | null;
+            /** @description What it sorts as. */
+            sort_title: string;
+        };
+        /**
+         * @description What an operator may change about a disc.
+         *
+         *     Every field is optional, and absent means "leave it alone", so a client
+         *     editing a label cannot blank a storage location it never saw.
+         */
+        UpdatePhysicalCopyRequest: {
+            /** @description What is written on the disc. */
+            label?: string | null;
+            /** @description Operator's notes. */
+            notes?: string | null;
+            /**
+             * @description Its condition.
+             *
+             *     `verified` and `verification_failed` are refused: those words describe
+             *     what a read-back found, and recording a check is how they are written.
+             */
+            status?: string | null;
+            /** @description Where it is kept. */
+            storage_location?: string | null;
         };
         /** @description The read-back comparison, when one ran. */
         VerificationReport: {
@@ -713,6 +1981,57 @@ export interface operations {
             };
         };
     };
+    component_content: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Single byte range, e.g. bytes=0-1023 */
+                Range?: string | null;
+            };
+            path: {
+                /** @description Artifact identifier */
+                artifact_id: string;
+                /** @description Component identifier */
+                component_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The whole component */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The requested range */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such artifact or component */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The range lies outside the object */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     get_manifest: {
         parameters: {
             query?: never;
@@ -733,6 +2052,38 @@ export interface operations {
                 content?: never;
             };
             /** @description No such artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_attempt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Attempt identifier */
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The attempt */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BurnAttemptDetail"];
+                };
+            };
+            /** @description No such attempt */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -769,6 +2120,43 @@ export interface operations {
                 };
             };
             /** @description No such leased attempt */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_events: {
+        parameters: {
+            query?: {
+                /** @description Return only events after this sequence. */
+                after?: number | null;
+                /** @description Maximum events to return. Clamped. */
+                limit?: number | null;
+            };
+            header?: never;
+            path: {
+                /** @description Attempt identifier */
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BurnEventPage"];
+                };
+            };
+            /** @description No such attempt */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -851,6 +2239,1180 @@ export interface operations {
             };
         };
     };
+    list_jobs: {
+        parameters: {
+            query?: {
+                /** @description Maximum jobs to return. Clamped. */
+                limit?: number | null;
+                /** @description Opaque cursor from a previous response's `next_cursor`. */
+                cursor?: string | null;
+                /** @description Only jobs in this state. */
+                state?: string | null;
+                /** @description Only jobs writing this artifact. */
+                artifact_id?: string | null;
+                /** @description Only jobs producing this disc. */
+                disc_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of burn jobs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BurnJobPage"];
+                };
+            };
+            /** @description Malformed filter or cursor */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_job: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Replay protection for a request that spends physical media */
+                "Idempotency-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateBurnJobRequest"];
+            };
+        };
+        responses: {
+            /** @description Already queued by an identical request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BurnJobCreated"];
+                };
+            };
+            /** @description Queued */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BurnJobCreated"];
+                };
+            };
+            /** @description The key was used for a different request */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request will not be acted on */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_job: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Burn job identifier */
+                burn_job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The burn job */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BurnJobDetail"];
+                };
+            };
+            /** @description No such burn job */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_attempts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Burn job identifier */
+                burn_job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The attempts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BurnAttemptView"][];
+                };
+            };
+            /** @description No such burn job */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    cancel_job: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Burn job identifier */
+                burn_job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cancelled */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BurnJobDetail"];
+                };
+            };
+            /** @description No such burn job */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Writing, or already finished */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    resolve_attention: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Burn job identifier */
+                burn_job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Released */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BurnJobDetail"];
+                };
+            };
+            /** @description No such burn job */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description This burn is not asking for attention */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    retry_job: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Burn job identifier */
+                burn_job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Requeued */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BurnJobDetail"];
+                };
+            };
+            /** @description No such burn job */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not in a state that can be retried */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_set_discs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Disc set identifier */
+                disc_set_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The discs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscView"][];
+                };
+            };
+            /** @description No such disc set */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_set_disc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Disc set identifier */
+                disc_set_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateDiscRequest"];
+            };
+        };
+        responses: {
+            /** @description Recorded */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscView"];
+                };
+            };
+            /** @description That disc number is taken */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such set, or an unusable value */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_one_disc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Disc identifier */
+                disc_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The disc */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscView"];
+                };
+            };
+            /** @description No such disc */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    link_artifact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Disc identifier */
+                disc_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LinkArtifactRequest"];
+            };
+        };
+        responses: {
+            /** @description Linked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscArtifactView"][];
+                };
+            };
+            /** @description No such disc or artifact */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_linked_artifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Disc identifier */
+                disc_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The links */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscArtifactView"][];
+                };
+            };
+            /** @description No such disc */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_edition_sets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Edition identifier */
+                edition_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The disc sets */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscSetView"][];
+                };
+            };
+            /** @description No such edition */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_edition_set: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Edition identifier */
+                edition_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateDiscSetRequest"];
+            };
+        };
+        responses: {
+            /** @description Recorded */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscSetView"];
+                };
+            };
+            /** @description No such edition, or an unusable name */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_sources: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Where imports may come from */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportSources"];
+                };
+            };
+            /** @description Storage is not configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_imports: {
+        parameters: {
+            query?: {
+                /** @description Maximum imports to return. Clamped. */
+                limit?: number | null;
+                /** @description Opaque cursor from a previous response's `next_cursor`. */
+                cursor?: string | null;
+                /** @description Only imports in this state. */
+                state?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of imports */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportPage"];
+                };
+            };
+            /** @description Malformed filter or cursor */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_import: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateImportRequest"];
+            };
+        };
+        responses: {
+            /** @description Queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportView"];
+                };
+            };
+            /** @description The path will not be resolved */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Storage is not configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    upload_import: {
+        parameters: {
+            query?: {
+                /** @description Filename as it should be recorded. A detection hint, never a path. */
+                filename?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The file itself */
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description Queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportView"];
+                };
+            };
+            /** @description Larger than this server accepts */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The filename is not usable */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Storage is not configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_import: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Import identifier */
+                import_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The import */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportView"];
+                };
+            };
+            /** @description No such import */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    cancel_import: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Import identifier */
+                import_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cancelled */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportView"];
+                };
+            };
+            /** @description No such import */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Already finished */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    retry_import: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Import identifier */
+                import_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Requeued */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportView"];
+                };
+            };
+            /** @description No such import */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Still running, or already succeeded */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_copies: {
+        parameters: {
+            query?: {
+                /** @description Maximum discs to return. Clamped. */
+                limit?: number | null;
+                /** @description Opaque cursor from a previous response's `next_cursor`. */
+                cursor?: string | null;
+                /** @description Only copies of this catalog disc. */
+                disc_id?: string | null;
+                /** @description Only copies of this artifact. */
+                artifact_id?: string | null;
+                /** @description Only discs in this condition. */
+                status?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of discs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PhysicalCopyPage"];
+                };
+            };
+            /** @description Malformed filter or cursor */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_copy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Physical copy identifier */
+                copy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The disc */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PhysicalCopyDetail"];
+                };
+            };
+            /** @description No such disc */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    update_copy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Physical copy identifier */
+                copy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdatePhysicalCopyRequest"];
+            };
+        };
+        responses: {
+            /** @description Recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PhysicalCopyDetail"];
+                };
+            };
+            /** @description No such disc */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The disc has been destroyed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description That condition needs a check */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    record_check: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Physical copy identifier */
+                copy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description Recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PhysicalCopyDetail"];
+                };
+            };
+            /** @description No such disc */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The disc has been destroyed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown method or result */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    mark_destroyed: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Physical copy identifier */
+                copy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PhysicalCopyDetail"];
+                };
+            };
+            /** @description No such disc */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_all_titles: {
+        parameters: {
+            query?: {
+                /** @description Maximum titles to return. Clamped. */
+                limit?: number | null;
+                /** @description Continue after this sort title. */
+                after?: string | null;
+                /** @description Only titles whose name contains this. */
+                search?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of titles */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TitlePage"];
+                };
+            };
+        };
+    };
+    create_new_title: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateTitleRequest"];
+            };
+        };
+        responses: {
+            /** @description Recorded */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TitleView"];
+                };
+            };
+            /** @description The request will not be stored */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_one_title: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Title identifier */
+                title_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The title */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TitleView"];
+                };
+            };
+            /** @description No such title */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_title_editions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Title identifier */
+                title_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The editions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EditionView"][];
+                };
+            };
+            /** @description No such title */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_title_edition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Title identifier */
+                title_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateEditionRequest"];
+            };
+        };
+        responses: {
+            /** @description Recorded */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EditionView"];
+                };
+            };
+            /** @description No such title, or an unusable name */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     consume_enrollment_token: {
         parameters: {
             query?: never;
@@ -893,6 +3455,60 @@ export interface operations {
             };
             /** @description The name is already in use */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    report_capabilities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Worker identifier */
+                worker_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CapabilityReport"];
+            };
+        };
+        responses: {
+            /** @description Recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilityResponse"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not this worker */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The report will not be accepted */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

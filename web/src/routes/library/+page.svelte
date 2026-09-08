@@ -53,6 +53,7 @@
     <section>
       <h2>No artifacts yet</h2>
       <p>Import an authorized disc image to create your first artifact.</p>
+      <p><a href="/imports">Import one</a></p>
     </section>
   {:else if view.kind === 'error'}
     <section>

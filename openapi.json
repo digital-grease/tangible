@@ -178,6 +178,76 @@
         }
       }
     },
+    "/api/v1/artifacts/{artifact_id}/components/{component_id}/content": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Stream one component's bytes.",
+        "description": "Stream one component's bytes. Supports a single byte range, which is how a worker resumes an interrupted download.",
+        "operationId": "component_content",
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "description": "Artifact identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "component_id",
+            "in": "path",
+            "description": "Component identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "description": "Single byte range, e.g. bytes=0-1023",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The whole component"
+          },
+          "206": {
+            "description": "The requested range"
+          },
+          "404": {
+            "description": "No such artifact or component",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "The range lies outside the object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/artifacts/{artifact_id}/manifest": {
       "get": {
         "tags": [
@@ -203,6 +273,49 @@
           },
           "404": {
             "description": "No such artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/burn-attempts/{attempt_id}": {
+      "get": {
+        "tags": [
+          "burns"
+        ],
+        "summary": "One attempt, with the reports it produced.",
+        "description": "Fetch one burn attempt, including the engine's write report and the read-back comparison when there is one.",
+        "operationId": "get_attempt",
+        "parameters": [
+          {
+            "name": "attempt_id",
+            "in": "path",
+            "description": "Attempt identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The attempt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BurnAttemptDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such attempt",
             "content": {
               "application/json": {
                 "schema": {
@@ -273,6 +386,73 @@
       }
     },
     "/api/v1/burn-attempts/{attempt_id}/events": {
+      "get": {
+        "tags": [
+          "burns"
+        ],
+        "summary": "The events recorded for one attempt, in sequence order.",
+        "description": "List the events a worker reported for an attempt, in sequence order. Pass the response's `next_after` as `after` to continue.",
+        "operationId": "list_events",
+        "parameters": [
+          {
+            "name": "attempt_id",
+            "in": "path",
+            "description": "Attempt identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Return only events after this sequence.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum events to return. Clamped.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BurnEventPage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such attempt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "tags": [
           "workers"
@@ -388,6 +568,1717 @@
         ]
       }
     },
+    "/api/v1/burn-jobs": {
+      "get": {
+        "tags": [
+          "burns"
+        ],
+        "summary": "List burn jobs, newest first.",
+        "description": "List burn jobs, newest first. Filter by state, artifact, or disc; page with `next_cursor`.",
+        "operationId": "list_jobs",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum jobs to return. Clamped.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous response's `next_cursor`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "Only jobs in this state.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "artifact_id",
+            "in": "query",
+            "description": "Only jobs writing this artifact.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "disc_id",
+            "in": "query",
+            "description": "Only jobs producing this disc.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of burn jobs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BurnJobPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed filter or cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "burns"
+        ],
+        "summary": "Queue a burn job.",
+        "description": "Queue a burn job. Idempotent when an Idempotency-Key header is supplied: a repeat returns the first job rather than spending a second disc.",
+        "operationId": "create_job",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Replay protection for a request that spends physical media",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBurnJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Already queued by an identical request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BurnJobCreated"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BurnJobCreated"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The key was used for a different request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request will not be acted on",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/burn-jobs/{burn_job_id}": {
+      "get": {
+        "tags": [
+          "burns"
+        ],
+        "summary": "One burn job, with every attempt made at it.",
+        "description": "Fetch one burn job with its attempts. Each attempt past the first spent a disc.",
+        "operationId": "get_job",
+        "parameters": [
+          {
+            "name": "burn_job_id",
+            "in": "path",
+            "description": "Burn job identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The burn job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BurnJobDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such burn job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/burn-jobs/{burn_job_id}/attempts": {
+      "get": {
+        "tags": [
+          "burns"
+        ],
+        "summary": "The attempts made at one job, oldest first.",
+        "description": "List the attempts made at a burn job, oldest first.",
+        "operationId": "list_attempts",
+        "parameters": [
+          {
+            "name": "burn_job_id",
+            "in": "path",
+            "description": "Burn job identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The attempts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BurnAttemptView"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such burn job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/burn-jobs/{burn_job_id}/cancel": {
+      "post": {
+        "tags": [
+          "burns"
+        ],
+        "summary": "Cancel a burn job that has not started writing.",
+        "description": "Cancel a burn job that has not started writing. Refused once a disc is being consumed, because stopping a write ruins the medium.",
+        "operationId": "cancel_job",
+        "parameters": [
+          {
+            "name": "burn_job_id",
+            "in": "path",
+            "description": "Burn job identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BurnJobDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such burn job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Writing, or already finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/burn-jobs/{burn_job_id}/resolve-attention": {
+      "post": {
+        "tags": [
+          "burns"
+        ],
+        "summary": "Record that a person has accounted for a burn's disc.",
+        "description": "Record that a person has accounted for a burn's disc. Releases a job stuck at needs_attention, leaving it failed so it can be retried.",
+        "operationId": "resolve_attention",
+        "parameters": [
+          {
+            "name": "burn_job_id",
+            "in": "path",
+            "description": "Burn job identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Released",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BurnJobDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such burn job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This burn is not asking for attention",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/burn-jobs/{burn_job_id}/retry": {
+      "post": {
+        "tags": [
+          "burns"
+        ],
+        "summary": "Requeue a failed or cancelled job for another attempt.",
+        "description": "Requeue a failed or cancelled burn job. Previous attempts are left as they are: a retry spends another disc and records another attempt.",
+        "operationId": "retry_job",
+        "parameters": [
+          {
+            "name": "burn_job_id",
+            "in": "path",
+            "description": "Burn job identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Requeued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BurnJobDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such burn job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not in a state that can be retried",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/disc-sets/{disc_set_id}/discs": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "The discs in a set.",
+        "description": "List the discs in a set, in order.",
+        "operationId": "list_set_discs",
+        "parameters": [
+          {
+            "name": "disc_set_id",
+            "in": "path",
+            "description": "Disc set identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The discs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DiscView"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such disc set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Record a disc within a set.",
+        "description": "Record one disc in a set. Disc numbers are unique within the set.",
+        "operationId": "create_set_disc",
+        "parameters": [
+          {
+            "name": "disc_set_id",
+            "in": "path",
+            "description": "Disc set identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDiscRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "That disc number is taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No such set, or an unusable value",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/discs/{disc_id}": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "One disc.",
+        "description": "Fetch one disc, the canonical object of this system.",
+        "operationId": "get_one_disc",
+        "parameters": [
+          {
+            "name": "disc_id",
+            "in": "path",
+            "description": "Disc identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The disc",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such disc",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/discs/{disc_id}/artifact-links": {
+      "post": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Link an artifact to the disc it represents.",
+        "description": "Link an artifact to a disc, saying what it is to that disc. Linking again updates the claim rather than failing.",
+        "operationId": "link_artifact",
+        "parameters": [
+          {
+            "name": "disc_id",
+            "in": "path",
+            "description": "Disc identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkArtifactRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Linked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DiscArtifactView"
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No such disc or artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/discs/{disc_id}/artifacts": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "The artifacts linked to a disc.",
+        "description": "List the artifacts linked to a disc.",
+        "operationId": "list_linked_artifacts",
+        "parameters": [
+          {
+            "name": "disc_id",
+            "in": "path",
+            "description": "Disc identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The links",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DiscArtifactView"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such disc",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/editions/{edition_id}/disc-sets": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "One edition, with its disc sets.",
+        "description": "List the disc sets of an edition.",
+        "operationId": "list_edition_sets",
+        "parameters": [
+          {
+            "name": "edition_id",
+            "in": "path",
+            "description": "Edition identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The disc sets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DiscSetView"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such edition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Record a disc set within an edition.",
+        "description": "Record what an edition shipped as.",
+        "operationId": "create_edition_set",
+        "parameters": [
+          {
+            "name": "edition_id",
+            "in": "path",
+            "description": "Edition identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDiscSetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscSetView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No such edition, or an unusable name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/import-sources": {
+      "get": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "What may be imported from.",
+        "description": "List the watched roots configured for importing, and the upload size limit.",
+        "operationId": "list_sources",
+        "responses": {
+          "200": {
+            "description": "Where imports may come from",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportSources"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Storage is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/imports": {
+      "get": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "List imports, newest first.",
+        "description": "List imports, newest first.",
+        "operationId": "list_imports",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum imports to return. Clamped.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous response's `next_cursor`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "Only imports in this state.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of imports",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed filter or cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Import a file from a watched folder.",
+        "description": "Import a file from a configured watched root. The server never accepts a host path: name a root and a relative path beneath it.",
+        "operationId": "create_import",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The path will not be resolved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Storage is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/imports/upload": {
+      "post": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Upload a file and import it.",
+        "description": "Upload a file as the request body and queue it for import. Streamed to disk as it arrives; the size limit is enforced on the bytes, not on a header.",
+        "operationId": "upload_import",
+        "parameters": [
+          {
+            "name": "filename",
+            "in": "query",
+            "description": "Filename as it should be recorded. A detection hint, never a path.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The file itself",
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportView"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Larger than this server accepts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The filename is not usable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Storage is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/imports/{import_id}": {
+      "get": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "One import.",
+        "description": "Fetch one import, including how far it has got and any structural findings so far.",
+        "operationId": "get_import",
+        "parameters": [
+          {
+            "name": "import_id",
+            "in": "path",
+            "description": "Import identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The import",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such import",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/imports/{import_id}/cancel": {
+      "post": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Stop an import.",
+        "description": "Stop an import. Honoured at any stage: nothing physical is consumed by importing.",
+        "operationId": "cancel_import",
+        "parameters": [
+          {
+            "name": "import_id",
+            "in": "path",
+            "description": "Import identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such import",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/imports/{import_id}/retry": {
+      "post": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Try an import again.",
+        "description": "Try a failed or cancelled import again, resuming from the last stage that completed.",
+        "operationId": "retry_import",
+        "parameters": [
+          {
+            "name": "import_id",
+            "in": "path",
+            "description": "Import identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Requeued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such import",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Still running, or already succeeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/physical-copies": {
+      "get": {
+        "tags": [
+          "physical-copies"
+        ],
+        "summary": "List the discs this system has produced.",
+        "description": "List discs, newest first. Filter by catalog disc, artifact, or condition.",
+        "operationId": "list_copies",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum discs to return. Clamped.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous response's `next_cursor`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "disc_id",
+            "in": "query",
+            "description": "Only copies of this catalog disc.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "artifact_id",
+            "in": "query",
+            "description": "Only copies of this artifact.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only discs in this condition.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of discs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhysicalCopyPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed filter or cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/physical-copies/{copy_id}": {
+      "get": {
+        "tags": [
+          "physical-copies"
+        ],
+        "summary": "One disc, with every check recorded for it.",
+        "description": "Fetch one disc and its check history, newest check first.",
+        "operationId": "get_copy",
+        "parameters": [
+          {
+            "name": "copy_id",
+            "in": "path",
+            "description": "Physical copy identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The disc",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhysicalCopyDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such disc",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "physical-copies"
+        ],
+        "summary": "Record what an operator knows about a disc.",
+        "description": "Record a disc's label, whereabouts, notes or condition. Absent fields are left alone. `verified` cannot be set by hand: record a check.",
+        "operationId": "update_copy",
+        "parameters": [
+          {
+            "name": "copy_id",
+            "in": "path",
+            "description": "Physical copy identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePhysicalCopyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhysicalCopyDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such disc",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The disc has been destroyed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "That condition needs a check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/physical-copies/{copy_id}/checks": {
+      "post": {
+        "tags": [
+          "physical-copies"
+        ],
+        "summary": "Record a check performed on a disc.",
+        "description": "Record a check. The disc's condition follows what the check found: this is the only path to `verified`.",
+        "operationId": "record_check",
+        "parameters": [
+          {
+            "name": "copy_id",
+            "in": "path",
+            "description": "Physical copy identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhysicalCopyDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such disc",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The disc has been destroyed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown method or result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/physical-copies/{copy_id}/mark-destroyed": {
+      "post": {
+        "tags": [
+          "physical-copies"
+        ],
+        "summary": "Record that a disc has been destroyed.",
+        "description": "Record that a disc has been destroyed. Irreversible: the record remains, but nothing further can be recorded against it.",
+        "operationId": "mark_destroyed",
+        "parameters": [
+          {
+            "name": "copy_id",
+            "in": "path",
+            "description": "Physical copy identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhysicalCopyDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such disc",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/titles": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "List titles, in sort order.",
+        "description": "List titles in sort order. Pass `search` to filter by name and `next_after` from the response to continue.",
+        "operationId": "list_all_titles",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum titles to return. Clamped.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Continue after this sort title.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Only titles whose name contains this.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of titles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TitlePage"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Record a title.",
+        "description": "Record a work. Editions, disc sets and discs hang off it.",
+        "operationId": "create_new_title",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTitleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TitleView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request will not be stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/titles/{title_id}": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "One title.",
+        "description": "Fetch one title.",
+        "operationId": "get_one_title",
+        "parameters": [
+          {
+            "name": "title_id",
+            "in": "path",
+            "description": "Title identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The title",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TitleView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such title",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/titles/{title_id}/editions": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "The editions of a title.",
+        "description": "List the editions of a title.",
+        "operationId": "list_title_editions",
+        "parameters": [
+          {
+            "name": "title_id",
+            "in": "path",
+            "description": "Title identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The editions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EditionView"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such title",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Record an edition of a title.",
+        "description": "Record a particular release of a title.",
+        "operationId": "create_title_edition",
+        "parameters": [
+          {
+            "name": "title_id",
+            "in": "path",
+            "description": "Title identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEditionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditionView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No such title, or an unusable name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/worker-enrollments/consume": {
       "post": {
         "tags": [
@@ -448,6 +2339,84 @@
             }
           }
         }
+      }
+    },
+    "/api/v1/workers/{worker_id}/capabilities": {
+      "put": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Record what a worker and its drive can do.",
+        "description": "Report what this worker and its drive can do, and receive the drive identifier to claim work with.",
+        "operationId": "report_capabilities",
+        "parameters": [
+          {
+            "name": "worker_id",
+            "in": "path",
+            "description": "Worker identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CapabilityReport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilityResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not this worker",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The report will not be accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "worker_credential": []
+          }
+        ]
       }
     },
     "/api/v1/workers/{worker_id}/claims": {
@@ -813,6 +2782,504 @@
           }
         }
       },
+      "BurnAttemptDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BurnAttemptView",
+            "description": "Summary fields."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "verify_report": {
+                "description": "The read-back comparison, when one ran."
+              },
+              "write_report": {
+                "description": "The engine's account of the write, once there is one."
+              }
+            }
+          }
+        ],
+        "description": "One attempt with the reports it produced."
+      },
+      "BurnAttemptView": {
+        "type": "object",
+        "description": "One execution of a burn job.",
+        "required": [
+          "id",
+          "burn_job_id",
+          "attempt_number",
+          "state",
+          "consumed_media",
+          "worker_id",
+          "drive_id",
+          "engine",
+          "engine_version",
+          "started_at"
+        ],
+        "properties": {
+          "attempt_number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Which attempt this is, starting at 1."
+          },
+          "burn_job_id": {
+            "type": "string",
+            "description": "The job it belongs to."
+          },
+          "consumed_media": {
+            "type": "boolean",
+            "description": "Whether this attempt consumed a disc."
+          },
+          "drive_id": {
+            "type": "string",
+            "description": "The drive it ran on."
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it ended, if it has."
+          },
+          "engine": {
+            "type": "string",
+            "description": "Which engine wrote."
+          },
+          "engine_version": {
+            "type": "string",
+            "description": "That engine's version."
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A stable failure code, when it failed."
+          },
+          "error_detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Human-readable failure detail, when it failed."
+          },
+          "id": {
+            "type": "string",
+            "description": "Opaque identifier."
+          },
+          "last_event_sequence": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Highest event sequence held for it."
+          },
+          "physical_copy_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The disc this attempt produced, if it produced one."
+          },
+          "started_at": {
+            "type": "string",
+            "description": "When it started."
+          },
+          "state": {
+            "type": "string",
+            "description": "Where it got to."
+          },
+          "worker_id": {
+            "type": "string",
+            "description": "The worker that ran it."
+          }
+        }
+      },
+      "BurnEventPage": {
+        "type": "object",
+        "description": "A page of events.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BurnEventView"
+            },
+            "description": "The events, in sequence order."
+          },
+          "next_after": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Sequence to pass as `after` to continue, or null at the end.\n\nA sequence rather than an opaque cursor: sequences are already the\ncurrency of this timeline (the worker numbers events with them and\nthe server acknowledges them), so hiding them here would be a\ndifferent vocabulary for the same thing."
+          }
+        }
+      },
+      "BurnEventView": {
+        "type": "object",
+        "description": "One recorded event.",
+        "required": [
+          "sequence",
+          "event_type",
+          "stage",
+          "code",
+          "data",
+          "observed_at",
+          "received_at"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable code."
+          },
+          "data": {
+            "description": "Structured detail."
+          },
+          "event_type": {
+            "type": "string",
+            "description": "Event type, such as `stage_changed`."
+          },
+          "fraction": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Progress from 0 to 1, when reported."
+          },
+          "observed_at": {
+            "type": "string",
+            "description": "When the worker observed it."
+          },
+          "received_at": {
+            "type": "string",
+            "description": "When the server stored it."
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Monotonic within the attempt."
+          },
+          "stage": {
+            "type": "string",
+            "description": "Stage it relates to."
+          }
+        }
+      },
+      "BurnJobCreated": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BurnJobView",
+            "description": "The job."
+          },
+          {
+            "type": "object",
+            "required": [
+              "warnings"
+            ],
+            "properties": {
+              "warnings": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Things worth knowing before the disc is spent.\n\nWarnings, not refusals: an operator may knowingly burn an artifact\nthat validated with warnings, and the system's job is to say so rather\nthan to decide for them."
+              }
+            }
+          }
+        ],
+        "description": "A newly queued job, with anything an operator should know about it."
+      },
+      "BurnJobDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BurnJobView",
+            "description": "Summary fields."
+          },
+          {
+            "type": "object",
+            "required": [
+              "attempts"
+            ],
+            "properties": {
+              "attempts": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/BurnAttemptView"
+                },
+                "description": "Every attempt made, oldest first."
+              }
+            }
+          }
+        ],
+        "description": "A burn job with its attempts."
+      },
+      "BurnJobPage": {
+        "type": "object",
+        "description": "A page of burn jobs.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BurnJobView"
+            },
+            "description": "The jobs in this page, newest first."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor for the next page, or null when this is the last."
+          }
+        }
+      },
+      "BurnJobView": {
+        "type": "object",
+        "description": "A burn job.",
+        "required": [
+          "id",
+          "disc_id",
+          "artifact_id",
+          "state",
+          "has_started_writing",
+          "priority",
+          "verification_policy",
+          "eject_policy",
+          "created_by",
+          "created_at",
+          "updated_at",
+          "attempt_count"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": "string",
+            "description": "The artifact being written."
+          },
+          "attempt_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many attempts have been made, including failed ones.\n\nEach attempt past the first spent a disc, so this is not a retry\ncounter but a count of media consumed."
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it finished, if it has."
+          },
+          "created_at": {
+            "type": "string",
+            "description": "When it was queued."
+          },
+          "created_by": {
+            "type": "string",
+            "description": "Who asked for it."
+          },
+          "disc_id": {
+            "type": "string",
+            "description": "The disc this copy represents."
+          },
+          "eject_policy": {
+            "type": "string",
+            "description": "What to do with the disc afterwards."
+          },
+          "has_started_writing": {
+            "type": "boolean",
+            "description": "Whether a disc is being or has been consumed.\n\nDerived from the state so a client does not have to know which states\nthose are. It is what decides whether cancelling is still offered."
+          },
+          "id": {
+            "type": "string",
+            "description": "Opaque identifier."
+          },
+          "priority": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Queue priority; higher is claimed first."
+          },
+          "progress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BurnProgress",
+                "description": "The most recent thing a worker reported, if any."
+              }
+            ]
+          },
+          "requested_media_profile": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Media profile requested, when one was."
+          },
+          "state": {
+            "type": "string",
+            "description": "Lifecycle state."
+          },
+          "updated_at": {
+            "type": "string",
+            "description": "When it last changed."
+          },
+          "verification_policy": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Ordered verification steps."
+          }
+        }
+      },
+      "BurnProgress": {
+        "type": "object",
+        "description": "What a worker last said it was doing.",
+        "required": [
+          "stage",
+          "code",
+          "observed_at"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable code for the event."
+          },
+          "fraction": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Progress within that stage, from 0 to 1, when the stage reports it."
+          },
+          "observed_at": {
+            "type": "string",
+            "description": "When the worker observed it."
+          },
+          "stage": {
+            "type": "string",
+            "description": "The stage the worker reported."
+          }
+        }
+      },
+      "CapabilityReport": {
+        "type": "object",
+        "description": "A worker's account of itself.",
+        "required": [
+          "software_version",
+          "drive"
+        ],
+        "properties": {
+          "cache_free_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Free bytes in its staging cache."
+          },
+          "drive": {
+            "$ref": "#/components/schemas/DriveReportBody",
+            "description": "The drive it operates."
+          },
+          "engines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EngineReport"
+            },
+            "description": "Engines it can run."
+          },
+          "software_version": {
+            "type": "string",
+            "description": "The worker's software version."
+          }
+        }
+      },
+      "CapabilityResponse": {
+        "type": "object",
+        "description": "What the server assigned.",
+        "required": [
+          "drive_id"
+        ],
+        "properties": {
+          "drive_id": {
+            "type": "string",
+            "description": "The drive's identifier, to be used when claiming work.\n\nAssigned by the server rather than supplied: public identifiers are\nthe server's to issue, and a worker that could choose one could claim\nanother worker's drive."
+          }
+        }
+      },
+      "CheckView": {
+        "type": "object",
+        "description": "One check performed on a disc.",
+        "required": [
+          "id",
+          "method",
+          "result",
+          "checked_by",
+          "checked_at"
+        ],
+        "properties": {
+          "bytes_read": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How much was read."
+          },
+          "checked_at": {
+            "type": "string",
+            "description": "When."
+          },
+          "checked_by": {
+            "type": "string",
+            "description": "Who checked."
+          },
+          "checked_with": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which drive read it."
+          },
+          "id": {
+            "type": "string",
+            "description": "Opaque identifier."
+          },
+          "method": {
+            "type": "string",
+            "description": "What was done."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Operator's notes."
+          },
+          "observed_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The digest read back, when the method produces one."
+          },
+          "result": {
+            "type": "string",
+            "description": "What was found."
+          }
+        }
+      },
       "ClaimRequest": {
         "type": "object",
         "description": "What a worker offers when asking for work.",
@@ -843,15 +3310,16 @@
           "attempt_id",
           "burn_job_id",
           "attempt_number",
-          "artifact_id",
+          "artifact",
           "lease_token",
           "lease_expires_at",
-          "verification_policy"
+          "verification_policy",
+          "eject_policy"
         ],
         "properties": {
-          "artifact_id": {
-            "type": "string",
-            "description": "The artifact to write."
+          "artifact": {
+            "$ref": "#/components/schemas/ClaimedArtifact",
+            "description": "What to write, and where to fetch it."
           },
           "attempt_id": {
             "type": "string",
@@ -866,6 +3334,10 @@
             "type": "string",
             "description": "The job."
           },
+          "eject_policy": {
+            "type": "string",
+            "description": "What to do with the disc when the attempt ends."
+          },
           "lease_expires_at": {
             "type": "string",
             "description": "When the lease lapses."
@@ -874,12 +3346,44 @@
             "type": "string",
             "description": "The lease token, presented on subsequent requests for this attempt."
           },
+          "requested_media_profile": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Media profile the operator asked for, if any.\n\nAdvisory until claims filter on drive capability: a worker whose drive\ncannot write this must fail preflight rather than write the wrong\nmedium."
+          },
           "verification_policy": {
             "type": "array",
             "items": {
               "type": "string"
             },
             "description": "Verification steps the job requires."
+          }
+        }
+      },
+      "ClaimedArtifact": {
+        "type": "object",
+        "description": "Where a worker fetches what it is to write.",
+        "required": [
+          "artifact_id",
+          "manifest_url"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": "string",
+            "description": "The artifact."
+          },
+          "manifest_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Digest of the manifest as published, when the library is readable.\n\nThe worker checks what it downloads against this. It does not make the\nmanifest trustworthy (it came from the same server), but it catches a\ndocument altered or truncated between publication and the download."
+          },
+          "manifest_url": {
+            "type": "string",
+            "description": "Path to fetch the manifest from, relative to the server.\n\nA path rather than an absolute URL: the worker already knows which\nserver it is talking to, and a server that told it otherwise would be\nredirecting a staging download somewhere the operator never\nconfigured."
           }
         }
       },
@@ -893,6 +3397,17 @@
           "physical_medium"
         ],
         "properties": {
+          "failure": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FailureReport",
+                "description": "Why it failed, when it did."
+              }
+            ]
+          },
           "last_sequence": {
             "type": "integer",
             "format": "int64",
@@ -985,6 +3500,199 @@
           }
         }
       },
+      "CreateBurnJobRequest": {
+        "type": "object",
+        "description": "What an operator sends to queue a burn.",
+        "required": [
+          "disc_id",
+          "artifact_id"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": "string",
+            "description": "The artifact to write."
+          },
+          "disc_id": {
+            "type": "string",
+            "description": "The disc the copy represents."
+          },
+          "eject_policy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What to do with the disc afterwards. Defaults to ejecting on success."
+          },
+          "priority": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Queue priority; higher is claimed first. Defaults to 0."
+          },
+          "requested_media_profile": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Media profile to require, or null for whatever fits."
+          },
+          "verification_policy": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Ordered verification steps. Defaults to a full read-back."
+          }
+        }
+      },
+      "CreateDiscRequest": {
+        "type": "object",
+        "description": "A new disc.",
+        "required": [
+          "sequence_number"
+        ],
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it is called, when it has a name of its own."
+          },
+          "media_family": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What kind of medium it is. Defaults to unknown."
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which region it plays in."
+          },
+          "sequence_number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Which disc of the set it is. Starts at 1."
+          }
+        }
+      },
+      "CreateDiscSetRequest": {
+        "type": "object",
+        "description": "A new disc set.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "disc_count_expected": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How many discs it should contain."
+          },
+          "name": {
+            "type": "string",
+            "description": "What the set is called."
+          },
+          "set_kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What shape of set it is. Defaults to unknown."
+          }
+        }
+      },
+      "CreateEditionRequest": {
+        "type": "object",
+        "description": "A new edition.",
+        "required": [
+          "display_name"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string",
+            "description": "What this release is called."
+          },
+          "publisher": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who published it."
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which region it was sold in."
+          }
+        }
+      },
+      "CreateImportRequest": {
+        "type": "object",
+        "description": "What an operator sends to import from a watched folder.",
+        "required": [
+          "path_id",
+          "relative_path"
+        ],
+        "properties": {
+          "path_id": {
+            "type": "string",
+            "description": "Which configured root the file is under."
+          },
+          "relative_path": {
+            "type": "string",
+            "description": "Where beneath that root, as a relative path."
+          }
+        }
+      },
+      "CreateTitleRequest": {
+        "type": "object",
+        "description": "A new title.",
+        "required": [
+          "display_title"
+        ],
+        "properties": {
+          "display_title": {
+            "type": "string",
+            "description": "What it is called."
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What kind of work it is. Defaults to unknown."
+          },
+          "release_year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "When it was released."
+          },
+          "sort_title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it sorts as. Defaults to the display title."
+          }
+        }
+      },
       "DependencyCheck": {
         "type": "object",
         "description": "The state of one dependency.",
@@ -1007,6 +3715,269 @@
           "status": {
             "type": "string",
             "description": "`\"up\"` or `\"down\"`."
+          }
+        }
+      },
+      "DiscArtifactView": {
+        "type": "object",
+        "description": "An artifact linked to a disc.",
+        "required": [
+          "artifact_id",
+          "relationship",
+          "confidence"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": "string",
+            "description": "The artifact."
+          },
+          "confidence": {
+            "type": "number",
+            "format": "float",
+            "description": "How confident the link is, from 0 to 1."
+          },
+          "relationship": {
+            "type": "string",
+            "description": "What the artifact is to the disc."
+          }
+        }
+      },
+      "DiscSetView": {
+        "type": "object",
+        "description": "The discs an edition shipped as.",
+        "required": [
+          "id",
+          "edition_id",
+          "name",
+          "set_kind",
+          "disc_count",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "description": "When it was catalogued."
+          },
+          "disc_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many are catalogued.\n\nBeside the expected count so an incomplete set is visible without\ncounting rows by eye."
+          },
+          "disc_count_expected": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How many discs it should contain."
+          },
+          "edition_id": {
+            "type": "string",
+            "description": "The edition it belongs to."
+          },
+          "id": {
+            "type": "string",
+            "description": "Opaque identifier."
+          },
+          "name": {
+            "type": "string",
+            "description": "What the set is called."
+          },
+          "set_kind": {
+            "type": "string",
+            "description": "What shape of set it is."
+          }
+        }
+      },
+      "DiscView": {
+        "type": "object",
+        "description": "One disc.",
+        "required": [
+          "id",
+          "disc_set_id",
+          "sequence_number",
+          "media_family",
+          "compatibility_claim",
+          "artifact_count",
+          "copy_count",
+          "created_at"
+        ],
+        "properties": {
+          "artifact_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many artifacts are linked to it."
+          },
+          "compatibility_claim": {
+            "type": "string",
+            "description": "What reproduction is expected to achieve.\n\n`unknown` unless evidence has been recorded, which is the schema's own\nrule: anything stronger must be backed by something."
+          },
+          "copy_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many physical copies of it this system has made."
+          },
+          "created_at": {
+            "type": "string",
+            "description": "When it was catalogued."
+          },
+          "disc_set_id": {
+            "type": "string",
+            "description": "The set it belongs to."
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it is called, when it has a name of its own."
+          },
+          "id": {
+            "type": "string",
+            "description": "Opaque identifier."
+          },
+          "media_family": {
+            "type": "string",
+            "description": "What kind of medium it is."
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which region it plays in."
+          },
+          "sequence_number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Which disc of the set it is."
+          },
+          "volume_label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The volume label read from an image of it."
+          }
+        }
+      },
+      "DriveReportBody": {
+        "type": "object",
+        "description": "What a worker says about one drive.",
+        "required": [
+          "device_alias",
+          "configured_name",
+          "status"
+        ],
+        "properties": {
+          "capabilities": {
+            "description": "What the drive says it can do."
+          },
+          "configured_name": {
+            "type": "string",
+            "description": "Human-meaningful name an operator chose."
+          },
+          "device_alias": {
+            "type": "string",
+            "description": "Worker-local stable alias, such as `/dev/disc-block`.\n\nSupplied by the worker and never a host device node. Together with the\nworker it is the drive's identity, which is why the same alias\nreported twice updates one drive rather than creating a second."
+          },
+          "firmware": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Reported firmware revision."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Reported model."
+          },
+          "serial_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SHA-256 of the drive serial, hashed by the worker.\n\nHashed before it is sent, so the raw serial never leaves the machine\nthat read it. The server only needs to recognise a drive, not to name\nits hardware in an export."
+          },
+          "status": {
+            "type": "string",
+            "description": "Current drive status."
+          },
+          "vendor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Reported vendor."
+          }
+        }
+      },
+      "EditionView": {
+        "type": "object",
+        "description": "A particular release of a title.",
+        "required": [
+          "id",
+          "title_id",
+          "display_name",
+          "set_count",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "description": "When it was catalogued."
+          },
+          "display_name": {
+            "type": "string",
+            "description": "What this release is called."
+          },
+          "id": {
+            "type": "string",
+            "description": "Opaque identifier."
+          },
+          "publisher": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who published it."
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which region it was sold in."
+          },
+          "set_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many disc sets it has."
+          },
+          "title_id": {
+            "type": "string",
+            "description": "The title it belongs to."
+          }
+        }
+      },
+      "EngineReport": {
+        "type": "object",
+        "description": "One engine a worker can run.",
+        "required": [
+          "name",
+          "version"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Engine name, such as `xorriso`."
+          },
+          "version": {
+            "type": "string",
+            "description": "Its version, as the engine reports it."
           }
         }
       },
@@ -1151,6 +4122,26 @@
           }
         }
       },
+      "FailureReport": {
+        "type": "object",
+        "description": "Why an attempt did not succeed.\n\nSent alongside the reports rather than inferred from them, because the\nreports say *what* happened and this says why. Without it a failed burn\ntells an operator only that it failed.",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable code, such as `PREFLIGHT_MEDIUM_NOT_BLANK`."
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Human-readable detail, bounded by the server before storage."
+          }
+        }
+      },
       "HeartbeatResponse": {
         "type": "object",
         "description": "What the server tells a worker on each heartbeat.",
@@ -1169,6 +4160,186 @@
           }
         }
       },
+      "ImportPage": {
+        "type": "object",
+        "description": "A page of imports.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportView"
+            },
+            "description": "The imports in this page, newest first."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor for the next page, or null when this is the last."
+          }
+        }
+      },
+      "ImportSources": {
+        "type": "object",
+        "description": "Where imports may be taken from.",
+        "required": [
+          "watch_roots",
+          "max_upload_bytes"
+        ],
+        "properties": {
+          "max_upload_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Largest upload the server will accept, in bytes."
+          },
+          "watch_roots": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Identifiers of the watched roots an administrator configured.\n\nIdentifiers only. The paths behind them are the host's business and\nare never exposed."
+          }
+        }
+      },
+      "ImportView": {
+        "type": "object",
+        "description": "An import job.",
+        "required": [
+          "id",
+          "source_kind",
+          "state",
+          "is_settled",
+          "bytes_received",
+          "warnings",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The artifact it produced, once it has."
+          },
+          "bytes_expected": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How many bytes are expected, when the source said."
+          },
+          "bytes_received": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many have arrived."
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it finished, if it has."
+          },
+          "created_at": {
+            "type": "string",
+            "description": "When it was requested."
+          },
+          "created_by": {
+            "type": "string",
+            "description": "Who asked."
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A stable failure code, when it failed."
+          },
+          "error_detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Human-readable failure detail, when it failed."
+          },
+          "id": {
+            "type": "string",
+            "description": "Opaque identifier."
+          },
+          "is_settled": {
+            "type": "boolean",
+            "description": "Whether the import has finished, one way or another."
+          },
+          "resumes_from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Whether a retry would resume rather than start again.\n\nSurfaced because it is the question an operator asks before pressing\nretry on a large import."
+          },
+          "source_filename": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The filename as received, when one was recorded."
+          },
+          "source_kind": {
+            "type": "string",
+            "description": "Where the bytes come from."
+          },
+          "state": {
+            "type": "string",
+            "description": "Lifecycle state."
+          },
+          "updated_at": {
+            "type": "string",
+            "description": "When it last changed."
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Structural observations gathered so far.\n\nPresent as soon as inspection has run, so a warning is visible before\nthe import finishes rather than only afterwards."
+          }
+        }
+      },
+      "LinkArtifactRequest": {
+        "type": "object",
+        "description": "A link between an artifact and a disc.",
+        "required": [
+          "artifact_id"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": "string",
+            "description": "The artifact."
+          },
+          "confidence": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "How confident the link is, from 0 to 1. Defaults to certain, because\nan operator linking by hand is the strongest evidence there is."
+          },
+          "relationship": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the artifact is to the disc. Defaults to a representation of it."
+          }
+        }
+      },
       "Liveness": {
         "type": "object",
         "description": "Result of a liveness probe.",
@@ -1184,6 +4355,169 @@
           "version": {
             "type": "string",
             "description": "Server version, from the crate version at build time."
+          }
+        }
+      },
+      "PhysicalCopyDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PhysicalCopyView",
+            "description": "Summary fields."
+          },
+          {
+            "type": "object",
+            "required": [
+              "checks"
+            ],
+            "properties": {
+              "checks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/CheckView"
+                },
+                "description": "Every check recorded, newest first."
+              }
+            }
+          }
+        ],
+        "description": "A disc with its check history."
+      },
+      "PhysicalCopyPage": {
+        "type": "object",
+        "description": "A page of discs.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PhysicalCopyView"
+            },
+            "description": "The discs in this page, newest first."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor for the next page, or null when this is the last."
+          }
+        }
+      },
+      "PhysicalCopyView": {
+        "type": "object",
+        "description": "A disc in the inventory.",
+        "required": [
+          "id",
+          "disc_id",
+          "artifact_id",
+          "burn_attempt_id",
+          "status",
+          "should_be_destroyed",
+          "is_settled",
+          "media_profile",
+          "verification_level",
+          "verification_result",
+          "created_at",
+          "updated_at",
+          "check_count"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": "string",
+            "description": "The artifact written to it."
+          },
+          "burn_attempt_id": {
+            "type": "string",
+            "description": "The attempt that produced it."
+          },
+          "check_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many checks have been recorded."
+          },
+          "created_at": {
+            "type": "string",
+            "description": "When it was burned."
+          },
+          "disc_id": {
+            "type": "string",
+            "description": "The catalog disc this is a copy of."
+          },
+          "id": {
+            "type": "string",
+            "description": "Opaque identifier."
+          },
+          "is_settled": {
+            "type": "boolean",
+            "description": "Whether anything further can be recorded about it."
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What is written on the disc itself."
+          },
+          "last_checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was last read back."
+          },
+          "manufacturer_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Manufacturer identifier, when the drive reported one."
+          },
+          "media_profile": {
+            "type": "string",
+            "description": "Media profile of the medium."
+          },
+          "media_serial": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Media serial, when the drive reported one."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Operator's notes."
+          },
+          "should_be_destroyed": {
+            "type": "boolean",
+            "description": "Whether it should be taken out of circulation.\n\nDerived from the condition so a client does not have to know which\nconditions mean \"bin this\". It is the question an operator is really\nasking when they look at a shelf."
+          },
+          "status": {
+            "type": "string",
+            "description": "Its condition."
+          },
+          "storage_location": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where it is kept."
+          },
+          "updated_at": {
+            "type": "string",
+            "description": "When the record last changed."
+          },
+          "verification_level": {
+            "type": "string",
+            "description": "What verification ran when it was burned."
+          },
+          "verification_result": {
+            "type": "string",
+            "description": "How that turned out."
           }
         }
       },
@@ -1277,6 +4611,53 @@
           }
         }
       },
+      "RecordCheckRequest": {
+        "type": "object",
+        "description": "What a check found.",
+        "required": [
+          "method",
+          "result"
+        ],
+        "properties": {
+          "bytes_read": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How much was read."
+          },
+          "checked_with": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which drive read it."
+          },
+          "method": {
+            "type": "string",
+            "description": "What was done, from the verification vocabulary."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Operator's notes."
+          },
+          "observed_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The digest read back, when the method produces one."
+          },
+          "result": {
+            "type": "string",
+            "description": "`passed`, `failed`, `partial`, or `not_performed`."
+          }
+        }
+      },
       "RecoveryRequest": {
         "type": "object",
         "description": "What a worker reports when it restarts holding local state.",
@@ -1357,6 +4738,110 @@
           "lease_expires_at": {
             "type": "string",
             "description": "The new expiry."
+          }
+        }
+      },
+      "TitlePage": {
+        "type": "object",
+        "description": "A page of titles.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TitleView"
+            },
+            "description": "The titles in this page, in sort order."
+          },
+          "next_after": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sort key to pass as `after` to continue, or null at the end.\n\nThe sort title rather than an opaque cursor, because the ordering is\nalphabetical and a client showing \"continue from R\" should be able to\nsay so."
+          }
+        }
+      },
+      "TitleView": {
+        "type": "object",
+        "description": "A work.",
+        "required": [
+          "id",
+          "kind",
+          "display_title",
+          "sort_title",
+          "edition_count",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "description": "When it was catalogued."
+          },
+          "display_title": {
+            "type": "string",
+            "description": "What it is called."
+          },
+          "edition_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many editions it has."
+          },
+          "id": {
+            "type": "string",
+            "description": "Opaque identifier."
+          },
+          "kind": {
+            "type": "string",
+            "description": "What kind of work it is."
+          },
+          "release_year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "When it was released."
+          },
+          "sort_title": {
+            "type": "string",
+            "description": "What it sorts as."
+          }
+        }
+      },
+      "UpdatePhysicalCopyRequest": {
+        "type": "object",
+        "description": "What an operator may change about a disc.\n\nEvery field is optional, and absent means \"leave it alone\", so a client\nediting a label cannot blank a storage location it never saw.",
+        "properties": {
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What is written on the disc."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Operator's notes."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its condition.\n\n`verified` and `verification_failed` are refused: those words describe\nwhat a read-back found, and recording a check is how they are written."
+          },
+          "storage_location": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where it is kept."
           }
         }
       },
@@ -1443,6 +4928,22 @@
     {
       "name": "library",
       "description": "Artifacts and their components"
+    },
+    {
+      "name": "catalog",
+      "description": "Titles, editions, disc sets, and discs"
+    },
+    {
+      "name": "imports",
+      "description": "Getting bytes into the library"
+    },
+    {
+      "name": "burns",
+      "description": "Burn jobs, attempts, and their events"
+    },
+    {
+      "name": "physical-copies",
+      "description": "The discs that actually exist"
     },
     {
       "name": "workers",
