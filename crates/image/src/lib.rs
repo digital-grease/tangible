@@ -7,8 +7,15 @@
 //! rather than filenames, parsers read bytes and never execute them, and no
 //! image is ever mounted.
 //!
-//! In place: ISO 9660 and UDF detection. CUE/BIN parsing follows.
+//! In place: ISO 9660 and UDF detection, and CUE sheet parsing with track
+//! layout. Descriptor formats beyond CUE follow.
 
+pub mod cue;
 pub mod iso;
 
+pub use cue::{
+    CdLayout, CueError, CueFile, CueSheet, CueTrack, CueWarning, LayoutError, Msf,
+    ReferenceFailure, ReferenceResolution, ResolvedReference, TrackLayout, TrackMode, layout,
+    parse, resolve_references,
+};
 pub use iso::{FilesystemEvidence, IsoInspection, IsoWarning, PrimaryVolume, inspect};

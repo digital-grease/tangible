@@ -31,18 +31,18 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use tangible_domain::enums::{
-    ArtifactFormat, ArtifactKind, ArtifactOrigin, ComponentRole, ValidationState,
+    ArtifactFormat, ArtifactKind, ArtifactOrigin, ComponentRole, MediaFamily, ValidationState,
 };
 use tangible_domain::manifest::{
     ArtifactManifest, BurnSupport, Classification, Compatibility, Component, ContentHashes,
     Detector, Extensions, FilesystemEvidence as ManifestFilesystem, Origin, SCHEMA_ID, StorageRef,
-    Topology, Validation, ValidatorResult,
+    Subchannel, Topology, Track, TrackIndex, Validation, ValidatorResult,
 };
 use tangible_domain::{
     ArtifactId, ComponentId, ImportJobId, ImportState, ImportTransitionError, LogicalPath,
     Sha256Digest,
 };
-use tangible_image::iso;
+use tangible_image::{cue, iso};
 use tangible_storage::{
     FilesystemStore, IngestLimits, ManifestStore, ManifestStoreError, StagingArea, StagingError,
     StagingKind, StagingManager, StorageError,
@@ -266,12 +266,18 @@ impl ImportPipeline {
         advance_to(checkpoint, ImportState::Hashing)?;
 
         // --- inspecting ---------------------------------------------------
+        // Run on every attempt rather than only the first. Inspection is a
+        // bounded read of a descriptor, and the structure it works out is what
+        // the manifest is built from; caching only the verdict would leave a
+        // resumed import publishing a manifest with no track layout in it.
+        // What the checkpoint records is the *first* verdict, so a resumed run
+        // cannot append the same warnings twice.
+        let detection = self.inspect(&area, &staged, request, checkpoint).await?;
         if checkpoint.detected_format.is_none() {
-            let detection = self.inspect(&area, &staged, request).await?;
             checkpoint.detected_format = Some(detection.format);
             checkpoint.confidence = detection.confidence;
-            checkpoint.warnings.extend(detection.warnings);
-            checkpoint.evidence.extend(detection.evidence);
+            checkpoint.warnings.extend(detection.warnings.clone());
+            checkpoint.evidence.extend(detection.evidence.clone());
         }
         advance_to(checkpoint, ImportState::Inspecting)?;
 
@@ -284,7 +290,7 @@ impl ImportPipeline {
             .get_or_insert_with(ArtifactId::generate);
         advance_to(checkpoint, ImportState::Registering)?;
 
-        let manifest = Self::build_manifest(artifact_id, request, &staged, checkpoint);
+        let manifest = Self::build_manifest(artifact_id, request, &staged, checkpoint, &detection);
         let manifest_path = self.manifests.write(&manifest).await?;
         advance_to(checkpoint, ImportState::Complete)?;
 
@@ -296,8 +302,139 @@ impl ImportPipeline {
         })
     }
 
-    /// Read enough of the primary component to classify it.
+    /// Classify what was staged.
+    ///
+    /// A descriptor decides the answer when there is one, because a CUE sheet
+    /// beside a BIN describes the BIN: classifying the largest file on its own
+    /// would report a headerless blob and throw away the only thing that says
+    /// what the blob is. Everything else falls through to reading the image
+    /// itself.
     async fn inspect(
+        &self,
+        area: &StagingArea,
+        staged: &[LogicalPath],
+        request: &ImportRequest,
+        checkpoint: &ImportCheckpoint,
+    ) -> Result<Detection, ImportError> {
+        let descriptors: Vec<&LogicalPath> = staged
+            .iter()
+            .filter(|path| path.extension().as_deref() == Some("cue"))
+            .collect();
+
+        match descriptors.as_slice() {
+            [] => self.inspect_iso(area, staged, request).await,
+            [only] => match self.inspect_cue(area, staged, only, checkpoint).await? {
+                Some(detection) => Ok(detection),
+                // A file named `.cue` that is not one. The bytes are still
+                // imported; they are simply not claimed to be a sheet.
+                None => self.inspect_iso(area, staged, request).await,
+            },
+            many => {
+                // Two discs staged together. Which BIN belongs to which sheet
+                // is a grouping question, and answering it by guessing would
+                // produce a manifest whose tracks point at another disc.
+                let mut detection = self.inspect_iso(area, staged, request).await?;
+                detection.warnings.push(format!(
+                    "{} descriptors were staged together, so no track layout was built; \
+                     import one disc at a time to get one",
+                    many.len()
+                ));
+                Ok(detection)
+            }
+        }
+    }
+
+    /// Read a CUE sheet and lay out the tracks it describes.
+    ///
+    /// Returns `None` when the descriptor does not parse, which leaves the
+    /// caller to classify the staged bytes some other way.
+    async fn inspect_cue(
+        &self,
+        area: &StagingArea,
+        staged: &[LogicalPath],
+        descriptor: &LogicalPath,
+        checkpoint: &ImportCheckpoint,
+    ) -> Result<Option<Detection>, ImportError> {
+        let resolved = area.resolve(descriptor).await?;
+        // One byte past the limit, so a file that is too large is refused by
+        // the parser rather than silently truncated into a valid-looking sheet.
+        let bytes = read_prefix(&resolved, cue::MAX_CUE_BYTES + 1)
+            .await
+            .map_err(|source| ImportError::ReadStaged {
+                path: descriptor.to_string(),
+                source,
+            })?;
+        let Ok(sheet) = cue::parse(&bytes) else {
+            return Ok(None);
+        };
+
+        let mut detection = Detection::plain(ArtifactFormat::CueBin, sheet.confidence);
+        detection.descriptor = Some(descriptor.clone());
+        detection.evidence.clone_from(&sheet.evidence);
+        detection.warnings = sheet.warnings.iter().map(ToString::to_string).collect();
+
+        // The sheet names files; the resolver turns those names into staged
+        // files or into nothing. Nothing here can reach a file that was not
+        // staged, whatever the sheet says.
+        let resolution = cue::resolve_references(&sheet, staged);
+        detection
+            .warnings
+            .extend(resolution.warnings.iter().map(ToString::to_string));
+        for file in &resolution.files {
+            if let Some(failure) = &file.failure {
+                detection
+                    .warnings
+                    .push(format!("{} could not be used: {failure}", file.declared));
+            }
+        }
+
+        let Some(paths) = resolution.paths() else {
+            return Ok(Some(detection));
+        };
+        detection
+            .evidence
+            .push(format!("{} referenced file(s) resolved", paths.len()));
+
+        // Sizes come from what was promoted rather than from the filesystem:
+        // those are the bytes that were hashed and stored, and a layout
+        // computed against anything else would describe a different disc.
+        let sizes: Vec<u64> = paths
+            .iter()
+            .map(|path| {
+                checkpoint
+                    .promoted
+                    .get(path.as_str())
+                    .map_or(0, |promoted| promoted.length_bytes)
+            })
+            .collect();
+
+        match cue::layout(&sheet, &sizes) {
+            Ok(layout) => {
+                detection
+                    .warnings
+                    .extend(layout.warnings.iter().map(ToString::to_string));
+                detection.evidence.push(format!(
+                    "{} track(s) over {} sectors in {} session(s)",
+                    layout.tracks.len(),
+                    layout.total_sectors(),
+                    layout.session_count
+                ));
+                // The sheet parsed and every file it names is here. That is as
+                // sure as detection gets; it is still not validation.
+                detection.confidence = 0.99;
+                detection.layout = Some(layout);
+                detection.track_files = paths;
+            }
+            Err(error) => detection
+                .warnings
+                .push(format!("the tracks could not be laid out: {error}")),
+        }
+
+        Ok(Some(detection))
+    }
+
+    /// Read enough of the primary component to classify it.
+    async fn inspect_iso(
         &self,
         area: &StagingArea,
         staged: &[LogicalPath],
@@ -373,6 +510,9 @@ impl ImportPipeline {
             block_size: inspection.primary.as_ref().map(|p| p.block_size),
             block_count: inspection.primary.as_ref().map(|p| p.block_count),
             volume_label: inspection.primary.as_ref().map(|p| p.volume_id.clone()),
+            descriptor: None,
+            track_files: Vec::new(),
+            layout: None,
         })
     }
 
@@ -381,6 +521,7 @@ impl ImportPipeline {
         request: &ImportRequest,
         staged: &[LogicalPath],
         checkpoint: &ImportCheckpoint,
+        detection: &Detection,
     ) -> (Vec<Component>, u64) {
         let mut components = Vec::new();
         let mut total_bytes = 0_u64;
@@ -393,9 +534,16 @@ impl ImportPipeline {
                 id: ComponentId::generate(),
                 logical_path: path.clone(),
                 source_filename: request.source_filename.clone(),
-                role: if staged.len() == 1 {
+                role: if detection.descriptor.as_ref() == Some(path) {
+                    ComponentRole::Descriptor
+                } else if detection.track_files.contains(path) {
+                    ComponentRole::TrackData
+                } else if staged.len() == 1 {
                     ComponentRole::PrimaryImage
                 } else {
+                    // Staged alongside the artifact and not named by anything
+                    // that describes it. Preserved, and not given a role it
+                    // was not shown to have.
                     ComponentRole::Unknown
                 },
                 ordinal: u32::try_from(ordinal).unwrap_or(u32::MAX),
@@ -414,18 +562,111 @@ impl ImportPipeline {
         (components, total_bytes)
     }
 
+    /// Describe the artifact's structure, when inspection worked one out.
+    ///
+    /// Topology is what makes a manifest portable: another tool reading it
+    /// learns where the tracks are without re-deriving them from a descriptor
+    /// it may not parse the same way. Anything not established is
+    /// [`Topology::Unknown`] rather than a plausible-looking default, because
+    /// a wrong offset here is a wrongly written disc.
+    fn build_topology(detection: &Detection, components: &[Component]) -> Topology {
+        if let Some(layout) = &detection.layout
+            && let Some(descriptor) = &detection.descriptor
+            && let Some(descriptor_component_id) = component_id(components, descriptor)
+        {
+            let mut tracks = Vec::with_capacity(layout.tracks.len());
+            for track in &layout.tracks {
+                // A track whose file is not a component would be a manifest
+                // pointing at bytes it does not carry. Better to describe
+                // nothing than to describe that.
+                let Some(component) = detection
+                    .track_files
+                    .get(track.file)
+                    .and_then(|path| component_id(components, path))
+                else {
+                    return Topology::Unknown;
+                };
+                tracks.push(Track {
+                    number: track.number,
+                    session: track.session,
+                    mode: track.mode.clone(),
+                    component_id: component,
+                    file_offset_bytes: track.file_offset_bytes,
+                    start_lba: track.start_lba,
+                    sector_count: track.sector_count,
+                    pregap_sectors: track.pregap_sectors,
+                    indexes: track
+                        .indexes
+                        .iter()
+                        .map(|(number, relative_lba)| TrackIndex {
+                            number: *number,
+                            relative_lba: *relative_lba,
+                        })
+                        .collect(),
+                    hashes: BTreeMap::new(),
+                });
+            }
+            return Topology::CdTracks {
+                descriptor_component_id,
+                session_count: layout.session_count,
+                tracks,
+                // A CUE/BIN set carries no subchannel data. Formats that do
+                // are a separate descriptor and a separate detector.
+                subchannel: Some(Subchannel {
+                    present: false,
+                    representation: None,
+                }),
+            };
+        }
+
+        if let (Some(block_size), Some(block_count)) = (detection.block_size, detection.block_count)
+        {
+            return Topology::SingleTrackBlockImage {
+                block_size,
+                block_count,
+                volume_labels: detection
+                    .volume_label
+                    .iter()
+                    .filter(|label| !label.is_empty())
+                    .cloned()
+                    .collect(),
+                filesystems: detection.filesystems.clone(),
+            };
+        }
+
+        Topology::Unknown
+    }
+
     /// Assemble the manifest from what the checkpoint recorded.
     fn build_manifest(
         artifact_id: ArtifactId,
         request: &ImportRequest,
         staged: &[LogicalPath],
         checkpoint: &ImportCheckpoint,
+        detection: &Detection,
     ) -> ArtifactManifest {
         let format = checkpoint
             .detected_format
             .unwrap_or(ArtifactFormat::Unknown);
 
-        let (components, total_bytes) = Self::build_components(request, staged, checkpoint);
+        // Named for what actually read the bytes, so a warning in a manifest
+        // can be traced to the thing that produced it.
+        let (detector, validator, warning_code, media_family) = match format {
+            ArtifactFormat::CueBin => (
+                "cue-parser",
+                "cue-structural",
+                "CUE_STRUCTURAL_WARNING",
+                // A CUE sheet describes a CD; there is no other medium it is
+                // used for. An ISO could be any of three, which is why the
+                // other arm claims nothing.
+                Some(MediaFamily::Cd),
+            ),
+            _ => ("iso9660", "iso-structural", "ISO_STRUCTURAL_WARNING", None),
+        };
+
+        let (components, total_bytes) =
+            Self::build_components(request, staged, checkpoint, detection);
+        let topology = Self::build_topology(detection, &components);
 
         // Warnings do not block: real preservation dumps carry benign
         // structural oddities, and refusing them would make the tool useless
@@ -441,10 +682,10 @@ impl ImportPipeline {
             .warnings
             .iter()
             .map(|warning| ValidatorResult {
-                name: "iso-structural".to_owned(),
+                name: validator.to_owned(),
                 version: env!("CARGO_PKG_VERSION").to_owned(),
                 result: "warning".to_owned(),
-                code: "ISO_STRUCTURAL_WARNING".to_owned(),
+                code: warning_code.to_owned(),
                 details: {
                     let mut details = Extensions::new();
                     details.insert("message".to_owned(), serde_json::json!(warning));
@@ -474,15 +715,15 @@ impl ImportPipeline {
                 format,
                 format_confidence: checkpoint.confidence,
                 detectors: vec![Detector {
-                    name: "iso9660".to_owned(),
+                    name: detector.to_owned(),
                     version: env!("CARGO_PKG_VERSION").to_owned(),
                     evidence: checkpoint.evidence.clone(),
                 }],
-                media_family: None,
+                media_family,
                 total_bytes,
             },
             components,
-            topology: Topology::Unknown,
+            topology,
             validation: Validation {
                 state,
                 validated_at: Some(OffsetDateTime::now_utc()),
@@ -524,20 +765,52 @@ impl ImportPipeline {
     }
 }
 
+/// The identifier of the component holding a given staged file.
+fn component_id(components: &[Component], path: &LogicalPath) -> Option<ComponentId> {
+    components
+        .iter()
+        .find(|component| &component.logical_path == path)
+        .map(|component| component.id)
+}
+
 /// What inspection concluded, in manifest terms.
 struct Detection {
     format: ArtifactFormat,
     confidence: f32,
     warnings: Vec<String>,
     evidence: Vec<String>,
-    #[allow(dead_code)]
     filesystems: Vec<ManifestFilesystem>,
-    #[allow(dead_code)]
     block_size: Option<u32>,
-    #[allow(dead_code)]
     block_count: Option<u64>,
-    #[allow(dead_code)]
     volume_label: Option<String>,
+    /// The descriptor, for formats that have one.
+    descriptor: Option<LogicalPath>,
+    /// The files the descriptor names, in its own declaration order.
+    ///
+    /// Indexed by [`cue::TrackLayout::file`], which is why the order matters
+    /// and why it is the resolver's order rather than the staged order.
+    track_files: Vec<LogicalPath>,
+    /// Track extents, when the descriptor could be laid out.
+    layout: Option<cue::CdLayout>,
+}
+
+impl Detection {
+    /// A detection that claims nothing beyond the format.
+    fn plain(format: ArtifactFormat, confidence: f32) -> Self {
+        Self {
+            format,
+            confidence,
+            warnings: Vec::new(),
+            evidence: Vec::new(),
+            filesystems: Vec::new(),
+            block_size: None,
+            block_count: None,
+            volume_label: None,
+            descriptor: None,
+            track_files: Vec::new(),
+            layout: None,
+        }
+    }
 }
 
 /// Move the checkpoint forward to `target`, one stage at a time.

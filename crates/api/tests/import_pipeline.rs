@@ -9,7 +9,8 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use tangible_api::{ImportCheckpoint, ImportError, ImportPipeline, ImportRequest};
-use tangible_domain::enums::{ArtifactFormat, ValidationState};
+use tangible_domain::enums::{ArtifactFormat, ComponentRole, MediaFamily, ValidationState};
+use tangible_domain::manifest::Topology;
 use tangible_domain::{ImportJobId, ImportState, LogicalPath};
 use tangible_storage::{FilesystemStore, IngestLimits, ManifestStore, StagingManager};
 use tempfile::TempDir;
@@ -476,5 +477,265 @@ async fn two_imports_of_identical_bytes_deduplicate_but_stay_distinct_artifacts(
         pipeline.manifests().list().await.expect("list").len(),
         2,
         "each artifact has its own manifest"
+    );
+}
+
+// --- CUE and BIN -------------------------------------------------------------
+
+/// Bytes per sector for the raw modes these sheets use.
+const RAW_SECTOR: usize = 2352;
+
+/// A mixed-mode sheet: a data track, then audio after a generated gap.
+const MIXED_MODE_SHEET: &[u8] = b"FILE \"disc.bin\" BINARY\n\
+  TRACK 01 MODE2/2352\n\
+    INDEX 01 00:00:00\n\
+  TRACK 02 AUDIO\n\
+    PREGAP 00:00:02\n\
+    INDEX 01 00:01:00\n";
+
+#[tokio::test]
+async fn a_cue_and_its_bin_import_as_one_artifact_that_knows_its_tracks() {
+    let (_dir, pipeline) = pipeline().await;
+    let import_id = ImportJobId::generate();
+    let area = pipeline.open_area(import_id).await.expect("area");
+    area.write(&path("disc.cue"), MIXED_MODE_SHEET)
+        .await
+        .expect("stage");
+    area.write(&path("disc.bin"), &vec![0_u8; RAW_SECTOR * 100])
+        .await
+        .expect("stage");
+
+    let mut checkpoint = ImportCheckpoint::default();
+    let outcome = pipeline
+        .run(&request(import_id, "disc.cue"), &mut checkpoint)
+        .await
+        .expect("import");
+
+    let manifest = pipeline
+        .manifests()
+        .read(outcome.artifact_id)
+        .await
+        .expect("read");
+
+    assert_eq!(manifest.classification.format, ArtifactFormat::CueBin);
+    assert_eq!(
+        manifest.classification.media_family,
+        Some(MediaFamily::Cd),
+        "a CUE sheet describes a CD and nothing else"
+    );
+    assert!(manifest.classification.format_confidence > 0.98);
+    assert_eq!(manifest.classification.detectors[0].name, "cue-parser");
+
+    // One artifact, two components, each with the role it actually plays.
+    let descriptor = manifest
+        .components
+        .iter()
+        .find(|component| component.logical_path.as_str() == "disc.cue")
+        .expect("the descriptor is a component");
+    let data = manifest
+        .components
+        .iter()
+        .find(|component| component.logical_path.as_str() == "disc.bin")
+        .expect("the data is a component");
+    assert_eq!(descriptor.role, ComponentRole::Descriptor);
+    assert_eq!(data.role, ComponentRole::TrackData);
+
+    let Topology::CdTracks {
+        descriptor_component_id,
+        session_count,
+        tracks,
+        subchannel,
+    } = manifest.topology
+    else {
+        panic!("expected a track topology, got {:?}", manifest.topology);
+    };
+    assert_eq!(descriptor_component_id, descriptor.id);
+    assert_eq!(session_count, 1);
+    assert!(
+        !subchannel.expect("stated").present,
+        "a CUE/BIN set carries no subchannel data"
+    );
+
+    assert_eq!(tracks.len(), 2);
+    assert_eq!(tracks[0].number, 1);
+    assert_eq!(tracks[0].mode, "MODE2/2352");
+    assert_eq!(tracks[0].component_id, data.id);
+    assert_eq!(tracks[0].start_lba, 0);
+    assert_eq!(tracks[0].sector_count, 75);
+    assert_eq!(tracks[0].file_offset_bytes, 0);
+
+    assert_eq!(tracks[1].mode, "AUDIO");
+    assert_eq!(tracks[1].component_id, data.id);
+    assert_eq!(tracks[1].file_offset_bytes, 75 * RAW_SECTOR as u64);
+    assert_eq!(tracks[1].start_lba, 77, "the generated gap is on the disc");
+    assert_eq!(tracks[1].sector_count, 25);
+    assert_eq!(tracks[1].pregap_sectors, 2);
+}
+
+#[tokio::test]
+async fn a_cue_whose_bin_was_not_staged_imports_without_claiming_a_layout() {
+    // Half a dump. The sheet is worth keeping and the tracks are not known,
+    // and the manifest has to say both.
+    let (_dir, pipeline) = pipeline().await;
+    let import_id = ImportJobId::generate();
+    let area = pipeline.open_area(import_id).await.expect("area");
+    area.write(&path("disc.cue"), MIXED_MODE_SHEET)
+        .await
+        .expect("stage");
+
+    let mut checkpoint = ImportCheckpoint::default();
+    let outcome = pipeline
+        .run(&request(import_id, "disc.cue"), &mut checkpoint)
+        .await
+        .expect("import");
+
+    let manifest = pipeline
+        .manifests()
+        .read(outcome.artifact_id)
+        .await
+        .expect("read");
+
+    assert_eq!(manifest.classification.format, ArtifactFormat::CueBin);
+    assert_eq!(manifest.topology, Topology::Unknown);
+    assert_eq!(
+        manifest.validation.state,
+        ValidationState::ValidWithWarnings
+    );
+    assert!(
+        outcome
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("disc.bin")),
+        "the missing file must be named: {:?}",
+        outcome.warnings
+    );
+}
+
+#[tokio::test]
+async fn a_cue_naming_a_file_outside_staging_reaches_nothing() {
+    // The trust boundary, exercised through the whole pipeline rather than
+    // only in the resolver's own tests.
+    let (_dir, pipeline) = pipeline().await;
+    let import_id = ImportJobId::generate();
+    let area = pipeline.open_area(import_id).await.expect("area");
+    area.write(
+        &path("disc.cue"),
+        b"FILE \"../../../etc/passwd\" BINARY\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n",
+    )
+    .await
+    .expect("stage");
+    area.write(&path("disc.bin"), &vec![0_u8; RAW_SECTOR * 10])
+        .await
+        .expect("stage");
+
+    let mut checkpoint = ImportCheckpoint::default();
+    let outcome = pipeline
+        .run(&request(import_id, "disc.cue"), &mut checkpoint)
+        .await
+        .expect("import");
+
+    let manifest = pipeline
+        .manifests()
+        .read(outcome.artifact_id)
+        .await
+        .expect("read");
+
+    assert_eq!(manifest.topology, Topology::Unknown);
+    assert!(
+        manifest
+            .components
+            .iter()
+            .all(|component| matches!(component.logical_path.as_str(), "disc.cue" | "disc.bin")),
+        "only staged files may appear as components"
+    );
+    assert!(
+        manifest
+            .components
+            .iter()
+            .all(|component| component.role != ComponentRole::TrackData),
+        "nothing resolved, so nothing is a track"
+    );
+}
+
+#[tokio::test]
+async fn two_sheets_staged_together_are_not_guessed_apart() {
+    let (_dir, pipeline) = pipeline().await;
+    let import_id = ImportJobId::generate();
+    let area = pipeline.open_area(import_id).await.expect("area");
+    area.write(&path("disc1.cue"), MIXED_MODE_SHEET)
+        .await
+        .expect("stage");
+    area.write(&path("disc2.cue"), MIXED_MODE_SHEET)
+        .await
+        .expect("stage");
+    area.write(&path("disc.bin"), &vec![0_u8; RAW_SECTOR * 100])
+        .await
+        .expect("stage");
+
+    let mut checkpoint = ImportCheckpoint::default();
+    let outcome = pipeline
+        .run(&request(import_id, "disc1.cue"), &mut checkpoint)
+        .await
+        .expect("import");
+
+    let manifest = pipeline
+        .manifests()
+        .read(outcome.artifact_id)
+        .await
+        .expect("read");
+
+    assert_eq!(manifest.topology, Topology::Unknown);
+    assert!(
+        outcome
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("descriptors were staged together")),
+        "{:?}",
+        outcome.warnings
+    );
+}
+
+#[tokio::test]
+async fn an_iso_describes_its_own_structure() {
+    // The other half of topology: an image that is one flat track still says
+    // how big it is and what is inside it.
+    let (_dir, pipeline) = pipeline().await;
+    let import_id = ImportJobId::generate();
+    let area = pipeline.open_area(import_id).await.expect("area");
+    area.write(&path("disc.iso"), &iso_image("EXAMPLE_DISC", 20))
+        .await
+        .expect("stage");
+
+    let mut checkpoint = ImportCheckpoint::default();
+    let outcome = pipeline
+        .run(&request(import_id, "disc.iso"), &mut checkpoint)
+        .await
+        .expect("import");
+
+    let manifest = pipeline
+        .manifests()
+        .read(outcome.artifact_id)
+        .await
+        .expect("read");
+
+    let Topology::SingleTrackBlockImage {
+        block_size,
+        block_count,
+        volume_labels,
+        filesystems,
+    } = manifest.topology
+    else {
+        panic!(
+            "expected a block image topology, got {:?}",
+            manifest.topology
+        );
+    };
+    assert_eq!(block_size, 2048);
+    assert_eq!(block_count, 20);
+    assert_eq!(volume_labels, vec!["EXAMPLE_DISC".to_owned()]);
+    assert!(
+        filesystems
+            .iter()
+            .any(|found| found.filesystem_type == "iso9660")
     );
 }
