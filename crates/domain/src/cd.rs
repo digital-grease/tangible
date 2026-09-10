@@ -57,6 +57,14 @@ pub fn is_cd_profile(profile: &str) -> bool {
     profile.trim().to_ascii_uppercase().starts_with("CD")
 }
 
+/// Frames in one second, and therefore sectors: a frame is one block.
+///
+/// The constant every timecode in every CD descriptor is built from.
+pub const FRAMES_PER_SECOND: u64 = 75;
+
+/// Seconds in one minute of a timecode.
+pub const SECONDS_PER_MINUTE: u64 = 60;
+
 /// Most tracks a CD can hold.
 pub const MAX_TRACKS: u32 = 99;
 
@@ -132,5 +140,6 @@ mod tests {
         // off. Spelled out rather than trusted: the first version of this
         // constant was wrong by exactly that 150.
         assert_eq!(MAX_SECTORS, (79 * 60 + 59) * 75 + 74 - 150);
+        assert_eq!(FRAMES_PER_SECOND * SECONDS_PER_MINUTE, 4500);
     }
 }

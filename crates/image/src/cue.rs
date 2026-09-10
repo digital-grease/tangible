@@ -29,10 +29,7 @@ use std::fmt;
 use tangible_domain::LogicalPath;
 
 /// Frames in one second of CD audio, and therefore sectors.
-pub const FRAMES_PER_SECOND: u64 = 75;
-
-/// Seconds in one minute of a timecode.
-const SECONDS_PER_MINUTE: u64 = 60;
+pub use tangible_domain::cd::{FRAMES_PER_SECOND, SECONDS_PER_MINUTE};
 
 /// Largest descriptor this parser will read.
 ///

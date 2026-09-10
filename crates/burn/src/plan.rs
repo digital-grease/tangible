@@ -144,6 +144,23 @@ pub struct PlannedTrack {
     pub sector_count: u64,
     /// The whole gap before INDEX 01.
     pub pregap_sectors: u64,
+    /// Index points, as LBAs relative to the first sector present.
+    ///
+    /// Carried because a writer has to tell a gap the burner generates from
+    /// one the file holds, and the presence of an INDEX 00 is what says which
+    /// this is. The combined [`PlannedTrack::pregap_sectors`] cannot answer
+    /// that on its own.
+    #[serde(default)]
+    pub indexes: Vec<PlannedIndex>,
+}
+
+/// One index point within a track.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlannedIndex {
+    /// Index number. 0 is the pregap, 1 is the track proper.
+    pub number: u32,
+    /// LBA relative to the track's first present sector.
+    pub relative_lba: u64,
 }
 
 impl PlannedTrack {
@@ -157,6 +174,27 @@ impl PlannedTrack {
     #[must_use]
     pub fn is_audio(&self) -> bool {
         cd::is_audio(&self.mode)
+    }
+
+    /// Sectors of gap the file itself carries, before INDEX 01.
+    ///
+    /// An INDEX 00 says the gap is in the file. Without one there is nothing
+    /// in the file before the track proper, whatever gap the disc may have.
+    #[must_use]
+    pub fn in_file_pregap(&self) -> u64 {
+        if !self.indexes.iter().any(|index| index.number == 0) {
+            return 0;
+        }
+        self.indexes
+            .iter()
+            .find(|index| index.number == 1)
+            .map_or(0, |index| index.relative_lba)
+    }
+
+    /// Sectors of gap the writer has to generate, which are in no file.
+    #[must_use]
+    pub fn generated_pregap(&self) -> u64 {
+        self.pregap_sectors.saturating_sub(self.in_file_pregap())
     }
 }
 
@@ -733,6 +771,10 @@ mod tests {
             start_lba: 0,
             sector_count,
             pregap_sectors: 0,
+            indexes: vec![PlannedIndex {
+                number: 1,
+                relative_lba: 0,
+            }],
         }
     }
 

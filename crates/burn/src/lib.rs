@@ -11,6 +11,7 @@
 //! hardware-free engine backed by a file standing in for the disc. Real
 //! engine adapters follow.
 
+pub mod cdrdao;
 pub mod client;
 pub mod device_lock;
 pub mod engine;
@@ -20,6 +21,7 @@ pub mod runner;
 pub mod worker;
 pub mod xorriso;
 
+pub use cdrdao::{TocError, write_toc};
 pub use client::{
     Capabilities, ClientError, Completion, CompletionAck, DriveDescription, EngineDescription,
     Enrolled, FailureBody, Leased, PhysicalMediumBody, VerificationReportBody, WorkerClient,

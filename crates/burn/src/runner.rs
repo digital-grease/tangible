@@ -1188,6 +1188,14 @@ fn planned_tracks(
             start_lba: track.start_lba,
             sector_count: track.sector_count,
             pregap_sectors: track.pregap_sectors,
+            indexes: track
+                .indexes
+                .iter()
+                .map(|index| crate::plan::PlannedIndex {
+                    number: index.number,
+                    relative_lba: index.relative_lba,
+                })
+                .collect(),
         })
         .collect()
 }
