@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use tangible_domain::cd;
 use tangible_domain::{DriveId, Sha256Digest, WorkerId};
 
 /// Which drive an operation targets.
@@ -118,6 +119,47 @@ pub struct PlannedInput {
     pub length_bytes: u64,
 }
 
+/// One track of a CD layout, as the plan carries it.
+///
+/// The quantities mean what they mean in the manifest this was built from:
+/// `start_lba` is the image-relative disc position of the first sector present
+/// in the file, `sector_count` is how many sectors of the track that file
+/// holds, and `pregap_sectors` is the whole gap before INDEX 01 whether the
+/// burner generates it or the file carries it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlannedTrack {
+    /// Track number, one-based.
+    pub number: u32,
+    /// Session the track belongs to.
+    pub session: u32,
+    /// Mode as the descriptor wrote it, e.g. `AUDIO` or `MODE2/2352`.
+    pub mode: String,
+    /// Which of the plan's inputs holds the bytes, by index.
+    pub input: usize,
+    /// Byte offset within that input.
+    pub file_offset_bytes: u64,
+    /// Image-relative disc position of the first sector present.
+    pub start_lba: u64,
+    /// Sectors of the track the input holds.
+    pub sector_count: u64,
+    /// The whole gap before INDEX 01.
+    pub pregap_sectors: u64,
+}
+
+impl PlannedTrack {
+    /// Bytes this track occupies in its input, when the mode is known.
+    #[must_use]
+    pub fn byte_length(&self) -> Option<u64> {
+        cd::sector_bytes(&self.mode).map(|bytes| self.sector_count.saturating_mul(u64::from(bytes)))
+    }
+
+    /// Whether the track carries audio.
+    #[must_use]
+    pub fn is_audio(&self) -> bool {
+        cd::is_audio(&self.mode)
+    }
+}
+
 /// What kind of write to perform.
 ///
 /// A closed set. There is no "other" variant carrying arbitrary options,
@@ -142,6 +184,12 @@ pub struct BurnPlan {
     pub drive: DriveRef,
     /// Files to write, in order.
     pub inputs: Vec<PlannedInput>,
+    /// Tracks, for a disc described as tracks rather than as one image.
+    ///
+    /// Empty for a block image, which is the shape an ISO has: one input, one
+    /// track, nothing to say about it that the input does not already say.
+    #[serde(default)]
+    pub tracks: Vec<PlannedTrack>,
     /// How to write them.
     pub mode: WriteMode,
     /// Media profiles this plan is valid for.
@@ -164,9 +212,180 @@ impl BurnPlan {
     ///
     /// Overburning is not offered, so a plan that does not fit simply does not
     /// proceed.
+    ///
+    /// Bytes, which is the right unit for a block image and the wrong one for
+    /// a track layout: a raw 2352 byte sector on a disc whose profile reports
+    /// 2048 byte blocks would make a full CD look oversized by a sixth. Use
+    /// [`BurnPlan::capacity_failures`], which asks the right question for the
+    /// shape it is given.
     #[must_use]
     pub const fn fits_on(&self, medium: &MediumInfo) -> bool {
         self.total_bytes <= medium.free_bytes()
+    }
+
+    /// Whether this plan describes a disc as tracks.
+    #[must_use]
+    pub fn is_track_layout(&self) -> bool {
+        !self.tracks.is_empty()
+    }
+
+    /// Sectors the layout occupies, generated pregaps included.
+    ///
+    /// The gap a PREGAP command asks for is not in any file and still takes up
+    /// the disc, so a capacity check that counted only file bytes would
+    /// under-count a mixed-mode disc by two seconds per audio track.
+    #[must_use]
+    pub fn required_sectors(&self) -> u64 {
+        self.tracks
+            .iter()
+            .map(|track| track.sector_count.saturating_add(track.pregap_sectors))
+            .fold(0, u64::saturating_add)
+    }
+
+    /// Checks that hold whatever is in the drive.
+    ///
+    /// Run before an operator is asked for a disc. A layout that could never
+    /// be written should not spend half an hour waiting for media first, and
+    /// none of these answers change when a disc appears.
+    #[must_use]
+    pub fn check_layout(&self) -> Vec<PreflightFailure> {
+        let mut failures = Vec::new();
+        if !self.is_track_layout() {
+            return failures;
+        }
+
+        if self.tracks.len() > cd::MAX_TRACKS as usize {
+            failures.push(PreflightFailure::TooManyTracks {
+                count: self.tracks.len(),
+            });
+        }
+
+        let sessions = self
+            .tracks
+            .iter()
+            .map(|track| track.session)
+            .max()
+            .unwrap_or(1);
+        if sessions > 1 {
+            failures.push(PreflightFailure::MultisessionUnsupported { sessions });
+        }
+
+        let required_sectors = self.required_sectors();
+        if required_sectors > cd::MAX_SECTORS {
+            failures.push(PreflightFailure::ExceedsCdCapacity {
+                required_sectors,
+                available_sectors: cd::MAX_SECTORS,
+            });
+        }
+
+        for track in &self.tracks {
+            let Some(byte_length) = track.byte_length() else {
+                failures.push(PreflightFailure::UnknownTrackMode {
+                    track: track.number,
+                    mode: track.mode.clone(),
+                });
+                continue;
+            };
+            let Some(input) = self.inputs.get(track.input) else {
+                failures.push(PreflightFailure::TrackInputMissing {
+                    track: track.number,
+                });
+                continue;
+            };
+            // The offset and the length are both from the descriptor and the
+            // length is from the file. A disagreement means the disc being
+            // described is not the disc being carried.
+            let needs_bytes = track.file_offset_bytes.saturating_add(byte_length);
+            if needs_bytes > input.length_bytes {
+                failures.push(PreflightFailure::TrackOutsideInput {
+                    track: track.number,
+                    needs_bytes,
+                    input_bytes: input.length_bytes,
+                });
+            }
+        }
+
+        failures
+    }
+
+    /// Capacity checks against the medium actually in the drive.
+    ///
+    /// Sectors for a track layout and bytes for a block image, because those
+    /// are the units each is written in.
+    #[must_use]
+    pub fn capacity_failures(&self, medium: &MediumInfo) -> Vec<PreflightFailure> {
+        let mut failures = Vec::new();
+        if !self.is_track_layout() {
+            if !self.fits_on(medium) {
+                failures.push(PreflightFailure::InsufficientCapacity {
+                    required_bytes: self.total_bytes,
+                    available_bytes: medium.free_bytes(),
+                });
+            }
+            return failures;
+        }
+
+        if !cd::is_cd_profile(&medium.profile) {
+            failures.push(PreflightFailure::TrackLayoutNeedsACd {
+                found: medium.profile.clone(),
+            });
+        }
+
+        // A CD's block count is its sector count whatever user-data size the
+        // profile reports per block, so this comparison is in the same units
+        // on both sides.
+        let required_sectors = self.required_sectors();
+        if required_sectors > medium.free_blocks {
+            failures.push(PreflightFailure::InsufficientCapacity {
+                required_bytes: self.total_bytes,
+                available_bytes: medium.free_bytes(),
+            });
+        }
+
+        failures
+    }
+
+    /// Observations worth putting in front of an operator before a burn.
+    ///
+    /// Not failures. Each of these describes a disc that will be written and
+    /// will not be quite the disc the descriptor came from, which is a thing
+    /// to know beforehand rather than to discover afterwards.
+    #[must_use]
+    pub fn layout_warnings(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        if !self.is_track_layout() {
+            return warnings;
+        }
+
+        if self.tracks.iter().any(PlannedTrack::is_audio) {
+            // Said here because preflight is the last moment before
+            // media is consumed, and it is the operator's decision to make.
+            warnings.push(
+                "audio tracks are verified by length and error reporting rather than by \
+                 comparing bytes: without a per-drive offset a byte comparison fails on \
+                 correct hardware"
+                    .to_owned(),
+            );
+        }
+
+        // A CUE/BIN pair cannot carry subchannel data, so anything that lived
+        // there is not on the disc this writes.
+        warnings.push(
+            "a disc written from a track descriptor carries no subchannel data, so CD+G \
+             graphics and subchannel-based protections are not reproduced"
+                .to_owned(),
+        );
+
+        let required_sectors = self.required_sectors();
+        if required_sectors > cd::REDBOOK_SECTORS {
+            warnings.push(format!(
+                "the layout needs {required_sectors} sectors, more than the {} of a 74 minute \
+                 disc; it needs 80 minute media",
+                cd::REDBOOK_SECTORS
+            ));
+        }
+
+        warnings
     }
 }
 
@@ -223,6 +442,73 @@ pub enum PreflightFailure {
     InputMissing {
         /// The input.
         path: String,
+    },
+    /// A track names a mode nothing here knows the sector size of.
+    ///
+    /// Without a sector size there is no way to say where the track's bytes
+    /// are, and writing it would be writing an offset nobody computed.
+    UnknownTrackMode {
+        /// The track.
+        track: u32,
+        /// The mode as the descriptor wrote it.
+        mode: String,
+    },
+    /// A track's bytes are not inside the file that is supposed to hold them.
+    ///
+    /// A topology and its components disagreeing, which is how a burn comes to
+    /// write whatever happened to be at that offset.
+    TrackOutsideInput {
+        /// The track.
+        track: u32,
+        /// Where the track ends, in bytes into the file.
+        needs_bytes: u64,
+        /// How long the file actually is.
+        input_bytes: u64,
+    },
+    /// A track refers to an input the plan does not carry.
+    TrackInputMissing {
+        /// The track.
+        track: u32,
+    },
+    /// More tracks than a CD can hold.
+    TooManyTracks {
+        /// How many were planned.
+        count: usize,
+    },
+    /// The layout spans more than one session.
+    ///
+    /// Multisession writing is a capability this project has not built. The
+    /// disc would be written as one session, which is a different disc from
+    /// the one the manifest describes.
+    MultisessionUnsupported {
+        /// How many sessions the layout spans.
+        sessions: u32,
+    },
+    /// The layout is longer than a CD.
+    ///
+    /// Separate from [`PreflightFailure::InsufficientCapacity`], which is
+    /// about the disc that happens to be in the drive. This one is about every
+    /// disc there is.
+    ExceedsCdCapacity {
+        /// Sectors the layout needs.
+        required_sectors: u64,
+        /// Sectors the largest CD this project will write holds.
+        available_sectors: u64,
+    },
+    /// The engine cannot write this shape of disc.
+    ///
+    /// The check that stops a mixed-mode CD being handed to an engine that
+    /// would flatten it into a single data track.
+    WriteModeUnsupported {
+        /// What the plan needs.
+        mode: WriteMode,
+        /// The engine that cannot do it.
+        engine: String,
+    },
+    /// A track layout on a medium that is not a CD.
+    TrackLayoutNeedsACd {
+        /// The profile in the drive.
+        found: String,
     },
 }
 
@@ -338,6 +624,7 @@ mod tests {
                 drive_id: DriveId::generate(),
                 device_alias: "/dev/disc-block".to_owned(),
             },
+            tracks: Vec::new(),
             inputs: vec![],
             mode: WriteMode::DataDiscAtOnce,
             accepted_profiles: vec!["CD-R".to_owned()],
@@ -416,5 +703,216 @@ mod tests {
         let json = serde_json::to_string(&WriteMode::TocDiscAtOnce).expect("serialize");
         assert_eq!(json, "\"toc_disc_at_once\"");
         assert!(serde_json::from_str::<WriteMode>("\"raw_passthrough\"").is_err());
+    }
+
+    // --- track layouts ---------------------------------------------------------
+
+    /// A plan for `sizes` inputs and the tracks laid over them.
+    fn track_plan(sizes: &[u64], tracks: Vec<PlannedTrack>) -> BurnPlan {
+        let mut built = plan(sizes.iter().copied().fold(0, u64::saturating_add));
+        built.inputs = sizes
+            .iter()
+            .map(|length| PlannedInput {
+                staged_path: PathBuf::from("/staged/track.bin"),
+                sha256: Sha256Digest::from_bytes([0; 32]),
+                length_bytes: *length,
+            })
+            .collect();
+        built.mode = WriteMode::TocDiscAtOnce;
+        built.tracks = tracks;
+        built
+    }
+
+    fn track(number: u32, mode: &str, sector_count: u64) -> PlannedTrack {
+        PlannedTrack {
+            number,
+            session: 1,
+            mode: mode.to_owned(),
+            input: 0,
+            file_offset_bytes: 0,
+            start_lba: 0,
+            sector_count,
+            pregap_sectors: 0,
+        }
+    }
+
+    #[test]
+    fn a_block_image_has_no_layout_to_object_to() {
+        assert!(plan(100).check_layout().is_empty());
+        assert!(plan(100).layout_warnings().is_empty());
+        assert_eq!(plan(100).required_sectors(), 0);
+    }
+
+    #[test]
+    fn a_coherent_layout_passes() {
+        let built = track_plan(&[2352 * 100], vec![track(1, "AUDIO", 100)]);
+
+        assert!(
+            built.check_layout().is_empty(),
+            "{:?}",
+            built.check_layout()
+        );
+        assert_eq!(built.required_sectors(), 100);
+    }
+
+    #[test]
+    fn a_track_that_runs_past_its_file_is_refused() {
+        // A topology and its components disagreeing. Writing it would put
+        // whatever happened to be at that offset onto a disc.
+        let built = track_plan(&[2352 * 50], vec![track(1, "AUDIO", 100)]);
+
+        assert!(matches!(
+            built.check_layout().as_slice(),
+            [PreflightFailure::TrackOutsideInput { track: 1, .. }]
+        ));
+    }
+
+    #[test]
+    fn a_mode_with_no_known_sector_size_is_refused() {
+        let built = track_plan(&[2352 * 100], vec![track(1, "MODE9/9999", 100)]);
+
+        assert!(matches!(
+            built.check_layout().as_slice(),
+            [PreflightFailure::UnknownTrackMode { track: 1, .. }]
+        ));
+    }
+
+    #[test]
+    fn a_track_naming_an_input_the_plan_does_not_have_is_refused() {
+        let mut orphan = track(1, "AUDIO", 10);
+        orphan.input = 7;
+        let built = track_plan(&[2352 * 100], vec![orphan]);
+
+        assert!(matches!(
+            built.check_layout().as_slice(),
+            [PreflightFailure::TrackInputMissing { track: 1 }]
+        ));
+    }
+
+    #[test]
+    fn more_tracks_than_a_cd_holds_is_refused() {
+        let tracks = (1..=100).map(|n| track(n, "AUDIO", 1)).collect();
+        let built = track_plan(&[2352 * 1000], tracks);
+
+        assert!(
+            built
+                .check_layout()
+                .iter()
+                .any(|failure| matches!(failure, PreflightFailure::TooManyTracks { count: 100 }))
+        );
+    }
+
+    #[test]
+    fn a_layout_spanning_sessions_is_refused_rather_than_flattened() {
+        // Written as one session it would be a different disc from the one the
+        // manifest describes, and it would look like it worked.
+        let mut second = track(2, "AUDIO", 10);
+        second.session = 2;
+        let built = track_plan(&[2352 * 100], vec![track(1, "AUDIO", 10), second]);
+
+        assert!(built.check_layout().iter().any(|failure| matches!(
+            failure,
+            PreflightFailure::MultisessionUnsupported { sessions: 2 }
+        )));
+    }
+
+    #[test]
+    fn a_layout_longer_than_any_cd_is_refused_before_a_disc_is_asked_for() {
+        let built = track_plan(
+            &[2352 * (cd::MAX_SECTORS + 10)],
+            vec![track(1, "AUDIO", cd::MAX_SECTORS + 10)],
+        );
+
+        assert!(
+            built
+                .check_layout()
+                .iter()
+                .any(|failure| matches!(failure, PreflightFailure::ExceedsCdCapacity { .. }))
+        );
+    }
+
+    #[test]
+    fn a_generated_pregap_takes_up_the_disc_without_taking_up_a_file() {
+        let mut second = track(2, "AUDIO", 10);
+        second.pregap_sectors = 150;
+        let built = track_plan(&[2352 * 100], vec![track(1, "AUDIO", 10), second]);
+
+        assert_eq!(built.required_sectors(), 170);
+    }
+
+    #[test]
+    fn a_full_cd_of_raw_sectors_is_not_called_oversized() {
+        // The regression this check exists for. A raw 2352 byte sector on a
+        // medium that reports 2048 byte blocks makes a full disc look a sixth
+        // too big, and a byte comparison would refuse to write a disc that
+        // fits perfectly well.
+        let sectors = 300_000;
+        let built = track_plan(&[2352 * sectors], vec![track(1, "AUDIO", sectors)]);
+
+        assert!(
+            !built.fits_on(&medium(sectors)),
+            "the byte comparison is wrong"
+        );
+        assert!(
+            built.capacity_failures(&medium(sectors)).is_empty(),
+            "the sector comparison is right"
+        );
+    }
+
+    #[test]
+    fn a_layout_that_does_not_fit_the_disc_in_the_drive_is_still_refused() {
+        let built = track_plan(&[2352 * 1000], vec![track(1, "AUDIO", 1000)]);
+
+        assert!(
+            built.capacity_failures(&medium(500)).iter().any(|failure| {
+                matches!(failure, PreflightFailure::InsufficientCapacity { .. })
+            })
+        );
+    }
+
+    #[test]
+    fn a_track_layout_will_not_go_on_a_dvd() {
+        let built = track_plan(&[2352 * 10], vec![track(1, "AUDIO", 10)]);
+        let mut dvd = medium(1_000_000);
+        dvd.profile = "DVD-R".to_owned();
+
+        assert!(
+            built
+                .capacity_failures(&dvd)
+                .iter()
+                .any(|failure| { matches!(failure, PreflightFailure::TrackLayoutNeedsACd { .. }) })
+        );
+    }
+
+    #[test]
+    fn the_operator_is_told_what_the_disc_will_not_be() {
+        let built = track_plan(&[2352 * 100], vec![track(1, "AUDIO", 100)]);
+
+        let warnings = built.layout_warnings();
+        assert!(
+            warnings.iter().any(|warning| warning.contains("audio")),
+            "audio verification is not a byte comparison: {warnings:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("subchannel")),
+            "a descriptor carries no subchannel data: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn a_disc_past_seventy_four_minutes_says_it_needs_longer_media() {
+        let sectors = cd::REDBOOK_SECTORS + 1;
+        let built = track_plan(&[2352 * sectors], vec![track(1, "AUDIO", sectors)]);
+
+        assert!(
+            built
+                .layout_warnings()
+                .iter()
+                .any(|warning| warning.contains("80 minute")),
+            "{:?}",
+            built.layout_warnings()
+        );
     }
 }

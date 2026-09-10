@@ -65,6 +65,7 @@ fn plan(staged: &Path, target: &Path, bytes: &[u8]) -> BurnPlan {
             sha256: digest_of(bytes),
             length_bytes: bytes.len() as u64,
         }],
+        tracks: Vec::new(),
         mode: WriteMode::DataDiscAtOnce,
         accepted_profiles: vec![],
         speed: None,
@@ -300,4 +301,17 @@ async fn trouble_after_a_completed_write_is_recorded_without_being_called_a_fail
             "the engine's account and the disc disagree: {report:?}"
         );
     }
+}
+
+#[test]
+fn xorriso_will_not_pretend_to_write_a_table_of_contents() {
+    // There are two engines because this one writes prepared images and
+    // does not write per-track modes, audio and exact pregaps. Saying so is
+    // what stops a mixed-mode CD being flattened into one data track by an
+    // engine that would happily accept it.
+    let engine = XorrisoEngine::new();
+
+    assert!(engine.supports_mode(WriteMode::DataDiscAtOnce));
+    assert!(engine.supports_mode(WriteMode::DataTrackAtOnce));
+    assert!(!engine.supports_mode(WriteMode::TocDiscAtOnce));
 }

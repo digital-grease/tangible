@@ -16,7 +16,7 @@ use async_trait::async_trait;
 
 use crate::plan::{
     BlankReport, BlankRequest, BurnPlan, DriveCapabilities, DriveRef, MediumInfo, PreflightReport,
-    VerifyReport, WriteReport,
+    VerifyReport, WriteMode, WriteReport,
 };
 
 /// Something an engine reports while working.
@@ -221,6 +221,15 @@ pub trait BurnEngine: Send + Sync {
     /// Answered by every engine rather than defaulted, so a new adapter that
     /// does drive a laser cannot inherit its way out of the claim.
     fn uses_hardware(&self) -> bool;
+
+    /// Whether this engine can write a disc of the given shape.
+    ///
+    /// Asked before media is consumed. An engine that writes prepared images
+    /// cannot write a table of contents with per-track modes and exact
+    /// pregaps, and the failure mode if nobody asks is not an error: it is a
+    /// mixed-mode CD silently flattened into one data track, which looks like
+    /// a successful burn and is a ruined disc.
+    fn supports_mode(&self, mode: WriteMode) -> bool;
 
     /// What the drive reports it can do.
     ///

@@ -443,6 +443,7 @@ fn plan(
             sha256: digest,
             length_bytes: bytes,
         }],
+        tracks: Vec::new(),
         mode: WriteMode::DataDiscAtOnce,
         accepted_profiles: vec!["CD-R".to_owned()],
         speed: None,

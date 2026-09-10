@@ -34,6 +34,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+use crate::cd;
 use crate::digest::Sha256Digest;
 use crate::enums::{
     ArtifactFormat, ArtifactKind, ArtifactOrigin, DiscRelationship, LossCharacter, MediaFamily,
@@ -84,6 +85,44 @@ pub enum ManifestError {
         path: String,
         /// The key recorded in the manifest.
         key: String,
+    },
+
+    /// The topology names a component the manifest does not carry.
+    ///
+    /// A manifest written by another tool is exactly as untrusted as the
+    /// descriptor it came from. A track pointing at a component that is not
+    /// here would have a burn planner reading bytes it does not have, and the
+    /// place to refuse it is on the way in.
+    #[error("{what} names component {component_id}, which the manifest does not list")]
+    TopologyComponentMissing {
+        /// What named it, e.g. `track 3` or `the descriptor`.
+        what: String,
+        /// The identifier that was named.
+        component_id: ComponentId,
+    },
+
+    /// Two tracks claim one number.
+    #[error("duplicate track number {number}")]
+    DuplicateTrack {
+        /// The repeated number.
+        number: u32,
+    },
+
+    /// A track number outside what a CD can hold.
+    #[error("track number {number} is outside 1 to {}", cd::MAX_TRACKS)]
+    TrackNumberOutOfRange {
+        /// The offending number.
+        number: u32,
+    },
+
+    /// A track that occupies no sectors.
+    ///
+    /// Nothing to write and nothing to read back, which means a plan built
+    /// from it would silently skip a track the manifest says exists.
+    #[error("track {number} declares no sectors")]
+    EmptyTrack {
+        /// The offending track.
+        number: u32,
     },
 
     /// The manifest declares a component count or size that disagrees with the
@@ -543,6 +582,7 @@ impl ArtifactManifest {
 
         let mut seen_ordinals = std::collections::BTreeSet::new();
         let mut seen_paths = std::collections::BTreeSet::new();
+        let mut seen_ids = std::collections::BTreeSet::new();
         let mut total: u64 = 0;
 
         for component in &self.components {
@@ -563,6 +603,7 @@ impl ArtifactManifest {
                     key: component.storage.object_key.clone(),
                 });
             }
+            seen_ids.insert(component.id);
             total = total.saturating_add(component.length_bytes);
         }
 
@@ -580,6 +621,61 @@ impl ArtifactManifest {
             && lineage.parent_artifact_id == self.artifact_id
         {
             return Err(ManifestError::SelfParent);
+        }
+
+        self.validate_topology(&seen_ids)?;
+
+        Ok(())
+    }
+
+    /// Check that a track topology describes components this manifest carries.
+    ///
+    /// The rest of validation asks whether the document is internally
+    /// consistent. This asks the same question of the part a burn planner
+    /// reads, which is the part where being wrong costs a disc.
+    fn validate_topology(
+        &self,
+        seen_ids: &std::collections::BTreeSet<ComponentId>,
+    ) -> Result<(), ManifestError> {
+        let Topology::CdTracks {
+            descriptor_component_id,
+            tracks,
+            ..
+        } = &self.topology
+        else {
+            return Ok(());
+        };
+
+        if !seen_ids.contains(descriptor_component_id) {
+            return Err(ManifestError::TopologyComponentMissing {
+                what: "the descriptor".to_owned(),
+                component_id: *descriptor_component_id,
+            });
+        }
+
+        let mut numbers = std::collections::BTreeSet::new();
+        for track in tracks {
+            if track.number == 0 || track.number > cd::MAX_TRACKS {
+                return Err(ManifestError::TrackNumberOutOfRange {
+                    number: track.number,
+                });
+            }
+            if !numbers.insert(track.number) {
+                return Err(ManifestError::DuplicateTrack {
+                    number: track.number,
+                });
+            }
+            if track.sector_count == 0 {
+                return Err(ManifestError::EmptyTrack {
+                    number: track.number,
+                });
+            }
+            if !seen_ids.contains(&track.component_id) {
+                return Err(ManifestError::TopologyComponentMissing {
+                    what: format!("track {}", track.number),
+                    component_id: track.component_id,
+                });
+            }
         }
 
         Ok(())
@@ -863,6 +959,106 @@ mod tests {
             json.contains("\"created_at\": \"1970-01-01T00:00:00Z\""),
             "expected an RFC 3339 UTC timestamp, got: {json}"
         );
+    }
+
+    /// A manifest carrying one CUE-shaped track, for the validation tests.
+    fn with_one_track(sector_count: u64, number: u32) -> ArtifactManifest {
+        let mut manifest = manifest(vec![component(0, "d.cue", 1, 5)]);
+        let component_id = manifest.components[0].id;
+        manifest.topology = Topology::CdTracks {
+            descriptor_component_id: component_id,
+            session_count: 1,
+            tracks: vec![Track {
+                number,
+                session: 1,
+                mode: "MODE2/2352".to_owned(),
+                component_id,
+                file_offset_bytes: 0,
+                start_lba: 0,
+                sector_count,
+                pregap_sectors: 0,
+                indexes: vec![],
+                hashes: BTreeMap::new(),
+            }],
+            subchannel: None,
+        };
+        manifest
+    }
+
+    #[test]
+    fn a_track_pointing_at_a_component_that_is_not_here_is_refused() {
+        // A manifest from another tool is as untrusted as the descriptor it
+        // came from. A burn planner reading this would fetch bytes the
+        // manifest does not carry.
+        let mut manifest = with_one_track(10, 1);
+        let Topology::CdTracks { tracks, .. } = &mut manifest.topology else {
+            panic!("built with tracks");
+        };
+        tracks[0].component_id = ComponentId::generate();
+
+        assert!(matches!(
+            manifest.validate(),
+            Err(ManifestError::TopologyComponentMissing { .. })
+        ));
+    }
+
+    #[test]
+    fn a_descriptor_that_is_not_a_component_is_refused() {
+        let mut manifest = with_one_track(10, 1);
+        let Topology::CdTracks {
+            descriptor_component_id,
+            ..
+        } = &mut manifest.topology
+        else {
+            panic!("built with tracks");
+        };
+        *descriptor_component_id = ComponentId::generate();
+
+        assert!(matches!(
+            manifest.validate(),
+            Err(ManifestError::TopologyComponentMissing { .. })
+        ));
+    }
+
+    #[test]
+    fn a_track_that_occupies_no_sectors_is_refused() {
+        // A plan built from it would skip a track the manifest says exists.
+        assert!(matches!(
+            with_one_track(0, 1).validate(),
+            Err(ManifestError::EmptyTrack { number: 1 })
+        ));
+    }
+
+    #[test]
+    fn a_track_number_no_cd_could_have_is_refused() {
+        assert!(matches!(
+            with_one_track(10, 0).validate(),
+            Err(ManifestError::TrackNumberOutOfRange { number: 0 })
+        ));
+        assert!(matches!(
+            with_one_track(10, 100).validate(),
+            Err(ManifestError::TrackNumberOutOfRange { number: 100 })
+        ));
+    }
+
+    #[test]
+    fn two_tracks_with_one_number_are_refused() {
+        let mut manifest = with_one_track(10, 1);
+        let Topology::CdTracks { tracks, .. } = &mut manifest.topology else {
+            panic!("built with tracks");
+        };
+        let duplicate = tracks[0].clone();
+        tracks.push(duplicate);
+
+        assert!(matches!(
+            manifest.validate(),
+            Err(ManifestError::DuplicateTrack { number: 1 })
+        ));
+    }
+
+    #[test]
+    fn a_coherent_track_topology_validates() {
+        with_one_track(10, 1).validate().expect("valid");
     }
 
     #[test]

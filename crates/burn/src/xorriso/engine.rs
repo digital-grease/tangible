@@ -37,7 +37,7 @@ use crate::engine::{BurnEngine, BurnEvent, EngineError, EventSink};
 use crate::fake::CancelToken;
 use crate::plan::{
     BlankReport, BlankRequest, BurnPlan, DriveCapabilities, DriveRef, MediumInfo, PreflightFailure,
-    PreflightReport, VerifyReport, WriteReport,
+    PreflightReport, VerifyReport, WriteMode, WriteReport,
 };
 use crate::xorriso::{command, parse};
 
@@ -281,6 +281,15 @@ impl BurnEngine for XorrisoEngine {
         true
     }
 
+    /// Data images only.
+    ///
+    /// xorriso writes a prepared image to a disc. It does not write a table of
+    /// contents with per-track modes, audio tracks and exact pregaps, which is
+    /// what cdrdao is for and why there are two engines rather than one.
+    fn supports_mode(&self, mode: WriteMode) -> bool {
+        matches!(mode, WriteMode::DataDiscAtOnce | WriteMode::DataTrackAtOnce)
+    }
+
     async fn probe_drive(&self, drive: &DriveRef) -> Result<DriveCapabilities, EngineError> {
         self.check_cancelled()?;
         let run = self.run(&command::devices(), PROBE_TIMEOUT).await?;
@@ -362,12 +371,11 @@ impl BurnEngine for XorrisoEngine {
                 accepted: plan.accepted_profiles.clone(),
             });
         }
-        if !plan.fits_on(&medium) {
-            failures.push(PreflightFailure::InsufficientCapacity {
-                required_bytes: plan.total_bytes,
-                available_bytes: medium.free_bytes(),
-            });
-        }
+        // Sectors for a track layout, bytes for a block image. The plan knows
+        // which it is; an engine counting bytes would call a full CD oversized
+        // by a sixth because its raw sectors are larger than the blocks the
+        // profile reports.
+        failures.extend(plan.capacity_failures(&medium));
 
         // The check that makes "hash verified before write" a fact rather than
         // an intention. Bytes staged an hour ago may not be the bytes on disk

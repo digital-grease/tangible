@@ -14,6 +14,7 @@
 //! repositories in epic E2.
 
 pub mod burn;
+pub mod cd;
 pub mod digest;
 pub mod enums;
 pub mod id;

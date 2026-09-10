@@ -66,6 +66,7 @@ fn plan_for(fixture: &Fixture) -> BurnPlan {
             sha256: digest_of(&fixture.payload),
             length_bytes: fixture.payload.len() as u64,
         }],
+        tracks: Vec::new(),
         mode: WriteMode::DataDiscAtOnce,
         accepted_profiles: vec!["CD-R".to_owned()],
         speed: None,

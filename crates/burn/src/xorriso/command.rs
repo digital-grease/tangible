@@ -177,6 +177,7 @@ mod tests {
             attempt_id: BurnAttemptId::generate(),
             drive: drive("/dev/disc-block"),
             inputs,
+            tracks: Vec::new(),
             mode: WriteMode::DataDiscAtOnce,
             accepted_profiles: vec!["CD-R".to_owned()],
             speed: None,

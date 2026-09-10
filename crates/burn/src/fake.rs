@@ -29,7 +29,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::engine::{BurnEngine, BurnEvent, EngineError, EventSink};
 use crate::plan::{
     BlankReport, BlankRequest, BurnPlan, DriveCapabilities, DriveRef, MediumInfo, PreflightFailure,
-    PreflightReport, VerifyReport, WriteReport,
+    PreflightReport, VerifyReport, WriteMode, WriteReport,
 };
 
 /// How the fake engine should misbehave.
@@ -190,6 +190,12 @@ impl BurnEngine for FakeEngine {
         false
     }
 
+    /// Every shape. The fake engine exists to exercise the paths around it,
+    /// and an engine that refused work would exercise fewer of them.
+    fn supports_mode(&self, _mode: WriteMode) -> bool {
+        true
+    }
+
     async fn probe_drive(&self, drive: &DriveRef) -> Result<DriveCapabilities, EngineError> {
         if self.behaviour.drive_unavailable {
             return Err(EngineError::DriveUnavailable {
@@ -266,12 +272,9 @@ impl BurnEngine for FakeEngine {
                 accepted: plan.accepted_profiles.clone(),
             });
         }
-        if !plan.fits_on(&medium) {
-            failures.push(PreflightFailure::InsufficientCapacity {
-                required_bytes: plan.total_bytes,
-                available_bytes: medium.free_bytes(),
-            });
-        }
+        // Sectors for a track layout, bytes for a block image. Asked of the
+        // plan so the fake engine agrees with the real one about what fits.
+        failures.extend(plan.capacity_failures(&medium));
 
         // Re-verify every input against its recorded digest. This is what
         // makes "hash verified before write" a fact rather than an intention:

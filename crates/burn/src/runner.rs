@@ -637,6 +637,52 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         Ok(())
     }
 
+    /// Refuse a layout no disc could rescue, before asking for one.
+    ///
+    /// None of these answers change when media appears, so asking now saves an
+    /// operator half an hour of waiting for a disc that was never going to be
+    /// accepted. The warnings are emitted on the way past, because a track
+    /// descriptor cannot carry subchannel data and audio cannot be verified
+    /// byte for byte, and both are better known while the media is still a
+    /// decision than explained afterwards.
+    fn refuse_impossible_layout(
+        &self,
+        plan: &BurnPlan,
+        buffer: &Arc<std::sync::Mutex<EventBuffer>>,
+    ) -> Option<AttemptOutcome> {
+        let mut refusals = plan.check_layout();
+        if !self.engine.supports_mode(plan.mode) {
+            refusals.push(PreflightFailure::WriteModeUnsupported {
+                mode: plan.mode,
+                engine: self.engine.name().to_owned(),
+            });
+        }
+
+        if refusals.is_empty() {
+            for warning in plan.layout_warnings() {
+                warn(
+                    buffer,
+                    WorkerStage::Preflighting,
+                    "LAYOUT_LIMITATION",
+                    &warning,
+                );
+            }
+            return None;
+        }
+
+        note(buffer, WorkerStage::Preflighting, "PREFLIGHT_FAILED");
+        Some(AttemptOutcome {
+            write: write_report_body("not_attempted", self.engine.name(), &self.engine.version()),
+            verification: None,
+            medium: PhysicalMediumBody {
+                profile: "unknown".to_owned(),
+                manufacturer_id: None,
+                serial: None,
+            },
+            failure: Some(failure_of(&refusals)),
+        })
+    }
+
     /// Stage, preflight, write and verify. The part that touches media.
     async fn attempt(
         &self,
@@ -673,6 +719,11 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         let mut plan = self
             .stage(lease, attempt_id, artifact_id, &drive, buffer)
             .await?;
+
+        // --- what cannot work whatever disc appears -------------------------
+        if let Some(refused) = self.refuse_impossible_layout(&plan, buffer) {
+            return Ok(refused);
+        }
 
         // --- preflight, and waiting for a disc ------------------------------
         let preflight = self.wait_for_media(&mut plan, buffer).await?;
@@ -864,6 +915,8 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             .await?;
 
         let mut inputs = Vec::with_capacity(manifest.components.len());
+        let mut input_of: std::collections::BTreeMap<tangible_domain::ComponentId, usize> =
+            std::collections::BTreeMap::new();
         for component in &manifest.components {
             let destination = self
                 .staging_root()
@@ -878,6 +931,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
                     &destination,
                 )
                 .await?;
+            input_of.insert(component.id, inputs.len());
             inputs.push(PlannedInput {
                 staged_path: destination,
                 sha256: component.content.sha256,
@@ -886,12 +940,22 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         }
         note(buffer, WorkerStage::Staging, "STAGING_COMPLETE");
 
+        let tracks = planned_tracks(&manifest.topology, &input_of);
         let total_bytes = inputs.iter().map(|input| input.length_bytes).sum();
         Ok(BurnPlan {
             attempt_id,
             drive: drive.clone(),
             inputs,
-            mode: WriteMode::DataDiscAtOnce,
+            // A disc described as tracks has to be written as a whole table of
+            // contents in one pass. Track-at-once inserts its own two second
+            // gaps and cannot honour an INDEX 00, so a mixed-mode disc written
+            // that way is a different disc from the one described.
+            mode: if tracks.is_empty() {
+                WriteMode::DataDiscAtOnce
+            } else {
+                WriteMode::TocDiscAtOnce
+            },
+            tracks,
             // Empty when the job named no profile. Preflight fills it in
             // from the disc actually in the drive, because a plan that
             // accepts nothing would refuse every medium.
@@ -1095,6 +1159,63 @@ fn waiting_on_media(failures: &[PreflightFailure]) -> bool {
         })
 }
 
+/// Turn a manifest's topology into the tracks a plan carries.
+///
+/// A topology naming a component the manifest does not list is refused by
+/// manifest validation before this runs, so the lookup cannot normally miss.
+/// When it does, the track is kept with an input index that cannot resolve
+/// rather than dropped: a plan quietly missing a track would write a disc
+/// missing a track, and preflight is where that should be said out loud.
+fn planned_tracks(
+    topology: &tangible_domain::manifest::Topology,
+    input_of: &std::collections::BTreeMap<tangible_domain::ComponentId, usize>,
+) -> Vec<crate::plan::PlannedTrack> {
+    let tangible_domain::manifest::Topology::CdTracks { tracks, .. } = topology else {
+        return Vec::new();
+    };
+
+    tracks
+        .iter()
+        .map(|track| crate::plan::PlannedTrack {
+            number: track.number,
+            session: track.session,
+            mode: track.mode.clone(),
+            input: input_of
+                .get(&track.component_id)
+                .copied()
+                .unwrap_or(usize::MAX),
+            file_offset_bytes: track.file_offset_bytes,
+            start_lba: track.start_lba,
+            sector_count: track.sector_count,
+            pregap_sectors: track.pregap_sectors,
+        })
+        .collect()
+}
+
+/// Record a warning an operator should see.
+///
+/// Distinct from [`note`], which records that a stage happened. A warning
+/// carries prose, and it goes into the event stream rather than only into a
+/// log file because the person who needs it is watching a progress page and
+/// deciding whether to let a disc be consumed.
+fn warn(
+    buffer: &Arc<std::sync::Mutex<EventBuffer>>,
+    stage: WorkerStage,
+    code: &str,
+    message: &str,
+) {
+    if let Ok(mut buffer) = buffer.lock() {
+        let _ = buffer.record(
+            "warning",
+            stage,
+            code,
+            None,
+            serde_json::json!({ "message": message }),
+            OffsetDateTime::now_utc(),
+        );
+    }
+}
+
 /// A stable code and a readable reason for the first blocking failure.
 fn failure_of(failures: &[PreflightFailure]) -> FailureBody {
     let code = match failures.first() {
@@ -1106,6 +1227,14 @@ fn failure_of(failures: &[PreflightFailure]) -> FailureBody {
         Some(PreflightFailure::DriveCannotWriteProfile { .. }) => "PREFLIGHT_DRIVE_CANNOT_WRITE",
         Some(PreflightFailure::InputDigestMismatch { .. }) => "PREFLIGHT_INPUT_DIGEST_MISMATCH",
         Some(PreflightFailure::InputMissing { .. }) => "PREFLIGHT_INPUT_MISSING",
+        Some(PreflightFailure::UnknownTrackMode { .. }) => "PREFLIGHT_UNKNOWN_TRACK_MODE",
+        Some(PreflightFailure::TrackOutsideInput { .. }) => "PREFLIGHT_TRACK_OUTSIDE_INPUT",
+        Some(PreflightFailure::TrackInputMissing { .. }) => "PREFLIGHT_TRACK_INPUT_MISSING",
+        Some(PreflightFailure::TooManyTracks { .. }) => "PREFLIGHT_TOO_MANY_TRACKS",
+        Some(PreflightFailure::MultisessionUnsupported { .. }) => "PREFLIGHT_MULTISESSION",
+        Some(PreflightFailure::ExceedsCdCapacity { .. }) => "PREFLIGHT_EXCEEDS_CD_CAPACITY",
+        Some(PreflightFailure::WriteModeUnsupported { .. }) => "PREFLIGHT_WRITE_MODE_UNSUPPORTED",
+        Some(PreflightFailure::TrackLayoutNeedsACd { .. }) => "PREFLIGHT_NEEDS_A_CD",
         None => "PREFLIGHT_FAILED",
     };
     FailureBody {

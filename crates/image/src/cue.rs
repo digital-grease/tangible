@@ -151,29 +151,14 @@ impl TrackMode {
     #[must_use]
     pub fn parse(text: &str) -> Self {
         let text = text.to_ascii_uppercase();
-        // The sizes are the raw sector sizes these modes occupy in a BIN, not
-        // the user-data sizes. Getting this wrong scales every offset in the
-        // disc, so each mode is written out rather than derived from the
-        // digits in its name or collapsed into whichever other mode happens to
-        // share a size today.
-        #[allow(clippy::match_same_arms)]
-        let (sector_bytes, audio) = match text.as_str() {
-            "AUDIO" => (Some(2352), true),
-            "CDG" => (Some(2448), true),
-            "MODE1/2048" => (Some(2048), false),
-            "MODE1/2352" => (Some(2352), false),
-            "MODE2/2048" => (Some(2048), false),
-            "MODE2/2324" => (Some(2324), false),
-            "MODE2/2336" => (Some(2336), false),
-            "MODE2/2352" => (Some(2352), false),
-            "CDI/2336" => (Some(2336), false),
-            "CDI/2352" => (Some(2352), false),
-            _ => (None, false),
-        };
+        // The sizes are domain facts rather than parser facts, and they live
+        // with the rest of them. Two tables that disagreed about what a
+        // MODE2/2352 sector is would be two components describing different
+        // discs.
         Self {
+            sector_bytes: tangible_domain::cd::sector_bytes(&text),
+            audio: tangible_domain::cd::is_audio(&text),
             text,
-            sector_bytes,
-            audio,
         }
     }
 

@@ -20,8 +20,12 @@ use std::time::Duration;
 
 use sqlx::PgPool;
 use tangible_api::{ApiState, ImportCheckpoint, ImportPipeline, ImportRequest, catalog, router};
+use tangible_burn::plan::{
+    BlankReport, BlankRequest, BurnPlan, DriveCapabilities, DriveRef, MediumInfo, PreflightReport,
+    VerifyReport, WriteMode, WriteReport,
+};
 use tangible_burn::runner::{WorkerRuntime, WorkerSettings};
-use tangible_burn::{FakeBehaviour, FakeEngine};
+use tangible_burn::{BurnEngine, EngineError, EventSink, FakeBehaviour, FakeEngine};
 use tangible_db::{Database, DbConfig};
 use tangible_domain::{ImportJobId, LogicalPath};
 use tangible_storage::{FilesystemStore, IngestLimits, ManifestStore, StagingManager};
@@ -141,6 +145,61 @@ impl Server {
                     import_id,
                     source_kind: "upload".to_owned(),
                     source_filename: Some("disc.iso".to_owned()),
+                    source_reference: None,
+                    limits: IngestLimits {
+                        max_bytes: None,
+                        fsync: false,
+                    },
+                },
+                &mut checkpoint,
+            )
+            .await
+            .expect("import");
+
+        let manifest = self
+            .pipeline
+            .manifests()
+            .read(outcome.artifact_id)
+            .await
+            .expect("manifest");
+        catalog::register_manifest(&self.database, &manifest)
+            .await
+            .expect("register");
+        outcome.artifact_id.to_string()
+    }
+
+    /// Import a CUE and its BIN, which is what a CD arrives as.
+    ///
+    /// Small on purpose: one data track and one audio track over a hundred
+    /// raw sectors, which is enough to have a layout and cheap to write.
+    async fn import_cue_bin(&self) -> String {
+        let sheet = b"FILE \"disc.bin\" BINARY\n\
+  TRACK 01 MODE2/2352\n\
+    INDEX 01 00:00:00\n\
+  TRACK 02 AUDIO\n\
+    PREGAP 00:00:02\n\
+    INDEX 01 00:01:00\n";
+
+        let import_id = ImportJobId::generate();
+        let area = self.pipeline.open_area(import_id).await.expect("area");
+        area.write(&LogicalPath::parse("disc.cue").expect("path"), sheet)
+            .await
+            .expect("stage the sheet");
+        area.write(
+            &LogicalPath::parse("disc.bin").expect("path"),
+            &vec![7_u8; 2352 * 100],
+        )
+        .await
+        .expect("stage the data");
+
+        let mut checkpoint = ImportCheckpoint::default();
+        let outcome = self
+            .pipeline
+            .run(
+                &ImportRequest {
+                    import_id,
+                    source_kind: "upload".to_owned(),
+                    source_filename: Some("disc.cue".to_owned()),
                     source_reference: None,
                     limits: IngestLimits {
                         max_bytes: None,
@@ -308,6 +367,73 @@ fn settings(server: &Server, state_dir: PathBuf, token: String) -> WorkerSetting
             format!("runtime-worker-{}", uuid::Uuid::now_v7()),
             state_dir,
         )
+    }
+}
+
+/// An engine that writes prepared images and not tables of contents.
+///
+/// Which is what the xorriso adapter is. Everything is delegated to the fake
+/// engine except the one answer under test, so this stands in for a real
+/// adapter's capabilities without standing in for its hardware.
+#[derive(Clone)]
+struct DataOnlyEngine(FakeEngine);
+
+#[async_trait::async_trait]
+impl BurnEngine for DataOnlyEngine {
+    fn name(&self) -> &'static str {
+        self.0.name()
+    }
+
+    fn version(&self) -> String {
+        self.0.version()
+    }
+
+    fn uses_hardware(&self) -> bool {
+        false
+    }
+
+    fn supports_mode(&self, mode: WriteMode) -> bool {
+        matches!(mode, WriteMode::DataDiscAtOnce | WriteMode::DataTrackAtOnce)
+    }
+
+    async fn probe_drive(&self, drive: &DriveRef) -> Result<DriveCapabilities, EngineError> {
+        self.0.probe_drive(drive).await
+    }
+
+    async fn inspect_medium(&self, drive: &DriveRef) -> Result<MediumInfo, EngineError> {
+        self.0.inspect_medium(drive).await
+    }
+
+    async fn preflight(&self, plan: &BurnPlan) -> Result<PreflightReport, EngineError> {
+        self.0.preflight(plan).await
+    }
+
+    async fn write(
+        &self,
+        plan: &BurnPlan,
+        sink: &dyn EventSink,
+    ) -> Result<WriteReport, EngineError> {
+        self.0.write(plan, sink).await
+    }
+
+    async fn verify(
+        &self,
+        plan: &BurnPlan,
+        sink: &dyn EventSink,
+    ) -> Result<VerifyReport, EngineError> {
+        self.0.verify(plan, sink).await
+    }
+
+    async fn blank(
+        &self,
+        request: &BlankRequest,
+        sink: &dyn EventSink,
+    ) -> Result<BlankReport, EngineError> {
+        self.0.blank(request, sink).await
+    }
+
+    async fn eject(&self, drive: &DriveRef) -> Result<(), EngineError> {
+        self.0.eject(drive).await
     }
 }
 
@@ -563,6 +689,135 @@ async fn a_worker_reports_its_drive_before_asking_for_work() {
         .await
         .expect("announce again");
     assert_eq!(drive, again);
+
+    server.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_cue_bin_burn_says_what_the_disc_will_not_be() {
+    // The whole chain for a disc described as tracks: import a sheet and its
+    // data, plan a burn from the topology the manifest carries, and tell the
+    // operator what a track descriptor cannot reproduce before the media is
+    // consumed rather than after.
+    let _queue = exclusive_queue().await;
+    let mut server = server().await;
+    server.drain_queue().await;
+
+    let artifact = server.import_cue_bin().await;
+    let disc = server.seed_disc().await;
+    let job = server.queue_burn(&disc, &artifact).await;
+
+    let worker_dir = TempDir::new().expect("temp dir");
+    let token = server.enrollment_token().await;
+    let settings = settings(&server, worker_dir.path().to_path_buf(), token);
+    let engine = FakeEngine::new(settings.state_dir.join("media"));
+
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let worker = tokio::spawn(async move {
+        let mut runtime = WorkerRuntime::new(settings, engine).expect("runtime");
+        runtime
+            .run(async {
+                let _ = stopped.await;
+            })
+            .await
+    });
+
+    let settled = server.await_settled(&job).await;
+    let _ = stop.send(());
+    let _ = worker.await.expect("the worker task");
+
+    assert_eq!(settled["state"], "complete", "{settled}");
+
+    let attempt = settled["attempts"][0]["id"].as_str().expect("an attempt");
+    let events = server
+        .get(&format!("/api/v1/burn-attempts/{attempt}/events?limit=500"))
+        .await;
+    let warnings: Vec<String> = events["items"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .filter(|event| event["code"] == "LAYOUT_LIMITATION")
+        .filter_map(|event| event["data"]["message"].as_str().map(ToOwned::to_owned))
+        .collect();
+
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("subchannel")),
+        "a track descriptor carries no subchannel data, and the operator is \
+         the one who needs to know: {warnings:?}"
+    );
+    assert!(
+        warnings.iter().any(|warning| warning.contains("audio")),
+        "audio is not verified by comparing bytes: {warnings:?}"
+    );
+
+    server.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_engine_that_cannot_write_a_toc_refuses_before_asking_for_media() {
+    // The failure this check exists to prevent is not an error message. It is
+    // a mixed-mode CD flattened into one data track, which looks like a
+    // successful burn and is a ruined disc.
+    let _queue = exclusive_queue().await;
+    let mut server = server().await;
+    server.drain_queue().await;
+
+    let artifact = server.import_cue_bin().await;
+    let disc = server.seed_disc().await;
+    let job = server.queue_burn(&disc, &artifact).await;
+
+    let worker_dir = TempDir::new().expect("temp dir");
+    let token = server.enrollment_token().await;
+    let settings = settings(&server, worker_dir.path().to_path_buf(), token);
+    let media_root = settings.state_dir.join("media");
+    let engine = DataOnlyEngine(FakeEngine::new(&media_root));
+
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let worker = tokio::spawn(async move {
+        let mut runtime = WorkerRuntime::new(settings, engine).expect("runtime");
+        runtime
+            .run(async {
+                let _ = stopped.await;
+            })
+            .await
+    });
+
+    let settled = server.await_settled(&job).await;
+    let _ = stop.send(());
+    let _ = worker.await.expect("the worker task");
+
+    assert_eq!(settled["state"], "failed", "{settled}");
+    assert_eq!(
+        settled["attempts"][0]["error_code"], "PREFLIGHT_WRITE_MODE_UNSUPPORTED",
+        "{settled}"
+    );
+    assert!(
+        settled["attempts"][0]["physical_copy_id"].is_null(),
+        "nothing was written, so no disc exists: {settled}"
+    );
+    assert!(
+        !media_root.exists(),
+        "the refusal came before anything reached the medium"
+    );
+
+    let attempt = settled["attempts"][0]["id"].as_str().expect("an attempt");
+    let events = server
+        .get(&format!("/api/v1/burn-attempts/{attempt}/events?limit=500"))
+        .await;
+    let stages: Vec<String> = events["items"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .filter_map(|event| event["stage"].as_str().map(ToOwned::to_owned))
+        .collect();
+    assert!(
+        !stages.iter().any(|stage| stage == "waiting_for_media"),
+        "an operator was asked for a disc that could never have been written: {stages:?}"
+    );
 
     server.stop().await;
 }
