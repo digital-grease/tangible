@@ -595,6 +595,7 @@ impl ImportPipeline {
                     start_lba: track.start_lba,
                     sector_count: track.sector_count,
                     pregap_sectors: track.pregap_sectors,
+                    isrc: track.isrc.clone(),
                     indexes: track
                         .indexes
                         .iter()
@@ -608,6 +609,7 @@ impl ImportPipeline {
             }
             return Topology::CdTracks {
                 descriptor_component_id,
+                catalog: layout.catalog.clone(),
                 session_count: layout.session_count,
                 tracks,
                 // A CUE/BIN set carries no subchannel data. Formats that do

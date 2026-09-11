@@ -152,6 +152,9 @@ pub struct PlannedTrack {
     /// that on its own.
     #[serde(default)]
     pub indexes: Vec<PlannedIndex>,
+    /// International Standard Recording Code to record on the track.
+    #[serde(default)]
+    pub isrc: Option<String>,
 }
 
 /// One index point within a track.
@@ -243,6 +246,9 @@ pub struct BurnPlan {
     pub eject_on_success: bool,
     /// Total bytes the plan will write.
     pub total_bytes: u64,
+    /// Media catalogue number to record on the disc, when there is one.
+    #[serde(default)]
+    pub catalog: Option<String>,
 }
 
 impl BurnPlan {
@@ -663,6 +669,7 @@ mod tests {
                 device_alias: "/dev/disc-block".to_owned(),
             },
             tracks: Vec::new(),
+            catalog: None,
             inputs: vec![],
             mode: WriteMode::DataDiscAtOnce,
             accepted_profiles: vec!["CD-R".to_owned()],
@@ -775,6 +782,7 @@ mod tests {
                 number: 1,
                 relative_lba: 0,
             }],
+            isrc: None,
         }
     }
 

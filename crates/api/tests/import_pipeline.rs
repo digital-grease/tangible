@@ -486,11 +486,13 @@ async fn two_imports_of_identical_bytes_deduplicate_but_stay_distinct_artifacts(
 const RAW_SECTOR: usize = 2352;
 
 /// A mixed-mode sheet: a data track, then audio after a generated gap.
-const MIXED_MODE_SHEET: &[u8] = b"FILE \"disc.bin\" BINARY\n\
+const MIXED_MODE_SHEET: &[u8] = b"CATALOG 1234567890123\n\
+FILE \"disc.bin\" BINARY\n\
   TRACK 01 MODE2/2352\n\
     INDEX 01 00:00:00\n\
   TRACK 02 AUDIO\n\
     PREGAP 00:00:02\n\
+    ISRC USRC17607839\n\
     INDEX 01 00:01:00\n";
 
 #[tokio::test]
@@ -542,6 +544,7 @@ async fn a_cue_and_its_bin_import_as_one_artifact_that_knows_its_tracks() {
 
     let Topology::CdTracks {
         descriptor_component_id,
+        catalog,
         session_count,
         tracks,
         subchannel,
@@ -550,6 +553,7 @@ async fn a_cue_and_its_bin_import_as_one_artifact_that_knows_its_tracks() {
         panic!("expected a track topology, got {:?}", manifest.topology);
     };
     assert_eq!(descriptor_component_id, descriptor.id);
+    assert_eq!(catalog.as_deref(), Some("1234567890123"));
     assert_eq!(session_count, 1);
     assert!(
         !subchannel.expect("stated").present,
@@ -570,6 +574,11 @@ async fn a_cue_and_its_bin_import_as_one_artifact_that_knows_its_tracks() {
     assert_eq!(tracks[1].start_lba, 77, "the generated gap is on the disc");
     assert_eq!(tracks[1].sector_count, 25);
     assert_eq!(tracks[1].pregap_sectors, 2);
+    assert_eq!(
+        tracks[1].isrc.as_deref(),
+        Some("USRC17607839"),
+        "a track's recording code is part of the disc"
+    );
 }
 
 #[tokio::test]

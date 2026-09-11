@@ -745,3 +745,55 @@ REM SESSION 02
     assert_eq!(layout.session_count, 2);
     assert_eq!(layout.tracks[1].session, 2);
 }
+
+// --- the codes a sheet carries -------------------------------------------------
+
+#[test]
+fn a_catalogue_number_and_an_isrc_reach_the_layout() {
+    let parsed = sheet(
+        r#"CATALOG 1234567890123
+FILE "d.bin" BINARY
+  TRACK 01 AUDIO
+    ISRC USRC17607839
+    INDEX 01 00:00:00
+"#,
+    );
+
+    let layout = cue::layout(&parsed, &[RAW_SECTOR * 100]).expect("a layout");
+
+    assert_eq!(layout.catalog.as_deref(), Some("1234567890123"));
+    assert_eq!(layout.tracks[0].isrc.as_deref(), Some("USRC17607839"));
+    assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+}
+
+#[test]
+fn a_code_that_is_not_one_is_warned_about_and_left_out_of_the_layout() {
+    // The sheet is preserved as it was received; what is not preserved is a
+    // claim that these are a catalogue number and an ISRC.
+    let parsed = sheet(
+        r#"CATALOG not-a-catalogue
+FILE "d.bin" BINARY
+  TRACK 01 AUDIO
+    ISRC nonsense
+    INDEX 01 00:00:00
+"#,
+    );
+
+    assert!(
+        parsed
+            .warnings
+            .iter()
+            .any(|warning| matches!(warning, CueWarning::MalformedCatalog { .. }))
+    );
+    assert!(
+        parsed
+            .warnings
+            .iter()
+            .any(|warning| matches!(warning, CueWarning::MalformedIsrc { track: 1, .. }))
+    );
+    assert_eq!(parsed.catalog.as_deref(), Some("not-a-catalogue"));
+
+    let layout = cue::layout(&parsed, &[RAW_SECTOR * 100]).expect("a layout");
+    assert_eq!(layout.catalog, None);
+    assert_eq!(layout.tracks[0].isrc, None);
+}

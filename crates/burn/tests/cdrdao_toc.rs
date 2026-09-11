@@ -35,6 +35,7 @@ fn plan(inputs: &[(&str, u64)], tracks: Vec<PlannedTrack>) -> BurnPlan {
             })
             .collect(),
         tracks,
+        catalog: None,
         mode: WriteMode::TocDiscAtOnce,
         accepted_profiles: vec!["CD-R".to_owned()],
         speed: None,
@@ -58,6 +59,7 @@ fn track(number: u32, mode: &str, sectors: u64) -> PlannedTrack {
             number: 1,
             relative_lba: 0,
         }],
+        isrc: None,
     }
 }
 
@@ -376,4 +378,52 @@ fn every_mode_maps_to_a_cdrdao_mode_holding_the_same_sized_sector() {
             "{mode} was written as {declared}, whose sectors are a different size"
         );
     }
+}
+
+// --- the codes the disc carries ------------------------------------------------
+
+#[test]
+fn a_catalogue_number_and_an_isrc_are_written_out() {
+    // The identifiers the ripped disc had, on the disc that replaces it.
+    let mut audio = track(1, "AUDIO", 75);
+    audio.isrc = Some("USRC17607839".to_owned());
+    let mut with_codes = plan(&[("/staged/disc.bin", RAW * 100)], vec![audio]);
+    with_codes.catalog = Some("1234567890123".to_owned());
+
+    let written = write_toc(&with_codes).expect("a table of contents");
+
+    assert_eq!(
+        written,
+        "CD_DA\n\
+         CATALOG \"1234567890123\"\n\
+         \n\
+         TRACK AUDIO\n\
+         ISRC \"USRC17607839\"\n\
+         FILE \"/staged/disc.bin\" 00:00:00 00:01:00\n"
+    );
+}
+
+#[test]
+fn an_isrc_written_in_lower_case_is_the_same_code() {
+    let mut audio = track(1, "AUDIO", 75);
+    audio.isrc = Some("usrc17607839".to_owned());
+
+    let written = write_toc(&plan(&[("/staged/a.bin", RAW * 100)], vec![audio]))
+        .expect("a table of contents");
+
+    assert!(written.contains("ISRC \"USRC17607839\""), "{written}");
+}
+
+#[test]
+fn a_recording_code_against_a_data_track_is_not_written() {
+    // cdrdao takes ISRC as an audio property. The manifest keeps it either
+    // way; what is not done is asserting it in a place the format does not
+    // have.
+    let mut data = track(1, "MODE1/2352", 75);
+    data.isrc = Some("USRC17607839".to_owned());
+
+    let written =
+        write_toc(&plan(&[("/staged/a.bin", RAW * 100)], vec![data])).expect("a table of contents");
+
+    assert!(!written.contains("ISRC"), "{written}");
 }

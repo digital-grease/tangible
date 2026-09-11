@@ -178,6 +178,7 @@ mod tests {
             drive: drive("/dev/disc-block"),
             inputs,
             tracks: Vec::new(),
+            catalog: None,
             mode: WriteMode::DataDiscAtOnce,
             accepted_profiles: vec!["CD-R".to_owned()],
             speed: None,

@@ -66,6 +66,7 @@ fn plan(staged: &Path, target: &Path, bytes: &[u8]) -> BurnPlan {
             length_bytes: bytes.len() as u64,
         }],
         tracks: Vec::new(),
+        catalog: None,
         mode: WriteMode::DataDiscAtOnce,
         accepted_profiles: vec![],
         speed: None,

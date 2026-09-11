@@ -65,6 +65,46 @@ pub const FRAMES_PER_SECOND: u64 = 75;
 /// Seconds in one minute of a timecode.
 pub const SECONDS_PER_MINUTE: u64 = 60;
 
+/// Whether a string is a media catalogue number.
+///
+/// Thirteen digits, which is a UPC/EAN. Checked rather than assumed because
+/// the value arrives from a descriptor somebody else wrote, and a manifest is
+/// read by other tools: one that carries a `catalog` field at all should be
+/// one they can trust the shape of.
+///
+/// The check digit is not verified. Real discs carry catalogue numbers that
+/// fail it, and refusing those would lose a true record of what was on the
+/// disc in exchange for a validation nobody asked for.
+#[must_use]
+pub fn is_catalog_number(value: &str) -> bool {
+    value.len() == CATALOG_DIGITS && value.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// Whether a string is an International Standard Recording Code.
+///
+/// Twelve characters, `CCOOOYYSSSSS`: two letters of country, three
+/// alphanumerics of registrant, two digits of year and five of designation.
+/// Compared without regard to case, which is how the standard defines it, and
+/// stored as written.
+#[must_use]
+pub fn is_isrc(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != ISRC_LENGTH {
+        return false;
+    }
+    let alphabetic = |index: usize| bytes.get(index).is_some_and(u8::is_ascii_alphabetic);
+    let alphanumeric = |index: usize| bytes.get(index).is_some_and(u8::is_ascii_alphanumeric);
+    let digit = |index: usize| bytes.get(index).is_some_and(u8::is_ascii_digit);
+
+    (0..2).all(alphabetic) && (2..5).all(alphanumeric) && (5..12).all(digit)
+}
+
+/// Digits in a media catalogue number.
+pub const CATALOG_DIGITS: usize = 13;
+
+/// Characters in an ISRC.
+pub const ISRC_LENGTH: usize = 12;
+
 /// Most tracks a CD can hold.
 pub const MAX_TRACKS: u32 = 99;
 
@@ -129,6 +169,29 @@ mod tests {
         assert!(!is_cd_profile("DVD-R"));
         assert!(!is_cd_profile("BD-R"));
         assert!(!is_cd_profile(""));
+    }
+
+    #[test]
+    fn a_catalogue_number_is_thirteen_digits() {
+        assert!(is_catalog_number("1234567890123"));
+        assert!(!is_catalog_number("123456789012"), "twelve is not thirteen");
+        assert!(!is_catalog_number("12345678901234"));
+        assert!(!is_catalog_number("123456789012X"));
+        assert!(!is_catalog_number(""));
+        // Leading zeroes are ordinary, and a numeric parse would eat them.
+        assert!(is_catalog_number("0000000000000"));
+    }
+
+    #[test]
+    fn an_isrc_is_two_letters_three_alphanumerics_and_seven_digits() {
+        assert!(is_isrc("USRC17607839"));
+        assert!(is_isrc("usrc17607839"), "case does not change the code");
+        assert!(is_isrc("GBAYE0601498"));
+        assert!(!is_isrc("USRC1760783"), "eleven characters");
+        assert!(!is_isrc("U1RC17607839"), "the country is letters");
+        assert!(!is_isrc("USRC1760783X"), "the designation is digits");
+        assert!(!is_isrc("US-RC1-76-07839"), "hyphens are not stored");
+        assert!(!is_isrc(""));
     }
 
     #[test]

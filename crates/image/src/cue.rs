@@ -363,6 +363,13 @@ pub enum CueWarning {
         /// What was written.
         value: String,
     },
+    /// An ISRC that is not one.
+    MalformedIsrc {
+        /// Track number.
+        track: u32,
+        /// What was written.
+        value: String,
+    },
     /// A file's length is not a whole number of sectors.
     ///
     /// The usual cause is a truncated dump, and the last track is short by
@@ -430,6 +437,9 @@ impl fmt::Display for CueWarning {
             }
             Self::MalformedCatalog { value } => {
                 write!(f, "the catalogue number {value} is not thirteen digits")
+            }
+            Self::MalformedIsrc { track, value } => {
+                write!(f, "track {track} carries {value}, which is not an ISRC")
             }
             Self::FileNotSectorAligned {
                 name,
@@ -811,6 +821,12 @@ pub fn parse(bytes: &[u8]) -> Result<CueSheet, CueError> {
                 let Some(track) = current_track(&mut files) else {
                     return Err(CueError::CommandBeforeTrack { line, command });
                 };
+                if !tangible_domain::cd::is_isrc(&value) {
+                    warnings.push(CueWarning::MalformedIsrc {
+                        track: track.number,
+                        value: value.clone(),
+                    });
+                }
                 track.isrc = Some(value);
             }
 
@@ -1272,11 +1288,21 @@ pub struct TrackLayout {
     pub pregap_sectors: u64,
     /// Index points, as LBAs relative to the track's first present sector.
     pub indexes: Vec<(u32, u64)>,
+    /// International Standard Recording Code, when the track declared a
+    /// well-formed one.
+    pub isrc: Option<String>,
 }
 
 /// A whole disc, laid out.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CdLayout {
+    /// Media catalogue number, when the sheet declared a well-formed one.
+    ///
+    /// Filtered here rather than passed through, so that everything
+    /// downstream can trust the shape of what it is given. Nothing is lost by
+    /// dropping a malformed one: the sheet itself is preserved as a component,
+    /// exactly as received, and the parser warned about it on the way past.
+    pub catalog: Option<String>,
     /// Tracks in disc order.
     pub tracks: Vec<TrackLayout>,
     /// How many sessions the tracks span.
@@ -1453,6 +1479,10 @@ pub fn layout(sheet: &CueSheet, file_sizes: &[u64]) -> Result<CdLayout, LayoutEr
                         )
                     })
                     .collect(),
+                isrc: track
+                    .isrc
+                    .clone()
+                    .filter(|isrc| tangible_domain::cd::is_isrc(isrc)),
             });
             running_lba = running_lba.saturating_add(extent.sectors);
         }
@@ -1466,6 +1496,10 @@ pub fn layout(sheet: &CueSheet, file_sizes: &[u64]) -> Result<CdLayout, LayoutEr
         .max(1);
 
     Ok(CdLayout {
+        catalog: sheet
+            .catalog
+            .clone()
+            .filter(|catalog| tangible_domain::cd::is_catalog_number(catalog)),
         tracks,
         session_count,
         warnings,

@@ -941,6 +941,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         note(buffer, WorkerStage::Staging, "STAGING_COMPLETE");
 
         let tracks = planned_tracks(&manifest.topology, &input_of);
+        let catalog = planned_catalog(&manifest.topology);
         let total_bytes = inputs.iter().map(|input| input.length_bytes).sum();
         Ok(BurnPlan {
             attempt_id,
@@ -968,6 +969,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             finalize: true,
             eject_on_success: lease.eject_policy == "eject_on_success",
             total_bytes,
+            catalog,
         })
     }
 
@@ -1196,8 +1198,17 @@ fn planned_tracks(
                     relative_lba: index.relative_lba,
                 })
                 .collect(),
+            isrc: track.isrc.clone(),
         })
         .collect()
+}
+
+/// The catalogue number a topology declares, if it declares one.
+fn planned_catalog(topology: &tangible_domain::manifest::Topology) -> Option<String> {
+    match topology {
+        tangible_domain::manifest::Topology::CdTracks { catalog, .. } => catalog.clone(),
+        _ => None,
+    }
 }
 
 /// Record a warning an operator should see.

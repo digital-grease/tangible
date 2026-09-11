@@ -444,6 +444,7 @@ fn plan(
             length_bytes: bytes,
         }],
         tracks: Vec::new(),
+        catalog: None,
         mode: WriteMode::DataDiscAtOnce,
         accepted_profiles: vec!["CD-R".to_owned()],
         speed: None,

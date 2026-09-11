@@ -101,6 +101,27 @@ pub enum ManifestError {
         component_id: ComponentId,
     },
 
+    /// A catalogue number that is not thirteen digits.
+    ///
+    /// The field is only worth having if a reader can trust its shape, so a
+    /// malformed one is refused rather than carried. Nothing is lost by that:
+    /// the descriptor it came from is preserved as a component, exactly as
+    /// received.
+    #[error("the catalogue number {value:?} is not {} digits", cd::CATALOG_DIGITS)]
+    MalformedCatalog {
+        /// What the manifest carried.
+        value: String,
+    },
+
+    /// An ISRC that is not one.
+    #[error("track {track} carries {value:?}, which is not an ISRC")]
+    MalformedIsrc {
+        /// The track.
+        track: u32,
+        /// What the manifest carried.
+        value: String,
+    },
+
     /// Two tracks claim one number.
     #[error("duplicate track number {number}")]
     DuplicateTrack {
@@ -342,6 +363,12 @@ pub enum Topology {
     CdTracks {
         /// The descriptor component, e.g. the CUE file.
         descriptor_component_id: ComponentId,
+        /// Media catalogue number, thirteen digits, when the disc declares one.
+        ///
+        /// Recorded because a disc burned without its catalogue number differs
+        /// from the one that was ripped, and differs invisibly.
+        #[serde(default)]
+        catalog: Option<String>,
         /// Number of sessions.
         session_count: u32,
         /// Tracks in order.
@@ -404,6 +431,9 @@ pub struct Track {
     /// Index points.
     #[serde(default)]
     pub indexes: Vec<TrackIndex>,
+    /// International Standard Recording Code, when the track declares one.
+    #[serde(default)]
+    pub isrc: Option<String>,
     /// Per-track digests, used for preservation-database matching.
     #[serde(default)]
     pub hashes: BTreeMap<String, String>,
@@ -639,12 +669,21 @@ impl ArtifactManifest {
     ) -> Result<(), ManifestError> {
         let Topology::CdTracks {
             descriptor_component_id,
+            catalog,
             tracks,
             ..
         } = &self.topology
         else {
             return Ok(());
         };
+
+        if let Some(catalog) = catalog
+            && !cd::is_catalog_number(catalog)
+        {
+            return Err(ManifestError::MalformedCatalog {
+                value: catalog.clone(),
+            });
+        }
 
         if !seen_ids.contains(descriptor_component_id) {
             return Err(ManifestError::TopologyComponentMissing {
@@ -674,6 +713,14 @@ impl ArtifactManifest {
                 return Err(ManifestError::TopologyComponentMissing {
                     what: format!("track {}", track.number),
                     component_id: track.component_id,
+                });
+            }
+            if let Some(isrc) = &track.isrc
+                && !cd::is_isrc(isrc)
+            {
+                return Err(ManifestError::MalformedIsrc {
+                    track: track.number,
+                    value: isrc.clone(),
                 });
             }
         }
@@ -967,12 +1014,14 @@ mod tests {
         let component_id = manifest.components[0].id;
         manifest.topology = Topology::CdTracks {
             descriptor_component_id: component_id,
+            catalog: None,
             session_count: 1,
             tracks: vec![Track {
                 number,
                 session: 1,
                 mode: "MODE2/2352".to_owned(),
                 component_id,
+                isrc: None,
                 file_offset_bytes: 0,
                 start_lba: 0,
                 sector_count,
@@ -1057,6 +1106,78 @@ mod tests {
     }
 
     #[test]
+    fn a_catalogue_number_that_is_not_one_is_refused() {
+        // The field is only worth having if a reader can trust its shape.
+        let mut manifest = with_one_track(10, 1);
+        let Topology::CdTracks { catalog, .. } = &mut manifest.topology else {
+            panic!("built with tracks");
+        };
+        *catalog = Some("not-a-catalogue".to_owned());
+
+        assert!(matches!(
+            manifest.validate(),
+            Err(ManifestError::MalformedCatalog { .. })
+        ));
+    }
+
+    #[test]
+    fn a_well_formed_catalogue_number_is_kept() {
+        let mut manifest = with_one_track(10, 1);
+        let Topology::CdTracks { catalog, .. } = &mut manifest.topology else {
+            panic!("built with tracks");
+        };
+        *catalog = Some("1234567890123".to_owned());
+
+        manifest.validate().expect("valid");
+    }
+
+    #[test]
+    fn an_isrc_that_is_not_one_is_refused() {
+        let mut manifest = with_one_track(10, 1);
+        let Topology::CdTracks { tracks, .. } = &mut manifest.topology else {
+            panic!("built with tracks");
+        };
+        tracks[0].isrc = Some("nonsense".to_owned());
+
+        assert!(matches!(
+            manifest.validate(),
+            Err(ManifestError::MalformedIsrc { track: 1, .. })
+        ));
+    }
+
+    #[test]
+    fn a_well_formed_isrc_is_kept() {
+        let mut manifest = with_one_track(10, 1);
+        let Topology::CdTracks { tracks, .. } = &mut manifest.topology else {
+            panic!("built with tracks");
+        };
+        tracks[0].isrc = Some("USRC17607839".to_owned());
+
+        manifest.validate().expect("valid");
+    }
+
+    #[test]
+    fn a_manifest_written_before_these_fields_existed_still_reads() {
+        // Absent is not the same as malformed, and a topology that never
+        // declared a catalogue number is ordinary rather than broken.
+        let mut manifest = with_one_track(10, 1);
+        let Topology::CdTracks { catalog, .. } = &mut manifest.topology else {
+            panic!("built with tracks");
+        };
+        *catalog = None;
+
+        let json = manifest.to_json().expect("serialize");
+        assert!(
+            !json.contains("\"catalog\": \""),
+            "an absent number is not written as text"
+        );
+        ArtifactManifest::from_json(&json)
+            .expect("parse")
+            .validate()
+            .expect("valid");
+    }
+
+    #[test]
     fn a_coherent_track_topology_validates() {
         with_one_track(10, 1).validate().expect("valid");
     }
@@ -1067,12 +1188,14 @@ mod tests {
         let component_id = m.components[0].id;
         m.topology = Topology::CdTracks {
             descriptor_component_id: component_id,
+            catalog: Some("1234567890123".to_owned()),
             session_count: 1,
             tracks: vec![Track {
                 number: 1,
                 session: 1,
                 mode: "MODE2/2352".to_owned(),
                 component_id,
+                isrc: None,
                 file_offset_bytes: 0,
                 start_lba: 0,
                 sector_count: 250_000,

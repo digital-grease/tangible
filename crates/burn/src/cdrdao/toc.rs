@@ -30,12 +30,16 @@
 //! are not what a reasonable person would guess, so they are called out at the
 //! code that depends on them.
 //!
-//! # What a TOC cannot carry from here
+//! # Codes the disc carries
 //!
-//! The media catalogue number and per-track ISRCs. The descriptor parser reads
-//! both, and the v1alpha1 manifest has nowhere to put them, so a disc written
-//! through this path loses them. Worth fixing in the schema rather than
-//! guessing at here.
+//! The media catalogue number and per-track ISRCs are written out, so a disc
+//! burned through this path keeps the identifiers the one it came from had.
+//! Both are validated where they enter the manifest rather than here: by the
+//! time a plan exists, a `catalog` is thirteen digits and an `isrc` is an ISRC
+//! or neither is present at all.
+//!
+//! cdrdao takes ISRC as an audio track property, so one recorded against a
+//! data track is not written. The manifest keeps it either way.
 
 use std::fmt::Write as _;
 
@@ -231,108 +235,140 @@ pub fn write_toc(plan: &BurnPlan) -> Result<String, TocError> {
 
     let mut document = String::new();
     let _ = writeln!(document, "{}", disc_type(&plan.tracks));
+    if let Some(catalog) = &plan.catalog {
+        // Validated on the way into the manifest, so it is thirteen digits
+        // here or it is not here. Quoting it anyway: the rule is that nothing
+        // is interpolated unquoted, not that this particular value is safe.
+        let _ = writeln!(document, "CATALOG \"{catalog}\"");
+    }
 
     for (position, track) in plan.tracks.iter().enumerate() {
-        let mode = track_mode(track)?;
-        let sector_bytes =
-            u64::from(
-                cd::sector_bytes(&track.mode).ok_or_else(|| TocError::UnknownTrackMode {
-                    track: track.number,
-                    mode: track.mode.clone(),
-                })?,
-            );
-        let input = plan
-            .inputs
-            .get(track.input)
-            .ok_or(TocError::TrackInputMissing {
-                track: track.number,
-            })?;
-        if !track.file_offset_bytes.is_multiple_of(sector_bytes) {
-            return Err(TocError::MisalignedOffset {
-                track: track.number,
-                offset: track.file_offset_bytes,
-                sector_bytes,
-            });
-        }
-        let start_block = track.file_offset_bytes / sector_bytes;
-        let in_file_pregap = track.in_file_pregap();
-        let generated_pregap = track.generated_pregap();
-        let file = quote(&input.staged_path)?;
-
-        if position == 0 && generated_pregap > 0 {
-            return Err(TocError::PregapOnFirstTrack {
-                track: track.number,
-                sectors: generated_pregap,
-            });
-        }
-
-        let _ = writeln!(document);
-        let _ = writeln!(document, "TRACK {mode}");
-
-        // A gap in no file, which the writer fills with silence or zeroes.
-        if generated_pregap > 0 {
-            let _ = writeln!(document, "PREGAP {}", msf(generated_pregap));
-        }
-
-        if track.is_audio() {
-            // A gap the file carries is written as its own FILE statement,
-            // then START, then the track proper. That is the form the manual
-            // demonstrates, and it says where index 01 falls without anything
-            // having to be counted twice.
-            if in_file_pregap > 0 {
-                let _ = writeln!(
-                    document,
-                    "FILE {file} {} {}",
-                    msf(start_block),
-                    msf(in_file_pregap)
-                );
-                let _ = writeln!(document, "START");
-                let _ = writeln!(
-                    document,
-                    "FILE {file} {} {}",
-                    msf(start_block + in_file_pregap),
-                    msf(track.sector_count.saturating_sub(in_file_pregap))
-                );
-            } else {
-                let _ = writeln!(
-                    document,
-                    "FILE {file} {} {}",
-                    msf(start_block),
-                    msf(track.sector_count)
-                );
-            }
-        } else {
-            // DATAFILE names a length and no offset, so a data track can only
-            // be read from the start of its file.
-            if start_block > 0 {
-                return Err(TocError::DataTrackNotAtStartOfFile {
-                    track: track.number,
-                    offset: track.file_offset_bytes,
-                });
-            }
-            if in_file_pregap > 0 {
-                return Err(TocError::DataTrackHasInFilePregap {
-                    track: track.number,
-                });
-            }
-            let _ = writeln!(document, "DATAFILE {file} {}", msf(track.sector_count));
-        }
-
-        // Index points past the first, positioned from the start of the track
-        // proper rather than from the start of its data.
-        let index_one = track
-            .indexes
-            .iter()
-            .find(|index| index.number == 1)
-            .map_or(0, |index| index.relative_lba);
-        for index in track.indexes.iter().filter(|index| index.number > 1) {
-            let _ = writeln!(
-                document,
-                "INDEX {}",
-                msf(index.relative_lba.saturating_sub(index_one))
-            );
-        }
+        write_track(&mut document, plan, position, track)?;
     }
 
     Ok(document)
+}
+
+/// Write one track's statements.
+///
+/// Split out from [`write_toc`] because the order of statements within a track
+/// is the part of the format with real rules: flags before gaps, gaps before
+/// data, and `START` between the data that is the gap and the data that is the
+/// track.
+fn write_track(
+    document: &mut String,
+    plan: &BurnPlan,
+    position: usize,
+    track: &PlannedTrack,
+) -> Result<(), TocError> {
+    let mode = track_mode(track)?;
+    let sector_bytes =
+        u64::from(
+            cd::sector_bytes(&track.mode).ok_or_else(|| TocError::UnknownTrackMode {
+                track: track.number,
+                mode: track.mode.clone(),
+            })?,
+        );
+    let input = plan
+        .inputs
+        .get(track.input)
+        .ok_or(TocError::TrackInputMissing {
+            track: track.number,
+        })?;
+    if !track.file_offset_bytes.is_multiple_of(sector_bytes) {
+        return Err(TocError::MisalignedOffset {
+            track: track.number,
+            offset: track.file_offset_bytes,
+            sector_bytes,
+        });
+    }
+    let start_block = track.file_offset_bytes / sector_bytes;
+    let in_file_pregap = track.in_file_pregap();
+    let generated_pregap = track.generated_pregap();
+    let file = quote(&input.staged_path)?;
+
+    if position == 0 && generated_pregap > 0 {
+        return Err(TocError::PregapOnFirstTrack {
+            track: track.number,
+            sectors: generated_pregap,
+        });
+    }
+
+    let _ = writeln!(document);
+    let _ = writeln!(document, "TRACK {mode}");
+
+    // An ISRC is an audio track property in cdrdao's vocabulary. Written upper
+    // case, which the standard treats as the same code, because that is the
+    // form the statement is documented with.
+    if let Some(isrc) = &track.isrc
+        && track.is_audio()
+    {
+        let _ = writeln!(document, "ISRC \"{}\"", isrc.to_ascii_uppercase());
+    }
+
+    // A gap in no file, which the writer fills with silence or zeroes.
+    if generated_pregap > 0 {
+        let _ = writeln!(document, "PREGAP {}", msf(generated_pregap));
+    }
+
+    if track.is_audio() {
+        // A gap the file carries is written as its own FILE statement, then
+        // START, then the track proper. That is the form the manual
+        // demonstrates, and it says where index 01 falls without anything
+        // having to be counted twice.
+        if in_file_pregap > 0 {
+            let _ = writeln!(
+                document,
+                "FILE {file} {} {}",
+                msf(start_block),
+                msf(in_file_pregap)
+            );
+            let _ = writeln!(document, "START");
+            let _ = writeln!(
+                document,
+                "FILE {file} {} {}",
+                msf(start_block + in_file_pregap),
+                msf(track.sector_count.saturating_sub(in_file_pregap))
+            );
+        } else {
+            let _ = writeln!(
+                document,
+                "FILE {file} {} {}",
+                msf(start_block),
+                msf(track.sector_count)
+            );
+        }
+    } else {
+        // DATAFILE names a length and no offset, so a data track can only be
+        // read from the start of its file.
+        if start_block > 0 {
+            return Err(TocError::DataTrackNotAtStartOfFile {
+                track: track.number,
+                offset: track.file_offset_bytes,
+            });
+        }
+        if in_file_pregap > 0 {
+            return Err(TocError::DataTrackHasInFilePregap {
+                track: track.number,
+            });
+        }
+        let _ = writeln!(document, "DATAFILE {file} {}", msf(track.sector_count));
+    }
+
+    // Index points past the first, positioned from the start of the track
+    // proper rather than from the start of its data.
+    let index_one = track
+        .indexes
+        .iter()
+        .find(|index| index.number == 1)
+        .map_or(0, |index| index.relative_lba);
+    for index in track.indexes.iter().filter(|index| index.number > 1) {
+        let _ = writeln!(
+            document,
+            "INDEX {}",
+            msf(index.relative_lba.saturating_sub(index_one))
+        );
+    }
+
+    Ok(())
 }
