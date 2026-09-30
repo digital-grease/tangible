@@ -15,16 +15,28 @@
 //! - **Output is bounded.** A tool that decides to print a line per block must
 //!   not exhaust the worker's memory, so what is retained is capped and the
 //!   rest is counted rather than kept.
-//! - **stdout and stderr are read separately and both are read.** A process
-//!   whose pipe fills because nobody is draining it stops, and a stopped
-//!   process mid-write is the thing above.
+//! - **stdout and stderr are read at the same time.** A process whose pipe
+//!   fills because nobody is draining it stops, and a stopped process
+//!   mid-write is the thing above. Reading one to its end before starting the
+//!   other only works while the second never fills.
 //!
-//! Verification does not use xorriso. Reading the medium back and hashing it
-//! is what "the disc holds what was intended" means, and doing it directly is
-//! both simpler and less trusting than parsing a tool's opinion of its own
-//! work.
+//! # Reading the disc back
+//!
+//! Verification hashes what the drive returns and compares it with the plan's
+//! digest; it does not ask the tool whether it thinks the disc is fine. The
+//! reading, though, goes through xorriso's `-check_media`, over SCSI, and not
+//! through the kernel's block device. The first real drive is why: after a
+//! burn the kernel still believed the device held a blank disc's two
+//! kilobytes, because writing over SCSI raises no media change, and reading
+//! the block device returned exactly that much of a correct disc.
+//!
+//! `-check_media` writes what it reads into a regular file at each block's own
+//! position, so the disc is read in chunks into one scratch file, emptied
+//! between chunks. Written at an offset into an emptied file, a chunk leaves a
+//! hole before it rather than data, so the scratch file never holds more than
+//! a chunk however large the disc.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -48,6 +60,23 @@ use crate::xorriso::{command, parse};
 /// should hear about rather than wait for.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// How much of the disc one `-check_media` run reads.
+///
+/// The scratch file holds at most this much. Larger chunks mean fewer runs,
+/// each of which acquires the drive afresh; a CD is three, a single-layer
+/// Blu-ray about a hundred.
+const VERIFY_CHUNK_BLOCKS: u64 = 256 * 1024 * 1024 / BLOCK_BYTES;
+
+/// Bytes in a data block, which is what `-check_media` counts in.
+const BLOCK_BYTES: u64 = 2048;
+
+/// How long one chunk of read-back may take.
+///
+/// Generous: a quarter of a gigabyte at single speed from a disc that needs
+/// retries is several minutes. Unlike a write, a read that is stopped ruins
+/// nothing, so it can have a limit at all.
+const VERIFY_CHUNK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
 /// How much tool output is retained.
 ///
 /// Bounded because a tool that decides to print a line per block must not
@@ -61,6 +90,8 @@ pub struct XorrisoEngine {
     program: PathBuf,
     version: String,
     cancel: CancelToken,
+    scratch_dir: PathBuf,
+    chunk_blocks: u64,
 }
 
 impl XorrisoEngine {
@@ -71,11 +102,7 @@ impl XorrisoEngine {
     /// and say so.
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            program: PathBuf::from(command::XORRISO),
-            version: "unknown".to_owned(),
-            cancel: CancelToken::new(),
-        }
+        Self::at(command::XORRISO)
     }
 
     /// An engine that runs a specific binary.
@@ -87,7 +114,30 @@ impl XorrisoEngine {
             program: program.into(),
             version: "unknown".to_owned(),
             cancel: CancelToken::new(),
+            scratch_dir: std::env::temp_dir(),
+            chunk_blocks: VERIFY_CHUNK_BLOCKS,
         }
+    }
+
+    /// Read back in chunks of this many blocks instead of a quarter of a
+    /// gigabyte.
+    ///
+    /// For tests, which need to cross chunk boundaries without writing a
+    /// quarter of a gigabyte first. A chunk is at least one block.
+    #[must_use]
+    pub fn with_read_back_chunk(mut self, blocks: u64) -> Self {
+        self.chunk_blocks = blocks.max(1);
+        self
+    }
+
+    /// Where verification keeps its scratch file.
+    ///
+    /// It holds up to a quarter of a gigabyte at a time. The system temporary
+    /// directory unless set; a worker points it at its own state volume.
+    #[must_use]
+    pub fn with_scratch_dir(mut self, scratch_dir: impl Into<PathBuf>) -> Self {
+        self.scratch_dir = scratch_dir.into();
+        self
     }
 
     /// Attach a cancellation token.
@@ -134,33 +184,19 @@ impl XorrisoEngine {
                 source,
             })?;
 
-        let mut stdout = child.stdout.take();
-        let mut stderr = child.stderr.take();
-        let mut text = String::new();
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
 
-        // Both pipes are drained. A process whose pipe fills because nobody is
-        // reading it stops, and a stopped process holding a drive is worse
-        // than a slow one.
-        let collect = async {
-            if let Some(pipe) = stdout.as_mut() {
-                let mut buffer = String::new();
-                let _ = pipe.read_to_string(&mut buffer).await;
-                push_bounded(&mut text, &buffer);
-            }
-            if let Some(pipe) = stderr.as_mut() {
-                let mut buffer = String::new();
-                let _ = pipe.read_to_string(&mut buffer).await;
-                push_bounded(&mut text, &buffer);
-            }
-        };
-
+        // Both pipes drained together. A process whose pipe fills because
+        // nobody is reading it stops, and a stopped process holding a drive is
+        // worse than a slow one.
         let finished = tokio::time::timeout(timeout, async {
-            collect.await;
-            child.wait().await
+            let (stdout, stderr) = tokio::join!(read_all(stdout), read_all(stderr));
+            (stdout, stderr, child.wait().await)
         })
         .await;
 
-        let Ok(status) = finished else {
+        let Ok((stdout, stderr, status)) = finished else {
             // A probe that will not answer is killed. This is never reached
             // for a write, which has no timeout for exactly the reason a
             // probe does.
@@ -175,6 +211,9 @@ impl XorrisoEngine {
             source,
         })?;
 
+        let mut text = String::new();
+        push_bounded(&mut text, &stdout);
+        push_bounded(&mut text, &stderr);
         let run = Run {
             text,
             exit_code: status.code(),
@@ -210,6 +249,36 @@ impl Default for XorrisoEngine {
 struct Run {
     text: String,
     exit_code: Option<i32>,
+}
+
+/// Read a pipe to its end. Unbounded here and bounded by the caller, which is
+/// fine for probes: their output is a screenful.
+async fn read_all<R: tokio::io::AsyncRead + Unpin>(pipe: Option<R>) -> String {
+    let mut text = String::new();
+    if let Some(mut pipe) = pipe {
+        let mut bytes = Vec::new();
+        let _ = pipe.read_to_end(&mut bytes).await;
+        text = String::from_utf8_lossy(&bytes).into_owned();
+    }
+    text
+}
+
+/// Read a pipe line by line as it arrives, reporting each line and keeping a
+/// bounded copy.
+async fn follow_lines<R: tokio::io::AsyncRead + Unpin>(
+    pipe: Option<R>,
+    sink: &dyn EventSink,
+) -> String {
+    let mut text = String::new();
+    if let Some(pipe) = pipe {
+        let mut lines = BufReader::new(pipe).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            emit(sink, &line);
+            push_bounded(&mut text, &line);
+            push_bounded(&mut text, "\n");
+        }
+    }
+    text
 }
 
 /// Append to a bounded log, saying so when something is dropped.
@@ -445,28 +514,17 @@ impl BurnEngine for XorrisoEngine {
 
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
-        let mut text = String::new();
 
-        // Progress arrives on stderr and the summary on stdout, so both are
-        // read line by line as they come rather than after the process ends.
-        // A write is minutes long; a progress bar that only moves at the end
-        // is not one.
-        if let Some(stderr) = stderr {
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                emit(sink, &line);
-                push_bounded(&mut text, &line);
-                push_bounded(&mut text, "\n");
-            }
-        }
-        if let Some(stdout) = stdout {
-            let mut lines = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                emit(sink, &line);
-                push_bounded(&mut text, &line);
-                push_bounded(&mut text, "\n");
-            }
-        }
+        // Both read line by line as they come, and at the same time. A write
+        // is minutes long; a progress bar that only moves at the end is not
+        // one, and a pipe left unread until the other closes can fill and
+        // stop the write. In cdrecord mode everything xorriso says, progress,
+        // completion and every severity line, is on stderr, so reading the two
+        // together changes nothing about the order the outcome is judged in.
+        let (stderr_text, stdout_text) =
+            tokio::join!(follow_lines(stderr, sink), follow_lines(stdout, sink));
+        let mut text = stderr_text;
+        push_bounded(&mut text, &stdout_text);
 
         let status = child.wait().await.map_err(|source| EngineError::Io {
             operation: "waiting for xorriso",
@@ -541,18 +599,18 @@ impl BurnEngine for XorrisoEngine {
             "reading the medium back",
         ));
 
-        // Read the medium directly rather than asking the tool whether it
-        // thinks the disc is fine. Comparing what the drive actually returns
-        // against what the library holds is the only thing that establishes
-        // the disc holds what was intended.
-        let (observed, bytes) = hash_prefix(
-            &PathBuf::from(&plan.drive.device_alias),
-            plan.total_bytes,
-            sink,
-        )
-        .await?;
+        let scratch = self
+            .scratch_dir
+            .join(format!("{}.readback", plan.attempt_id));
+        let result = self.read_back(plan, &scratch, sink).await;
+        // Always, including after an error: a quarter of a gigabyte left in a
+        // worker's state per failed verification adds up.
+        let _ = tokio::fs::remove_file(&scratch).await;
+        let read = result?;
 
-        let matched = observed == expected && bytes == plan.total_bytes;
+        let matched = read.unreadable_at.is_none()
+            && read.digest == expected
+            && read.bytes == plan.total_bytes;
         sink.emit(BurnEvent::new(
             "verifying",
             if matched {
@@ -560,14 +618,20 @@ impl BurnEngine for XorrisoEngine {
             } else {
                 "VERIFY_MISMATCH"
             },
-            format!("read back {bytes} bytes"),
+            match read.unreadable_at {
+                Some(offset) => format!(
+                    "read back {} bytes; the drive could not read the block at byte {offset}",
+                    read.bytes
+                ),
+                None => format!("read back {} bytes", read.bytes),
+            },
         ));
 
         Ok(VerifyReport {
             matched,
-            bytes_compared: bytes,
+            bytes_compared: read.bytes,
             method: "full_sector_readback".to_owned(),
-            first_mismatch_offset: None,
+            first_mismatch_offset: read.unreadable_at,
             // Always populated: a verification result that does not state its
             // limits invites being read as a stronger guarantee than it is.
             limitations: vec![
@@ -611,6 +675,138 @@ impl BurnEngine for XorrisoEngine {
         ];
         self.run(&arguments, PROBE_TIMEOUT).await.map(|_| ())
     }
+}
+
+/// What reading a disc back produced.
+struct ReadBack {
+    /// Digest of every byte read, in order.
+    digest: Sha256Digest,
+    /// Bytes read.
+    bytes: u64,
+    /// Byte offset of the first block the drive reported it could not read.
+    unreadable_at: Option<u64>,
+}
+
+impl XorrisoEngine {
+    /// Read the written extent of the medium back through xorriso, a chunk at
+    /// a time, hashing as it goes.
+    async fn read_back(
+        &self,
+        plan: &BurnPlan,
+        scratch: &Path,
+        sink: &dyn EventSink,
+    ) -> Result<ReadBack, EngineError> {
+        use sha2::Digest as _;
+
+        let length = plan.total_bytes;
+        let blocks = length.div_ceil(BLOCK_BYTES);
+        let mut hasher = sha2::Sha256::new();
+        let mut read_total = 0_u64;
+        let mut unreadable_at = None;
+
+        let mut first = 0_u64;
+        while first < blocks {
+            // Between chunks, never within one: a read that is stopped ruins
+            // nothing, so verification is cancellable where a write is not.
+            self.check_cancelled()?;
+            let last = (first + self.chunk_blocks).min(blocks) - 1;
+
+            // Emptied before each chunk, so what it holds is only this chunk.
+            tokio::fs::write(scratch, b"")
+                .await
+                .map_err(|source| EngineError::Io {
+                    operation: "preparing the read-back file",
+                    source,
+                })?;
+            let arguments =
+                command::verify(&plan.drive, first, last, scratch).ok_or_else(|| {
+                    EngineError::Unsupported {
+                        what: format!(
+                            "the scratch directory {} is not an absolute path",
+                            self.scratch_dir.display()
+                        ),
+                    }
+                })?;
+            let run = self.run(&arguments, VERIFY_CHUNK_TIMEOUT).await?;
+
+            // The drive's own account of which blocks it could read. A block it
+            // could not read is left as a hole in the file, which would hash
+            // as zeroes; the mismatch that produces is real, and this says
+            // where it is.
+            if unreadable_at.is_none()
+                && let Some(region) = parse::media_regions(&run.text)
+                    .iter()
+                    .filter(|region| region.overlaps(first, last))
+                    .find(|region| !region.read_ok())
+            {
+                unreadable_at = Some(region.lba.max(first) * BLOCK_BYTES);
+            }
+
+            let start = first * BLOCK_BYTES;
+            let end = ((last + 1) * BLOCK_BYTES).min(length);
+            let read = hash_range(scratch, start, end, &mut hasher).await?;
+            read_total += read;
+            if read < end - start {
+                // The drive returned less than was asked for. What is missing
+                // was not read, and the digest will say so.
+                break;
+            }
+
+            #[allow(clippy::cast_precision_loss)]
+            let fraction = read_total as f32 / length.max(1) as f32;
+            sink.emit(BurnEvent::progress(
+                "verifying",
+                "VERIFY_PROGRESS",
+                fraction,
+                format!("read {read_total} of {length} bytes"),
+            ));
+            first = last + 1;
+        }
+
+        Ok(ReadBack {
+            digest: Sha256Digest::from_bytes(hasher.finalize().into()),
+            bytes: read_total,
+            unreadable_at,
+        })
+    }
+}
+
+/// Feed bytes `start` to `end` of a file into a hasher, returning how many
+/// there were.
+async fn hash_range(
+    path: &Path,
+    start: u64,
+    end: u64,
+    hasher: &mut sha2::Sha256,
+) -> Result<u64, EngineError> {
+    use sha2::Digest as _;
+    use tokio::io::AsyncSeekExt as _;
+
+    let io = |operation: &'static str| {
+        move |source: std::io::Error| EngineError::Io { operation, source }
+    };
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(io("opening the read-back file"))?;
+    file.seek(std::io::SeekFrom::Start(start))
+        .await
+        .map_err(io("seeking in the read-back file"))?;
+
+    let mut buffer = vec![0_u8; 1 << 20];
+    let mut total = 0_u64;
+    while total < end - start {
+        let want = usize::try_from((end - start - total).min(buffer.len() as u64)).unwrap_or(0);
+        let read = file
+            .read(&mut buffer[..want])
+            .await
+            .map_err(io("reading the read-back file"))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        total += read as u64;
+    }
+    Ok(total)
 }
 
 /// Emit an engine event for a line of tool output, when it carries one.
@@ -677,64 +873,6 @@ async fn hash_file(path: &std::path::Path) -> Result<Sha256Digest, EngineError> 
         hasher.update(&buffer[..read]);
     }
     Ok(Sha256Digest::from_bytes(hasher.finalize().into()))
-}
-
-/// Hash the first `length` bytes of a medium, reporting progress.
-async fn hash_prefix(
-    path: &std::path::Path,
-    length: u64,
-    sink: &dyn EventSink,
-) -> Result<(Sha256Digest, u64), EngineError> {
-    use sha2::Digest as _;
-
-    let mut file = tokio::fs::File::open(path)
-        .await
-        .map_err(|source| EngineError::Io {
-            operation: "opening the medium",
-            source,
-        })?;
-
-    let mut hasher = sha2::Sha256::new();
-    let mut buffer = vec![0_u8; 1 << 20];
-    let mut read_total: u64 = 0;
-    let mut last_reported = 0_u64;
-
-    while read_total < length {
-        let want = usize::try_from((length - read_total).min(buffer.len() as u64)).unwrap_or(0);
-        let read = file
-            .read(&mut buffer[..want])
-            .await
-            .map_err(|source| EngineError::Io {
-                operation: "reading the medium",
-                source,
-            })?;
-        if read == 0 {
-            // Short: the medium holds less than was written to it, which is a
-            // mismatch rather than an error.
-            break;
-        }
-        hasher.update(&buffer[..read]);
-        read_total += read as u64;
-
-        // A reading every few per cent, not every buffer: a verify of a
-        // twenty-five gigabyte disc would otherwise emit thousands of events.
-        if read_total - last_reported > length / 20 + 1 {
-            last_reported = read_total;
-            #[allow(clippy::cast_precision_loss)]
-            let fraction = read_total as f32 / length.max(1) as f32;
-            sink.emit(BurnEvent::progress(
-                "verifying",
-                "VERIFY_PROGRESS",
-                fraction,
-                format!("read {read_total} of {length} bytes"),
-            ));
-        }
-    }
-
-    Ok((
-        Sha256Digest::from_bytes(hasher.finalize().into()),
-        read_total,
-    ))
 }
 
 #[cfg(test)]

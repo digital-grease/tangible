@@ -312,6 +312,63 @@ pub fn write_outcome(output: &str) -> WriteOutcome {
     }
 }
 
+/// One region of a `-check_media` report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MediaRegion {
+    /// First block of the region.
+    pub lba: u64,
+    /// Blocks in it.
+    pub blocks: u64,
+    /// xorriso's verdict, such as `+ good`, `- unreadable` or `0 untested`.
+    pub quality: String,
+}
+
+impl MediaRegion {
+    /// Whether xorriso read this region successfully.
+    ///
+    /// Its own convention: a verdict beginning `+` was read, `-` was not, and
+    /// `0` was not tried.
+    #[must_use]
+    pub fn read_ok(&self) -> bool {
+        self.quality.starts_with('+')
+    }
+
+    /// Whether xorriso tried to read this region.
+    #[must_use]
+    pub fn tested(&self) -> bool {
+        !self.quality.starts_with('0')
+    }
+
+    /// Whether the region overlaps blocks `first` to `last`.
+    #[must_use]
+    pub const fn overlaps(&self, first: u64, last: u64) -> bool {
+        self.lba <= last && self.lba.saturating_add(self.blocks) > first
+    }
+}
+
+/// Read the regions of a `-check_media` report.
+///
+/// The shape, from a real drive:
+///   `Media region :        600 ,        561 , + good`
+#[must_use]
+pub fn media_regions(output: &str) -> Vec<MediaRegion> {
+    output
+        .lines()
+        .filter_map(|line| field(line, "Media region"))
+        .filter_map(|value| {
+            let mut parts = value.splitn(3, ',');
+            let lba = parts.next()?.trim().parse().ok()?;
+            let blocks = parts.next()?.trim().parse().ok()?;
+            let quality = parts.next()?.trim().to_owned();
+            Some(MediaRegion {
+                lba,
+                blocks,
+                quality,
+            })
+        })
+        .collect()
+}
+
 /// Parse an UPDATE line into progress.
 ///
 /// The shape is:
@@ -643,6 +700,41 @@ xorriso 1.5.6 : RockRidge filesystem manipulator, libburnia project.
         assert!(medium.blank);
         assert_eq!(medium.profile.as_deref(), Some("CD-R"));
         assert_eq!(medium.writable_blocks, Some(359_844));
+    }
+
+    #[test]
+    fn a_check_media_report_is_read_region_by_region() {
+        // Captured from a real drive reading blocks 600 to 1160 of a CD-R.
+        let regions = media_regions(
+            "Media checks :        lba ,       size , quality\n\
+             Media region :          0 ,        600 , 0 untested\n\
+             Media region :        600 ,        561 , + good\n\
+             Media region :       1161 ,       2400 , 0 untested\n",
+        );
+        assert_eq!(regions.len(), 3, "the header is not a region");
+        assert_eq!(
+            regions[1],
+            MediaRegion {
+                lba: 600,
+                blocks: 561,
+                quality: "+ good".to_owned()
+            }
+        );
+        assert!(regions[1].read_ok() && regions[1].tested());
+        assert!(!regions[0].tested());
+        assert!(regions[1].overlaps(600, 1160));
+        assert!(
+            !regions[0].overlaps(600, 1160),
+            "ends where the range begins"
+        );
+        assert!(!regions[2].overlaps(600, 1160), "begins after it ends");
+    }
+
+    #[test]
+    fn a_region_that_could_not_be_read_says_so() {
+        let regions = media_regions("Media region :        100 ,         16 , - unreadable\n");
+        assert!(regions[0].tested());
+        assert!(!regions[0].read_ok());
     }
 
     #[test]

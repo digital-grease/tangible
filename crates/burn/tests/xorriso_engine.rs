@@ -77,7 +77,7 @@ fn plan(staged: &Path, target: &Path, bytes: &[u8]) -> BurnPlan {
 }
 
 struct Fixture {
-    _dir: TempDir,
+    dir: TempDir,
     staged: PathBuf,
     target: PathBuf,
     bytes: Vec<u8>,
@@ -96,7 +96,7 @@ fn fixture(len: usize) -> Fixture {
     let target = dir.path().join("medium.img");
 
     Fixture {
-        _dir: dir,
+        dir,
         staged,
         target,
         bytes,
@@ -162,6 +162,73 @@ async fn a_real_write_lands_the_bytes_and_verifies() {
         !verified.limitations.is_empty(),
         "a verification result must state its limits"
     );
+}
+
+#[tokio::test]
+async fn a_read_back_in_uneven_chunks_matches() {
+    // Chunk boundaries are where offset arithmetic goes wrong. 1000 blocks
+    // does not divide the image, so the last chunk is a partial one.
+    let Some(binary) = binary() else { return };
+    let fixture = fixture(8 * 1024 * 1024 + 4096);
+    let engine = XorrisoEngine::at(&binary).with_read_back_chunk(1000);
+    let plan = plan(&fixture.staged, &fixture.target, &fixture.bytes);
+    let sink = CollectingSink::new();
+    engine.write(&plan, &sink).await.expect("the write ran");
+
+    let verified = engine
+        .verify(&plan, &sink)
+        .await
+        .expect("the read-back ran");
+    assert!(verified.matched, "{verified:?}");
+    assert_eq!(verified.bytes_compared, fixture.bytes.len() as u64);
+    let chunks = sink
+        .events()
+        .iter()
+        .filter(|event| event.code == "VERIFY_PROGRESS")
+        .count();
+    assert_eq!(chunks, 5, "4098 blocks in chunks of 1000");
+}
+
+#[tokio::test]
+async fn a_wrong_byte_in_a_later_chunk_is_found() {
+    let Some(binary) = binary() else { return };
+    let fixture = fixture(8 * 1024 * 1024);
+    let engine = XorrisoEngine::at(&binary).with_read_back_chunk(1000);
+    let plan = plan(&fixture.staged, &fixture.target, &fixture.bytes);
+    let sink = CollectingSink::new();
+    engine.write(&plan, &sink).await.expect("the write ran");
+
+    // Block 3500, in the fourth chunk.
+    let mut written = std::fs::read(&fixture.target).expect("read the medium");
+    written[3500 * 2048 + 7] ^= 0xff;
+    std::fs::write(&fixture.target, &written).expect("corrupt the medium");
+
+    let verified = engine
+        .verify(&plan, &sink)
+        .await
+        .expect("the read-back ran");
+    assert!(!verified.matched, "{verified:?}");
+}
+
+#[tokio::test]
+async fn a_read_back_leaves_nothing_behind() {
+    // Up to a quarter of a gigabyte per verification, in a worker's state.
+    let Some(binary) = binary() else { return };
+    let fixture = fixture(1024 * 1024);
+    let scratch = TempDir::new_in(fixture.dir.path()).expect("scratch");
+    let engine = XorrisoEngine::at(&binary).with_scratch_dir(scratch.path());
+    let plan = plan(&fixture.staged, &fixture.target, &fixture.bytes);
+    engine
+        .write(&plan, &CollectingSink::new())
+        .await
+        .expect("the write ran");
+    engine
+        .verify(&plan, &CollectingSink::new())
+        .await
+        .expect("the read-back ran");
+
+    let left: Vec<_> = std::fs::read_dir(scratch.path()).expect("list").collect();
+    assert!(left.is_empty(), "{left:?}");
 }
 
 #[tokio::test]

@@ -22,7 +22,17 @@
 //! - no `-force`, no overburn, no speed override unless the plan names a
 //!   speed from its own closed set;
 //! - `blank=as_needed` only, which erases a rewritable medium that already
-//!   holds data and does nothing to a blank one.
+//!   holds data and does nothing to a blank one;
+//! - `-multi` only when the plan asks for the disc to be left open, and never
+//!   `-eject`. Ejecting is the runner's decision, made from the job's policy
+//!   after the disc has been read back; a tray opened by the write is a tray
+//!   verification finds empty, on any drive that cannot close its own.
+//!
+//! Verification reads the medium through xorriso too, with `-check_media`,
+//! rather than through the kernel's block device. After a burn the kernel
+//! still believes the device holds whatever it held before, a blank disc's
+//! two kilobytes, because writing over SCSI raises no media change; the first
+//! real drive showed a correct disc reading back as 2 KB of it.
 
 use std::path::Path;
 
@@ -101,10 +111,10 @@ pub fn write(plan: &BurnPlan) -> Option<Vec<String>> {
         // arbitrary argument.
         arguments.push(format!("speed={speed}"));
     }
-    if plan.finalize {
-        // Close the disc so it reads in players that do not understand an
-        // open session.
-        arguments.push("-eject".to_owned());
+    if !plan.finalize {
+        // Leave the session open. Closing it is cdrecord's default, and it is
+        // what lets a disc read in players that do not understand an open one.
+        arguments.push("-multi".to_owned());
     }
 
     // Some drives need the tail of a track padded to read back reliably.
@@ -115,23 +125,34 @@ pub fn write(plan: &BurnPlan) -> Option<Vec<String>> {
     Some(arguments)
 }
 
-/// Arguments that read a medium back for comparison.
+/// Arguments that read blocks `first` to `last` of a medium into `data_to`.
 ///
-/// Reading is done with `-check_media` rather than by copying the medium to a
-/// file: the comparison is of what the drive can actually read, block by
-/// block, and a copy would hide a sector that needed twenty retries.
+/// Through libburn over SCSI, as the write went, so the read does not depend
+/// on the kernel having noticed that the disc changed. `-outdev` rather than
+/// `-indev`, because `-indev` loads the ISO tree first, which a comparison of
+/// raw blocks does not need and a disc that is not ISO 9660 does not have.
+///
+/// `data_to` must be a regular file: xorriso writes each block at its own
+/// position in it, block times 2048, and a pipe cannot be written that way.
+/// Returns `None` for a path that is not absolute text.
 #[must_use]
-pub fn verify(drive: &DriveRef, blocks: u64) -> Vec<String> {
-    vec![
+pub fn verify(drive: &DriveRef, first: u64, last: u64, data_to: &Path) -> Option<Vec<String>> {
+    if !data_to.is_absolute() {
+        return None;
+    }
+    Some(vec![
         "-abort_on".to_owned(),
         "FAILURE".to_owned(),
-        "-indev".to_owned(),
+        "-outdev".to_owned(),
         device_argument(&drive.device_alias),
         "-check_media".to_owned(),
-        "use=indev".to_owned(),
-        format!("data_to={blocks}"),
+        "use=outdev".to_owned(),
+        "what=disc".to_owned(),
+        format!("min_lba={first}"),
+        format!("max_lba={last}"),
+        format!("data_to={}", path_argument(data_to)?),
         "--".to_owned(),
-    ]
+    ])
 }
 
 /// Render a device for xorriso.
@@ -287,21 +308,19 @@ mod tests {
     }
 
     #[test]
-    fn finalizing_is_what_ejects() {
+    fn an_open_disc_is_asked_for_by_name_and_nothing_ejects() {
+        // Finalizing used to add -eject, which neither closes the disc (that
+        // is cdrecord's default) nor leaves it where verification can read it.
         let mut open = plan(vec![input("/staging/disc.iso")]);
         open.finalize = false;
-        assert!(
-            !write(&open)
-                .expect("arguments")
-                .contains(&"-eject".to_owned())
-        );
+        let arguments = write(&open).expect("arguments");
+        assert!(arguments.contains(&"-multi".to_owned()), "{arguments:?}");
+        assert!(!arguments.contains(&"-eject".to_owned()), "{arguments:?}");
 
         open.finalize = true;
-        assert!(
-            write(&open)
-                .expect("arguments")
-                .contains(&"-eject".to_owned())
-        );
+        let arguments = write(&open).expect("arguments");
+        assert!(!arguments.contains(&"-multi".to_owned()), "{arguments:?}");
+        assert!(!arguments.contains(&"-eject".to_owned()), "{arguments:?}");
     }
 
     #[test]
@@ -326,8 +345,39 @@ mod tests {
     fn inspecting_and_verifying_name_the_same_device() {
         let drive = drive("/dev/disc-block");
         assert!(inspect(&drive).contains(&"/dev/disc-block".to_owned()));
-        assert!(verify(&drive, 1000).contains(&"/dev/disc-block".to_owned()));
-        assert!(verify(&drive, 1000).contains(&"data_to=1000".to_owned()));
+        let arguments = verify(&drive, 0, 999, Path::new("/var/tmp/readback")).expect("arguments");
+        assert!(arguments.contains(&"/dev/disc-block".to_owned()));
+    }
+
+    #[test]
+    fn a_read_back_is_exactly_these_arguments() {
+        assert_eq!(
+            verify(
+                &drive("/dev/disc-block"),
+                131_072,
+                262_143,
+                Path::new("/var/tmp/readback")
+            )
+            .expect("arguments"),
+            vec![
+                "-abort_on",
+                "FAILURE",
+                "-outdev",
+                "/dev/disc-block",
+                "-check_media",
+                "use=outdev",
+                "what=disc",
+                "min_lba=131072",
+                "max_lba=262143",
+                "data_to=/var/tmp/readback",
+                "--",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_read_back_will_not_write_somewhere_relative() {
+        assert!(verify(&drive("/dev/disc-block"), 0, 1, Path::new("readback")).is_none());
     }
 
     #[test]
