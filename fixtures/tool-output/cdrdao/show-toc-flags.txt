@@ -1,0 +1,15 @@
+Cdrdao version 1.2.4 - (C) Andreas Mueller <andreas@daneb.de>
+TOC TYPE: CD_ROM
+TRACK  1  Mode MODE1_RAW:
+          COPY PERMITTED
+          START  00:00:00(     0)
+          END    00:13:25(  1000)
+
+TRACK  2  Mode AUDIO:
+          ISRC US RC1 76 07839
+          COPY PERMITTED
+          PRE-EMPHASIS
+          FOUR CHANNEL AUDIO
+          PREGAP 00:02:00(   150)
+          START  00:15:25(  1150)
+          END    00:53:25(  4000)

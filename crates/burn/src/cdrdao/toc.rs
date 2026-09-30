@@ -181,7 +181,7 @@ pub enum TocError {
 }
 
 /// The disc type line, which cdrdao requires first.
-fn disc_type(tracks: &[PlannedTrack]) -> &'static str {
+pub(crate) fn disc_type(tracks: &[PlannedTrack]) -> &'static str {
     if tracks
         .iter()
         .any(|track| track.mode.to_ascii_uppercase().starts_with("MODE2"))
@@ -207,7 +207,7 @@ fn disc_type(tracks: &[PlannedTrack]) -> &'static str {
 /// name: cdrdao's mode names carry no digits, so `MODE2/2336` and
 /// `MODE2/2352` become entirely different words. Each pairing is size-checked
 /// against [`tangible_domain::cd`] by a test.
-fn track_mode(track: &PlannedTrack) -> Result<&'static str, TocError> {
+pub(crate) fn track_mode(track: &PlannedTrack) -> Result<&'static str, TocError> {
     match track.mode.to_ascii_uppercase().as_str() {
         "AUDIO" => Ok("AUDIO"),
         "MODE1/2048" => Ok("MODE1"),

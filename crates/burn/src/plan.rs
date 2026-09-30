@@ -607,6 +607,25 @@ pub enum PreflightFailure {
         /// The track.
         track: u32,
     },
+    /// The table of contents the engine writes from could not be made, or the
+    /// writing tool objected to it.
+    ///
+    /// Specific to an engine that writes from such a document, which is why it
+    /// is not among the checks every layout gets.
+    TableOfContentsRefused {
+        /// Why, in the words of whichever refused it. Not `reason`, which is
+        /// the tag this enum is serialized under.
+        cause: String,
+    },
+    /// The writing tool read the table of contents differently from the plan.
+    ///
+    /// The last check before media is consumed that the tool will write what
+    /// was meant, made by asking the tool itself rather than by trusting the
+    /// document it was handed.
+    TableOfContentsDisagrees {
+        /// What disagreed.
+        detail: String,
+    },
 }
 
 /// The outcome of preflight.

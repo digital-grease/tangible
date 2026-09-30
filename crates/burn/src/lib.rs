@@ -7,9 +7,10 @@
 //! A successful tool exit is not verified media, so write and verify stay
 //! separate operations.
 //!
-//! In place: the plan and report types, the `BurnEngine` contract, and a
-//! hardware-free engine backed by a file standing in for the disc. Real
-//! engine adapters follow.
+//! In place: the plan and report types, the `BurnEngine` contract, a
+//! hardware-free engine backed by a file standing in for the disc, and two
+//! real adapters: xorriso for prepared images and cdrdao for discs described
+//! as tracks.
 
 pub mod cdrdao;
 pub mod client;
@@ -21,7 +22,7 @@ pub mod runner;
 pub mod worker;
 pub mod xorriso;
 
-pub use cdrdao::{TocError, write_toc};
+pub use cdrdao::{CdrdaoEngine, TocError, write_toc};
 pub use client::{
     Capabilities, ClientError, Completion, CompletionAck, DriveDescription, EngineDescription,
     Enrolled, FailureBody, Leased, PhysicalMediumBody, VerificationReportBody, WorkerClient,

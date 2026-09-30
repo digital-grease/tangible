@@ -1,0 +1,4 @@
+CD_DA
+
+TRACK AUDIO
+FILE "/work/nowhere.bin" SWAP 00:00:00 00:20:00

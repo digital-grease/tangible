@@ -46,6 +46,30 @@ jobs:
       - name: Test
         run: cargo test --workspace --all-features
 
+  engines:
+    # The engine tests run the real xorriso and cdrdao, against a file target
+    # and a table of contents respectively. No drive is involved; that is what
+    # TANGIBLE_HARDWARE_TESTS is for.
+    name: Burn engines against the real tools
+    runs-on: ubuntu-latest
+    env:
+      TANGIBLE_XORRISO_TESTS: "1"
+      TANGIBLE_CDRDAO_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install xorriso and cdrdao
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y xorriso cdrdao
+
+      - name: xorriso engine
+        run: cargo test -p tangible-burn --all-features --test xorriso_engine
+
+      - name: cdrdao engine
+        run: cargo test -p tangible-burn --all-features --test cdrdao_engine
+
   openapi:
     name: OpenAPI and generated client are current
     runs-on: ubuntu-latest

@@ -1,0 +1,7 @@
+CD_DA
+
+TRACK AUDIO
+FILE "/work/track01.bin" SWAP 00:00:00 00:40:00
+
+TRACK AUDIO
+FILE "/work/track02.bin" SWAP 00:00:00 00:20:00

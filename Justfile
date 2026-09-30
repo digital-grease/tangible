@@ -104,6 +104,16 @@ test-integration: dev-db
 test-xorriso:
     TANGIBLE_XORRISO_TESTS=1 cargo test -p tangible-burn --test xorriso_engine --all-features
 
+# Tests that run the real cdrdao over the tables of contents the engine writes.
+# No drive involved: cdrdao cannot write to a file, so these check what it
+# reads a table of contents as, and how it refuses a drive that is not there.
+#
+# Skipped rather than failed when cdrdao is missing. TANGIBLE_CDRDAO_BIN may
+# point at a wrapper that runs it in a container, if the wrapper mounts the
+# temporary directory at the same path.
+test-cdrdao:
+    TANGIBLE_CDRDAO_TESTS=1 cargo test -p tangible-burn --test cdrdao_engine --all-features
+
 # Tests that touch a real optical drive. Never run in normal CI.
 test-hardware:
     #!/usr/bin/env bash

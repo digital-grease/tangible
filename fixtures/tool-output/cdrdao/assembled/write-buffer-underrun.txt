@@ -1,0 +1,13 @@
+Cdrdao version 1.2.4 - (C) Andreas Mueller <andreas@daneb.de>
+/dev/disc-block: HL-DT-ST BD-RE  WH16NS60	Rev: 1.02
+Using driver: Generic SCSI-3/MMC - Version 2.0 (options 0x0000)
+
+Starting write at speed 8...
+Process can be aborted with QUIT signal (usually CTRL-\).
+Turning BURN-Proof on
+Executing power calibration...
+Power calibration successful.
+Writing track 01 (mode MODE2_RAW/MODE2_RAW )...
+Wrote 1 of 9 MB (Buffers 100%  96%).Wrote 2 of 9 MB (Buffers 100%  97%).Writing track 02 (mode AUDIO/AUDIO )...
+Wrote 3 of 9 MB (Buffers 100%  95%).Wrote 4 of 9 MB (Buffers 100%  96%).Wrote 5 of 9 MB (Buffers 100%  97%).ERROR: Writing failed - buffer under run?
+ERROR: Writing failed.

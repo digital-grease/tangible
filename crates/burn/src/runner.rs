@@ -1258,6 +1258,8 @@ fn failure_of(failures: &[PreflightFailure]) -> FailureBody {
         Some(PreflightFailure::TrackLayoutNeedsACd { .. }) => "PREFLIGHT_NEEDS_A_CD",
         Some(PreflightFailure::TrackTooShort { .. }) => "PREFLIGHT_TRACK_TOO_SHORT",
         Some(PreflightFailure::AudioByteOrderUnknown { .. }) => "PREFLIGHT_BYTE_ORDER_UNKNOWN",
+        Some(PreflightFailure::TableOfContentsRefused { .. }) => "PREFLIGHT_TOC_REFUSED",
+        Some(PreflightFailure::TableOfContentsDisagrees { .. }) => "PREFLIGHT_TOC_DISAGREES",
         None => "PREFLIGHT_FAILED",
     };
     FailureBody {

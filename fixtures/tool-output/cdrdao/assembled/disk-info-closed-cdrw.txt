@@ -1,0 +1,16 @@
+Cdrdao version 1.2.4 - (C) Andreas Mueller <andreas@daneb.de>
+/dev/disc-block: HL-DT-ST BD-RE  WH16NS60	Rev: 1.02
+Using driver: Generic SCSI-3/MMC - Version 2.0 (options 0x0000)
+
+That data below may not reflect the real status of the inserted medium
+if a simulation run was performed before. Reload the medium in this case.
+
+CD-RW                : yes
+Total Capacity       : 79:59:74 (359849 blocks, 702/807 MB)
+CD-R medium          : n/a
+Recording Speed      : 4X - 10X
+CD-R empty           : no
+Toc Type             : CD-ROM XA
+Sessions             : 1
+Last Track           : 2
+Appendable           : no

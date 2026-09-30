@@ -1,0 +1,9 @@
+CD_ROM
+
+TRACK MODE1_RAW
+DATAFILE "/work/disc.bin" 00:13:25
+
+TRACK AUDIO
+FILE "/work/disc.bin" SWAP 00:13:25 00:02:00
+START
+FILE "/work/disc.bin" SWAP 00:15:25 00:38:00

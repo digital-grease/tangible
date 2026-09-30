@@ -1,0 +1,8 @@
+Cdrdao version 1.2.4 - (C) Andreas Mueller <andreas@daneb.de>
+Starting read test...
+Process can be aborted with QUIT signal (usually CTRL-\).
+WARNING: Cannot lock memory pages: Cannot allocate memory
+Writing track 01 (mode MODE2_RAW/AUDIO )...
+Read 0 of 9 MB.Read 0 of 9 MB.Read 0 of 9 MB.Read 0 of 9 MB.Read 0 of 9 MB.Read 1 of 9 MB.Read 1 of 9 MB.Read 1 of 9 MB.Read 1 of 9 MB.Read 1 of 9 MB.Read 1 of 9 MB.Read 2 of 9 MB.Read 2 of 9 MB.Read 2 of 9 MB.Writing track 02 (mode AUDIO/AUDIO )...
+Read 2 of 9 MB.Read 2 of 9 MB.Read 2 of 9 MB.Read 2 of 9 MB.Read 3 of 9 MB.Read 3 of 9 MB.Read 3 of 9 MB.Read 3 of 9 MB.Read 3 of 9 MB.Read 3 of 9 MB.Read 4 of 9 MB.Read 4 of 9 MB.Read 4 of 9 MB.Read 4 of 9 MB.Read 4 of 9 MB.Read 4 of 9 MB.Read 5 of 9 MB.Read 5 of 9 MB.Read 5 of 9 MB.Read 5 of 9 MB.Read 5 of 9 MB.Read 5 of 9 MB.Read 6 of 9 MB.Read 6 of 9 MB.Read 6 of 9 MB.Read 6 of 9 MB.Read 6 of 9 MB.Read 6 of 9 MB.Read 7 of 9 MB.Read 7 of 9 MB.Read 7 of 9 MB.Read 7 of 9 MB.Read 7 of 9 MB.Read 7 of 9 MB.Read 8 of 9 MB.Read 8 of 9 MB.Read 8 of 9 MB.Read 8 of 9 MB.Read 8 of 9 MB.Read 8 of 9 MB.Read 9 of 9 MB.Read 9 of 9 MB.
+Read 4150 blocks.

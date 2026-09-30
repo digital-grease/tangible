@@ -1,0 +1,11 @@
+Cdrdao version 1.2.4 - (C) Andreas Mueller <andreas@daneb.de>
+TOC TYPE: CD_DA
+CATALOG NUMBER: 1234567890123
+TRACK  1  Mode AUDIO:
+          ISRC US RC1 76 07839
+          COPY NOT PERMITTED
+          NO PRE-EMPHASIS
+          TWO CHANNEL AUDIO
+          START  00:00:00(     0)
+          INDEX  2 00:02:00(   150)
+          END    00:40:00(  3000)

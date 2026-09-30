@@ -1,0 +1,6 @@
+Cdrdao version 1.2.4 - (C) Andreas Mueller <andreas@daneb.de>
+ERROR: syntax-error.toc:5: Illegal token: B
+ERROR: syntax-error.toc:5: Illegal token: O
+ERROR: syntax-error.toc:5: Illegal token: G
+ERROR: syntax-error.toc:5: Illegal token: U
+ERROR: syntax-error.toc:5: Illegal token: S

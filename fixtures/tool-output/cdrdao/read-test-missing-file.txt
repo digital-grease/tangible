@@ -1,0 +1,7 @@
+Cdrdao version 1.2.4 - (C) Andreas Mueller <andreas@daneb.de>
+ERROR: Track 1: Cannot open audio file "/work/nowhere.bin": No such file or directory
+ERROR: The toc check function detected at least one warning.
+ERROR: If you record this toc the resulting CD might be unusable
+ERROR: or the recording process might abort with error.
+ERROR: Use option --force to ignore the warnings.
+ERROR: Toc file "missing-file.toc" is inconsistent.

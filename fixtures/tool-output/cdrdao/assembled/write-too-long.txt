@@ -1,0 +1,6 @@
+Cdrdao version 1.2.4 - (C) Andreas Mueller <andreas@daneb.de>
+/dev/disc-block: HL-DT-ST BD-RE  WH16NS60	Rev: 1.02
+Using driver: Generic SCSI-3/MMC - Version 2.0 (options 0x0000)
+
+ERROR: Length of toc (80:10:00, 360750 blocks) exceeds capacity of CD-R (79:59:74, 359849 blocks).
+ERROR: Please use option '--overburn' to startrecording anyway.

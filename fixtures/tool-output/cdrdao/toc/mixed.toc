@@ -1,0 +1,8 @@
+CD_ROM_XA
+
+TRACK MODE2_RAW
+DATAFILE "/work/disc.bin" 00:13:25
+
+TRACK AUDIO
+PREGAP 00:02:00
+FILE "/work/disc.bin" SWAP 00:13:25 00:40:00

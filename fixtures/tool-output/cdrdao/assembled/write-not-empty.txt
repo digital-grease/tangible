@@ -1,0 +1,5 @@
+Cdrdao version 1.2.4 - (C) Andreas Mueller <andreas@daneb.de>
+/dev/disc-block: HL-DT-ST BD-RE  WH16NS60	Rev: 1.02
+Using driver: Generic SCSI-3/MMC - Version 2.0 (options 0x0000)
+
+ERROR: Inserted disk is not empty and not appendable.

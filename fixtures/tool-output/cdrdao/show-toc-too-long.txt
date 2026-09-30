@@ -1,0 +1,10 @@
+Cdrdao version 1.2.4 - (C) Andreas Mueller <andreas@daneb.de>
+ERROR: Track 1: Requested length (0 + 882000 samples) exceeds length of audio file "/work/short.bin" (58800 samples at offset 0).
+ERROR: Toc file "too-long.toc" is inconsistent.
+TOC TYPE: CD_DA
+TRACK  1  Mode AUDIO:
+          COPY NOT PERMITTED
+          NO PRE-EMPHASIS
+          TWO CHANNEL AUDIO
+          START  00:00:00(     0)
+          END    00:20:00(  1500)
