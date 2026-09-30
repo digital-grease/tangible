@@ -596,6 +596,8 @@ impl ImportPipeline {
                     sector_count: track.sector_count,
                     pregap_sectors: track.pregap_sectors,
                     isrc: track.isrc.clone(),
+                    sample_byte_order: track.sample_byte_order,
+                    flags: track.flags.clone(),
                     indexes: track
                         .indexes
                         .iter()

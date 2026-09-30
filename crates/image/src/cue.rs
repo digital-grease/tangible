@@ -27,6 +27,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use tangible_domain::LogicalPath;
+use tangible_domain::cd::{SampleByteOrder, TrackFlag};
 
 /// Frames in one second of CD audio, and therefore sectors.
 pub use tangible_domain::cd::{FRAMES_PER_SECOND, SECONDS_PER_MINUTE};
@@ -245,6 +246,20 @@ impl CueFile {
     pub fn is_raw_sectors(&self) -> bool {
         matches!(self.format.as_str(), "BINARY" | "MOTOROLA")
     }
+
+    /// How the file stores audio samples, when its format says.
+    ///
+    /// The format word is the only place a sheet records this, and nothing in
+    /// the bytes does. `BINARY` is little-endian and `MOTOROLA` big-endian;
+    /// anything else is not raw sectors and has no answer here.
+    #[must_use]
+    pub fn sample_byte_order(&self) -> Option<SampleByteOrder> {
+        match self.format.as_str() {
+            "BINARY" => Some(SampleByteOrder::LittleEndian),
+            "MOTOROLA" => Some(SampleByteOrder::BigEndian),
+            _ => None,
+        }
+    }
 }
 
 /// A parsed sheet.
@@ -370,6 +385,17 @@ pub enum CueWarning {
         /// What was written.
         value: String,
     },
+    /// A flag outside the four a track can carry.
+    ///
+    /// Left out of the layout rather than refused: some sheets write `DATA`
+    /// for a data track, which the mode already says, and a disc is not worth
+    /// refusing over a word that changes nothing.
+    UnknownFlag {
+        /// Track number.
+        track: u32,
+        /// What was written.
+        flag: String,
+    },
     /// A file's length is not a whole number of sectors.
     ///
     /// The usual cause is a truncated dump, and the last track is short by
@@ -440,6 +466,9 @@ impl fmt::Display for CueWarning {
             }
             Self::MalformedIsrc { track, value } => {
                 write!(f, "track {track} carries {value}, which is not an ISRC")
+            }
+            Self::UnknownFlag { track, flag } => {
+                write!(f, "track {track} carries the unrecognised flag {flag}")
             }
             Self::FileNotSectorAligned {
                 name,
@@ -810,6 +839,14 @@ pub fn parse(bytes: &[u8]) -> Result<CueSheet, CueError> {
                 let Some(track) = current_track(&mut files) else {
                     return Err(CueError::CommandBeforeTrack { line, command });
                 };
+                for flag in &flags {
+                    if TrackFlag::parse(flag).is_none() {
+                        warnings.push(CueWarning::UnknownFlag {
+                            track: track.number,
+                            flag: flag.clone(),
+                        });
+                    }
+                }
                 track.flags = flags;
             }
 
@@ -1291,6 +1328,11 @@ pub struct TrackLayout {
     /// International Standard Recording Code, when the track declared a
     /// well-formed one.
     pub isrc: Option<String>,
+    /// How the track's file stores audio samples, from its declared format.
+    pub sample_byte_order: Option<SampleByteOrder>,
+    /// The flags the track declared that are flags, in the order given and
+    /// without repeats. Anything else was warned about by the parser.
+    pub flags: Vec<TrackFlag>,
 }
 
 /// A whole disc, laid out.
@@ -1415,6 +1457,17 @@ fn extent_of(
     })
 }
 
+/// The flags a track declared that are flags, deduplicated in declared order.
+fn known_flags(declared: &[String]) -> Vec<TrackFlag> {
+    let mut flags = Vec::new();
+    for flag in declared.iter().filter_map(|flag| TrackFlag::parse(flag)) {
+        if !flags.contains(&flag) {
+            flags.push(flag);
+        }
+    }
+    flags
+}
+
 /// Turn a parsed sheet and the sizes of the files it names into track extents.
 ///
 /// `file_sizes` is one length per FILE, in the order the sheet declared them,
@@ -1483,6 +1536,8 @@ pub fn layout(sheet: &CueSheet, file_sizes: &[u64]) -> Result<CdLayout, LayoutEr
                     .isrc
                     .clone()
                     .filter(|isrc| tangible_domain::cd::is_isrc(isrc)),
+                sample_byte_order: file.sample_byte_order(),
+                flags: known_flags(&track.flags),
             });
             running_lba = running_lba.saturating_add(extent.sectors);
         }

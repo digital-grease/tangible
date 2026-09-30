@@ -170,15 +170,16 @@ impl Server {
 
     /// Import a CUE and its BIN, which is what a CD arrives as.
     ///
-    /// Small on purpose: one data track and one audio track over a hundred
-    /// raw sectors, which is enough to have a layout and cheap to write.
+    /// Small on purpose: one data track and one audio track of four seconds
+    /// each, the shortest a CD track may be, which is enough to have a layout
+    /// and cheap to write.
     async fn import_cue_bin(&self) -> String {
         let sheet = b"FILE \"disc.bin\" BINARY\n\
   TRACK 01 MODE2/2352\n\
     INDEX 01 00:00:00\n\
   TRACK 02 AUDIO\n\
     PREGAP 00:00:02\n\
-    INDEX 01 00:01:00\n";
+    INDEX 01 00:04:00\n";
 
         let import_id = ImportJobId::generate();
         let area = self.pipeline.open_area(import_id).await.expect("area");
@@ -187,7 +188,7 @@ impl Server {
             .expect("stage the sheet");
         area.write(
             &LogicalPath::parse("disc.bin").expect("path"),
-            &vec![7_u8; 2352 * 100],
+            &vec![7_u8; 2352 * 600],
         )
         .await
         .expect("stage the data");

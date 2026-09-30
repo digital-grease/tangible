@@ -40,10 +40,29 @@
 //!
 //! cdrdao takes ISRC as an audio track property, so one recorded against a
 //! data track is not written. The manifest keeps it either way.
+//!
+//! Track flags are written too: `COPY` for a track that permits digital
+//! copying, and for audio `PRE_EMPHASIS` and `FOUR_CHANNEL_AUDIO`. Serial copy
+//! management has no statement in the format and is refused, by the same rule
+//! as everything else not exactly expressible.
+//!
+//! # Byte order
+//!
+//! cdrdao reads a raw audio file as big-endian samples. Almost every rip, and
+//! every file a CUE sheet calls `BINARY`, is little-endian. Written without
+//! further instruction, such a track reaches the disc as full-volume static:
+//! checked with cdrdao 1.2.4's own `show-data`, which turns a little-endian
+//! ramp of 0, 50, 100 into 0, 12800, 25600 until the file is marked `SWAP`.
+//!
+//! So each `FILE` statement says how its file stores samples, from the byte
+//! order the manifest recorded, and an audio track without one is refused
+//! rather than assumed. The swap is per file rather than cdrdao's global
+//! `--swap` option, because the global one would be wrong for every file of
+//! the other order in the same plan.
 
 use std::fmt::Write as _;
 
-use tangible_domain::cd;
+use tangible_domain::cd::{self, SampleByteOrder, TrackFlag};
 
 use crate::plan::{BurnPlan, PlannedTrack};
 
@@ -139,6 +158,25 @@ pub enum TocError {
     UnquotablePath {
         /// The offending path, as far as it can be shown.
         path: String,
+    },
+
+    /// An audio track whose file does not say how it stores samples.
+    ///
+    /// Refused rather than assumed: one answer is a disc and the other is
+    /// static, and the bytes do not say which.
+    #[error("track {track} is audio from a file whose sample byte order is not recorded")]
+    ByteOrderUnknown {
+        /// The track.
+        track: u32,
+    },
+
+    /// A flag the format has no statement for.
+    #[error("track {track} carries the {flag} flag, which a table of contents cannot express")]
+    FlagNotWritable {
+        /// The track.
+        track: u32,
+        /// The flag as a descriptor spells it.
+        flag: &'static str,
     },
 }
 
@@ -249,6 +287,60 @@ pub fn write_toc(plan: &BurnPlan) -> Result<String, TocError> {
     Ok(document)
 }
 
+/// How an audio track's `FILE` statements name their file.
+///
+/// `SWAP` sits between the name and the start. Big-endian is what cdrdao
+/// assumes, so only a little-endian file needs saying, and a track whose byte
+/// order was never recorded is refused. A data track's file is named plainly:
+/// its sectors are bytes, not samples.
+fn audio_file_statement(track: &PlannedTrack, file: &str) -> Result<String, TocError> {
+    if !track.is_audio() {
+        return Ok(file.to_owned());
+    }
+    match track.sample_byte_order {
+        Some(SampleByteOrder::LittleEndian) => Ok(format!("{file} SWAP")),
+        Some(SampleByteOrder::BigEndian) => Ok(file.to_owned()),
+        None => Err(TocError::ByteOrderUnknown {
+            track: track.number,
+        }),
+    }
+}
+
+/// Refuse a flag the format has no statement for.
+fn refuse_unwritable_flags(track: &PlannedTrack) -> Result<(), TocError> {
+    match track
+        .flags
+        .iter()
+        .find(|flag| matches!(flag, TrackFlag::SerialCopyManagement))
+    {
+        Some(flag) => Err(TocError::FlagNotWritable {
+            track: track.number,
+            flag: flag.as_str(),
+        }),
+        None => Ok(()),
+    }
+}
+
+/// Write a track's flags, in the block cdrdao reads them from: after TRACK and
+/// before any gap.
+///
+/// Absence is the default in each case, so only a flag that is set is written.
+/// Pre-emphasis and channel count describe audio, and like an ISRC they are
+/// kept by the manifest and not asserted of a data track.
+fn write_flags(document: &mut String, track: &PlannedTrack) {
+    if track.flags.contains(&TrackFlag::DigitalCopyPermitted) {
+        let _ = writeln!(document, "COPY");
+    }
+    if track.is_audio() {
+        if track.flags.contains(&TrackFlag::PreEmphasis) {
+            let _ = writeln!(document, "PRE_EMPHASIS");
+        }
+        if track.flags.contains(&TrackFlag::FourChannel) {
+            let _ = writeln!(document, "FOUR_CHANNEL_AUDIO");
+        }
+    }
+}
+
 /// Write one track's statements.
 ///
 /// Split out from [`write_toc`] because the order of statements within a track
@@ -294,6 +386,11 @@ fn write_track(
         });
     }
 
+    // Refused before anything is written for this track, so an error never
+    // leaves half a statement behind in a document somebody might read.
+    let file_statement = audio_file_statement(track, &file)?;
+    refuse_unwritable_flags(track)?;
+
     let _ = writeln!(document);
     let _ = writeln!(document, "TRACK {mode}");
 
@@ -305,6 +402,8 @@ fn write_track(
     {
         let _ = writeln!(document, "ISRC \"{}\"", isrc.to_ascii_uppercase());
     }
+
+    write_flags(document, track);
 
     // A gap in no file, which the writer fills with silence or zeroes.
     if generated_pregap > 0 {
@@ -319,21 +418,21 @@ fn write_track(
         if in_file_pregap > 0 {
             let _ = writeln!(
                 document,
-                "FILE {file} {} {}",
+                "FILE {file_statement} {} {}",
                 msf(start_block),
                 msf(in_file_pregap)
             );
             let _ = writeln!(document, "START");
             let _ = writeln!(
                 document,
-                "FILE {file} {} {}",
+                "FILE {file_statement} {} {}",
                 msf(start_block + in_file_pregap),
                 msf(track.sector_count.saturating_sub(in_file_pregap))
             );
         } else {
             let _ = writeln!(
                 document,
-                "FILE {file} {} {}",
+                "FILE {file_statement} {} {}",
                 msf(start_block),
                 msf(track.sector_count)
             );

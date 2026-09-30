@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use tangible_burn::cdrdao::{TocError, write_toc};
 use tangible_burn::plan::{PlannedIndex, PlannedTrack};
 use tangible_burn::{BurnPlan, DriveRef, PlannedInput, WriteMode};
+use tangible_domain::cd::{SampleByteOrder, TrackFlag};
 use tangible_domain::{BurnAttemptId, DriveId, Sha256Digest, WorkerId, cd};
 
 const RAW: u64 = 2352;
@@ -60,6 +61,9 @@ fn track(number: u32, mode: &str, sectors: u64) -> PlannedTrack {
             relative_lba: 0,
         }],
         isrc: None,
+        // What a sheet's BINARY file is, and what nearly every rip is.
+        sample_byte_order: Some(SampleByteOrder::LittleEndian),
+        flags: Vec::new(),
     }
 }
 
@@ -82,10 +86,10 @@ fn an_audio_disc_is_cd_da() {
         "CD_DA\n\
          \n\
          TRACK AUDIO\n\
-         FILE \"/staged/disc.bin\" 00:00:00 00:01:00\n\
+         FILE \"/staged/disc.bin\" SWAP 00:00:00 00:01:00\n\
          \n\
          TRACK AUDIO\n\
-         FILE \"/staged/disc.bin\" 00:01:00 00:00:25\n"
+         FILE \"/staged/disc.bin\" SWAP 00:01:00 00:00:25\n"
     );
 }
 
@@ -113,7 +117,7 @@ fn a_mixed_mode_disc_puts_the_data_track_first_and_generates_the_gap() {
          \n\
          TRACK AUDIO\n\
          PREGAP 00:00:02\n\
-         FILE \"/staged/disc.bin\" 00:01:00 00:00:25\n"
+         FILE \"/staged/disc.bin\" SWAP 00:01:00 00:00:25\n"
     );
 }
 
@@ -149,9 +153,9 @@ fn a_gap_the_file_carries_is_written_as_start_between_two_files() {
          DATAFILE \"/staged/disc.bin\" 00:01:00\n\
          \n\
          TRACK AUDIO\n\
-         FILE \"/staged/disc.bin\" 00:01:00 00:00:02\n\
+         FILE \"/staged/disc.bin\" SWAP 00:01:00 00:00:02\n\
          START\n\
-         FILE \"/staged/disc.bin\" 00:01:02 00:00:23\n",
+         FILE \"/staged/disc.bin\" SWAP 00:01:02 00:00:23\n",
         "the gap is in the file, so no PREGAP is generated"
     );
 }
@@ -175,10 +179,10 @@ fn one_file_per_track_addresses_each_from_its_own_beginning() {
         "CD_DA\n\
          \n\
          TRACK AUDIO\n\
-         FILE \"/staged/track01.bin\" 00:00:00 00:01:25\n\
+         FILE \"/staged/track01.bin\" SWAP 00:00:00 00:01:25\n\
          \n\
          TRACK AUDIO\n\
-         FILE \"/staged/track02.bin\" 00:00:00 00:00:50\n"
+         FILE \"/staged/track02.bin\" SWAP 00:00:00 00:00:50\n"
     );
 }
 
@@ -399,7 +403,7 @@ fn a_catalogue_number_and_an_isrc_are_written_out() {
          \n\
          TRACK AUDIO\n\
          ISRC \"USRC17607839\"\n\
-         FILE \"/staged/disc.bin\" 00:00:00 00:01:00\n"
+         FILE \"/staged/disc.bin\" SWAP 00:00:00 00:01:00\n"
     );
 }
 
@@ -426,4 +430,156 @@ fn a_recording_code_against_a_data_track_is_not_written() {
         write_toc(&plan(&[("/staged/a.bin", RAW * 100)], vec![data])).expect("a table of contents");
 
     assert!(!written.contains("ISRC"), "{written}");
+}
+
+// --- byte order ------------------------------------------------------------------
+
+#[test]
+fn a_big_endian_file_is_what_cdrdao_expects_and_is_not_swapped() {
+    let mut audio = track(1, "AUDIO", 75);
+    audio.sample_byte_order = Some(SampleByteOrder::BigEndian);
+
+    let written = write_toc(&plan(&[("/staged/disc.bin", RAW * 100)], vec![audio]))
+        .expect("a table of contents");
+
+    assert_eq!(
+        written,
+        "CD_DA\n\
+         \n\
+         TRACK AUDIO\n\
+         FILE \"/staged/disc.bin\" 00:00:00 00:01:00\n"
+    );
+}
+
+#[test]
+fn each_file_says_its_own_byte_order() {
+    // Why the swap is per file rather than cdrdao's global --swap: that option
+    // would be wrong for one of these two whichever way it was set.
+    let mut first = track(1, "AUDIO", 75);
+    first.sample_byte_order = Some(SampleByteOrder::LittleEndian);
+    let mut second = track(2, "AUDIO", 50);
+    second.input = 1;
+    second.sample_byte_order = Some(SampleByteOrder::BigEndian);
+
+    let written = write_toc(&plan(
+        &[("/staged/a.bin", RAW * 75), ("/staged/b.bin", RAW * 50)],
+        vec![first, second],
+    ))
+    .expect("a table of contents");
+
+    assert!(
+        written.contains("FILE \"/staged/a.bin\" SWAP 00:00:00"),
+        "{written}"
+    );
+    assert!(
+        written.contains("FILE \"/staged/b.bin\" 00:00:00"),
+        "{written}"
+    );
+}
+
+#[test]
+fn an_audio_track_whose_byte_order_is_unknown_is_refused() {
+    // One answer is a disc and the other is static.
+    let mut audio = track(1, "AUDIO", 75);
+    audio.sample_byte_order = None;
+
+    assert_eq!(
+        write_toc(&plan(&[("/staged/disc.bin", RAW * 100)], vec![audio])),
+        Err(TocError::ByteOrderUnknown { track: 1 })
+    );
+}
+
+#[test]
+fn a_data_track_is_never_swapped() {
+    // Data sectors are bytes, not samples, whatever the file's audio would be.
+    let mut data = track(1, "MODE1/2352", 75);
+    data.sample_byte_order = None;
+
+    let written = write_toc(&plan(&[("/staged/disc.bin", RAW * 100)], vec![data]))
+        .expect("a table of contents");
+
+    assert!(!written.contains("SWAP"), "{written}");
+}
+
+// --- flags -----------------------------------------------------------------------
+
+#[test]
+fn the_flags_an_audio_track_carries_are_written_before_its_data() {
+    let mut audio = track(1, "AUDIO", 75);
+    audio.isrc = Some("USRC17607839".to_owned());
+    audio.flags = vec![
+        TrackFlag::PreEmphasis,
+        TrackFlag::DigitalCopyPermitted,
+        TrackFlag::FourChannel,
+    ];
+
+    let written = write_toc(&plan(&[("/staged/disc.bin", RAW * 100)], vec![audio]))
+        .expect("a table of contents");
+
+    assert_eq!(
+        written,
+        "CD_DA\n\
+         \n\
+         TRACK AUDIO\n\
+         ISRC \"USRC17607839\"\n\
+         COPY\n\
+         PRE_EMPHASIS\n\
+         FOUR_CHANNEL_AUDIO\n\
+         FILE \"/staged/disc.bin\" SWAP 00:00:00 00:01:00\n"
+    );
+}
+
+#[test]
+fn a_flag_goes_before_a_generated_gap() {
+    // cdrdao reads the flag block and then the gap; the other order is a
+    // syntax error rather than a different disc.
+    let mut audio = track(2, "AUDIO", 25);
+    audio.file_offset_bytes = RAW * 75;
+    audio.pregap_sectors = 2;
+    audio.flags = vec![TrackFlag::PreEmphasis];
+
+    let written = write_toc(&plan(
+        &[("/staged/disc.bin", RAW * 100)],
+        vec![track(1, "MODE1/2352", 75), audio],
+    ))
+    .expect("a table of contents");
+
+    assert!(
+        written.contains("TRACK AUDIO\nPRE_EMPHASIS\nPREGAP 00:00:02\n"),
+        "{written}"
+    );
+}
+
+#[test]
+fn audio_flags_are_not_asserted_of_a_data_track() {
+    // Like an ISRC: the manifest keeps them, and the disc is not told
+    // something about audio it does not hold. Copy permission is a property of
+    // any track and is written.
+    let mut data = track(1, "MODE1/2352", 75);
+    data.flags = vec![
+        TrackFlag::PreEmphasis,
+        TrackFlag::FourChannel,
+        TrackFlag::DigitalCopyPermitted,
+    ];
+
+    let written = write_toc(&plan(&[("/staged/disc.bin", RAW * 100)], vec![data]))
+        .expect("a table of contents");
+
+    assert!(written.contains("TRACK MODE1_RAW\nCOPY\n"), "{written}");
+    assert!(!written.contains("PRE_EMPHASIS"), "{written}");
+    assert!(!written.contains("FOUR_CHANNEL"), "{written}");
+}
+
+#[test]
+fn serial_copy_management_has_no_statement_and_is_refused() {
+    let mut audio = track(1, "AUDIO", 75);
+    audio.flags = vec![TrackFlag::SerialCopyManagement];
+
+    assert_eq!(
+        write_toc(&plan(&[("/staged/disc.bin", RAW * 100)], vec![audio])),
+        Err(TocError::FlagNotWritable {
+            track: 1,
+            flag: "SCMS"
+        })
+    );
 }

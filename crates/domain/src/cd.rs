@@ -99,6 +99,82 @@ pub fn is_isrc(value: &str) -> bool {
     (0..2).all(alphabetic) && (2..5).all(alphanumeric) && (5..12).all(digit)
 }
 
+/// The order of the two bytes in each 16-bit audio sample of a file.
+///
+/// A fact about how a file stores audio, not about the disc: the disc has one
+/// sample order and a file may hold either. It is recorded because nothing in
+/// the bytes says which, and a writer that assumes the wrong one burns every
+/// audio track as full-volume static. cdrdao reads raw audio as big-endian
+/// unless told otherwise, while almost every rip stores it little-endian, so
+/// the wrong assumption is also the default one.
+///
+/// Meaningless for data sectors, which are bytes rather than samples.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SampleByteOrder {
+    /// Least significant byte first. What a CUE sheet calls `BINARY`, and
+    /// what nearly every rip is.
+    LittleEndian,
+    /// Most significant byte first. What a CUE sheet calls `MOTOROLA`.
+    BigEndian,
+}
+
+/// A subcode flag a track can carry.
+///
+/// A closed set: these four are the Q-channel control bits a descriptor can
+/// state, spelled as CUE sheets spell them. They change how a disc plays or
+/// may be copied, so a disc burned without them is a different disc, and one
+/// that differs invisibly until a player applies the wrong equalisation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum TrackFlag {
+    /// Digital copy permitted.
+    #[serde(rename = "DCP")]
+    DigitalCopyPermitted,
+    /// Four-channel audio.
+    #[serde(rename = "4CH")]
+    FourChannel,
+    /// Pre-emphasis applied when mastering, which a player has to undo.
+    #[serde(rename = "PRE")]
+    PreEmphasis,
+    /// Serial copy management system.
+    #[serde(rename = "SCMS")]
+    SerialCopyManagement,
+}
+
+impl TrackFlag {
+    /// The flag a descriptor names, or `None` for one outside the set.
+    ///
+    /// Case-insensitive, as descriptors are.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.to_ascii_uppercase().as_str() {
+            "DCP" => Some(Self::DigitalCopyPermitted),
+            "4CH" => Some(Self::FourChannel),
+            "PRE" => Some(Self::PreEmphasis),
+            "SCMS" => Some(Self::SerialCopyManagement),
+            _ => None,
+        }
+    }
+
+    /// The flag as a descriptor spells it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DigitalCopyPermitted => "DCP",
+            Self::FourChannel => "4CH",
+            Self::PreEmphasis => "PRE",
+            Self::SerialCopyManagement => "SCMS",
+        }
+    }
+}
+
+/// Shortest track a CD may hold, in sectors: four seconds.
+///
+/// Measured from INDEX 01, so a pregap does not count towards it. A writer
+/// refuses a shorter track rather than burn a disc that breaks the format,
+/// which makes this a thing to check before anyone is asked for media.
+pub const MIN_TRACK_SECTORS: u64 = 4 * FRAMES_PER_SECOND;
+
 /// Digits in a media catalogue number.
 pub const CATALOG_DIGITS: usize = 13;
 
@@ -192,6 +268,57 @@ mod tests {
         assert!(!is_isrc("USRC1760783X"), "the designation is digits");
         assert!(!is_isrc("US-RC1-76-07839"), "hyphens are not stored");
         assert!(!is_isrc(""));
+    }
+
+    #[test]
+    fn a_flag_is_read_as_a_descriptor_writes_it() {
+        assert_eq!(
+            TrackFlag::parse("DCP"),
+            Some(TrackFlag::DigitalCopyPermitted)
+        );
+        assert_eq!(TrackFlag::parse("4ch"), Some(TrackFlag::FourChannel));
+        assert_eq!(TrackFlag::parse("pre"), Some(TrackFlag::PreEmphasis));
+        assert_eq!(
+            TrackFlag::parse("SCMS"),
+            Some(TrackFlag::SerialCopyManagement)
+        );
+        // Some sheets write DATA for a data track. It is not a flag anyone
+        // sets; the mode already says it.
+        assert_eq!(TrackFlag::parse("DATA"), None);
+        assert_eq!(TrackFlag::parse(""), None);
+    }
+
+    #[test]
+    fn a_flag_serializes_as_it_is_spelled() {
+        // The manifest persists the text, so the spelling is the contract.
+        for flag in [
+            TrackFlag::DigitalCopyPermitted,
+            TrackFlag::FourChannel,
+            TrackFlag::PreEmphasis,
+            TrackFlag::SerialCopyManagement,
+        ] {
+            let json = serde_json::to_string(&flag).expect("serialize");
+            assert_eq!(json, format!("\"{}\"", flag.as_str()));
+            assert_eq!(TrackFlag::parse(flag.as_str()), Some(flag));
+        }
+        assert!(serde_json::from_str::<TrackFlag>("\"DATA\"").is_err());
+    }
+
+    #[test]
+    fn a_byte_order_serializes_as_words() {
+        assert_eq!(
+            serde_json::to_string(&SampleByteOrder::LittleEndian).expect("serialize"),
+            "\"little_endian\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SampleByteOrder::BigEndian).expect("serialize"),
+            "\"big_endian\""
+        );
+    }
+
+    #[test]
+    fn the_shortest_track_is_four_seconds() {
+        assert_eq!(MIN_TRACK_SECTORS, 300);
     }
 
     #[test]

@@ -9,6 +9,7 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use tangible_api::{ImportCheckpoint, ImportError, ImportPipeline, ImportRequest};
+use tangible_domain::cd::{SampleByteOrder, TrackFlag};
 use tangible_domain::enums::{ArtifactFormat, ComponentRole, MediaFamily, ValidationState};
 use tangible_domain::manifest::Topology;
 use tangible_domain::{ImportJobId, ImportState, LogicalPath};
@@ -493,6 +494,7 @@ FILE \"disc.bin\" BINARY\n\
   TRACK 02 AUDIO\n\
     PREGAP 00:00:02\n\
     ISRC USRC17607839\n\
+    FLAGS PRE\n\
     INDEX 01 00:01:00\n";
 
 #[tokio::test]
@@ -578,6 +580,16 @@ async fn a_cue_and_its_bin_import_as_one_artifact_that_knows_its_tracks() {
         tracks[1].isrc.as_deref(),
         Some("USRC17607839"),
         "a track's recording code is part of the disc"
+    );
+    assert_eq!(
+        tracks[1].flags,
+        vec![TrackFlag::PreEmphasis],
+        "so is its pre-emphasis, which a player has to undo"
+    );
+    assert_eq!(
+        tracks[1].sample_byte_order,
+        Some(SampleByteOrder::LittleEndian),
+        "a BINARY file is little-endian, and nothing in its bytes says so"
     );
 }
 

@@ -11,6 +11,7 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use tangible_domain::LogicalPath;
+use tangible_domain::cd::{SampleByteOrder, TrackFlag};
 use tangible_image::cue::{
     self, CueError, CueWarning, LayoutError, MAX_CUE_BYTES, Msf, ReferenceFailure,
 };
@@ -796,4 +797,78 @@ FILE "d.bin" BINARY
     let layout = cue::layout(&parsed, &[RAW_SECTOR * 100]).expect("a layout");
     assert_eq!(layout.catalog, None);
     assert_eq!(layout.tracks[0].isrc, None);
+}
+
+// --- how the file stores samples, and the flags a track carries ---------------
+
+#[test]
+fn a_binary_file_is_little_endian_and_a_motorola_file_is_big_endian() {
+    // Nothing in the bytes says, and a writer that guesses wrong burns every
+    // audio track as static. The format word is the only record there is.
+    let parsed = sheet(
+        r#"FILE "a.bin" BINARY
+  TRACK 01 AUDIO
+    INDEX 01 00:00:00
+FILE "b.bin" MOTOROLA
+  TRACK 02 AUDIO
+    INDEX 01 00:00:00
+"#,
+    );
+
+    let layout = cue::layout(&parsed, &[RAW_SECTOR * 400, RAW_SECTOR * 400]).expect("a layout");
+
+    assert_eq!(
+        layout.tracks[0].sample_byte_order,
+        Some(SampleByteOrder::LittleEndian)
+    );
+    assert_eq!(
+        layout.tracks[1].sample_byte_order,
+        Some(SampleByteOrder::BigEndian)
+    );
+}
+
+#[test]
+fn a_track_flag_reaches_the_layout() {
+    // Pre-emphasis in particular: a disc burned without it plays with the
+    // treble boosted, and nothing about the disc says why.
+    let parsed = sheet(
+        r#"FILE "d.bin" BINARY
+  TRACK 01 AUDIO
+    FLAGS PRE DCP
+    INDEX 01 00:00:00
+"#,
+    );
+
+    let layout = cue::layout(&parsed, &[RAW_SECTOR * 400]).expect("a layout");
+
+    assert_eq!(
+        layout.tracks[0].flags,
+        vec![TrackFlag::PreEmphasis, TrackFlag::DigitalCopyPermitted]
+    );
+    assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+}
+
+#[test]
+fn a_word_that_is_not_a_flag_is_warned_about_and_left_out() {
+    // Some sheets write DATA on a data track. The mode already says so, and a
+    // disc is not worth refusing over it.
+    let parsed = sheet(
+        r#"FILE "d.bin" BINARY
+  TRACK 01 MODE1/2352
+    FLAGS DATA 4CH 4ch
+    INDEX 01 00:00:00
+"#,
+    );
+
+    assert!(parsed.warnings.iter().any(|warning| matches!(
+        warning,
+        CueWarning::UnknownFlag { track: 1, flag } if flag == "DATA"
+    )));
+
+    let layout = cue::layout(&parsed, &[RAW_SECTOR * 400]).expect("a layout");
+    assert_eq!(
+        layout.tracks[0].flags,
+        vec![TrackFlag::FourChannel],
+        "known flags kept, once each"
+    );
 }

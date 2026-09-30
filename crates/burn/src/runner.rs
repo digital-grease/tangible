@@ -1199,6 +1199,8 @@ fn planned_tracks(
                 })
                 .collect(),
             isrc: track.isrc.clone(),
+            sample_byte_order: track.sample_byte_order,
+            flags: track.flags.clone(),
         })
         .collect()
 }
@@ -1254,6 +1256,8 @@ fn failure_of(failures: &[PreflightFailure]) -> FailureBody {
         Some(PreflightFailure::ExceedsCdCapacity { .. }) => "PREFLIGHT_EXCEEDS_CD_CAPACITY",
         Some(PreflightFailure::WriteModeUnsupported { .. }) => "PREFLIGHT_WRITE_MODE_UNSUPPORTED",
         Some(PreflightFailure::TrackLayoutNeedsACd { .. }) => "PREFLIGHT_NEEDS_A_CD",
+        Some(PreflightFailure::TrackTooShort { .. }) => "PREFLIGHT_TRACK_TOO_SHORT",
+        Some(PreflightFailure::AudioByteOrderUnknown { .. }) => "PREFLIGHT_BYTE_ORDER_UNKNOWN",
         None => "PREFLIGHT_FAILED",
     };
     FailureBody {

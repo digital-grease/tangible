@@ -434,6 +434,20 @@ pub struct Track {
     /// International Standard Recording Code, when the track declares one.
     #[serde(default)]
     pub isrc: Option<String>,
+    /// How the component holding this track stores audio samples.
+    ///
+    /// Recorded because nothing in the bytes says, and a writer that guesses
+    /// wrong burns audio as static. Absent when the descriptor did not say,
+    /// which is not the same as either answer: a burn planner refuses an audio
+    /// track without one rather than assume.
+    #[serde(default)]
+    pub sample_byte_order: Option<cd::SampleByteOrder>,
+    /// Subcode flags the track declares, such as pre-emphasis.
+    ///
+    /// A closed set, so a manifest carrying a flag outside it is refused on
+    /// read rather than passed on to a tool that would have to guess.
+    #[serde(default)]
+    pub flags: Vec<cd::TrackFlag>,
     /// Per-track digests, used for preservation-database matching.
     #[serde(default)]
     pub hashes: BTreeMap<String, String>,
@@ -1022,6 +1036,8 @@ mod tests {
                 mode: "MODE2/2352".to_owned(),
                 component_id,
                 isrc: None,
+                sample_byte_order: None,
+                flags: vec![],
                 file_offset_bytes: 0,
                 start_lba: 0,
                 sector_count,
@@ -1178,6 +1194,33 @@ mod tests {
     }
 
     #[test]
+    fn a_flag_outside_the_closed_set_is_refused_on_read() {
+        // A tool reading a manifest should never meet a flag it has to guess
+        // the meaning of.
+        let json = with_one_track(10, 1).to_json().expect("serialize");
+        let tampered = json.replacen("\"flags\": []", "\"flags\": [\"DATA\"]", 1);
+        assert_ne!(json, tampered, "the flags field is written out");
+        assert!(ArtifactManifest::from_json(&tampered).is_err());
+    }
+
+    #[test]
+    fn a_byte_order_and_flags_are_written_as_text() {
+        let mut manifest = with_one_track(10, 1);
+        let Topology::CdTracks { tracks, .. } = &mut manifest.topology else {
+            panic!("built with tracks");
+        };
+        tracks[0].sample_byte_order = Some(cd::SampleByteOrder::BigEndian);
+        tracks[0].flags = vec![cd::TrackFlag::FourChannel];
+
+        let json = manifest.to_json().expect("serialize");
+        assert!(
+            json.contains("\"sample_byte_order\": \"big_endian\""),
+            "{json}"
+        );
+        assert!(json.contains("\"4CH\""), "{json}");
+    }
+
+    #[test]
     fn a_coherent_track_topology_validates() {
         with_one_track(10, 1).validate().expect("valid");
     }
@@ -1196,6 +1239,11 @@ mod tests {
                 mode: "MODE2/2352".to_owned(),
                 component_id,
                 isrc: None,
+                sample_byte_order: Some(cd::SampleByteOrder::LittleEndian),
+                flags: vec![
+                    cd::TrackFlag::PreEmphasis,
+                    cd::TrackFlag::DigitalCopyPermitted,
+                ],
                 file_offset_bytes: 0,
                 start_lba: 0,
                 sector_count: 250_000,

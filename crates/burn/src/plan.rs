@@ -155,6 +155,16 @@ pub struct PlannedTrack {
     /// International Standard Recording Code to record on the track.
     #[serde(default)]
     pub isrc: Option<String>,
+    /// How the input stores audio samples, when the descriptor said.
+    ///
+    /// An audio track without one is refused before media is asked for: the
+    /// two answers produce a correct disc and a disc of static, and nothing in
+    /// the bytes says which is which.
+    #[serde(default)]
+    pub sample_byte_order: Option<cd::SampleByteOrder>,
+    /// Subcode flags to record on the track.
+    #[serde(default)]
+    pub flags: Vec<cd::TrackFlag>,
 }
 
 /// One index point within a track.
@@ -198,6 +208,15 @@ impl PlannedTrack {
     #[must_use]
     pub fn generated_pregap(&self) -> u64 {
         self.pregap_sectors.saturating_sub(self.in_file_pregap())
+    }
+
+    /// Sectors from INDEX 01 to the end of the track: the track proper.
+    ///
+    /// What the four-second minimum is measured against. A gap the file
+    /// carries is inside [`PlannedTrack::sector_count`] and is not part of it.
+    #[must_use]
+    pub fn sectors_after_index_one(&self) -> u64 {
+        self.sector_count.saturating_sub(self.in_file_pregap())
     }
 }
 
@@ -278,11 +297,16 @@ impl BurnPlan {
     /// The gap a PREGAP command asks for is not in any file and still takes up
     /// the disc, so a capacity check that counted only file bytes would
     /// under-count a mixed-mode disc by two seconds per audio track.
+    ///
+    /// Only the generated part is added. A gap the file carries is already in
+    /// the track's sectors, and adding the whole of `pregap_sectors` counted it
+    /// twice. cdrdao's own `toc-size` is what showed that: for a track whose
+    /// file carries its gap it reports the sectors in the file and no more.
     #[must_use]
     pub fn required_sectors(&self) -> u64 {
         self.tracks
             .iter()
-            .map(|track| track.sector_count.saturating_add(track.pregap_sectors))
+            .map(|track| track.sector_count.saturating_add(track.generated_pregap()))
             .fold(0, u64::saturating_add)
     }
 
@@ -323,6 +347,20 @@ impl BurnPlan {
         }
 
         for track in &self.tracks {
+            // Measured from INDEX 01, as the format measures it. A writer
+            // refuses a shorter track, so asking for a disc first would only
+            // waste somebody's time.
+            if track.sectors_after_index_one() < cd::MIN_TRACK_SECTORS {
+                failures.push(PreflightFailure::TrackTooShort {
+                    track: track.number,
+                    sectors: track.sectors_after_index_one(),
+                });
+            }
+            if track.is_audio() && track.sample_byte_order.is_none() {
+                failures.push(PreflightFailure::AudioByteOrderUnknown {
+                    track: track.number,
+                });
+            }
             let Some(byte_length) = track.byte_length() else {
                 failures.push(PreflightFailure::UnknownTrackMode {
                     track: track.number,
@@ -554,6 +592,21 @@ pub enum PreflightFailure {
         /// The profile in the drive.
         found: String,
     },
+    /// A track shorter than the four seconds a CD track must last.
+    TrackTooShort {
+        /// The track.
+        track: u32,
+        /// Sectors from INDEX 01 to its end.
+        sectors: u64,
+    },
+    /// An audio track whose file does not say how it stores samples.
+    ///
+    /// Refused rather than assumed: one answer is a disc and the other is
+    /// static, and the bytes do not say which.
+    AudioByteOrderUnknown {
+        /// The track.
+        track: u32,
+    },
 }
 
 /// The outcome of preflight.
@@ -783,6 +836,8 @@ mod tests {
                 relative_lba: 0,
             }],
             isrc: None,
+            sample_byte_order: Some(cd::SampleByteOrder::LittleEndian),
+            flags: Vec::new(),
         }
     }
 
@@ -795,21 +850,21 @@ mod tests {
 
     #[test]
     fn a_coherent_layout_passes() {
-        let built = track_plan(&[2352 * 100], vec![track(1, "AUDIO", 100)]);
+        let built = track_plan(&[2352 * 300], vec![track(1, "AUDIO", 300)]);
 
         assert!(
             built.check_layout().is_empty(),
             "{:?}",
             built.check_layout()
         );
-        assert_eq!(built.required_sectors(), 100);
+        assert_eq!(built.required_sectors(), 300);
     }
 
     #[test]
     fn a_track_that_runs_past_its_file_is_refused() {
         // A topology and its components disagreeing. Writing it would put
         // whatever happened to be at that offset onto a disc.
-        let built = track_plan(&[2352 * 50], vec![track(1, "AUDIO", 100)]);
+        let built = track_plan(&[2352 * 150], vec![track(1, "AUDIO", 300)]);
 
         assert!(matches!(
             built.check_layout().as_slice(),
@@ -819,7 +874,7 @@ mod tests {
 
     #[test]
     fn a_mode_with_no_known_sector_size_is_refused() {
-        let built = track_plan(&[2352 * 100], vec![track(1, "MODE9/9999", 100)]);
+        let built = track_plan(&[2352 * 300], vec![track(1, "MODE9/9999", 300)]);
 
         assert!(matches!(
             built.check_layout().as_slice(),
@@ -829,9 +884,9 @@ mod tests {
 
     #[test]
     fn a_track_naming_an_input_the_plan_does_not_have_is_refused() {
-        let mut orphan = track(1, "AUDIO", 10);
+        let mut orphan = track(1, "AUDIO", 300);
         orphan.input = 7;
-        let built = track_plan(&[2352 * 100], vec![orphan]);
+        let built = track_plan(&[2352 * 300], vec![orphan]);
 
         assert!(matches!(
             built.check_layout().as_slice(),
@@ -888,6 +943,98 @@ mod tests {
         let built = track_plan(&[2352 * 100], vec![track(1, "AUDIO", 10), second]);
 
         assert_eq!(built.required_sectors(), 170);
+    }
+
+    #[test]
+    fn a_gap_the_file_carries_is_not_counted_twice() {
+        // The track's sectors already include a gap its file carries. Adding
+        // the whole pregap on top claimed two seconds per track that the disc
+        // does not use; cdrdao's toc-size, run on the same layout, is what
+        // said so.
+        let mut audio = track(2, "AUDIO", 3000);
+        audio.pregap_sectors = 150;
+        audio.indexes = vec![
+            PlannedIndex {
+                number: 0,
+                relative_lba: 0,
+            },
+            PlannedIndex {
+                number: 1,
+                relative_lba: 150,
+            },
+        ];
+        let built = track_plan(&[2352 * 4000], vec![track(1, "MODE1/2352", 1000), audio]);
+
+        assert_eq!(built.required_sectors(), 4000);
+    }
+
+    #[test]
+    fn a_track_shorter_than_four_seconds_is_refused_before_a_disc_is_asked_for() {
+        // A writer refuses it, so a disc would only be asked for and wasted.
+        let built = track_plan(&[2352 * 299], vec![track(1, "AUDIO", 299)]);
+
+        assert!(built.check_layout().iter().any(|failure| matches!(
+            failure,
+            PreflightFailure::TrackTooShort {
+                track: 1,
+                sectors: 299
+            }
+        )));
+    }
+
+    #[test]
+    fn four_seconds_are_counted_from_index_one() {
+        // The format measures the track proper. Three hundred sectors in the
+        // file of which a hundred and fifty are its gap is two seconds of
+        // track, and too short.
+        let mut audio = track(1, "AUDIO", 300);
+        audio.pregap_sectors = 150;
+        audio.indexes = vec![
+            PlannedIndex {
+                number: 0,
+                relative_lba: 0,
+            },
+            PlannedIndex {
+                number: 1,
+                relative_lba: 150,
+            },
+        ];
+        let built = track_plan(&[2352 * 300], vec![audio]);
+
+        assert!(built.check_layout().iter().any(|failure| matches!(
+            failure,
+            PreflightFailure::TrackTooShort {
+                track: 1,
+                sectors: 150
+            }
+        )));
+    }
+
+    #[test]
+    fn an_audio_track_whose_byte_order_nobody_recorded_is_refused() {
+        // One answer is a disc and the other is static.
+        let mut audio = track(1, "AUDIO", 300);
+        audio.sample_byte_order = None;
+        let built = track_plan(&[2352 * 300], vec![audio]);
+
+        assert!(matches!(
+            built.check_layout().as_slice(),
+            [PreflightFailure::AudioByteOrderUnknown { track: 1 }]
+        ));
+    }
+
+    #[test]
+    fn a_data_track_needs_no_byte_order() {
+        // Data sectors are bytes, not samples.
+        let mut data = track(1, "MODE1/2352", 300);
+        data.sample_byte_order = None;
+        let built = track_plan(&[2352 * 300], vec![data]);
+
+        assert!(
+            built.check_layout().is_empty(),
+            "{:?}",
+            built.check_layout()
+        );
     }
 
     #[test]
