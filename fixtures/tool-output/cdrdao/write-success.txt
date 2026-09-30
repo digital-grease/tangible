@@ -1,0 +1,17 @@
+Cdrdao version 1.2.4 - (C) Andreas Mueller <andreas@daneb.de>
+/dev/sr0: Slimtype DVD A DS8A8SH	Rev: KS21
+Using driver: Generic SCSI-3/MMC - Version 2.0 (options 0x0000)
+
+Starting write at speed 24...
+Process can be aborted with QUIT signal (usually CTRL-\).
+WARNING: Cannot lock memory pages: Cannot allocate memory
+Turning BURN-Proof on
+Enabling JustSpeed.
+Executing power calibration...
+Power calibration successful.
+Writing track 01 (mode MODE1/MODE1 )...
+Wrote 1 of 7 MB (Buffers 100%  99%).Wrote 2 of 7 MB (Buffers 100%  99%).Writing track 02 (mode AUDIO/AUDIO )...
+Wrote 3 of 7 MB (Buffers 100%  99%).Wrote 4 of 7 MB (Buffers 100%  99%).Wrote 5 of 7 MB (Buffers 100%  99%).Wrote 6 of 7 MB (Buffers 100%  99%).Wrote 7 of 7 MB (Buffers 100%  99%).
+Wrote 3561 blocks. Buffer fill min 100%/max 100%.
+Flushing cache...
+Writing finished successfully.

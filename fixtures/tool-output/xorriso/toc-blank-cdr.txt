@@ -1,0 +1,15 @@
+xorriso 1.5.6 : RockRidge filesystem manipulator, libburnia project.
+
+Drive current: -outdev '/dev/sr0'
+Media current: CD-R
+Media status : is blank
+Media summary: 0 sessions, 0 data blocks, 0 data,  703m free
+Drive current: -outdev '/dev/sr0'
+Drive access : exclusive:unrestricted
+Drive type   : vendor 'Slimtype' product 'DVD A DS8A8SH' revision 'KS21'
+Drive id     : 'XXXXXXXXXXXXXXXXXXXXXXX '
+Media current: CD-R
+Media product: 97m26s66f/79m59s71f , CMC Magnetics Corporation
+Media status : is blank
+Media blocks : 0 readable , 359844 writable , 359844 overall
+Media summary: 0 sessions, 0 data blocks, 0 data,  703m free

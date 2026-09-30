@@ -1143,14 +1143,12 @@ mod tests {
 
     #[test]
     fn a_blank_cd_r_is_writable_to_its_whole_capacity() {
-        let medium = medium_info(&parse::disk_info(&fixture(
-            "assembled/disk-info-blank-cdr.txt",
-        )));
+        let medium = medium_info(&parse::disk_info(&fixture("disk-info-blank-cdr.txt")));
         assert_eq!(medium.profile, "CD-R");
         assert!(medium.blank);
         assert!(medium.writable);
         assert!(!medium.erasable);
-        assert_eq!(medium.free_blocks, 359_849);
+        assert_eq!(medium.free_blocks, 359_846);
     }
 
     #[test]
@@ -1221,7 +1219,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_write_is_followed_and_reported_as_it_happens() {
-        let output = fixture("assembled/write-success.txt");
+        // The first real burn, as the drive printed it.
+        let output = fixture("write-success.txt");
         let sink = CollectingSink::new();
         let (outcome, log) = follow_write(Some(output.as_bytes()), &sink).await;
 
@@ -1235,7 +1234,7 @@ mod tests {
             .iter()
             .filter(|code| **code == "WRITE_PROGRESS")
             .count();
-        assert_eq!(progress, 9, "one per megabyte: {codes:?}");
+        assert_eq!(progress, 7, "one per megabyte: {codes:?}");
     }
 
     #[tokio::test]

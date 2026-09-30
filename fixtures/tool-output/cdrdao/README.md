@@ -37,10 +37,20 @@ ran against, in the shapes the TOC writer produces. `exit-codes.txt` records
 each command's exit status, because several of the findings below are about
 the exit status disagreeing with the output.
 
-Two files are captured from a real drive: `drive-info.txt` and
-`disk-info-no-disc.txt`, from a Slimtype DVD A DS8A8SH (firmware KS21) on USB,
-passed to the same container as `--device /dev/sr0` with the tray empty,
-captured 2026-09-29. They replaced assembled files of the same names. The
+Four files are captured from a real drive, a Slimtype DVD A DS8A8SH (firmware
+KS21) on USB, passed to the same container as `--device /dev/sr0`, on
+2026-09-29: `drive-info.txt` and `disk-info-no-disc.txt` with the tray empty,
+then `disk-info-blank-cdr.txt` and `write-simulate.txt` with a blank 80 minute
+CD-R in it. The latter is the engine's own write arguments and table of
+contents with `--simulate` added: the drive goes through the whole write with
+the laser off, and the disc was checked blank afterwards. Finally
+`write-success.txt`, the first real burn: the engine's own `write()` on the same
+disc, its stderr kept byte for byte. The disc was then read back over SCSI with
+`cdrdao read-cd`: the data track was byte-identical to the ISO it was written
+from, and the audio track was sample-identical to the tone, which is what shows
+the per-file `SWAP` is right. `drive-info.txt`, `disk-info-no-disc.txt`,
+`disk-info-blank-cdr.txt` and `write-success.txt` replaced assembled files of
+the same names. The
 assembled empty-drive file had nine "still trying" lines where the drive
 printed ten and lacked the drive banner, and the parser read both the same.
 The same capture showed that cdrdao talks to the drive through `/dev/sr0`
@@ -95,9 +105,12 @@ would guess:
 | `write-no-device.txt` | The engine's exact write arguments against a drive that is not there. |
 | `disk-info-no-device.txt`, `drive-info-no-device.txt` | The same, for inspection and probing. |
 | `drive-info.txt` | A real drive's answer. |
+| `disk-info-blank-cdr.txt` | A real blank CD-R: the vendor, then an indented line naming the dye. |
+| `write-success.txt` | The first real burn, raw. Unlike the simulation it calibrates laser power first. |
+| `write-simulate.txt` | A real simulated write, raw, carriage returns intact. 3561 blocks is both tracks and the generated gap between them. |
 | `disk-info-no-disc.txt` | A real drive with an empty tray: ten retries, then it gives up. |
-| `assembled/write-*.txt` | A successful write, an underrun, a failure after completion, and two refusals before writing. |
-| `assembled/disk-info-*.txt` | A blank CD-R, a closed CD-RW and an appendable CD-R. |
+| `assembled/write-*.txt` | An underrun, a failure after completion, and two refusals before writing. Failures cannot be captured on purpose without ruining media, so these may stay assembled. |
+| `assembled/disk-info-*.txt` | A closed CD-RW and an appendable CD-R. |
 
 ## Refreshing these
 

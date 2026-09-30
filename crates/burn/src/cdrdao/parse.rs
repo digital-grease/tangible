@@ -699,14 +699,16 @@ mod tests {
 
     #[test]
     fn a_blank_cd_r_is_empty_with_its_whole_capacity() {
-        let info = disk_info(&assembled("disk-info-blank-cdr.txt"));
+        // Captured from a real blank CD-R. The manufacturer is followed by a
+        // second line naming the dye, which is deliberately not kept.
+        let info = disk_info(&captured("disk-info-blank-cdr.txt"));
         assert!(info.present());
         assert_eq!(info.empty, Some(true));
         assert_eq!(info.rewritable, Some(false));
-        assert_eq!(info.capacity_blocks, Some(359_849));
+        assert_eq!(info.capacity_blocks, Some(359_846));
         assert_eq!(
             info.manufacturer.as_deref(),
-            Some("97:24:01: unknown vendor ID")
+            Some("CMC Magnetics Corporation")
         );
     }
 
@@ -752,16 +754,43 @@ mod tests {
 
     #[test]
     fn a_successful_write_says_so_and_reports_its_progress() {
-        let outcome = write_outcome(&assembled("write-success.txt"));
+        // The first real burn: a CD-R, the engine's own table of contents, a
+        // data track and an audio track, read back byte for byte afterwards.
+        let outcome = write_outcome(&captured("write-success.txt"));
         assert!(outcome.reported_complete);
         assert!(outcome.failures.is_empty(), "{:?}", outcome.failures);
-        assert_eq!(outcome.last_progress, Some((9, 9)));
-        assert_eq!(outcome.blocks_written, Some(4150));
+        assert_eq!(outcome.last_progress, Some((7, 7)));
+        assert_eq!(outcome.blocks_written, Some(3561));
         assert!(
             outcome
                 .events
                 .contains(&WriteEvent::TrackStarted { track: 2 }),
             "a track that starts after a \\r is still found"
+        );
+    }
+
+    #[test]
+    fn a_real_simulated_write_completes_and_counts_the_generated_gap() {
+        // Captured with --simulate against a blank CD-R: the engine's own
+        // arguments and table of contents, the laser off. 3561 blocks is the
+        // data track, the audio track and the two-second gap between them.
+        let output = captured("write-simulate.txt");
+        let outcome = write_outcome(&output);
+        assert!(outcome.reported_complete, "{:?}", outcome.events);
+        assert!(outcome.failures.is_empty(), "{:?}", outcome.failures);
+        assert_eq!(outcome.blocks_written, Some(1161 + 150 + 2250));
+        assert_eq!(outcome.last_progress, Some((7, 7)));
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("Cannot lock memory pages")),
+            "a worker without the capability sees this: {:?}",
+            outcome.warnings
+        );
+        assert!(
+            output.contains('\r'),
+            "the capture keeps cdrdao's carriage returns"
         );
     }
 

@@ -341,7 +341,13 @@ fn progress(line: &str) -> Option<WriteEvent> {
 ///
 /// The shape is `xorriso : FAILURE : Image size 58927s exceeds free space...`.
 fn problem(line: &str) -> Option<(String, String)> {
-    let rest = line.strip_prefix("xorriso : ")?;
+    // libburn, the library that actually drives the laser, reports under its
+    // own name. The first real write printed "libburn : NOTE : WRITE command
+    // repetition happened 335 times", and a FAILURE from it would have been
+    // read as nothing at all if only xorriso's prefix were recognised.
+    let rest = line
+        .strip_prefix("xorriso : ")
+        .or_else(|| line.strip_prefix("libburn : "))?;
     let (severity, message) = rest.split_once(" : ")?;
     let severity = severity.trim();
     // Only the words xorriso uses as severities. "xorriso : NOTE : ..." is one
@@ -601,6 +607,42 @@ xorriso 1.5.6 : RockRidge filesystem manipulator, libburnia project.
         );
         assert!(outcome.reported_complete);
         assert!(outcome.failures.is_empty());
+    }
+
+    #[test]
+    fn a_real_dummy_write_to_a_cd_r_completes() {
+        // Captured with -dummy against a blank CD-R in a real drive: the laser
+        // was off and the disc stayed blank, and everything else is real.
+        let outcome = write_outcome(&fixture("write-dummy-cdr.txt"));
+        assert!(outcome.reported_complete, "{:?}", outcome.events);
+        assert!(outcome.failures.is_empty(), "{:?}", outcome.failures);
+        assert_eq!(outcome.last_progress, Some((2, 2)));
+    }
+
+    #[test]
+    fn the_library_that_drives_the_laser_is_heard_too() {
+        let outcome = write_outcome(&fixture("write-dummy-cdr.txt"));
+        assert!(
+            outcome.events.iter().any(|event| matches!(
+                event,
+                WriteEvent::Problem { severity, message }
+                    if severity == "NOTE" && message.contains("WRITE command repetition")
+            )),
+            "{:?}",
+            outcome.events
+        );
+
+        let failed = write_outcome("libburn : FAILURE : Some write failure\n");
+        assert_eq!(failed.failures, vec!["Some write failure".to_owned()]);
+    }
+
+    #[test]
+    fn a_real_blank_cd_r_is_read_as_blank_and_writable() {
+        let medium = medium(&fixture("toc-blank-cdr.txt"));
+        assert!(medium.present());
+        assert!(medium.blank);
+        assert_eq!(medium.profile.as_deref(), Some("CD-R"));
+        assert_eq!(medium.writable_blocks, Some(359_844));
     }
 
     #[test]
