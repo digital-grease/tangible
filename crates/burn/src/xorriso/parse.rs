@@ -151,14 +151,25 @@ pub fn medium(output: &str) -> MediumReport {
         drive_identity: None,
     };
 
+    let mut absent = false;
+
     for line in output.lines() {
         if let Some(value) = field(line, "Media current") {
             // "CD-R" or "stdio file, overwriteable": the first clause is the
-            // profile and the rest is how it behaves.
-            report.profile = Some(value.split(',').next().unwrap_or(value).trim().to_owned());
+            // profile and the rest is how it behaves. "is not recognizable" is
+            // not a profile, and reading it as one is how an empty drive came
+            // to look like a disc: found on the first real drive, which prints
+            // exactly that with nothing in the tray.
+            let profile = value.split(',').next().unwrap_or(value).trim();
+            report.profile = Some(if profile.starts_with("is not recognizable") {
+                "unknown".to_owned()
+            } else {
+                profile.to_owned()
+            });
         } else if let Some(value) = field(line, "Media status") {
             report.blank = value.contains("is blank");
             report.appendable = value.contains("is appendable");
+            absent |= value.contains("is not present");
         } else if let Some(value) = field(line, "Media blocks") {
             report.readable_blocks = counted(value, "readable");
             report.writable_blocks = counted(value, "writable");
@@ -181,6 +192,11 @@ pub fn medium(output: &str) -> MediumReport {
         }
     }
 
+    if absent {
+        // The drive said the tray is empty. Whatever "Media current" said
+        // alongside that describes nothing.
+        report.profile = None;
+    }
     report
 }
 
@@ -441,6 +457,44 @@ xorriso 1.5.6 : RockRidge filesystem manipulator, libburnia project.
             "the drive identity is worth keeping: {:?}",
             medium.drive_identity
         );
+    }
+
+    #[test]
+    fn a_real_empty_drive_reports_no_medium() {
+        // Captured from a Slimtype DS8A8SH with nothing in the tray. It says
+        // "Media current: is not recognizable", which the parser used to take
+        // for a profile, so an empty drive read as a disc that could not be
+        // written rather than as a request to insert one.
+        let empty = medium(&fixture("toc-no-disc.txt"));
+        assert!(!empty.present(), "{empty:?}");
+        assert!(
+            empty
+                .drive_identity
+                .as_deref()
+                .is_some_and(|identity| identity.contains("Slimtype")),
+            "{empty:?}"
+        );
+    }
+
+    #[test]
+    fn a_disc_the_drive_cannot_read_is_present_and_unknown() {
+        // The other half: the same words with a disc in the tray are not an
+        // empty drive, and are not a profile either.
+        let unreadable = medium(
+            "Media current: is not recognizable\n\
+             Media status : is written , is closed\n",
+        );
+        assert!(unreadable.present());
+        assert_eq!(unreadable.profile.as_deref(), Some("unknown"));
+    }
+
+    #[test]
+    fn a_real_drive_is_listed_with_its_identity() {
+        let found = devices(&fixture("devices-one.txt"));
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].path, "/dev/sr0");
+        assert_eq!(found[0].vendor.as_deref(), Some("Slimtype"));
+        assert_eq!(found[0].model.as_deref(), Some("DVD A DS8A8SH"));
     }
 
     #[test]

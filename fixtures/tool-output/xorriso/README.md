@@ -23,6 +23,18 @@ The target is `stdio:`, a file standing in for a medium. That is xorriso's own
 mechanism, not a simulation of ours, so the messages are the ones a real drive
 produces for everything except the parts that talk to hardware.
 
+Two more were captured on 2026-09-29 from a real drive, a Slimtype DVD A
+DS8A8SH (firmware KS21) on USB, using xorriso 1.5.6 from Ubuntu 24.04's package
+with `--device /dev/sr0` and the tray empty:
+
+```bash
+xorriso -abort_on FATAL -devices
+xorriso -abort_on FATAL -outdev /dev/sr0 -toc
+```
+
+The drive's serial number in `toc-no-disc.txt` is replaced with `X`s. It
+identifies one physical drive and has no business in a public repository.
+
 ## What each file is for
 
 | File | What it is |
@@ -33,6 +45,8 @@ produces for everything except the parts that talk to hardware.
 | `toc-written.txt` | `-toc` against a medium holding one session. |
 | `write-success.txt` | A 115 MB write, with the progress lines a long write produces. |
 | `write-insufficient-space.txt` | A write refused because the image is larger than the medium. Exit code 5. |
+| `devices-one.txt` | `-devices` on a machine with one real drive. |
+| `toc-no-disc.txt` | `-toc` on a real drive with an empty tray. It says `Media current: is not recognizable`, which the parser used to read as a profile, so an empty drive looked like a disc that could not be written. |
 | `write-success-then-abort.txt` | **The interesting one.** The write completed and xorriso then crashed on shutdown, exiting non-zero. |
 
 That last file is why the parser reports what the output said and leaves the

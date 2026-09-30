@@ -609,7 +609,8 @@ mod tests {
     #[test]
     fn an_empty_tray_is_not_a_missing_device() {
         // Different remedies: one is a disc, the other is the device mapping.
-        let output = assembled("disk-info-no-disc.txt");
+        // Captured from a real drive with an empty tray.
+        let output = captured("disk-info-no-disc.txt");
         assert!(no_disc(&output));
         assert!(!device_unavailable(&output));
     }
@@ -728,7 +729,7 @@ mod tests {
 
     #[test]
     fn a_drive_that_would_not_answer_describes_no_medium() {
-        assert!(!disk_info(&assembled("disk-info-no-disc.txt")).present());
+        assert!(!disk_info(&captured("disk-info-no-disc.txt")).present());
         assert!(!disk_info(&captured("disk-info-no-device.txt")).present());
     }
 
@@ -736,13 +737,14 @@ mod tests {
 
     #[test]
     fn a_drive_says_what_it_is_and_what_it_can_do() {
-        let info = drive_info(&assembled("drive-info.txt"), "/dev/disc-block");
-        assert_eq!(info.identity.as_deref(), Some("HL-DT-ST BD-RE WH16NS60"));
+        // Captured from a Slimtype DS8A8SH.
+        let info = drive_info(&captured("drive-info.txt"), "/dev/sr0");
+        assert_eq!(info.identity.as_deref(), Some("Slimtype DVD A DS8A8SH"));
         assert_eq!(
             info.driver.as_deref(),
             Some("Generic SCSI-3/MMC - Version 2.0 (options 0x0000)")
         );
-        assert_eq!(info.max_write_kbps, Some(8467));
+        assert_eq!(info.max_write_kbps, Some(4234));
         assert_eq!(info.burn_proof, Some(true));
     }
 

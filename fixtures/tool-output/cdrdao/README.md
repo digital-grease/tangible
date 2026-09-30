@@ -37,6 +37,15 @@ ran against, in the shapes the TOC writer produces. `exit-codes.txt` records
 each command's exit status, because several of the findings below are about
 the exit status disagreeing with the output.
 
+Two files are captured from a real drive: `drive-info.txt` and
+`disk-info-no-disc.txt`, from a Slimtype DVD A DS8A8SH (firmware KS21) on USB,
+passed to the same container as `--device /dev/sr0` with the tray empty,
+captured 2026-09-29. They replaced assembled files of the same names. The
+assembled empty-drive file had nine "still trying" lines where the drive
+printed ten and lacked the drive banner, and the parser read both the same.
+The same capture showed that cdrdao talks to the drive through `/dev/sr0`
+with no `/dev/sg` node loaded.
+
 The assembled files are built from cdrdao's source at tag `rel_1_2_4`
 (`github.com/cdrdao/cdrdao`): `dao/main.cc` for the command flow, `showDiskInfo`
 and `showDriveInfo`; `dao/dao.cc` for the progress lines; `trackdb/log.cc` for
@@ -85,9 +94,10 @@ would guess:
 | `read-test-*.txt` | The writer loop without a drive: real `\r` progress, and the warning refusal. |
 | `write-no-device.txt` | The engine's exact write arguments against a drive that is not there. |
 | `disk-info-no-device.txt`, `drive-info-no-device.txt` | The same, for inspection and probing. |
+| `drive-info.txt` | A real drive's answer. |
+| `disk-info-no-disc.txt` | A real drive with an empty tray: ten retries, then it gives up. |
 | `assembled/write-*.txt` | A successful write, an underrun, a failure after completion, and two refusals before writing. |
-| `assembled/disk-info-*.txt` | A blank CD-R, a closed CD-RW, an appendable CD-R, and an empty drive. |
-| `assembled/drive-info.txt` | What `drive-info` prints for a working drive. |
+| `assembled/disk-info-*.txt` | A blank CD-R, a closed CD-RW and an appendable CD-R. |
 
 ## Refreshing these
 
