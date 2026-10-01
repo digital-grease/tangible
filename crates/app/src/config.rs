@@ -31,6 +31,10 @@ pub enum BurnEngineKind {
     Xorriso,
     /// `cdrdao`, for DAO CD layouts, audio, mixed mode and pregaps.
     Cdrdao,
+    /// Both: xorriso for prepared images and cdrdao for discs described as
+    /// tracks, each plan going to the one its shape needs. What a worker with
+    /// a real drive should normally run, because one drive then serves both.
+    Auto,
 }
 
 /// Settings shared by every subcommand.
@@ -207,6 +211,9 @@ mod tests {
         let cli = TestCli::try_parse_from(["tangible", "--burn-engine", "xorriso"])
             .expect("explicit engine parses");
         assert_eq!(cli.serve.burn_engine, BurnEngineKind::Xorriso);
+        let cli = TestCli::try_parse_from(["tangible", "--burn-engine", "auto"])
+            .expect("auto is a burn engine");
+        assert_eq!(cli.serve.burn_engine, BurnEngineKind::Auto);
     }
 
     #[test]

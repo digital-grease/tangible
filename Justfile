@@ -115,14 +115,19 @@ test-cdrdao:
     TANGIBLE_CDRDAO_TESTS=1 cargo test -p tangible-burn --test cdrdao_engine --all-features
 
 # Tests that touch a real optical drive. Never run in normal CI.
-test-hardware:
+#
+# TANGIBLE_HARDWARE_TESTS=1 runs the ones that only ask the drive questions.
+# Adding TANGIBLE_HARDWARE_WRITE=1 runs the ones that burn, each of which uses
+# up a disc, so name one: just test-hardware an_iso
+# TANGIBLE_HARDWARE_DEVICE names the drive (default /dev/sr0).
+test-hardware *filter:
     #!/usr/bin/env bash
     set -euo pipefail
     if [ "${TANGIBLE_HARDWARE_TESTS:-0}" != "1" ]; then
         echo "refusing to run hardware tests without TANGIBLE_HARDWARE_TESTS=1" >&2
         exit 1
     fi
-    cargo test --workspace --all-features --features hardware-tests -- --ignored --test-threads=1
+    cargo test -p tangible-burn --all-features --test hardware {{filter}} -- --test-threads=1 --nocapture
 
 # Supply-chain checks.
 audit:
@@ -192,7 +197,8 @@ db-reset:
 compose-config:
     docker compose -f deploy/compose.yaml --env-file deploy/.env.example config >/dev/null
     docker compose -f deploy/compose.yaml -f deploy/compose.dev.yaml --env-file deploy/.env.example config >/dev/null
-    TANGIBLE_WORKER_NAME=validate docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml --env-file deploy/.env.example config >/dev/null
+    TANGIBLE_WORKER_NAME=validate TANGIBLE_OPTICAL_GID=990 docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml --env-file deploy/.env.example config >/dev/null
+    TANGIBLE_WORKER_NAME=validate TANGIBLE_OPTICAL_GID=990 TANGIBLE_SCSI_DEVICE=/dev/sg4 docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml -f deploy/compose.hardware-sg.yaml --env-file deploy/.env.example config >/dev/null
     @echo "all compose combinations render"
 
 # Assert that no default stack can reach an optical drive.

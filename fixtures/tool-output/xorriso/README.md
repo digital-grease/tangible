@@ -51,6 +51,7 @@ identifies one physical drive and has no business in a public repository.
 | `write-insufficient-space.txt` | A write refused because the image is larger than the medium. Exit code 5. |
 | `devices-one.txt` | `-devices` on a machine with one real drive. |
 | `toc-blank-cdr.txt` | `-toc` on a real blank CD-R. |
+| `write-success-cdr.txt` | The first real xorriso burn, 2026-09-30: a 4 MB ISO to a CD-R through the combined engine, read back identical over SCSI. Raw stderr; stdout was empty. Progress repeats once a second whether or not it moved, which is why the engine reports a megabyte only when it changes. |
 | `write-dummy-cdr.txt` | A real dummy write. Note the `libburn : NOTE :` line: the library that drives the laser reports under its own prefix, which the parser did not recognise until this capture. |
 | `toc-no-disc.txt` | `-toc` on a real drive with an empty tray. It says `Media current: is not recognizable`, which the parser used to read as a profile, so an empty drive looked like a disc that could not be written. |
 | `write-success-then-abort.txt` | **The interesting one.** The write completed and xorriso then crashed on shutdown, exiting non-zero. |

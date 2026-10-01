@@ -1,0 +1,54 @@
+xorriso 1.5.6 : RockRidge filesystem manipulator, libburnia project.
+
+Drive current: -outdev '/dev/sr0'
+Media current: CD-R
+Media status : is blank
+Media summary: 0 sessions, 0 data blocks, 0 data,  703m free
+xorriso : NOTE : -blank as_needed: no need for action detected
+Beginning to write data track.
+xorriso : UPDATE : Thank you for being patient. Working since 0 seconds.
+xorriso : UPDATE : Thank you for being patient. Working since 1 seconds.
+xorriso : UPDATE : Thank you for being patient. Working since 2 seconds.
+xorriso : UPDATE : Thank you for being patient. Working since 3 seconds.
+xorriso : UPDATE : Thank you for being patient. Working since 4 seconds.
+xorriso : UPDATE : Thank you for being patient. Working since 5 seconds.
+xorriso : UPDATE : Thank you for being patient. Working since 6 seconds.
+xorriso : UPDATE :    0 of    4 MB written (fifo 99%) [buf  76%]   1.5x.
+xorriso : UPDATE :    0 of    4 MB written (fifo 99%) [buf  76%]   0.0x.
+xorriso : UPDATE :    0 of    4 MB written (fifo 99%) [buf  76%]   0.0x.
+xorriso : UPDATE :    0 of    4 MB written (fifo 99%) [buf  76%]   0.0x.
+xorriso : UPDATE :    0 of    4 MB written (fifo 99%) [buf  76%]   0.0x.
+xorriso : UPDATE :    0 of    4 MB written (fifo 99%) [buf  76%]   0.0x.
+xorriso : UPDATE :    0 of    4 MB written (fifo 99%) [buf  76%]   0.0x.
+xorriso : UPDATE :    0 of    4 MB written (fifo 99%) [buf  76%]   0.0x.
+xorriso : UPDATE :    0 of    4 MB written (fifo 99%) [buf  76%]   0.0x.
+xorriso : UPDATE :    0 of    4 MB written (fifo 99%) [buf  76%]   0.0x.
+xorriso : UPDATE :    0 of    4 MB written (fifo 99%) [buf  76%]   0.0x.
+xorriso : UPDATE :    0 of    4 MB written (fifo 99%) [buf  76%]   0.0x.
+xorriso : UPDATE :    0 of    4 MB written (fifo 99%) [buf  76%]   0.0x.
+xorriso : UPDATE :    0 of    4 MB written (fifo 99%) [buf  76%]   0.0x.
+xorriso : UPDATE :    0 of    4 MB written (fifo 99%) [buf  76%]   0.0x.
+xorriso : UPDATE :    0 of    4 MB written (fifo 86%) [buf  99%]   4.7x.
+xorriso : UPDATE :    2 of    4 MB written (fifo 47%) [buf  99%]  10.7x.
+xorriso : UPDATE :    4 of    4 MB written (fifo  7%) [buf  99%]  10.9x.
+xorriso : UPDATE :    4 of    4 MB written (fifo  0%) [buf  99%]   4.0x.
+xorriso : UPDATE :    4 of    4 MB written (fifo  0%) [buf  99%]   0.0x.
+xorriso : UPDATE :    4 of    4 MB written (fifo  0%) [buf  99%]   0.0x.
+xorriso : UPDATE :    4 of    4 MB written (fifo  0%) [buf  99%]   0.0x.
+xorriso : UPDATE :    4 of    4 MB written (fifo  0%) [buf  99%]   0.0x.
+xorriso : UPDATE :    4 of    4 MB written (fifo  0%) [buf  99%]   0.0x.
+xorriso : UPDATE :    4 of    4 MB written (fifo  0%) [buf  99%]   0.0x.
+xorriso : UPDATE :    4 of    4 MB written (fifo  0%) [buf  99%]   0.0x.
+xorriso : UPDATE :    4 of    4 MB written (fifo  0%) [buf  99%]   0.0x.
+xorriso : UPDATE : Thank you for being patient. Working since 34 seconds.
+xorriso : UPDATE : Thank you for being patient. Working since 35 seconds.
+xorriso : UPDATE : Thank you for being patient. Working since 36 seconds.
+libburn : NOTE : WRITE command repetition happened 294 times
+Writing to '/dev/sr0' completed successfully.
+
+xorriso : NOTE : Re-assessing -outdev '/dev/sr0'
+xorriso : NOTE : Disc status unsuitable for writing
+Drive current: -outdev '/dev/sr0'
+Media current: CD-R
+Media status : is written , is closed
+Media summary: 1 session, 2382 data blocks, 4764k data,     0 free

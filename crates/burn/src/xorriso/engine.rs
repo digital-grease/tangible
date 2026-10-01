@@ -270,10 +270,11 @@ async fn follow_lines<R: tokio::io::AsyncRead + Unpin>(
     sink: &dyn EventSink,
 ) -> String {
     let mut text = String::new();
+    let mut last_mb = None;
     if let Some(pipe) = pipe {
         let mut lines = BufReader::new(pipe).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            emit(sink, &line);
+            emit(sink, &line, &mut last_mb);
             push_bounded(&mut text, &line);
             push_bounded(&mut text, "\n");
         }
@@ -324,7 +325,9 @@ fn medium_info(report: &parse::MediumReport) -> MediumInfo {
             .saturating_add(report.readable_blocks.unwrap_or(0)),
         free_blocks: report.writable_blocks.unwrap_or(0),
         block_size,
-        manufacturer_id: report.drive_identity.clone(),
+        // The disc's maker, which is what a physical copy records. The drive's
+        // identity was recorded here until the first real drive showed it.
+        manufacturer_id: report.media_manufacturer.clone(),
         sessions: report.sessions.unwrap_or(0),
         erasable: report
             .profile
@@ -810,13 +813,23 @@ async fn hash_range(
 }
 
 /// Emit an engine event for a line of tool output, when it carries one.
-fn emit(sink: &dyn EventSink, line: &str) {
+///
+/// xorriso prints its progress line once a second whether or not anything
+/// moved, and a "Thank you for being patient" line while the drive is busy.
+/// The first real burn sent an operator "0 of 4 MB" fifteen times and the
+/// patience line seven. Progress is reported when the megabyte count changes,
+/// and UPDATE lines that are not progress stay in the log and off the page.
+fn emit(sink: &dyn EventSink, line: &str, last_mb: &mut Option<u64>) {
     match parse::write_outcome(line).events.first() {
         Some(parse::WriteEvent::Progress {
             written_mb,
             total_mb,
             speed,
         }) => {
+            if *last_mb == Some(*written_mb) {
+                return;
+            }
+            *last_mb = Some(*written_mb);
             #[allow(clippy::cast_precision_loss)]
             let fraction = if *total_mb == 0 {
                 0.0
@@ -838,6 +851,7 @@ fn emit(sink: &dyn EventSink, line: &str) {
             "WRITE_COMPLETED",
             "the engine reported the write finished",
         )),
+        Some(parse::WriteEvent::Problem { severity, .. }) if severity == "UPDATE" => {}
         Some(parse::WriteEvent::Problem { severity, message }) => sink.emit(BurnEvent::new(
             "writing",
             "ENGINE_MESSAGE",
@@ -946,6 +960,7 @@ mod tests {
         emit(
             &sink,
             "xorriso : UPDATE :   92 of  115 MB written (fifo  0%) [buf  50%]  59.7x.",
+            &mut None,
         );
         let events = sink.events();
         assert_eq!(events.len(), 1);
@@ -961,6 +976,7 @@ mod tests {
         emit(
             &sink,
             "Writing to 'stdio:/tmp/x.iso' completed successfully.",
+            &mut None,
         );
         assert_eq!(sink.events()[0].code, "WRITE_COMPLETED");
     }
@@ -968,8 +984,68 @@ mod tests {
     #[test]
     fn an_ordinary_line_emits_nothing() {
         let sink = CollectingSink::new();
-        emit(&sink, "Drive current: -outdev 'stdio:/tmp/x.iso'");
+        emit(
+            &sink,
+            "Drive current: -outdev 'stdio:/tmp/x.iso'",
+            &mut None,
+        );
         assert!(sink.events().is_empty());
+    }
+
+    #[test]
+    fn the_real_burn_reports_each_megabyte_once_and_no_chatter() {
+        // The first real xorriso burn, as the drive printed it.
+        let output = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/tool-output/xorriso/write-success-cdr.txt"
+        ))
+        .expect("fixture");
+        let sink = CollectingSink::new();
+        let mut last_mb = None;
+        for line in output.lines() {
+            emit(&sink, line, &mut last_mb);
+        }
+        let events = sink.events();
+        let progress: Vec<&str> = events
+            .iter()
+            .filter(|event| event.code == "WRITE_PROGRESS")
+            .map(|event| event.message.as_str())
+            .collect();
+        assert_eq!(progress.len(), 3, "0, 2 and 4 MB: {progress:?}");
+        assert!(
+            !events
+                .iter()
+                .any(|event| event.message.contains("Thank you for being patient")),
+            "{events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.message.contains("WRITE command repetition")),
+            "a NOTE still reaches the operator: {events:?}"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.code == "WRITE_COMPLETED")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn the_disc_maker_is_recorded_rather_than_the_drive() {
+        let report = parse::medium(
+            "Media current: CD-R\n\
+             Media status : is blank\n\
+             Media blocks : 0 readable , 359844 writable , 359844 overall\n\
+             Drive type   : vendor 'Slimtype' product 'DVD A DS8A8SH' revision 'KS21'\n\
+             Media product: 97m26s66f/79m59s71f , CMC Magnetics Corporation\n",
+        );
+        assert_eq!(
+            medium_info(&report).manufacturer_id.as_deref(),
+            Some("CMC Magnetics Corporation")
+        );
     }
 
     #[tokio::test]

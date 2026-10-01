@@ -48,9 +48,10 @@ services:
       # workers page, start the worker, then remove this line: the credential
       # it exchanges the token for lives on the volume.
       TANGIBLE_ENROLLMENT_TOKEN: ${TANGIBLE_ENROLLMENT_TOKEN:-}
-      # `fake` writes to a file and touches no drive; `xorriso` writes ISO
-      # images to the mapped device. The default stays fake, so a worker that
-      # is merely started does not write to a disc somebody left in the tray.
+      # `fake` writes to a file and touches no drive. `auto` writes to the
+      # mapped drive, ISO images through xorriso and CUE/BIN discs through
+      # cdrdao; see .env.example. The default stays fake, so a worker that is
+      # merely started does not write to a disc somebody left in the tray.
       TANGIBLE_BURN_ENGINE: ${TANGIBLE_BURN_ENGINE:-fake}
       TANGIBLE_LOG: ${TANGIBLE_LOG:-tangible=info}
     volumes:

@@ -123,6 +123,13 @@ pub struct MediumReport {
     pub volume_ids: Vec<String>,
     /// The drive's own identity, when it reported one.
     pub drive_identity: Option<String>,
+    /// Who made the medium, when the drive reports it.
+    ///
+    /// From the `Media product` line, which names the dye and maker of a
+    /// recordable disc. Kept apart from the drive's identity, which is a
+    /// different thing that the first real drive showed was being recorded in
+    /// its place.
+    pub media_manufacturer: Option<String>,
 }
 
 impl MediumReport {
@@ -149,6 +156,7 @@ pub fn medium(output: &str) -> MediumReport {
         sessions: None,
         volume_ids: Vec::new(),
         drive_identity: None,
+        media_manufacturer: None,
     };
 
     let mut absent = false;
@@ -179,6 +187,13 @@ pub fn medium(output: &str) -> MediumReport {
                 .next()
                 .and_then(|clause| clause.split_whitespace().next())
                 .and_then(|count| count.parse().ok());
+        } else if let Some(value) = field(line, "Media product") {
+            // "97m26s66f/79m59s71f , CMC Magnetics Corporation": the lead-in
+            // start and the last possible lead-out, then the maker.
+            report.media_manufacturer = value
+                .split_once(',')
+                .map(|(_, maker)| maker.trim().to_owned())
+                .filter(|maker| !maker.is_empty());
         } else if let Some(value) = field(line, "Drive type") {
             report.drive_identity = Some(value.trim().to_owned());
         } else if let Some(value) = field(line, "ISO session") {
@@ -700,6 +715,26 @@ xorriso 1.5.6 : RockRidge filesystem manipulator, libburnia project.
         assert!(medium.blank);
         assert_eq!(medium.profile.as_deref(), Some("CD-R"));
         assert_eq!(medium.writable_blocks, Some(359_844));
+        assert_eq!(
+            medium.media_manufacturer.as_deref(),
+            Some("CMC Magnetics Corporation"),
+            "the disc's maker, not the drive's"
+        );
+    }
+
+    #[test]
+    fn the_first_real_xorriso_burn_completed() {
+        // A 4 MB ISO to a CD-R through the combined engine, read back
+        // identical over SCSI afterwards.
+        let outcome = write_outcome(&fixture("write-success-cdr.txt"));
+        assert!(outcome.reported_complete);
+        assert!(outcome.failures.is_empty(), "{:?}", outcome.failures);
+        assert!(
+            outcome.late_problems.is_empty(),
+            "{:?}",
+            outcome.late_problems
+        );
+        assert_eq!(outcome.last_progress, Some((4, 4)));
     }
 
     #[test]

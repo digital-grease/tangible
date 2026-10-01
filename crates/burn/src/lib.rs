@@ -14,6 +14,7 @@
 
 pub mod cdrdao;
 pub mod client;
+pub mod combined;
 pub mod device_lock;
 pub mod engine;
 pub mod fake;
@@ -28,6 +29,7 @@ pub use client::{
     Enrolled, FailureBody, Leased, PhysicalMediumBody, VerificationReportBody, WorkerClient,
     WorkerIdentity, WriteReportBody,
 };
+pub use combined::CombinedEngine;
 pub use device_lock::{DeviceLock, DeviceLockError};
 pub use engine::{BurnEngine, BurnEvent, CollectingSink, EngineError, EventSink, NullSink};
 pub use fake::{CancelToken, FakeBehaviour, FakeEngine};
@@ -40,3 +42,4 @@ pub use worker::{
     EventBuffer, EventError, Lease, RecoveryDirective, RecoveryError, RecoveryPlan, RecoveryRecord,
     RecoveryStore, UnknownStage, WorkerEvent, WorkerStage, plan_for,
 };
+pub use xorriso::XorrisoEngine;

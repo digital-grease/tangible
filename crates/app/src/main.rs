@@ -216,17 +216,14 @@ async fn doctor_command(common: &CommonConfig) -> Result<()> {
 /// a redeploy, because stopping mid-write ruins the disc and the local
 /// recovery record is what lets the next process reconcile rather than guess.
 async fn burn_worker_command(worker: &WorkerConfig) -> Result<()> {
-    use tangible_burn::runner::{WorkerRuntime, WorkerSettings};
+    use tangible_burn::runner::WorkerSettings;
+    use tangible_burn::{CdrdaoEngine, CombinedEngine, FakeEngine, XorrisoEngine};
 
-    match worker.burn_engine {
-        BurnEngineKind::Fake => {}
-        // Refused rather than silently substituted. An operator who asked for
-        // a real engine and got a simulation would believe a disc exists.
-        other => anyhow::bail!(
-            "the {other:?} engine is not implemented yet; it arrives with epic E6. \
-             Remove TANGIBLE_BURN_ENGINE to run the hardware-free engine."
-        ),
-    }
+    // Absolute, because the engines refuse to hand a tool a relative path
+    // that could be read as an option, and because the working directory of a
+    // container is not something to depend on.
+    let state_dir = std::path::absolute(&worker.state_dir)
+        .with_context(|| format!("resolving {}", worker.state_dir.display()))?;
 
     let settings = WorkerSettings {
         enrollment_token: worker.enrollment_token.clone(),
@@ -235,7 +232,7 @@ async fn burn_worker_command(worker: &WorkerConfig) -> Result<()> {
         ..WorkerSettings::new(
             worker.server_url.clone(),
             worker.worker_name.clone(),
-            worker.state_dir.clone(),
+            state_dir.clone(),
         )
     };
 
@@ -244,14 +241,63 @@ async fn burn_worker_command(worker: &WorkerConfig) -> Result<()> {
         worker = %settings.worker_name,
         alias = %settings.device_alias,
         state_dir = %settings.state_dir.display(),
-        "starting the burn worker with the hardware-free engine"
+        engine = ?worker.burn_engine,
+        "starting the burn worker"
     );
 
-    // Simulated media live beside the worker's other state, so a restart
-    // finds the same "disc" in the same "drive".
-    let engine = tangible_burn::FakeEngine::new(settings.state_dir.join("media"));
-    let mut runtime = WorkerRuntime::new(settings, engine).context("assembling the burn worker")?;
+    // Tables of contents and read-back chunks live with the worker's other
+    // state, on the volume that survives a restart, rather than in a
+    // container's temporary directory.
+    let xorriso = || async {
+        let mut engine = XorrisoEngine::new().with_scratch_dir(state_dir.join("readback"));
+        tokio::fs::create_dir_all(state_dir.join("readback"))
+            .await
+            .context("creating the read-back directory")?;
+        let version = engine
+            .probe_version()
+            .await
+            .context("xorriso did not answer; the worker image may be broken")?;
+        tracing::info!(version = %version.version, "xorriso is ready");
+        anyhow::Ok(engine)
+    };
+    let cdrdao = || async {
+        let mut engine = CdrdaoEngine::new(state_dir.join("toc"));
+        let version = engine
+            .probe_version()
+            .await
+            .context("cdrdao did not answer; the worker image may be broken")?;
+        tracing::info!(%version, "cdrdao is ready");
+        // Said at startup because it is a property of every disc this worker
+        // writes from a track layout, not of any one of them.
+        tracing::warn!(
+            "discs written from a track layout are recorded as written and unverified: \
+             reading one back is not built yet"
+        );
+        anyhow::Ok(engine)
+    };
 
+    match worker.burn_engine {
+        BurnEngineKind::Fake => {
+            // Simulated media live beside the worker's other state, so a
+            // restart finds the same "disc" in the same "drive".
+            run_worker(settings, FakeEngine::new(state_dir.join("media"))).await
+        }
+        BurnEngineKind::Xorriso => run_worker(settings, xorriso().await?).await,
+        BurnEngineKind::Cdrdao => run_worker(settings, cdrdao().await?).await,
+        BurnEngineKind::Auto => {
+            let engine = CombinedEngine::new(xorriso().await?, cdrdao().await?);
+            run_worker(settings, engine).await
+        }
+    }
+}
+
+/// Run a worker with the engine it was given until it is asked to stop.
+async fn run_worker<E: tangible_burn::BurnEngine + 'static>(
+    settings: tangible_burn::runner::WorkerSettings,
+    engine: E,
+) -> Result<()> {
+    let mut runtime = tangible_burn::runner::WorkerRuntime::new(settings, engine)
+        .context("assembling the burn worker")?;
     runtime
         .run(shutdown_signal())
         .await
