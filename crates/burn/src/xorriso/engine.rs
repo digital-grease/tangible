@@ -654,6 +654,7 @@ impl BurnEngine for XorrisoEngine {
                 "reads through this drive, so a disc unreadable elsewhere can still match here"
                     .to_owned(),
             ],
+            tracks: Vec::new(),
         })
     }
 

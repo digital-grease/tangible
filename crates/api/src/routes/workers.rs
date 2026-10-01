@@ -1103,6 +1103,31 @@ pub struct VerificationReport {
     pub expected_sha256: String,
     /// The digest actually read from the disc.
     pub observed_sha256: String,
+    /// What was checked on each track, for a disc described as tracks.
+    #[serde(default)]
+    pub tracks: Vec<TrackVerificationReport>,
+}
+
+/// The check on one track of a disc described as tracks.
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
+pub struct TrackVerificationReport {
+    /// Track number.
+    pub number: u32,
+    /// `byte_compare`, or `length_and_readable` for a track that was read back
+    /// and measured but not compared.
+    pub check: String,
+    /// `match`, `mismatch` or `unreadable`.
+    pub outcome: String,
+    /// Sectors the layout says the track proper holds.
+    pub sectors_expected: u64,
+    /// Sectors found on the disc.
+    pub sectors_read: u64,
+    /// The digest of what was written, for a byte comparison.
+    #[serde(default)]
+    pub expected_sha256: Option<String>,
+    /// The digest of what was read back, for a byte comparison.
+    #[serde(default)]
+    pub observed_sha256: Option<String>,
 }
 
 /// What was in the drive.
@@ -1174,10 +1199,20 @@ struct Resolved {
 
 fn resolve(request: &CompletionRequest) -> Resolved {
     let wrote = request.write_report.state == "success";
-    let verification = request
-        .verification_report
-        .as_ref()
-        .map(|r| r.state.as_str());
+    // A report that says it matched while some track was only measured is
+    // recorded as partial whatever it says: the record never claims more than
+    // was checked, and that rule is the server's to keep, not each worker's.
+    let verification = request.verification_report.as_ref().map(|report| {
+        let only_measured = report
+            .tracks
+            .iter()
+            .any(|track| track.check != "byte_compare");
+        if report.state == "match" && only_measured {
+            "partial"
+        } else {
+            report.state.as_str()
+        }
+    });
 
     // A write that never started consumed nothing. Checked first, because
     // every other arm below assumes the laser ran: recording a preflight
@@ -1198,6 +1233,15 @@ fn resolve(request: &CompletionRequest) -> Resolved {
             state: BurnAttemptState::Verified,
             copy_status: "verified",
             verification_result: "passed",
+            error_code: None,
+        },
+        // Written, and everything checked passed, but some tracks were only
+        // read back and measured rather than compared: audio, or raw data
+        // tracks. A good disc, recorded as exactly that.
+        (true, Some("partial")) => Resolved {
+            state: BurnAttemptState::Verified,
+            copy_status: "verified",
+            verification_result: "partial",
             error_code: None,
         },
         // Physically written, holds the wrong bytes. The disc exists and must
@@ -1554,6 +1598,7 @@ mod tests {
                 bytes_read: 10,
                 expected_sha256: "a".repeat(64),
                 observed_sha256: "a".repeat(64),
+                tracks: Vec::new(),
             }),
             physical_medium: PhysicalMedium {
                 profile: "bd-r-25".to_owned(),
@@ -1612,6 +1657,53 @@ mod tests {
         assert_eq!(resolved.state, BurnAttemptState::FailedBeforeWrite);
         assert!(!resolved.state.consumed_media());
         assert_eq!(resolved.error_code, Some("WRITE_NOT_ATTEMPTED"));
+    }
+
+    fn track(check: &str, outcome: &str) -> TrackVerificationReport {
+        TrackVerificationReport {
+            number: 1,
+            check: check.to_owned(),
+            outcome: outcome.to_owned(),
+            sectors_expected: 300,
+            sectors_read: 300,
+            expected_sha256: None,
+            observed_sha256: None,
+        }
+    }
+
+    #[test]
+    fn a_partial_verification_is_a_verified_disc_recorded_as_partial() {
+        // Data compared, audio only measured. A good disc, and the
+        // record says exactly how it was checked.
+        let resolved = resolve(&completion("success", Some("partial")));
+        assert_eq!(resolved.state, BurnAttemptState::Verified);
+        assert_eq!(resolved.copy_status, "verified");
+        assert_eq!(resolved.verification_result, "partial");
+        assert_eq!(resolved.error_code, None);
+    }
+
+    #[test]
+    fn a_match_that_only_measured_a_track_is_recorded_as_partial_anyway() {
+        // The server keeps the rule, not each worker: a report claiming a
+        // match while a track was only read back and measured is downgraded.
+        let mut request = completion("success", Some("match"));
+        if let Some(report) = request.verification_report.as_mut() {
+            report.tracks = vec![
+                track("byte_compare", "match"),
+                track("length_and_readable", "match"),
+            ];
+        }
+        assert_eq!(resolve(&request).verification_result, "partial");
+
+        let mut compared = completion("success", Some("match"));
+        if let Some(report) = compared.verification_report.as_mut() {
+            report.tracks = vec![track("byte_compare", "match")];
+        }
+        assert_eq!(
+            resolve(&compared).verification_result,
+            "passed",
+            "every track compared is a pass"
+        );
     }
 
     #[test]

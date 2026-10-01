@@ -550,6 +550,7 @@ impl BurnEngine for FakeEngine {
                     .to_owned(),
                 "does not assess the physical longevity of the medium".to_owned(),
             ],
+            tracks: Vec::new(),
         })
     }
 

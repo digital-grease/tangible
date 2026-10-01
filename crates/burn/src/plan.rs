@@ -684,6 +684,77 @@ pub struct VerifyReport {
     /// Always populated. A verification result that does not state its limits
     /// invites being read as a stronger guarantee than it is.
     pub limitations: Vec<String>,
+    /// What was checked on each track, for a disc described as tracks.
+    ///
+    /// Empty for a block image, which is compared as one extent. For a track
+    /// layout this is the result: which tracks were compared byte for byte,
+    /// which could only be checked for length and readability, and how each
+    /// came out.
+    #[serde(default)]
+    pub tracks: Vec<TrackVerification>,
+}
+
+impl VerifyReport {
+    /// Whether everything that was checked passed, but some of it was only
+    /// checked for length and readability rather than compared.
+    ///
+    /// Recorded as a `partial` result rather than a pass: a record never claims
+    /// more than was checked, and a length check is not a comparison.
+    #[must_use]
+    pub fn is_partial(&self) -> bool {
+        self.matched
+            && self
+                .tracks
+                .iter()
+                .any(|track| track.check == TrackCheck::LengthAndReadable)
+    }
+}
+
+/// How one track was checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrackCheck {
+    /// Every byte read back and compared with what was written.
+    ByteCompare,
+    /// Read back without an uncorrected error, and found to be the length the
+    /// layout says, to the sector. Not compared: audio, because without the
+    /// drive's read offset a comparison fails on correct hardware, and raw
+    /// data tracks, until raw sector reads have been proven on a drive.
+    LengthAndReadable,
+}
+
+/// How one track's check came out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrackOutcome {
+    /// It passed.
+    Match,
+    /// It was read and was wrong: different bytes, or a different length or
+    /// position from the layout's.
+    Mismatch,
+    /// It could not be read back cleanly.
+    Unreadable,
+}
+
+/// The check on one track.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrackVerification {
+    /// Track number.
+    pub number: u32,
+    /// How it was checked.
+    pub check: TrackCheck,
+    /// How that came out.
+    pub outcome: TrackOutcome,
+    /// Sectors the layout says the track proper holds.
+    pub sectors_expected: u64,
+    /// Sectors found on the disc.
+    pub sectors_read: u64,
+    /// The digest of what was written, for a byte comparison.
+    #[serde(default)]
+    pub expected_sha256: Option<String>,
+    /// The digest of what was read back, for a byte comparison.
+    #[serde(default)]
+    pub observed_sha256: Option<String>,
 }
 
 /// A request to erase a rewritable medium.

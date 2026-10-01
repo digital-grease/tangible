@@ -316,10 +316,12 @@ impl Server {
     }
 
     async fn drain_queue(&self) {
-        sqlx::query("UPDATE burn_jobs SET state = 'canceled' WHERE state = 'queued'")
-            .execute(&self.pool)
-            .await
-            .expect("drain");
+        sqlx::query(
+            "UPDATE burn_jobs SET state = 'canceled', completed_at = now() WHERE state = 'queued'",
+        )
+        .execute(&self.pool)
+        .await
+        .expect("drain");
     }
 
     /// Wait for a job to settle, returning its final view.

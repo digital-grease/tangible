@@ -28,15 +28,24 @@
 //! or short file and a track under four seconds, which cdrdao prints as
 //! objections and then exits 0 from.
 //!
-//! # What this engine does not claim
+//! # Reading the disc back
 //!
-//! Verification is not built. Reading a disc of tracks back needs raw sector
-//! reads, a per-track report, and a real drive to establish what the reads can
-//! be trusted for; audio in particular cannot be compared byte for byte without
-//! the drive's read offset. Until that exists [`BurnEngine::verify`] says it
-//! cannot, and the runner records the disc as written and unverified. A result
-//! that reported a match here would be recorded as a full sector comparison of
-//! a digest nobody computed.
+//! Verification reports track by
+//! track. `cdrdao read-cd` reads every sector of every track over SCSI into a
+//! scratch file, which is what makes an unreadable sector show up as a failed
+//! read; `show-toc` over the table of contents it writes gives each track's
+//! position, which is compared with the layout to the sector. Then:
+//!
+//! - a `MODE1/2048` data track is compared byte for byte with what was
+//!   written, which was proven on a real drive;
+//! - an audio track is checked for length and readability only, because
+//!   without the drive's read offset a comparison fails on correct hardware;
+//! - a raw or mode 2 data track gets the same check as audio until raw sector
+//!   reads have been proven on a drive.
+//!
+//! The result is recorded as `track_hash_compare`, and it is `partial` whenever
+//! any track was only checked rather than compared: a record never claims more
+//! than was checked.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -54,7 +63,8 @@ use crate::engine::{BurnEngine, BurnEvent, EngineError, EventSink};
 use crate::fake::CancelToken;
 use crate::plan::{
     BlankReport, BlankRequest, BurnPlan, DriveCapabilities, DriveRef, MediumInfo, PreflightFailure,
-    PreflightReport, VerifyReport, WriteMode, WriteReport,
+    PreflightReport, TrackCheck, TrackOutcome, TrackVerification, VerifyReport, WriteMode,
+    WriteReport,
 };
 
 /// How long inspecting or probing a drive may take.
@@ -296,6 +306,278 @@ impl CdrdaoEngine {
         }
         Ok(())
     }
+}
+
+/// How long reading a whole CD back may take.
+///
+/// An 80 minute disc at single speed is 80 minutes, and a disc that needs
+/// retries is slower still. Unlike a write, a read that is stopped ruins
+/// nothing, so it can have a limit at all.
+const READBACK_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
+
+impl CdrdaoEngine {
+    /// Read a disc of tracks back and check each track.
+    async fn read_back(
+        &self,
+        plan: &BurnPlan,
+        scratch: &Path,
+        sink: &dyn EventSink,
+    ) -> Result<VerifyReport, EngineError> {
+        let io = |operation: &'static str| {
+            move |source: std::io::Error| EngineError::Io { operation, source }
+        };
+        // Emptied first: read-cd refuses to overwrite either file, and a stale
+        // pair from an interrupted run would be compared as this disc.
+        let _ = tokio::fs::remove_dir_all(scratch).await;
+        tokio::fs::create_dir_all(scratch)
+            .await
+            .map_err(io("creating the read-back directory"))?;
+        let datafile = scratch.join("readback.bin");
+        let toc = scratch.join("readback.toc");
+
+        sink.emit(BurnEvent::new(
+            "verifying",
+            "VERIFY_STARTED",
+            "reading every track of the disc back",
+        ));
+        let (listing, extents) = self.read_disc(plan, &datafile, &toc).await?;
+
+        let mut tracks = Vec::new();
+        let mut bytes_compared = 0_u64;
+        for check in plan_track_checks(plan, &listing, &extents) {
+            let verification = run_track_check(plan, &check, &datafile).await?;
+            if verification.check == TrackCheck::ByteCompare {
+                bytes_compared += verification.sectors_read * DATA_SECTOR_BYTES;
+            }
+            sink.emit(BurnEvent::new(
+                "verifying",
+                "VERIFY_TRACK",
+                format!(
+                    "track {}: {:?}, {:?}",
+                    verification.number, verification.check, verification.outcome
+                ),
+            ));
+            tracks.push(verification);
+        }
+
+        let matched = !tracks.is_empty()
+            && tracks
+                .iter()
+                .all(|track| track.outcome == TrackOutcome::Match);
+        sink.emit(BurnEvent::new(
+            "verifying",
+            if matched {
+                "VERIFY_MATCHED"
+            } else {
+                "VERIFY_MISMATCH"
+            },
+            format!("{} tracks checked", tracks.len()),
+        ));
+
+        Ok(VerifyReport {
+            matched,
+            bytes_compared,
+            method: "track_hash_compare".to_owned(),
+            first_mismatch_offset: None,
+            limitations: vec![
+                "audio tracks are checked for length and readability, not compared: without \
+                 the drive's read offset a comparison fails on correct hardware"
+                    .to_owned(),
+                "raw and mode 2 data tracks are checked for length and readability until raw \
+                 sector reads have been proven on a drive"
+                    .to_owned(),
+                "subchannel data is not read or compared".to_owned(),
+                "reads through this drive, so a disc unreadable elsewhere can still match here"
+                    .to_owned(),
+            ],
+            tracks,
+        })
+    }
+}
+
+impl CdrdaoEngine {
+    /// Read the whole disc into `datafile`, and say where cdrdao found each
+    /// track. An empty listing means the disc did not read back cleanly, which
+    /// every track's check then reports as unreadable.
+    async fn read_disc(
+        &self,
+        plan: &BurnPlan,
+        datafile: &Path,
+        toc: &Path,
+    ) -> Result<(parse::TocListing, Vec<parse::ReadbackTrack>), EngineError> {
+        let arguments =
+            command::read_cd(&plan.drive, datafile, toc).map_err(|error| unusable(&error))?;
+        let text = self.run(&arguments, READBACK_TIMEOUT).await?.text();
+        if parse::device_unavailable(&text) {
+            return Err(EngineError::DriveUnavailable {
+                alias: plan.drive.device_alias.clone(),
+            });
+        }
+        if parse::no_disc(&text) {
+            return Err(EngineError::NoMedium {
+                alias: plan.drive.device_alias.clone(),
+            });
+        }
+        if !parse::read_completed(&text) {
+            for message in parse::messages(&text)
+                .iter()
+                .filter(|message| message.severity.is_failure())
+            {
+                tracing::warn!(message = %message.text, "the disc did not read back cleanly");
+            }
+            return Ok((parse::TocListing::default(), Vec::new()));
+        }
+
+        let toc_text = tokio::fs::read_to_string(toc)
+            .await
+            .map_err(|source| EngineError::Io {
+                operation: "reading the read-back table of contents",
+                source,
+            })?;
+        let shown = self
+            .run(
+                &command::show_toc(toc).map_err(|error| unusable(&error))?,
+                CHECK_TIMEOUT,
+            )
+            .await?;
+        Ok((
+            parse::toc_listing(&shown.text()),
+            parse::readback_tracks(&toc_text),
+        ))
+    }
+}
+
+/// Bytes of user data in a `MODE1/2048` sector, the only kind compared.
+const DATA_SECTOR_BYTES: u64 = 2048;
+
+/// What to check on one track, decided before anything is read.
+#[derive(Debug, PartialEq, Eq)]
+struct PlannedCheck {
+    number: u32,
+    check: TrackCheck,
+    /// Whether the disc has the track where the layout puts it, to the sector,
+    /// and of the same kind. `None` when the disc did not read back at all.
+    position_matches: Option<bool>,
+    sectors_expected: u64,
+    sectors_read: u64,
+    /// For a byte comparison: the input, where in it, and where in the
+    /// read-back file, and how many bytes.
+    compare: Option<ByteRanges>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ByteRanges {
+    input: usize,
+    input_offset: u64,
+    readback_offset: u64,
+    length: u64,
+}
+
+/// Decide each track's check from the plan and what the disc read back as.
+///
+/// Positions are computed the way [`disagreements`] computes them, from the
+/// start of the program area, and a track matches only if both its start and
+/// its end are where the layout puts them. A disc does not distinguish a gap
+/// the burner generated from one a file carried, so the expected start is the
+/// whole pregap in either case, and the end follows from it.
+fn plan_track_checks(
+    plan: &BurnPlan,
+    listing: &parse::TocListing,
+    extents: &[parse::ReadbackTrack],
+) -> Vec<PlannedCheck> {
+    let mut position = 0_u64;
+    let mut checks = Vec::new();
+    for (index, track) in plan.tracks.iter().enumerate() {
+        let start = position.saturating_add(track.pregap_sectors);
+        let end = position
+            .saturating_add(track.generated_pregap())
+            .saturating_add(track.sector_count);
+        position = end;
+        let sectors_expected = end - start;
+
+        let listed = listing.tracks.get(index);
+        let sectors_read = listed.map_or(0, |listed| listed.end.saturating_sub(listed.start));
+        let position_matches = listed.map(|listed| {
+            listed.start == start
+                && listed.end == end
+                && (listed.mode == "AUDIO") == track.is_audio()
+        });
+
+        let compare = extents
+            .get(index)
+            .filter(|_| track.mode.eq_ignore_ascii_case("MODE1/2048"))
+            .filter(|extent| extent.data_blocks == Some(track.sector_count))
+            .and_then(|extent| extent.data_offset)
+            .map(|readback_offset| ByteRanges {
+                input: track.input,
+                input_offset: track.file_offset_bytes,
+                readback_offset,
+                length: track.sector_count * DATA_SECTOR_BYTES,
+            });
+
+        checks.push(PlannedCheck {
+            number: track.number,
+            check: if compare.is_some() {
+                TrackCheck::ByteCompare
+            } else {
+                TrackCheck::LengthAndReadable
+            },
+            position_matches,
+            sectors_expected,
+            sectors_read,
+            compare,
+        });
+    }
+    checks
+}
+
+/// Carry out one track's check.
+async fn run_track_check(
+    plan: &BurnPlan,
+    check: &PlannedCheck,
+    datafile: &Path,
+) -> Result<TrackVerification, EngineError> {
+    let mut verification = TrackVerification {
+        number: check.number,
+        check: check.check,
+        outcome: TrackOutcome::Match,
+        sectors_expected: check.sectors_expected,
+        sectors_read: check.sectors_read,
+        expected_sha256: None,
+        observed_sha256: None,
+    };
+    match check.position_matches {
+        None => {
+            verification.outcome = TrackOutcome::Unreadable;
+            return Ok(verification);
+        }
+        Some(false) => {
+            verification.outcome = TrackOutcome::Mismatch;
+            return Ok(verification);
+        }
+        Some(true) => {}
+    }
+
+    if let Some(ranges) = &check.compare {
+        let input = plan
+            .inputs
+            .get(ranges.input)
+            .ok_or_else(|| EngineError::Unsupported {
+                what: format!(
+                    "track {} names an input the plan does not have",
+                    check.number
+                ),
+            })?;
+        let (expected, _) =
+            hash_range(&input.staged_path, ranges.input_offset, ranges.length).await?;
+        let (observed, read) = hash_range(datafile, ranges.readback_offset, ranges.length).await?;
+        verification.expected_sha256 = Some(expected.to_hex());
+        verification.observed_sha256 = Some(observed.to_hex());
+        if read != ranges.length || observed != expected {
+            verification.outcome = TrackOutcome::Mismatch;
+        }
+    }
+    Ok(verification)
 }
 
 /// What one run of the tool produced.
@@ -887,16 +1169,22 @@ impl BurnEngine for CdrdaoEngine {
 
     async fn verify(
         &self,
-        _plan: &BurnPlan,
-        _sink: &dyn EventSink,
+        plan: &BurnPlan,
+        sink: &dyn EventSink,
     ) -> Result<VerifyReport, EngineError> {
-        // Said rather than approximated. See the module documentation: a match
-        // reported from here would be recorded as a full sector comparison.
-        Err(EngineError::Unsupported {
-            what: "reading a disc of tracks back is not built yet; the disc is recorded as \
-                   written and unverified"
-                .to_owned(),
-        })
+        self.check_cancelled()?;
+        if !plan.is_track_layout() {
+            return Err(EngineError::Unsupported {
+                what: "this engine verifies discs described as tracks".to_owned(),
+            });
+        }
+
+        let scratch = self.work_dir.join(format!("{}.readback", plan.attempt_id));
+        let result = self.read_back(plan, &scratch, sink).await;
+        // Always: a whole CD's worth of read-back is not something to leave in
+        // a worker's state, whichever way verification went.
+        let _ = tokio::fs::remove_dir_all(&scratch).await;
+        result
     }
 
     async fn blank(
@@ -932,6 +1220,42 @@ impl BurnEngine for CdrdaoEngine {
             None => Ok(()),
         }
     }
+}
+
+/// Hash `length` bytes of a file from `start`, returning how many there were.
+async fn hash_range(
+    path: &Path,
+    start: u64,
+    length: u64,
+) -> Result<(Sha256Digest, u64), EngineError> {
+    use sha2::Digest as _;
+    use tokio::io::AsyncSeekExt as _;
+
+    let io = |operation: &'static str| {
+        move |source: std::io::Error| EngineError::Io { operation, source }
+    };
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(io("opening a file to compare"))?;
+    file.seek(std::io::SeekFrom::Start(start))
+        .await
+        .map_err(io("seeking in a file to compare"))?;
+    let mut hasher = sha2::Sha256::new();
+    let mut buffer = vec![0_u8; 1 << 20];
+    let mut total = 0_u64;
+    while total < length {
+        let want = usize::try_from((length - total).min(buffer.len() as u64)).unwrap_or(0);
+        let read = file
+            .read(&mut buffer[..want])
+            .await
+            .map_err(io("reading a file to compare"))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        total += read as u64;
+    }
+    Ok((Sha256Digest::from_bytes(hasher.finalize().into()), total))
 }
 
 /// Hash a whole file.
@@ -1311,14 +1635,157 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verification_says_it_was_not_done() {
-        // A match from here would be recorded as a full sector comparison.
+    async fn a_block_image_is_not_this_engine_s_to_verify() {
         let engine = CdrdaoEngine::new("/var/lib/tangible-worker/toc");
+        let mut image = mixed();
+        image.tracks.clear();
         let error = engine
-            .verify(&mixed(), &CollectingSink::new())
+            .verify(&image, &CollectingSink::new())
             .await
-            .expect_err("not built");
+            .expect_err("not a track layout");
         assert!(matches!(error, EngineError::Unsupported { .. }));
+    }
+
+    // --- reading a disc of tracks back -------------------------------------------
+
+    /// The plan the first disc burned through this engine was written from: a
+    /// 1161 sector MODE1/2048 ISO, then 2250 sectors of audio after a
+    /// generated two-second gap.
+    fn first_burn() -> BurnPlan {
+        let data = track(1, "MODE1/2048", 1161);
+        let mut audio = track(2, "AUDIO", 2250);
+        audio.input = 1;
+        audio.pregap_sectors = 150;
+        let mut plan = plan(vec![data, audio]);
+        plan.inputs.push(PlannedInput {
+            staged_path: PathBuf::from("/work/tone.bin"),
+            sha256: Sha256Digest::from_bytes([0; 32]),
+            length_bytes: 2250 * RAW,
+        });
+        plan
+    }
+
+    fn real_readback() -> (parse::TocListing, Vec<parse::ReadbackTrack>) {
+        (
+            parse::toc_listing(&fixture("show-toc-readback-mixed.txt")),
+            parse::readback_tracks(&fixture("readback-mixed.toc")),
+        )
+    }
+
+    #[test]
+    fn the_first_burn_reads_back_where_its_layout_says() {
+        // Decided against the real read-back of that disc.
+        let (listing, extents) = real_readback();
+        let checks = plan_track_checks(&first_burn(), &listing, &extents);
+        assert_eq!(
+            checks,
+            vec![
+                PlannedCheck {
+                    number: 1,
+                    check: TrackCheck::ByteCompare,
+                    position_matches: Some(true),
+                    sectors_expected: 1161,
+                    sectors_read: 1161,
+                    compare: Some(ByteRanges {
+                        input: 0,
+                        input_offset: 0,
+                        readback_offset: 0,
+                        length: 1161 * 2048,
+                    }),
+                },
+                PlannedCheck {
+                    number: 2,
+                    check: TrackCheck::LengthAndReadable,
+                    position_matches: Some(true),
+                    sectors_expected: 2250,
+                    sectors_read: 2250,
+                    compare: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_raw_data_track_is_checked_rather_than_compared() {
+        // Measured, not compared, until raw sector reads are proven on a drive.
+        let (listing, extents) = real_readback();
+        let mut raw = first_burn();
+        raw.tracks[0].mode = "MODE1/2352".to_owned();
+        let checks = plan_track_checks(&raw, &listing, &extents);
+        assert_eq!(checks[0].check, TrackCheck::LengthAndReadable);
+        assert_eq!(checks[0].compare, None);
+    }
+
+    #[test]
+    fn a_track_a_sector_short_is_not_where_the_layout_says() {
+        let (listing, extents) = real_readback();
+        let mut short = first_burn();
+        short.tracks[1].sector_count = 2249;
+        let checks = plan_track_checks(&short, &listing, &extents);
+        assert_eq!(checks[1].position_matches, Some(false));
+    }
+
+    #[test]
+    fn a_disc_that_did_not_read_back_has_nothing_in_place() {
+        let checks = plan_track_checks(&first_burn(), &parse::TocListing::default(), &[]);
+        assert!(
+            checks.iter().all(|check| check.position_matches.is_none()
+                && check.check == TrackCheck::LengthAndReadable),
+            "{checks:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_data_track_is_compared_byte_for_byte() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let written: Vec<u8> = (0..1161 * 2048_u32)
+            .map(|i| u8::try_from(i % 251).unwrap_or(0))
+            .collect();
+        let input = dir.path().join("data.iso");
+        let readback = dir.path().join("readback.bin");
+        std::fs::write(&input, &written).expect("input");
+        std::fs::write(&readback, &written).expect("readback");
+        let mut plan = first_burn();
+        plan.inputs[0].staged_path = input;
+        let (listing, extents) = real_readback();
+        let checks = plan_track_checks(&plan, &listing, &extents);
+
+        let same = run_track_check(&plan, &checks[0], &readback)
+            .await
+            .expect("check");
+        assert_eq!(same.outcome, TrackOutcome::Match);
+        assert_eq!(same.expected_sha256, same.observed_sha256);
+
+        let mut changed = written;
+        changed[700 * 2048 + 3] ^= 0xff;
+        std::fs::write(&readback, &changed).expect("readback");
+        let different = run_track_check(&plan, &checks[0], &readback)
+            .await
+            .expect("check");
+        assert_eq!(different.outcome, TrackOutcome::Mismatch);
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_or_misplaced_track_never_passes() {
+        let plan = first_burn();
+        let missing = Path::new("/nonexistent/readback.bin");
+        for (position_matches, outcome) in [
+            (None, TrackOutcome::Unreadable),
+            (Some(false), TrackOutcome::Mismatch),
+        ] {
+            let check = PlannedCheck {
+                number: 2,
+                check: TrackCheck::LengthAndReadable,
+                position_matches,
+                sectors_expected: 2250,
+                sectors_read: 0,
+                compare: None,
+            };
+            let verification = run_track_check(&plan, &check, missing)
+                .await
+                .expect("check");
+            assert_eq!(verification.outcome, outcome);
+        }
     }
 
     #[tokio::test]

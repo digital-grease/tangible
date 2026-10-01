@@ -269,9 +269,10 @@ async fn burn_worker_command(worker: &WorkerConfig) -> Result<()> {
         tracing::info!(%version, "cdrdao is ready");
         // Said at startup because it is a property of every disc this worker
         // writes from a track layout, not of any one of them.
-        tracing::warn!(
-            "discs written from a track layout are recorded as written and unverified: \
-             reading one back is not built yet"
+        tracing::info!(
+            "discs written from a track layout are read back track by track: data tracks \
+             in MODE1/2048 are compared, and audio and raw data tracks are checked for \
+             length and readability, which records the disc as partially verified"
         );
         anyhow::Ok(engine)
     };

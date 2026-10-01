@@ -46,9 +46,11 @@ async fn exclusive_queue() -> tokio::sync::MutexGuard<'static, ()> {
 ///
 /// Only safe to call while holding the queue lock.
 async fn drain_queue(pool: &PgPool) {
-    pool.execute("UPDATE burn_jobs SET state = 'canceled' WHERE state = 'queued'")
-        .await
-        .expect("drain the queue");
+    pool.execute(
+        "UPDATE burn_jobs SET state = 'canceled', completed_at = now() WHERE state = 'queued'",
+    )
+    .await
+    .expect("drain the queue");
 }
 
 async fn pool() -> PgPool {

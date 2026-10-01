@@ -1,0 +1,24 @@
+Cdrdao version 1.2.4 - (C) Andreas Mueller <andreas@daneb.de>
+/dev/sr0: Slimtype DVD A DS8A8SH	Rev: KS21
+Using driver: Generic SCSI-3/MMC - Version 2.0 (options 0x0000)
+
+Reading toc and track data...
+
+Track   Mode    Flags  Start                Length
+------------------------------------------------------------
+ 1      DATA    4      00:00:00(     0)     00:17:36(  1311)
+ 2      AUDIO   0      00:17:36(  1311)     00:30:00(  2250)
+Leadout AUDIO   0      00:47:36(  3561)
+
+PQ sub-channel reading (data track) is supported, data format is BCD.
+Raw P-W sub-channel reading (data track) is supported.
+Cooked R-W sub-channel reading (data track) is supported.
+PQ sub-channel reading (audio track) is supported, data format is BCD.
+Raw P-W sub-channel reading (audio track) is supported.
+Cooked R-W sub-channel reading (audio track) is supported.
+Copying data track 1 (MODE1): start 00:00:00, length 00:15:36 to "/work/readback/readback.bin"...
+00:01:0000:02:0000:03:0000:04:0000:05:0000:06:0000:07:0000:08:0000:09:0000:10:0000:11:0000:12:0000:13:0000:14:00Copying audio tracks 2-2: start 00:17:36, length 00:30:00 to "/work/readback/readback.bin"...
+Track 2...
+00:17:00Found ISRC code.
+00:18:0000:19:0000:20:0000:21:0000:22:0000:23:0000:24:0000:25:0000:26:0000:27:0000:28:0000:29:0000:30:0000:31:0000:32:0000:33:0000:34:0000:35:0000:36:0000:37:0000:38:0000:39:0000:40:0000:41:0000:42:0000:43:0000:44:0000:45:0000:46:00Found 13 Q sub-channels with CRC errors.
+Reading of toc and track data finished successfully.

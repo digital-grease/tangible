@@ -119,6 +119,31 @@ pub fn write(plan: &BurnPlan, toc: &Path) -> Result<Vec<String>, CommandError> {
     Ok(arguments)
 }
 
+/// Arguments that read a whole disc back: its table of contents into `toc`,
+/// and every track's data into `datafile`.
+///
+/// Read over SCSI, as the write went, and every sector of every track is read,
+/// which is what makes an unreadable audio sector show up as an error rather
+/// than as a length check that passed. cdrdao refuses to overwrite either
+/// file, so the caller removes them first.
+///
+/// # Errors
+///
+/// [`CommandError::UnusableTocPath`] if either path could be mistaken for an
+/// option.
+pub fn read_cd(drive: &DriveRef, datafile: &Path, toc: &Path) -> Result<Vec<String>, CommandError> {
+    Ok(vec![
+        "read-cd".to_owned(),
+        "--device".to_owned(),
+        drive.device_alias.clone(),
+        "-v".to_owned(),
+        "2".to_owned(),
+        "--datafile".to_owned(),
+        toc_argument(datafile)?,
+        toc_argument(toc)?,
+    ])
+}
+
 /// Arguments that open the tray.
 ///
 /// cdrdao has no eject command. `unlock --eject` is the nearest: it releases
@@ -305,6 +330,29 @@ mod tests {
             Some("/var/lib/tangible worker/--eject.toc")
         );
         assert!(!arguments.contains(&"--eject".to_owned()));
+    }
+
+    #[test]
+    fn a_read_back_is_exactly_these_arguments() {
+        assert_eq!(
+            read_cd(
+                &drive(),
+                Path::new("/var/lib/tangible-worker/toc/a.readback/readback.bin"),
+                Path::new("/var/lib/tangible-worker/toc/a.readback/readback.toc"),
+            )
+            .expect("arguments"),
+            vec![
+                "read-cd",
+                "--device",
+                "/dev/disc-block",
+                "-v",
+                "2",
+                "--datafile",
+                "/var/lib/tangible-worker/toc/a.readback/readback.bin",
+                "/var/lib/tangible-worker/toc/a.readback/readback.toc",
+            ]
+        );
+        assert!(read_cd(&drive(), Path::new("rel.bin"), Path::new("/a.toc")).is_err());
     }
 
     #[test]

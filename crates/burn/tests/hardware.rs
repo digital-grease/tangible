@@ -33,7 +33,7 @@
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest as _, Sha256};
-use tangible_burn::plan::{PlannedIndex, PlannedTrack};
+use tangible_burn::plan::{PlannedIndex, PlannedTrack, TrackCheck, TrackOutcome};
 use tangible_burn::{
     BurnEngine, BurnEvent, BurnPlan, CdrdaoEngine, CombinedEngine, DriveRef, EngineError,
     EventSink, PlannedInput, WriteMode, XorrisoEngine,
@@ -255,8 +255,9 @@ async fn an_iso_is_burned_and_reads_back_identical() {
 #[tokio::test]
 async fn a_mixed_mode_disc_is_burned_and_its_data_track_reads_back() {
     // cdrdao, through the same routing: a data track, a generated gap, and a
-    // little-endian tone. The engine does not verify a disc of tracks, so the
-    // data track, which is an ISO, is read back with xorriso afterwards.
+    // little-endian tone. Verified track by track: the data track compared
+    // byte for byte, the audio track measured, the result partial. The data
+    // track, which is an ISO, is then read back with xorriso as well.
     let Some(device) = device_for_writing() else {
         return;
     };
@@ -301,6 +302,26 @@ async fn a_mixed_mode_disc_is_burned_and_its_data_track_reads_back() {
     println!("write: {report:#?}");
     assert!(report.engine_reported_success, "{:?}", report.diagnostics);
     assert_eq!(report.engine, "cdrdao", "the layout went to cdrdao");
+
+    let verified = engine
+        .verify(&plan, &Print)
+        .await
+        .expect("the read-back ran");
+    println!("verify: {verified:#?}");
+    assert!(verified.matched, "{:?}", verified.tracks);
+    assert!(verified.is_partial(), "audio is measured, not compared");
+    assert_eq!(verified.method, "track_hash_compare");
+    assert_eq!(
+        verified
+            .tracks
+            .iter()
+            .map(|track| (track.check, track.outcome))
+            .collect::<Vec<_>>(),
+        vec![
+            (TrackCheck::ByteCompare, TrackOutcome::Match),
+            (TrackCheck::LengthAndReadable, TrackOutcome::Match),
+        ]
+    );
 
     let data_track = image_plan(&device, image);
     let verified = engine

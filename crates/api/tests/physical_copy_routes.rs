@@ -50,10 +50,12 @@ async fn harness() -> Harness {
     database.migrate().await.expect("migrate");
     let pool = database.pool().clone();
 
-    sqlx::query("UPDATE burn_jobs SET state = 'canceled' WHERE state = 'queued'")
-        .execute(&pool)
-        .await
-        .expect("drain the burn queue");
+    sqlx::query(
+        "UPDATE burn_jobs SET state = 'canceled', completed_at = now() WHERE state = 'queued'",
+    )
+    .execute(&pool)
+    .await
+    .expect("drain the burn queue");
 
     Harness {
         router: router(ApiState::new(database)),

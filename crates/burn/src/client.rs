@@ -208,6 +208,9 @@ pub struct VerificationReportBody {
     pub expected_sha256: String,
     /// The digest actually read from the disc.
     pub observed_sha256: String,
+    /// What was checked on each track, for a disc described as tracks.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tracks: Vec<crate::plan::TrackVerification>,
 }
 
 /// What was in the drive.

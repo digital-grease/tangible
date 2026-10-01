@@ -1850,6 +1850,35 @@ export interface components {
             /** @description What it sorts as. */
             sort_title: string;
         };
+        /** @description The check on one track of a disc described as tracks. */
+        TrackVerificationReport: {
+            /**
+             * @description `byte_compare`, or `length_and_readable` for a track that was read back
+             *     and measured but not compared.
+             */
+            check: string;
+            /** @description The digest of what was written, for a byte comparison. */
+            expected_sha256?: string | null;
+            /**
+             * Format: int32
+             * @description Track number.
+             */
+            number: number;
+            /** @description The digest of what was read back, for a byte comparison. */
+            observed_sha256?: string | null;
+            /** @description `match`, `mismatch` or `unreadable`. */
+            outcome: string;
+            /**
+             * Format: int64
+             * @description Sectors the layout says the track proper holds.
+             */
+            sectors_expected: number;
+            /**
+             * Format: int64
+             * @description Sectors found on the disc.
+             */
+            sectors_read: number;
+        };
         /**
          * @description What an operator may change about a disc.
          *
@@ -1886,6 +1915,8 @@ export interface components {
             policy: string;
             /** @description `match`, `mismatch`, or `skipped`. */
             state: string;
+            /** @description What was checked on each track, for a disc described as tracks. */
+            tracks?: components["schemas"]["TrackVerificationReport"][];
         };
         /** @description The engine's account of the write. */
         WriteReport: {

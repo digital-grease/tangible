@@ -465,10 +465,12 @@ fn plan(
 async fn an_imported_iso_is_burned_verified_and_recorded() {
     let _queue = exclusive_queue().await;
     let world = world().await;
-    sqlx::query("UPDATE burn_jobs SET state = 'canceled' WHERE state = 'queued'")
-        .execute(&world.pool)
-        .await
-        .expect("drain the queue");
+    sqlx::query(
+        "UPDATE burn_jobs SET state = 'canceled', completed_at = now() WHERE state = 'queued'",
+    )
+    .execute(&world.pool)
+    .await
+    .expect("drain the queue");
 
     // --- import ------------------------------------------------------------
     let image = iso_image("EXAMPLE_DISC", 40);
@@ -650,10 +652,12 @@ async fn a_disc_that_fails_verification_is_recorded_rather_than_forgotten() {
     // never be filed as a good copy.
     let _queue = exclusive_queue().await;
     let world = world().await;
-    sqlx::query("UPDATE burn_jobs SET state = 'canceled' WHERE state = 'queued'")
-        .execute(&world.pool)
-        .await
-        .expect("drain the queue");
+    sqlx::query(
+        "UPDATE burn_jobs SET state = 'canceled', completed_at = now() WHERE state = 'queued'",
+    )
+    .execute(&world.pool)
+    .await
+    .expect("drain the queue");
 
     let image = iso_image("BAD_BURN", 24);
     let manifest = world.import_iso(&image).await;

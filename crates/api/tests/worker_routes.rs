@@ -35,10 +35,12 @@ async fn exclusive_queue() -> tokio::sync::MutexGuard<'static, ()> {
 }
 
 async fn drain_queue(pool: &PgPool) {
-    sqlx::query("UPDATE burn_jobs SET state = 'canceled' WHERE state = 'queued'")
-        .execute(pool)
-        .await
-        .expect("drain the queue");
+    sqlx::query(
+        "UPDATE burn_jobs SET state = 'canceled', completed_at = now() WHERE state = 'queued'",
+    )
+    .execute(pool)
+    .await
+    .expect("drain the queue");
 }
 
 struct Harness {
@@ -1298,6 +1300,57 @@ async fn a_combined_worker_can_claim_and_the_attempt_names_the_engine_that_wrote
         ("xorriso", "1.5.4"),
         "a finished attempt names the engine that wrote, not the wrapper"
     );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_disc_checked_track_by_track_is_recorded_as_partially_verified() {
+    // On the physical copy: the data track compared, the audio track
+    // only measured. The copy is good, and its record says how it was checked.
+    let _queue = exclusive_queue().await;
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let attempt = claimed_attempt(&harness).await;
+
+    let mut body = completion(&attempt.lease, "success", Some("partial"));
+    body["verification_report"]["policy"] = serde_json::json!("track_hash_compare");
+    body["verification_report"]["tracks"] = serde_json::json!([
+        {"number": 1, "check": "byte_compare", "outcome": "match",
+         "sectors_expected": 1161, "sectors_read": 1161,
+         "expected_sha256": "a".repeat(64), "observed_sha256": "a".repeat(64)},
+        {"number": 2, "check": "length_and_readable", "outcome": "match",
+         "sectors_expected": 2250, "sectors_read": 2250},
+    ]);
+    let (status, done) = harness
+        .post(
+            &format!("/api/v1/burn-attempts/{}/complete", attempt.id),
+            Some(&attempt.credential),
+            body,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+
+    let (copy_status, level, result): (String, String, String) = sqlx::query_as(
+        "SELECT status, verification_level, verification_result FROM physical_copies
+         WHERE burn_attempt_id = $1::uuid",
+    )
+    .bind(&attempt.id)
+    .fetch_one(&harness.pool)
+    .await
+    .expect("a physical copy");
+    assert_eq!(
+        (copy_status.as_str(), level.as_str(), result.as_str()),
+        ("verified", "track_hash_compare", "partial")
+    );
+
+    let tracks: serde_json::Value = sqlx::query_scalar(
+        "SELECT verify_report_json -> 'tracks' FROM burn_attempts WHERE id = $1::uuid",
+    )
+    .bind(&attempt.id)
+    .fetch_one(&harness.pool)
+    .await
+    .expect("the stored report");
+    assert_eq!(tracks.as_array().map(Vec::len), Some(2), "{tracks}");
 }
 
 #[tokio::test]

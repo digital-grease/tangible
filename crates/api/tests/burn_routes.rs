@@ -38,10 +38,12 @@ async fn exclusive_queue() -> tokio::sync::MutexGuard<'static, ()> {
 /// Cancelled rather than deleted: attempts reference their job with RESTRICT,
 /// and a record of work performed must not vanish because someone tidied up.
 async fn drain_queue(pool: &PgPool) {
-    sqlx::query("UPDATE burn_jobs SET state = 'canceled' WHERE state = 'queued'")
-        .execute(pool)
-        .await
-        .expect("drain the queue");
+    sqlx::query(
+        "UPDATE burn_jobs SET state = 'canceled', completed_at = now() WHERE state = 'queued'",
+    )
+    .execute(pool)
+    .await
+    .expect("drain the queue");
 }
 
 struct Harness {

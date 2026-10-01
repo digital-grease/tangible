@@ -260,6 +260,113 @@ fn blocks(text: &str) -> Option<u64> {
     inside.split_whitespace().next()?.parse().ok()
 }
 
+// --- read-cd ---------------------------------------------------------------------
+
+/// One track of the table of contents `read-cd` writes, and where its data is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadbackTrack {
+    /// cdrdao's mode word from the TRACK line, such as `MODE1` or `AUDIO`.
+    pub mode: String,
+    /// Byte offset of the track's data in the data file.
+    pub data_offset: Option<u64>,
+    /// Blocks of the track's data in the data file.
+    pub data_blocks: Option<u64>,
+}
+
+/// Read where each track's data sits in the file `read-cd` wrote.
+///
+/// The shape, from a real read-back:
+///
+/// ```text
+/// TRACK MODE1
+/// DATAFILE "/work/readback.bin" 00:15:36 // length in bytes: 2377728
+/// TRACK AUDIO
+/// SILENCE 00:02:00
+/// FILE "/work/readback.bin" #2377728 0 00:30:00
+/// ```
+///
+/// A `#` number is a byte offset into the file, and absent means the start of
+/// it. A gap read-cd found silent is written as `SILENCE` and is in no file,
+/// so only the first `DATAFILE` or `FILE` of a track is its data.
+#[must_use]
+pub fn readback_tracks(toc: &str) -> Vec<ReadbackTrack> {
+    let mut tracks: Vec<ReadbackTrack> = Vec::new();
+    let mut seen_data = false;
+
+    for line in toc.lines() {
+        let line = line.split("//").next().unwrap_or("").trim();
+        if let Some(mode) = line.strip_prefix("TRACK ") {
+            tracks.push(ReadbackTrack {
+                mode: mode.split_whitespace().next().unwrap_or("").to_owned(),
+                data_offset: None,
+                data_blocks: None,
+            });
+            seen_data = false;
+            continue;
+        }
+        let statement = if line.starts_with("DATAFILE ") {
+            Some(false)
+        } else if line.starts_with("FILE ") || line.starts_with("AUDIOFILE ") {
+            Some(true)
+        } else {
+            None
+        };
+        let (Some(has_start), Some(track)) = (statement, tracks.last_mut()) else {
+            continue;
+        };
+        if seen_data {
+            continue;
+        }
+        // Everything after the quoted name: an optional "#offset", then for
+        // FILE a start, then a length.
+        let Some(after_name) = line.rsplit_once('"').map(|(_, rest)| rest) else {
+            continue;
+        };
+        let mut words = after_name.split_whitespace().peekable();
+        let offset = match words.peek() {
+            Some(word) if word.starts_with('#') => {
+                let offset = word[1..].parse().ok();
+                words.next();
+                offset
+            }
+            _ => Some(0),
+        };
+        if has_start {
+            words.next();
+        }
+        track.data_offset = offset;
+        track.data_blocks = words.next().and_then(msf_blocks);
+        seen_data = true;
+    }
+
+    tracks
+}
+
+/// Blocks in an `MM:SS:FF` timecode, where a frame is one block.
+fn msf_blocks(text: &str) -> Option<u64> {
+    let mut parts = text.split(':');
+    let minutes: u64 = parts.next()?.parse().ok()?;
+    let seconds: u64 = parts.next()?.parse().ok()?;
+    let frames: u64 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() || seconds >= 60 || frames >= 75 {
+        return None;
+    }
+    Some((minutes * 60 + seconds) * 75 + frames)
+}
+
+/// Whether `read-cd` said it read the whole disc.
+///
+/// Its own completion line, and no failure before it. An unreadable sector
+/// stops the read with an error, so a disc that reads to the end read every
+/// sector of every track.
+#[must_use]
+pub fn read_completed(output: &str) -> bool {
+    lines(output).any(|line| line.trim() == "Reading of toc and track data finished successfully.")
+        && !messages(output)
+            .iter()
+            .any(|message| message.severity.is_failure())
+}
+
 // --- disk-info and drive-info --------------------------------------------------
 
 /// What `disk-info` said about the medium in a drive.
@@ -693,6 +800,69 @@ mod tests {
         let listing = toc_listing(&captured("show-toc-syntax-error.txt"));
         assert!(listing.tracks.is_empty());
         assert!(!listing.problems.is_empty());
+    }
+
+    // --- read-cd ----------------------------------------------------------------------
+
+    #[test]
+    fn a_real_read_back_says_where_each_track_is() {
+        // Read back from the first disc burned through the cdrdao engine: a
+        // MODE1 data track, then audio after a silent two-second gap.
+        let tracks = readback_tracks(&captured("readback-mixed.toc"));
+        assert_eq!(
+            tracks,
+            vec![
+                ReadbackTrack {
+                    mode: "MODE1".to_owned(),
+                    data_offset: Some(0),
+                    data_blocks: Some(1161),
+                },
+                ReadbackTrack {
+                    mode: "AUDIO".to_owned(),
+                    data_offset: Some(2_377_728),
+                    data_blocks: Some(2250),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_real_read_back_finished() {
+        let output = captured("read-cd-mixed.txt");
+        assert!(read_completed(&output));
+        // Subchannel CRC errors are reported but are not a failed read: the
+        // data and the audio both read back right on the disc this came from.
+        assert!(output.contains("Q sub-channels with CRC errors"));
+    }
+
+    #[test]
+    fn a_read_that_hit_an_error_did_not_finish() {
+        assert!(!read_completed(
+            "ERROR: Read error at 00:12:34\n\
+             Reading of toc and track data finished successfully.\n"
+        ));
+        assert!(!read_completed("Reading toc and track data...\n"));
+    }
+
+    #[test]
+    fn the_listing_of_a_read_back_has_the_positions_the_layout_predicts() {
+        let listing = toc_listing(&captured("show-toc-readback-mixed.txt"));
+        assert!(listing.problems.is_empty(), "{:?}", listing.problems);
+        let positions: Vec<(u64, u64, u64)> = listing
+            .tracks
+            .iter()
+            .map(|track| (track.pregap, track.start, track.end))
+            .collect();
+        assert_eq!(positions, vec![(0, 0, 1161), (150, 1311, 3561)]);
+    }
+
+    #[test]
+    fn a_timecode_is_read_as_blocks_or_refused() {
+        assert_eq!(msf_blocks("00:15:36"), Some(1161));
+        assert_eq!(msf_blocks("79:59:74"), Some(359_999));
+        assert_eq!(msf_blocks("00:60:00"), None);
+        assert_eq!(msf_blocks("00:00:75"), None);
+        assert_eq!(msf_blocks("12"), None);
     }
 
     // --- disk-info ------------------------------------------------------------------

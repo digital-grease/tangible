@@ -4893,6 +4893,59 @@
           }
         }
       },
+      "TrackVerificationReport": {
+        "type": "object",
+        "description": "The check on one track of a disc described as tracks.",
+        "required": [
+          "number",
+          "check",
+          "outcome",
+          "sectors_expected",
+          "sectors_read"
+        ],
+        "properties": {
+          "check": {
+            "type": "string",
+            "description": "`byte_compare`, or `length_and_readable` for a track that was read back\nand measured but not compared."
+          },
+          "expected_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The digest of what was written, for a byte comparison."
+          },
+          "number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Track number.",
+            "minimum": 0
+          },
+          "observed_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The digest of what was read back, for a byte comparison."
+          },
+          "outcome": {
+            "type": "string",
+            "description": "`match`, `mismatch` or `unreadable`."
+          },
+          "sectors_expected": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sectors the layout says the track proper holds.",
+            "minimum": 0
+          },
+          "sectors_read": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sectors found on the disc.",
+            "minimum": 0
+          }
+        }
+      },
       "UpdatePhysicalCopyRequest": {
         "type": "object",
         "description": "What an operator may change about a disc.\n\nEvery field is optional, and absent means \"leave it alone\", so a client\nediting a label cannot blank a storage location it never saw.",
@@ -4958,6 +5011,13 @@
           "state": {
             "type": "string",
             "description": "`match`, `mismatch`, or `skipped`."
+          },
+          "tracks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TrackVerificationReport"
+            },
+            "description": "What was checked on each track, for a disc described as tracks."
           }
         }
       },

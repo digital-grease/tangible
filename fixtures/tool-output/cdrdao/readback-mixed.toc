@@ -1,0 +1,19 @@
+CD_ROM
+
+
+// Track 1
+TRACK MODE1
+NO COPY
+DATAFILE "/work/readback/readback.bin" 00:15:36 // length in bytes: 2377728
+
+
+// Track 2
+TRACK AUDIO
+NO COPY
+NO PRE_EMPHASIS
+TWO_CHANNEL_AUDIO
+ISRC "000000000000"
+SILENCE 00:02:00
+FILE "/work/readback/readback.bin" #2377728 0 00:30:00
+START 00:02:00
+

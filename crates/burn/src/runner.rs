@@ -1113,26 +1113,50 @@ fn verification_reads_media_back(policy: &[String]) -> bool {
 }
 
 /// Turn an engine's verify report into what the protocol carries.
+///
+/// Labelled with the method the engine says it ran, when that is a
+/// verification step that reads media back, rather than with the job's policy:
+/// a disc of tracks verified track by track is recorded as
+/// `track_hash_compare`, not as the `full_sector_readback` the job asked for.
+/// No result may be labelled with a step that did not run.
 fn verification_body(
     policy: &[String],
     plan: &BurnPlan,
     report: &VerifyReport,
 ) -> VerificationReportBody {
-    let expected = plan
-        .inputs
-        .first()
-        .map(|input| input.sha256.to_hex())
-        .unwrap_or_default();
+    let reads_back = |step: &str| {
+        step.parse::<tangible_domain::VerificationStep>()
+            .is_ok_and(|step| step.reads_media_back())
+    };
+    let by_track = !report.tracks.is_empty();
+    // A whole-disc digest means nothing for a disc compared track by track;
+    // the per-track digests carry it instead.
+    let expected = if by_track {
+        String::new()
+    } else {
+        plan.inputs
+            .first()
+            .map(|input| input.sha256.to_hex())
+            .unwrap_or_default()
+    };
     VerificationReportBody {
-        policy: policy
-            .iter()
-            .find(|step| {
-                step.parse::<tangible_domain::VerificationStep>()
-                    .is_ok_and(|step| step.reads_media_back())
-            })
-            .cloned()
-            .unwrap_or_else(|| "full_sector_readback".to_owned()),
-        state: if report.matched { "match" } else { "mismatch" }.to_owned(),
+        policy: if reads_back(&report.method) {
+            report.method.clone()
+        } else {
+            policy
+                .iter()
+                .find(|step| reads_back(step))
+                .cloned()
+                .unwrap_or_else(|| "full_sector_readback".to_owned())
+        },
+        state: if !report.matched {
+            "mismatch"
+        } else if report.is_partial() {
+            "partial"
+        } else {
+            "match"
+        }
+        .to_owned(),
         bytes_read: i64::try_from(report.bytes_compared).unwrap_or(i64::MAX),
         // A mismatch reports a digest that is deliberately not the expected
         // one: the engine compares as it reads and does not produce a whole
@@ -1143,6 +1167,7 @@ fn verification_body(
             String::new()
         },
         expected_sha256: expected,
+        tracks: report.tracks.clone(),
     }
 }
 
@@ -1311,6 +1336,93 @@ mod tests {
     #[test]
     fn an_unknown_verification_step_does_not_imply_a_read_back() {
         assert!(!verification_reads_media_back(&["vibes".to_owned()]));
+    }
+
+    fn verify_plan() -> BurnPlan {
+        BurnPlan {
+            attempt_id: BurnAttemptId::generate(),
+            drive: crate::plan::DriveRef {
+                worker_id: tangible_domain::WorkerId::generate(),
+                drive_id: DriveId::generate(),
+                device_alias: "/dev/sr0".to_owned(),
+            },
+            inputs: vec![PlannedInput {
+                staged_path: std::path::PathBuf::from("/staged/disc.iso"),
+                sha256: tangible_domain::Sha256Digest::from_bytes([7; 32]),
+                length_bytes: 2048,
+            }],
+            tracks: Vec::new(),
+            catalog: None,
+            mode: WriteMode::DataDiscAtOnce,
+            accepted_profiles: Vec::new(),
+            speed: None,
+            finalize: true,
+            eject_on_success: true,
+            total_bytes: 2048,
+        }
+    }
+
+    fn track(check: crate::plan::TrackCheck) -> crate::plan::TrackVerification {
+        crate::plan::TrackVerification {
+            number: 1,
+            check,
+            outcome: crate::plan::TrackOutcome::Match,
+            sectors_expected: 300,
+            sectors_read: 300,
+            expected_sha256: None,
+            observed_sha256: None,
+        }
+    }
+
+    #[test]
+    fn a_disc_checked_track_by_track_is_labelled_with_the_check_that_ran() {
+        // The job asked for full_sector_readback, but what ran was a
+        // track-by-track check, and some of it only measured. Recording the
+        // job's label would claim a comparison that never happened.
+        let report = VerifyReport {
+            matched: true,
+            bytes_compared: 2048,
+            method: "track_hash_compare".to_owned(),
+            first_mismatch_offset: None,
+            limitations: Vec::new(),
+            tracks: vec![
+                track(crate::plan::TrackCheck::ByteCompare),
+                track(crate::plan::TrackCheck::LengthAndReadable),
+            ],
+        };
+        let body = verification_body(
+            &["full_sector_readback".to_owned()],
+            &verify_plan(),
+            &report,
+        );
+        assert_eq!(body.policy, "track_hash_compare");
+        assert_eq!(body.state, "partial");
+        assert_eq!(body.tracks.len(), 2);
+        assert!(
+            body.expected_sha256.is_empty(),
+            "no whole-disc digest for a disc compared by track"
+        );
+    }
+
+    #[test]
+    fn a_whole_image_read_back_keeps_its_digest_and_its_label() {
+        let report = VerifyReport {
+            matched: true,
+            bytes_compared: 2048,
+            method: "full_sector_readback".to_owned(),
+            first_mismatch_offset: None,
+            limitations: Vec::new(),
+            tracks: Vec::new(),
+        };
+        let body = verification_body(
+            &["full_sector_readback".to_owned()],
+            &verify_plan(),
+            &report,
+        );
+        assert_eq!(body.policy, "full_sector_readback");
+        assert_eq!(body.state, "match");
+        assert_eq!(body.expected_sha256, body.observed_sha256);
+        assert_eq!(body.expected_sha256.len(), 64);
     }
 
     #[test]
