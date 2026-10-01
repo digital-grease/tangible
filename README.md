@@ -57,7 +57,7 @@ burn-worker /dev/sr0            burn-worker /dev/sr1
 xorriso + cdrdao                xorriso + cdrdao
 ```
 
-The normal deployment is Linux and Docker Compose. The API container does not receive optical-device access. Each burn-worker container receives only its configured `/dev/srN` block device and matching `/dev/sgN` generic SCSI device.
+The normal deployment is Linux and Docker Compose. The API container does not receive optical-device access. Each burn-worker container receives only its configured `/dev/srN` block device, and the drive's group so an unprivileged process can open it.
 
 ## Core principles
 

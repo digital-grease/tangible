@@ -7,11 +7,13 @@
 #
 #   docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml config
 #
-# Both device nodes are required: the block device for data transfer and the
-# generic SCSI device for the commands that query and control the drive.
+# The block device is the only device node the worker gets. Both engines send
+# their drive commands through it, and on the first real drive both burned and
+# read back a disc with nothing else mapped. A drive that turns out to need the
+# generic SCSI node as well can have it through compose.hardware-sg.yaml.
 #
 # One worker per drive. To add a second drive, copy the service, give it a new
-# name, and map its own /dev/srN and /dev/sgN.
+# name, and map its own /dev/srN.
 
 services:
   burner-sr0:
@@ -26,11 +28,17 @@ services:
       # configuration identical across machines where the drive enumerates
       # differently.
       - "${TANGIBLE_BLOCK_DEVICE:-/dev/sr0}:/dev/disc-block:rwm"
-      - "${TANGIBLE_SCSI_DEVICE:-/dev/sg4}:/dev/disc-scsi:rwm"
+    # A mapped device keeps its host owner and mode, typically root and a
+    # group such as `optical` or `cdrom` with mode 0660, and the image runs as
+    # an unprivileged user. Without that group the worker is refused its own
+    # drive with "Permission denied". The number differs between
+    # distributions, so there is no default to get wrong: find it with
+    #   stat -c %g /dev/sr0
+    group_add:
+      - "${TANGIBLE_OPTICAL_GID:?set TANGIBLE_OPTICAL_GID to the group that owns the drive: stat -c %g /dev/sr0}"
     environment:
       TANGIBLE_SERVER_URL: http://server:8080
       TANGIBLE_BLOCK_DEVICE: /dev/disc-block
-      TANGIBLE_SCSI_DEVICE: /dev/disc-scsi
       TANGIBLE_WORKER_NAME: ${TANGIBLE_WORKER_NAME:?name this drive, e.g. pioneer-bdr-212}
       # Where the credential and the local recovery record live. It is on the
       # volume below because a worker that loses this cannot tell, after a
@@ -51,7 +59,8 @@ services:
     security_opt:
       - no-new-privileges:true
     # privileged: true is never an accepted default.
-    # The two device mappings above are the entire required privilege.
+    # The device mapping and the drive's group are the entire required
+    # privilege.
 
 volumes:
   burner-sr0-cache:

@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 digitalgrease
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# OPT-IN, ON TOP OF compose.hardware.yaml. Adds the drive's generic SCSI node
+# to the burn worker, for a drive that cannot be driven through its block
+# device alone. None has been found yet: the first real drive burned and read
+# back through /dev/srN only, which is why this is not the default.
+#
+# Needs the sg kernel module loaded (`lsscsi -g` shows the pairing). The node
+# is named explicitly because /dev/srN does not reliably pair with the same
+# number in /dev/sgN:
+#
+#   docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml \
+#     -f deploy/compose.hardware-sg.yaml config
+
+services:
+  burner-sr0:
+    devices:
+      - "${TANGIBLE_SCSI_DEVICE:?set TANGIBLE_SCSI_DEVICE to the drive's generic SCSI node, from lsscsi -g}:/dev/disc-scsi:rwm"
