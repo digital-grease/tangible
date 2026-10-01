@@ -2279,6 +2279,48 @@
         }
       }
     },
+    "/api/v1/worker-enrollments": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Issue a one-use enrollment token for a new burn worker.",
+        "description": "Issue a one-use enrollment token for a new burn worker. The token is returned once and cannot be recovered; it expires after 15 minutes unless asked otherwise, at most 60. Unauthenticated until operator sign-in exists, and audited.",
+        "operationId": "issue_enrollment_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueEnrollmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedEnrollment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The lifetime is out of range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/worker-enrollments/consume": {
       "post": {
         "tags": [
@@ -4309,6 +4351,46 @@
               "type": "string"
             },
             "description": "Structural observations gathered so far.\n\nPresent as soon as inspection has run, so a warning is visible before\nthe import finishes rather than only afterwards."
+          }
+        }
+      },
+      "IssueEnrollmentRequest": {
+        "type": "object",
+        "description": "What an operator sends to issue an enrollment token. Every field is\noptional; `{}` asks for the defaults.",
+        "properties": {
+          "expires_in_minutes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Minutes until the token lapses, from 1 to 60. Defaults to 15.",
+            "default": null,
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "IssuedEnrollment": {
+        "type": "object",
+        "description": "A newly issued enrollment token.",
+        "required": [
+          "enrollment_id",
+          "enrollment_token",
+          "expires_at"
+        ],
+        "properties": {
+          "enrollment_id": {
+            "type": "string",
+            "description": "The enrollment's identifier, for the audit log and for revoking it."
+          },
+          "enrollment_token": {
+            "type": "string",
+            "description": "The token. Returned this once and never again: the server keeps only\nits hash."
+          },
+          "expires_at": {
+            "type": "string",
+            "description": "When it lapses, RFC 3339."
           }
         }
       },

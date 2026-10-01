@@ -485,6 +485,60 @@ async fn highest_contiguous_sequence(
     row.try_get("through").map_err(DbError::Query)
 }
 
+/// Record a newly issued enrollment token, and that it was issued.
+///
+/// Only the hash is stored; the token itself is shown to whoever asked for it
+/// and is not recoverable afterwards. The audit row is written in the same
+/// transaction, so a token can never exist without a record of its issue.
+///
+/// `actor` is who asked, as far as the server knows. Until operator
+/// authentication exists that is `unauthenticated`, and the audit row says so
+/// rather than inventing an identity.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure, including a hash collision,
+/// which the column's uniqueness turns into an error rather than two rows one
+/// secret could satisfy.
+pub async fn issue_enrollment(
+    pool: &PgPool,
+    token_hash: &str,
+    expires_at: OffsetDateTime,
+    actor: &str,
+) -> Result<uuid::Uuid, DbError> {
+    let mut tx = pool.begin().await.map_err(DbError::Query)?;
+    let enrollment_id = uuid::Uuid::now_v7();
+
+    sqlx::query(
+        "INSERT INTO worker_enrollments (id, token_hash, expires_at, created_by)
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(enrollment_id)
+    .bind(token_hash)
+    .bind(expires_at)
+    .bind(actor)
+    .execute(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
+
+    sqlx::query(
+        "INSERT INTO audit_events
+             (id, actor_type, actor_id, action, target_type, target_id, outcome, metadata)
+         VALUES ($1, 'user', $2, 'worker_enrollment.issued', 'worker_enrollment', $3,
+                 'success', jsonb_build_object('expires_at', $4::timestamptz))",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(actor)
+    .bind(enrollment_id.to_string())
+    .bind(expires_at)
+    .execute(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
+
+    tx.commit().await.map_err(DbError::Query)?;
+    Ok(enrollment_id)
+}
+
 /// Exchange an enrollment token for a worker.
 ///
 /// The one-use guarantee is the `SELECT ... FOR UPDATE` that opens the
@@ -716,6 +770,23 @@ pub enum CompletionOutcome {
     NoSuchLeasedAttempt,
 }
 
+/// The update that records how an attempt ended.
+///
+/// The engine the attempt was claimed with is the worker's, which for a
+/// combined worker is `auto`. Once the write report names the engine that
+/// actually did the work, that is what the attempt records. Only a name the
+/// column accepts replaces it: completion arrives after a disc may already
+/// exist, and failing it over a label would be the worst place to fail.
+const RECORD_ATTEMPT_OUTCOME: &str = "UPDATE burn_attempts
+     SET state = $2, write_report_json = $3, verify_report_json = $4,
+         error_code = $5, error_detail = $6, ended_at = now(),
+         engine = CASE WHEN $3->>'engine' IN ('fake', 'xorriso', 'cdrdao')
+                       THEN $3->>'engine' ELSE engine END,
+         engine_version = CASE WHEN $3->>'engine' IN ('fake', 'xorriso', 'cdrdao')
+                                AND length(coalesce($3->>'engine_version', '')) > 0
+                               THEN $3->>'engine_version' ELSE engine_version END
+     WHERE id = $1";
+
 /// Record the end of a burn attempt.
 ///
 /// Idempotent, because completion is precisely the request a worker retries
@@ -785,21 +856,16 @@ pub async fn complete_attempt(
     let disc_id: uuid::Uuid = existing.try_get("disc_id").map_err(DbError::Query)?;
     let artifact_id: uuid::Uuid = existing.try_get("artifact_id").map_err(DbError::Query)?;
 
-    sqlx::query(
-        "UPDATE burn_attempts
-         SET state = $2, write_report_json = $3, verify_report_json = $4,
-             error_code = $5, error_detail = $6, ended_at = now()
-         WHERE id = $1",
-    )
-    .bind(attempt_id.as_uuid())
-    .bind(completion.state.as_str())
-    .bind(completion.write_report)
-    .bind(completion.verify_report)
-    .bind(completion.error_code)
-    .bind(completion.error_detail)
-    .execute(&mut *tx)
-    .await
-    .map_err(DbError::Query)?;
+    sqlx::query(RECORD_ATTEMPT_OUTCOME)
+        .bind(attempt_id.as_uuid())
+        .bind(completion.state.as_str())
+        .bind(completion.write_report)
+        .bind(completion.verify_report)
+        .bind(completion.error_code)
+        .bind(completion.error_detail)
+        .execute(&mut *tx)
+        .await
+        .map_err(DbError::Query)?;
 
     let physical_copy_id = if completion.state.consumed_media() {
         let id = uuid::Uuid::now_v7();
@@ -881,6 +947,91 @@ pub async fn attempt_state_for_worker(
     // is a bug rather than a missing row; treating it as absent would answer a
     // recovery with "discard", so it is reported as unknown instead.
     Ok(BurnAttemptState::from_str(&state).ok())
+}
+
+/// Close an attempt its worker abandoned before writing, and fail its job.
+///
+/// Called when a restarted worker is told to discard pre-write state. The
+/// directive told the worker it could drop its local record; until this
+/// existed nothing told the server, so the attempt stayed open with an expired
+/// lease, the job kept pointing at it, and no worker could ever claim it
+/// again. The first end-to-end run found it by restarting a worker
+/// mid-preflight.
+///
+/// Only an attempt that never reached a write is touched, re-checked here
+/// under a row lock, so a recovery can never close an attempt whose disc may
+/// exist. The attempt ends as `failed_before_write` with `WORKER_RESTARTED`.
+/// The job moves to `failed` through the domain's own transition check, not
+/// back to the queue: the job machine treats failure as terminal and leaves
+/// spending another disc to the operator, which here is one retry.
+///
+/// Returns whether anything changed; an attempt already closed is left alone.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure, or [`DbError::Enum`] if a stored
+/// state is not one this build understands.
+pub async fn abandon_prewrite_attempt(
+    pool: &PgPool,
+    attempt_id: BurnAttemptId,
+    worker_id: WorkerId,
+) -> Result<bool, DbError> {
+    let mut tx = pool.begin().await.map_err(DbError::Query)?;
+
+    let row = sqlx::query(
+        "SELECT a.state, a.burn_job_id, j.state AS job_state
+         FROM burn_attempts a JOIN burn_jobs j ON j.id = a.burn_job_id
+         WHERE a.id = $1 AND a.worker_id = $2
+         FOR UPDATE OF a, j",
+    )
+    .bind(attempt_id.as_uuid())
+    .bind(worker_id.as_uuid())
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
+    let Some(row) = row else {
+        tx.rollback().await.map_err(DbError::Query)?;
+        return Ok(false);
+    };
+
+    let state: String = row.try_get("state").map_err(DbError::Query)?;
+    let state: BurnAttemptState = stored_enum("burn_attempts.state", &state)?;
+    let before_write = matches!(
+        state,
+        BurnAttemptState::Claimed | BurnAttemptState::Staging | BurnAttemptState::Preflighting
+    );
+    if !before_write {
+        tx.rollback().await.map_err(DbError::Query)?;
+        return Ok(false);
+    }
+
+    sqlx::query(
+        "UPDATE burn_attempts
+         SET state = 'failed_before_write', error_code = 'WORKER_RESTARTED',
+             error_detail = 'the worker restarted before writing; nothing was written',
+             ended_at = now()
+         WHERE id = $1",
+    )
+    .bind(attempt_id.as_uuid())
+    .execute(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
+
+    let burn_job_id: uuid::Uuid = row.try_get("burn_job_id").map_err(DbError::Query)?;
+    let job_state: String = row.try_get("job_state").map_err(DbError::Query)?;
+    let job_state: BurnJobState = stored_enum("burn_jobs.state", &job_state)?;
+    // A job already settled, by an operator cancelling it say, keeps its
+    // state; only one still waiting on this attempt is failed.
+    if job_state.transition_to(BurnJobState::Failed).is_ok() {
+        sqlx::query("UPDATE burn_jobs SET state = 'failed', completed_at = now() WHERE id = $1")
+            .bind(burn_job_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(DbError::Query)?;
+    }
+
+    tx.commit().await.map_err(DbError::Query)?;
+    Ok(true)
 }
 
 // --- burn jobs -----------------------------------------------------------------

@@ -327,6 +327,25 @@ pub fn write_outcome(output: &str) -> WriteOutcome {
     }
 }
 
+/// Why xorriso would not use the drive, when it says it would not.
+///
+/// Two shapes, both from a real drive: the address was refused outright
+/// ("Drive address '/dev/disc-block' rejected because: not MMC ..."), which is
+/// what libburn does with a path it does not enumerate as a drive, or no drive
+/// was acquired at all. Either is a fault in how the worker reaches the drive,
+/// not a fact about the disc, and is reported as such.
+#[must_use]
+pub fn drive_refused(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let (severity, message) = problem(line)?;
+        let refused = message.starts_with("Drive address") && message.contains("rejected because")
+            || message.starts_with("No input drive acquired")
+            || message.starts_with("No output drive acquired")
+            || message.starts_with("Cannot acquire drive");
+        (refused && FATAL_SEVERITIES.contains(&severity.as_str())).then_some(message)
+    })
+}
+
 /// One region of a `-check_media` report.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MediaRegion {
@@ -770,6 +789,22 @@ xorriso 1.5.6 : RockRidge filesystem manipulator, libburnia project.
         let regions = media_regions("Media region :        100 ,         16 , - unreadable\n");
         assert!(regions[0].tested());
         assert!(!regions[0].read_ok());
+    }
+
+    #[test]
+    fn a_refused_drive_address_is_a_refusal_not_an_empty_tray() {
+        // Captured in the first end-to-end run: the worker container mapped
+        // the drive as /dev/disc-block, a name libburn does not enumerate.
+        let output = fixture("toc-address-rejected.txt");
+        let reason = drive_refused(&output).expect("a refusal");
+        assert!(reason.contains("rejected because: not MMC"), "{reason}");
+    }
+
+    #[test]
+    fn an_ordinary_report_is_not_a_refusal() {
+        for name in ["toc-blank-cdr.txt", "toc-no-disc.txt", "toc-written.txt"] {
+            assert_eq!(drive_refused(&fixture(name)), None, "{name}");
+        }
     }
 
     #[test]

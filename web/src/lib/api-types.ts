@@ -696,6 +696,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/worker-enrollments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue a one-use enrollment token for a new burn worker.
+         * @description Issue a one-use enrollment token for a new burn worker. The token is returned once and cannot be recovered; it expires after 15 minutes unless asked otherwise, at most 60. Unauthenticated until operator sign-in exists, and audited.
+         */
+        post: operations["issue_enrollment_token"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/worker-enrollments/consume": {
         parameters: {
             query?: never;
@@ -1600,6 +1620,30 @@ export interface components {
              *     the import finishes rather than only afterwards.
              */
             warnings: string[];
+        };
+        /**
+         * @description What an operator sends to issue an enrollment token. Every field is
+         *     optional; `{}` asks for the defaults.
+         */
+        IssueEnrollmentRequest: {
+            /**
+             * Format: int32
+             * @description Minutes until the token lapses, from 1 to 60. Defaults to 15.
+             * @default null
+             */
+            expires_in_minutes: number | null;
+        };
+        /** @description A newly issued enrollment token. */
+        IssuedEnrollment: {
+            /** @description The enrollment's identifier, for the audit log and for revoking it. */
+            enrollment_id: string;
+            /**
+             * @description The token. Returned this once and never again: the server keeps only
+             *     its hash.
+             */
+            enrollment_token: string;
+            /** @description When it lapses, RFC 3339. */
+            expires_at: string;
         };
         /** @description A link between an artifact and a disc. */
         LinkArtifactRequest: {
@@ -3404,6 +3448,39 @@ export interface operations {
             };
             /** @description No such title, or an unusable name */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    issue_enrollment_token: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IssueEnrollmentRequest"];
+            };
+        };
+        responses: {
+            /** @description Issued */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssuedEnrollment"];
+                };
+            };
+            /** @description The lifetime is out of range */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -15,21 +15,32 @@
 //! credential could drive somebody else's drive by editing a URL, which is the
 //! oldest mistake in this shape of API and the one worth the most care here.
 //!
-//! Enrollment is the single unauthenticated route, because the enrollment
-//! token *is* the authentication. It is one-use and short-lived for that
-//! reason.
+//! Enrollment is the single unauthenticated worker route, because the
+//! enrollment token *is* the authentication. It is one-use and short-lived for
+//! that reason.
+//!
+//! Issuing a token is an operator route rather than a worker one, and it is
+//! unauthenticated too, for a different and temporary reason: operator
+//! authentication does not exist yet, and every operator route is open to
+//! whoever can reach the server. Until it does, the trade is a server that can
+//! enroll a worker at all against one that anybody on its network could enroll
+//! a worker on. The first was chosen; each issue is audited, the token
+//! expires within the hour, and a worker it creates can be revoked.
 
 use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
+use axum::response::IntoResponse as _;
 use axum::routing::post;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tangible_burn::worker::{RecoveryDirective, WorkerStage, plan_for};
 use tangible_db::repositories::{
     AttemptCompletion, ClaimOutcome, DriveReport, EnrollmentOutcome, IncomingEvent, ReportedStage,
-    attempt_state_for_worker, authenticate_worker, claim_next_burn_job, complete_attempt,
-    consume_enrollment, record_capabilities, record_events, record_heartbeat, renew_lease,
+    abandon_prewrite_attempt, attempt_state_for_worker, authenticate_worker, claim_next_burn_job,
+    complete_attempt, consume_enrollment, issue_enrollment, record_capabilities, record_events,
+    record_heartbeat, renew_lease,
 };
 use tangible_domain::{BurnAttemptId, BurnAttemptState, DriveId, EjectPolicy, WorkerId};
 use time::OffsetDateTime;
@@ -38,7 +49,8 @@ use utoipa::ToSchema;
 use crate::problem::{ErrorCode, Problem};
 use crate::state::ApiState;
 use crate::worker_auth::{
-    AuthRejection, Secret, WorkerCredential, WorkerIdentity, bearer_worker_credential,
+    AuthRejection, EnrollmentToken, Secret, WorkerCredential, WorkerIdentity,
+    bearer_worker_credential,
 };
 
 /// How long a lease lasts.
@@ -122,6 +134,124 @@ fn same_worker(identity: WorkerIdentity, path_worker: &str) -> Result<WorkerId, 
         return Err(Problem::not_found("worker", &requested.to_string()));
     }
     Ok(requested)
+}
+
+// --- issuing an enrollment token -------------------------------------------------
+
+/// How long an enrollment token lasts when the request does not say.
+///
+/// Long enough to paste it into a worker's configuration and start the
+/// container, short enough that one left in a terminal's scrollback is soon
+/// worth nothing.
+const DEFAULT_ENROLLMENT_MINUTES: u32 = 15;
+
+/// The longest an enrollment token may last.
+const MAX_ENROLLMENT_MINUTES: u32 = 60;
+
+/// Who issued a token, as the audit log records it, until operators sign in.
+const UNAUTHENTICATED_ACTOR: &str = "unauthenticated";
+
+/// What an operator sends to issue an enrollment token. Every field is
+/// optional; `{}` asks for the defaults.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct IssueEnrollmentRequest {
+    /// Minutes until the token lapses, from 1 to 60. Defaults to 15.
+    pub expires_in_minutes: Option<u32>,
+}
+
+/// A newly issued enrollment token.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct IssuedEnrollment {
+    /// The enrollment's identifier, for the audit log and for revoking it.
+    pub enrollment_id: String,
+    /// The token. Returned this once and never again: the server keeps only
+    /// its hash.
+    pub enrollment_token: String,
+    /// When it lapses, RFC 3339.
+    pub expires_at: String,
+}
+
+/// Issue a one-use enrollment token for a new burn worker.
+///
+/// Not idempotent, although the API design once listed it with the operations
+/// that are. A token is shown once and stored only as a hash, so a retried
+/// request cannot be given the same token back; it gets a new one, and the
+/// first, never used, lapses on its own within the hour.
+///
+/// # Errors
+///
+/// `INVALID_PARAMETER` for a lifetime outside 1 to 60 minutes, and
+/// `STORAGE_UNAVAILABLE` if the token cannot be generated or recorded.
+#[utoipa::path(
+    post,
+    path = "/api/v1/worker-enrollments",
+    tag = "workers",
+    description = "Issue a one-use enrollment token for a new burn worker. The \
+                   token is returned once and cannot be recovered; it expires \
+                   after 15 minutes unless asked otherwise, at most 60. \
+                   Unauthenticated until operator sign-in exists, and audited.",
+    request_body = IssueEnrollmentRequest,
+    responses(
+        (status = 201, description = "Issued", body = IssuedEnrollment),
+        (status = 400, description = "The lifetime is out of range", body = Problem),
+    ),
+)]
+pub async fn issue_enrollment_token(
+    State(state): State<ApiState>,
+    Json(request): Json<IssueEnrollmentRequest>,
+) -> Result<axum::response::Response, Problem> {
+    let minutes = request
+        .expires_in_minutes
+        .unwrap_or(DEFAULT_ENROLLMENT_MINUTES);
+    if !(1..=MAX_ENROLLMENT_MINUTES).contains(&minutes) {
+        return Err(Problem::invalid_parameter(
+            "expires_in_minutes",
+            "must be from 1 to 60",
+        ));
+    }
+
+    let token = EnrollmentToken::issue(
+        OffsetDateTime::now_utc(),
+        time::Duration::minutes(i64::from(minutes)),
+    )
+    .map_err(|error| {
+        tracing::error!(error = ?error, "could not generate an enrollment token");
+        Problem::new(
+            ErrorCode::StorageUnavailable,
+            "an enrollment token could not be generated",
+        )
+    })?;
+
+    let enrollment_id = issue_enrollment(
+        state.database().pool(),
+        token.hash.as_str(),
+        token.expires_at,
+        UNAUTHENTICATED_ACTOR,
+    )
+    .await
+    .map_err(|error| {
+        tracing::error!(error = ?error, "could not record an enrollment token");
+        unavailable("the enrollment token could not be recorded")
+    })?;
+
+    // The identifier, never the token.
+    tracing::info!(%enrollment_id, minutes, "worker enrollment token issued");
+
+    let expires_at = token
+        .expires_at
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default();
+    Ok((
+        StatusCode::CREATED,
+        Json(IssuedEnrollment {
+            enrollment_id: enrollment_id.to_string(),
+            // The one and only time this leaves the server.
+            enrollment_token: token.secret.expose().to_owned(),
+            expires_at,
+        }),
+    )
+        .into_response())
 }
 
 // --- enrollment ----------------------------------------------------------------
@@ -1337,6 +1467,32 @@ pub async fn recover(
     let directive = directive_for(server_state, local_stage, engine_running);
     let plan = plan_for(directive);
 
+    // A discarded attempt that the server still holds open, short of a write,
+    // is closed here. Without it the worker drops its record, the attempt
+    // stays open on an expired lease, and the job is never claimable again.
+    // Closing it fails the job rather than requeueing it; spending another
+    // disc stays the operator's decision.
+    if directive == RecoveryDirective::DiscardPrewriteState
+        && server_state.is_some_and(|state| !state.is_terminal() && !state.consumed_media())
+    {
+        let closed = abandon_prewrite_attempt(state.database().pool(), attempt_id, worker_id)
+            .await
+            .map_err(|error| {
+                // Retried by the worker. Answering "discard" without closing
+                // the attempt would strand the job behind a reassuring reply.
+                tracing::error!(error = ?error, "could not close an abandoned attempt");
+                unavailable("the abandoned attempt could not be closed")
+            })?;
+        if closed {
+            tracing::warn!(
+                worker_id = %worker_id,
+                attempt_id = %attempt_id,
+                "closed an attempt its worker abandoned before writing; the job has failed \
+                 and can be retried"
+            );
+        }
+    }
+
     tracing::info!(
         worker_id = %worker_id,
         attempt_id = %attempt_id,
@@ -1359,6 +1515,7 @@ pub async fn recover(
 /// The worker protocol routes.
 pub fn router() -> Router<ApiState> {
     Router::new()
+        .route("/worker-enrollments", post(issue_enrollment_token))
         .route(
             "/worker-enrollments/consume",
             post(consume_enrollment_token),

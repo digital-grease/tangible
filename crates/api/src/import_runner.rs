@@ -200,7 +200,8 @@ impl ImportRunner {
 
         // Written whichever way it went: a failure that discarded the
         // checkpoint would make the retry redo work that succeeded.
-        self.record(&job, checkpoint.state, &checkpoint).await;
+        self.record(&job, progress_state(checkpoint.state), &checkpoint)
+            .await;
 
         match outcome {
             Ok(outcome) => {
@@ -396,6 +397,23 @@ fn descriptor_string(descriptor: &serde_json::Value, key: &str) -> Option<String
         .map(ToOwned::to_owned)
 }
 
+/// The state a progress write may record for a checkpoint.
+///
+/// A pipeline that has finished leaves its checkpoint at `Complete`, but the
+/// job is not complete until the catalog has the artifact and the artifact is
+/// attached, which only `complete_import_job` does, and it writes both at
+/// once because the schema refuses a completed import without an artifact.
+/// Recording `Complete` here was refused by that constraint on every
+/// successful import, which the first end-to-end run's logs showed, and the
+/// refused write also discarded the checkpoint. Until then the job is still
+/// registering, so that is what is recorded.
+fn progress_state(checkpoint: ImportState) -> ImportState {
+    match checkpoint {
+        ImportState::Complete => ImportState::Registering,
+        other => other,
+    }
+}
+
 /// Which stage a retry should re-enter at.
 ///
 /// Only the stages the schema accepts as resumable. Anything else means the
@@ -444,6 +462,21 @@ fn failure_code(error: &ImportError) -> &'static str {
 #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_finished_pipeline_is_recorded_as_registering_until_the_artifact_is_attached() {
+        // Regression: recording `Complete` here broke the schema's rule that a
+        // complete import has an artifact, on every successful import.
+        assert_eq!(
+            progress_state(ImportState::Complete),
+            ImportState::Registering
+        );
+        assert_eq!(progress_state(ImportState::Hashing), ImportState::Hashing);
+        assert_eq!(
+            progress_state(ImportState::Registering),
+            ImportState::Registering
+        );
+    }
 
     #[test]
     fn an_empty_import_is_not_retried_forever() {

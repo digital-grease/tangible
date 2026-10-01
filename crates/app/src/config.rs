@@ -162,11 +162,14 @@ pub struct WorkerConfig {
     )]
     pub state_dir: PathBuf,
 
-    /// Worker-local stable alias for the drive's block device.
+    /// The drive's block device as the worker sees it.
     ///
-    /// An alias rather than a host path, so the same configuration works on
-    /// machines where the drive enumerates differently.
-    #[arg(long, env = "TANGIBLE_BLOCK_DEVICE", default_value = "/dev/disc-block")]
+    /// In a container this is the in-container path, which the hardware
+    /// Compose file fixes at `/dev/sr0` whatever the host calls the drive, so
+    /// the same configuration works on every machine. It must be a name
+    /// libburn enumerates as a drive: xorriso refuses any other path as "not
+    /// MMC", which the first end-to-end run found with an alias.
+    #[arg(long, env = "TANGIBLE_BLOCK_DEVICE", default_value = "/dev/sr0")]
     pub device_alias: PathBuf,
 
     /// Burn engine. Defaults to `fake`, so a misconfigured worker cannot
@@ -261,6 +264,6 @@ mod tests {
     fn a_worker_addresses_its_drive_by_alias_rather_than_host_path() {
         // Drive identity is worker plus configured alias. A host device node
         // is not stable across reboots, let alone across machines.
-        assert_eq!(worker().device_alias, PathBuf::from("/dev/disc-block"));
+        assert_eq!(worker().device_alias, PathBuf::from("/dev/sr0"));
     }
 }

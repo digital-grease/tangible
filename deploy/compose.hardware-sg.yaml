@@ -16,4 +16,6 @@
 services:
   burner-sr0:
     devices:
-      - "${TANGIBLE_SCSI_DEVICE:?set TANGIBLE_SCSI_DEVICE to the drive's generic SCSI node, from lsscsi -g}:/dev/disc-scsi:rwm"
+      # Inside the container as /dev/sg0, a name libburn enumerates, for the
+      # same reason the block device is /dev/sr0.
+      - "${TANGIBLE_SCSI_DEVICE:?set TANGIBLE_SCSI_DEVICE to the drive's generic SCSI node, from lsscsi -g}:/dev/sg0:rwm"

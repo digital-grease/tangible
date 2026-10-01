@@ -1,0 +1,8 @@
+xorriso 1.5.4 : RockRidge filesystem manipulator, libburnia project.
+
+xorriso : FAILURE : Drive address '/dev/disc-block' rejected because: not MMC and -drive_class 'caution' '/dev'
+xorriso : HINT : If the address is a legitimate target, prepend "stdio:"
+xorriso : NOTE : Tolerated problem event of severity 'FAILURE'
+xorriso : FAILURE : No input drive acquired on attempt to print Table Of Content
+xorriso : NOTE : Tolerated problem event of severity 'FAILURE'
+xorriso : NOTE : -return_with SORRY 32 triggered by problem severity FAILURE

@@ -399,8 +399,20 @@ impl BurnEngine for XorrisoEngine {
     async fn inspect_medium(&self, drive: &DriveRef) -> Result<MediumInfo, EngineError> {
         self.check_cancelled()?;
         let run = self.run(&command::inspect(drive), PROBE_TIMEOUT).await?;
-        let report = parse::medium(&run.text);
 
+        // Checked before anything is concluded about a disc. A drive xorriso
+        // refused or could not acquire says nothing about what is in it, and
+        // reading that as an empty tray is how the first end-to-end run's
+        // worker sat waiting for a disc that was already there: the problem
+        // was the address, and only an operator can fix an address.
+        if let Some(reason) = parse::drive_refused(&run.text) {
+            tracing::error!(alias = %drive.device_alias, %reason, "xorriso refused the drive");
+            return Err(EngineError::DriveUnavailable {
+                alias: drive.device_alias.clone(),
+            });
+        }
+
+        let report = parse::medium(&run.text);
         if !report.present() {
             return Err(EngineError::NoMedium {
                 alias: drive.device_alias.clone(),

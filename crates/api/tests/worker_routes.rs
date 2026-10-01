@@ -153,6 +153,126 @@ async fn enroll(harness: &Harness) -> (String, String) {
     )
 }
 
+// --- issuing a token ----------------------------------------------------------
+
+/// Issue a token through the operator route, as a deployment does.
+async fn issue_via_route(harness: &Harness, body: serde_json::Value) -> serde_json::Value {
+    let (status, issued) = harness.post("/api/v1/worker-enrollments", None, body).await;
+    assert_eq!(status, StatusCode::CREATED, "{issued}");
+    issued
+}
+
+async fn consume(harness: &Harness, token: &str) -> StatusCode {
+    harness
+        .post(
+            "/api/v1/worker-enrollments/consume",
+            None,
+            serde_json::json!({
+                "enrollment_token": token,
+                "name": format!("issued-worker-{}", uuid::Uuid::now_v7()),
+                "protocol_versions": ["1alpha1"],
+                "software_version": "0.1.0",
+            }),
+        )
+        .await
+        .0
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_issued_token_enrolls_a_worker_once() {
+    // The route an operator was missing: until it existed, nothing but a test
+    // could put a token in the table, so no real worker could ever enroll.
+    let harness = harness().await;
+    let issued = issue_via_route(&harness, serde_json::json!({})).await;
+    let token = issued["enrollment_token"].as_str().expect("a token");
+    assert!(token.starts_with("tgw_enroll_"), "{issued}");
+
+    assert_eq!(consume(&harness, token).await, StatusCode::OK);
+    assert_eq!(
+        consume(&harness, token).await,
+        StatusCode::UNAUTHORIZED,
+        "one use"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_token_lasts_fifteen_minutes_unless_asked_and_never_past_an_hour() {
+    let harness = harness().await;
+    let lifetime = |issued: &serde_json::Value| {
+        let expires = time::OffsetDateTime::parse(
+            issued["expires_at"].as_str().expect("expires_at"),
+            &time::format_description::well_known::Rfc3339,
+        )
+        .expect("RFC 3339");
+        (expires - time::OffsetDateTime::now_utc()).whole_minutes()
+    };
+
+    let default = issue_via_route(&harness, serde_json::json!({})).await;
+    assert!((14..=15).contains(&lifetime(&default)), "{default}");
+    let hour = issue_via_route(&harness, serde_json::json!({"expires_in_minutes": 60})).await;
+    assert!((59..=60).contains(&lifetime(&hour)), "{hour}");
+
+    for minutes in [0, 61, 100_000] {
+        let (status, problem) = harness
+            .post(
+                "/api/v1/worker-enrollments",
+                None,
+                serde_json::json!({"expires_in_minutes": minutes}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{minutes}: {problem}");
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn only_the_hash_is_kept_and_the_issue_is_audited() {
+    let harness = harness().await;
+    let issued = issue_via_route(&harness, serde_json::json!({})).await;
+    let token = issued["enrollment_token"].as_str().expect("a token");
+    let enrollment_id: uuid::Uuid = issued["enrollment_id"]
+        .as_str()
+        .expect("an id")
+        .parse()
+        .expect("a uuid");
+
+    let stored: String =
+        sqlx::query_scalar("SELECT token_hash FROM worker_enrollments WHERE id = $1")
+            .bind(enrollment_id)
+            .fetch_one(&harness.pool)
+            .await
+            .expect("the row");
+    assert_ne!(stored, token);
+    assert!(!stored.contains(token));
+
+    let (actor, action, outcome): (String, String, String) = sqlx::query_as(
+        "SELECT actor_id, action, outcome FROM audit_events
+         WHERE target_type = 'worker_enrollment' AND target_id = $1",
+    )
+    .bind(enrollment_id.to_string())
+    .fetch_one(&harness.pool)
+    .await
+    .expect("an audit row");
+    assert_eq!(
+        (actor.as_str(), action.as_str(), outcome.as_str()),
+        ("unauthenticated", "worker_enrollment.issued", "success"),
+        "the audit row says who asked, honestly"
+    );
+
+    let metadata: serde_json::Value =
+        sqlx::query_scalar("SELECT metadata FROM audit_events WHERE target_id = $1")
+            .bind(enrollment_id.to_string())
+            .fetch_one(&harness.pool)
+            .await
+            .expect("metadata");
+    assert!(
+        !metadata.to_string().contains(token),
+        "the token is not in the audit log: {metadata}"
+    );
+}
+
 // --- enrollment ------------------------------------------------------------
 
 #[tokio::test]
@@ -1127,6 +1247,88 @@ async fn completing_frees_the_drive() {
     assert_eq!(freed, StatusCode::OK, "{body}");
 }
 
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_combined_worker_can_claim_and_the_attempt_names_the_engine_that_wrote() {
+    // Regression: the first end-to-end run's worker ran `auto` and registered
+    // as such. The engine column's constraint did not know the name, so every
+    // claim rolled back and the job never left the queue.
+    let _queue = exclusive_queue().await;
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let (worker_id, credential) = enroll(&harness).await;
+    let drive = seed_drive(&harness.pool, &worker_id).await;
+    queue_job(&harness.pool).await;
+
+    let (status, claim) = harness
+        .post(
+            &format!("/api/v1/workers/{worker_id}/claims"),
+            Some(&credential),
+            serde_json::json!({
+                "drive_id": drive,
+                "engine": "auto",
+                "engine_version": "xorriso 1.5.4; cdrdao 1.2.4",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{claim}");
+    let attempt_id = claim["attempt_id"].as_str().expect("attempt_id").to_owned();
+    let lease = claim["lease_token"].as_str().expect("lease").to_owned();
+
+    let mut body = completion(&lease, "success", Some("match"));
+    body["write_report"]["engine"] = serde_json::json!("xorriso");
+    body["write_report"]["engine_version"] = serde_json::json!("1.5.4");
+    let (status, done) = harness
+        .post(
+            &format!("/api/v1/burn-attempts/{attempt_id}/complete"),
+            Some(&credential),
+            body,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+
+    let (engine, version): (String, String) =
+        sqlx::query_as("SELECT engine, engine_version FROM burn_attempts WHERE id = $1::uuid")
+            .bind(&attempt_id)
+            .fetch_one(&harness.pool)
+            .await
+            .expect("the attempt");
+    assert_eq!(
+        (engine.as_str(), version.as_str()),
+        ("xorriso", "1.5.4"),
+        "a finished attempt names the engine that wrote, not the wrapper"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_unknown_engine_on_a_write_report_does_not_fail_completion() {
+    // Completion can arrive after a disc exists. A label the column does not
+    // accept leaves the claimed engine in place rather than losing the record.
+    let _queue = exclusive_queue().await;
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let attempt = claimed_attempt(&harness).await;
+
+    let mut body = completion(&attempt.lease, "success", Some("match"));
+    body["write_report"]["engine"] = serde_json::json!("something-new");
+    let (status, done) = harness
+        .post(
+            &format!("/api/v1/burn-attempts/{}/complete", attempt.id),
+            Some(&attempt.credential),
+            body,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+
+    let engine: String = sqlx::query_scalar("SELECT engine FROM burn_attempts WHERE id = $1::uuid")
+        .bind(&attempt.id)
+        .fetch_one(&harness.pool)
+        .await
+        .expect("the attempt");
+    assert_eq!(engine, "fake");
+}
+
 // --- recovery --------------------------------------------------------------
 
 #[tokio::test]
@@ -1153,6 +1355,94 @@ async fn a_recovery_never_permits_a_write() {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body["may_write"], false, "stage {stage} permitted a write");
     }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_attempt_abandoned_before_writing_is_closed_and_its_job_can_be_retried() {
+    // Regression: the first end-to-end run restarted its worker mid-preflight.
+    // The worker was told to discard, the server kept the attempt open on an
+    // expired lease, and the job could never be claimed again.
+    let _queue = exclusive_queue().await;
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let attempt = claimed_attempt(&harness).await;
+
+    let (status, body) = harness
+        .post(
+            &format!("/api/v1/workers/{}/recoveries", attempt.worker),
+            Some(&attempt.credential),
+            serde_json::json!({
+                "attempt_id": attempt.id,
+                "local_stage": "staging",
+                "last_event_sequence": 3,
+                "engine_process_state": "not_running",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["directive"], "discard_prewrite_state");
+
+    let (state, code, job_id, job_state): (String, Option<String>, uuid::Uuid, String) =
+        sqlx::query_as(
+            "SELECT a.state, a.error_code, j.id, j.state
+             FROM burn_attempts a JOIN burn_jobs j ON j.id = a.burn_job_id
+             WHERE a.id = $1::uuid",
+        )
+        .bind(&attempt.id)
+        .fetch_one(&harness.pool)
+        .await
+        .expect("the attempt");
+    assert_eq!(state, "failed_before_write");
+    assert_eq!(code.as_deref(), Some("WORKER_RESTARTED"));
+    assert_eq!(
+        job_state, "failed",
+        "failed, not requeued: another disc is the operator's call"
+    );
+
+    let (status, retried) = harness
+        .post(
+            &format!("/api/v1/burn-jobs/{job_id}/retry"),
+            None,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{retried}");
+    assert_eq!(retried["state"], "queued");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_recovery_never_closes_an_attempt_that_may_have_written() {
+    let _queue = exclusive_queue().await;
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let attempt = claimed_attempt(&harness).await;
+
+    let (status, body) = harness
+        .post(
+            &format!("/api/v1/workers/{}/recoveries", attempt.worker),
+            Some(&attempt.credential),
+            serde_json::json!({
+                "attempt_id": attempt.id,
+                "local_stage": "writing",
+                "last_event_sequence": 3,
+                "engine_process_state": "not_running",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["directive"], "mark_needs_attention");
+
+    let state: String = sqlx::query_scalar("SELECT state FROM burn_attempts WHERE id = $1::uuid")
+        .bind(&attempt.id)
+        .fetch_one(&harness.pool)
+        .await
+        .expect("the attempt");
+    assert_eq!(
+        state, "claimed",
+        "a disc may exist; nothing automatic touches it"
+    );
 }
 
 #[tokio::test]

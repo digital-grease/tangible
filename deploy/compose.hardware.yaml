@@ -24,10 +24,13 @@ services:
       server:
         condition: service_healthy
     devices:
-      # Host path : in-container alias. The alias keeps the worker's
-      # configuration identical across machines where the drive enumerates
-      # differently.
-      - "${TANGIBLE_BLOCK_DEVICE:-/dev/sr0}:/dev/disc-block:rwm"
+      # Host path : in-container path. Inside its own container every worker
+      # sees its drive as /dev/sr0, whatever the host numbers it, so the
+      # worker's configuration is the same on every machine. The in-container
+      # name has to be one libburn enumerates as a drive: an earlier alias,
+      # /dev/disc-block, was refused by xorriso as "not MMC", and a worker
+      # using it waited forever for a disc that was already in the tray.
+      - "${TANGIBLE_BLOCK_DEVICE:-/dev/sr0}:/dev/sr0:rwm"
     # A mapped device keeps its host owner and mode, typically root and a
     # group such as `optical` or `cdrom` with mode 0660, and the image runs as
     # an unprivileged user. Without that group the worker is refused its own
@@ -38,15 +41,18 @@ services:
       - "${TANGIBLE_OPTICAL_GID:?set TANGIBLE_OPTICAL_GID to the group that owns the drive: stat -c %g /dev/sr0}"
     environment:
       TANGIBLE_SERVER_URL: http://server:8080
-      TANGIBLE_BLOCK_DEVICE: /dev/disc-block
+      # The drive's path inside this container, not on the host.
+      TANGIBLE_BLOCK_DEVICE: /dev/sr0
       TANGIBLE_WORKER_NAME: ${TANGIBLE_WORKER_NAME:?name this drive, e.g. pioneer-bdr-212}
       # Where the credential and the local recovery record live. It is on the
       # volume below because a worker that loses this cannot tell, after a
       # restart, whether an interrupted attempt wrote a disc.
       TANGIBLE_WORKER_STATE_DIR: /var/lib/tangible-worker
-      # A one-use token, needed only on first start. Issue one from the
-      # workers page, start the worker, then remove this line: the credential
-      # it exchanges the token for lives on the volume.
+      # A one-use token, needed only on first start. Issue one with
+      #   curl -X POST -H 'Content-Type: application/json' -d '{}' \
+      #     http://localhost:8080/api/v1/worker-enrollments
+      # start the worker within 15 minutes, then remove this line: the
+      # credential it exchanges the token for lives on the volume.
       TANGIBLE_ENROLLMENT_TOKEN: ${TANGIBLE_ENROLLMENT_TOKEN:-}
       # `fake` writes to a file and touches no drive. `auto` writes to the
       # mapped drive, ISO images through xorriso and CUE/BIN discs through

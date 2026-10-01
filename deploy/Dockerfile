@@ -43,6 +43,15 @@ RUN apt-get update \
 # Unprivileged by default. The worker gains device access through the device
 # mapping in compose.hardware.yaml, not through user privilege.
 RUN useradd --system --create-home --uid 10001 tangible
+
+# The directories the Compose files mount named volumes on, created here and
+# owned by the user the process runs as. Docker gives a new named volume the
+# ownership of the directory it is mounted over, and a directory the image
+# does not have is created owned by root: the first end-to-end run found the
+# server refused its own library ("Permission denied") on a fresh deployment,
+# and the worker's state volume would have failed the same way.
+RUN mkdir -p /var/lib/tangible/library /var/lib/tangible/staging /var/lib/tangible-worker \
+ && chown -R tangible:tangible /var/lib/tangible /var/lib/tangible-worker
 USER tangible
 
 COPY --from=build /src/target/release/tangible /usr/local/bin/tangible
