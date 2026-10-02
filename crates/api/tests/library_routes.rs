@@ -6,6 +6,10 @@
 //! Requests go through axum's own routing and extraction rather than calling
 //! handlers directly, so path parsing, query deserialization and the error
 //! response shape are all covered.
+//!
+//! The library is read from the manifest store, but reading it needs a
+//! session, and sessions live in PostgreSQL; hence most of these are ignored
+//! without one.
 
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
@@ -17,6 +21,8 @@ use tangible_domain::{ImportJobId, LogicalPath};
 use tangible_storage::{FilesystemStore, IngestLimits, ManifestStore, StagingManager};
 use tempfile::TempDir;
 use tower::ServiceExt as _;
+
+mod support;
 
 const SECTOR: usize = 2048;
 const SYSTEM_AREA: usize = 16 * SECTOR;
@@ -100,17 +106,15 @@ async fn harness(count: usize) -> Harness {
     }
     artifact_ids.sort();
 
-    // The database is never reached by these routes, so a lazy pool is enough
-    // and the tests need no PostgreSQL.
-    let database = Database::connect_lazy(&DbConfig::new(
-        "postgres://tangible:tangible@127.0.0.1:1/tangible",
-    ))
-    .expect("lazy pool");
+    // The library itself is read from the manifest store, but the session
+    // that lets anyone read it is in the database.
+    let database = support::database().await;
+    let session = support::sign_in(database.pool(), tangible_domain::Role::Viewer).await;
 
     let state = ApiState::with_manifests(database, manifests);
     Harness {
         _dir: dir,
-        router: tangible_api::router(state),
+        router: support::signed_in(tangible_api::router(state), session),
         artifact_ids,
     }
 }
@@ -144,6 +148,7 @@ async fn get(router: &axum::Router, uri: &str) -> (StatusCode, serde_json::Value
 // --- listing -----------------------------------------------------------------
 
 #[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn listing_returns_imported_artifacts() {
     let harness = harness(3).await;
     let (status, body, _) = get(&harness.router, "/api/v1/artifacts").await;
@@ -155,6 +160,7 @@ async fn listing_returns_imported_artifacts() {
 }
 
 #[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn an_empty_library_lists_cleanly() {
     // An empty collection is a normal state, not an error.
     let harness = harness(0).await;
@@ -166,6 +172,7 @@ async fn an_empty_library_lists_cleanly() {
 }
 
 #[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn a_short_page_carries_no_cursor() {
     let harness = harness(2).await;
     let (_, body, _) = get(&harness.router, "/api/v1/artifacts?limit=10").await;
@@ -173,6 +180,7 @@ async fn a_short_page_carries_no_cursor() {
 }
 
 #[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn pagination_walks_the_whole_library_without_repeating() {
     // The property that matters: every artifact appears exactly once across
     // the pages.
@@ -197,6 +205,7 @@ async fn pagination_walks_the_whole_library_without_repeating() {
 }
 
 #[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn a_forged_cursor_is_rejected_with_a_stable_code() {
     let harness = harness(1).await;
     let (status, body, content_type) =
@@ -211,6 +220,7 @@ async fn a_forged_cursor_is_rejected_with_a_stable_code() {
 }
 
 #[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn an_over_large_limit_is_clamped_rather_than_refused() {
     let harness = harness(3).await;
     let (status, body, _) = get(&harness.router, "/api/v1/artifacts?limit=999999").await;
@@ -221,6 +231,7 @@ async fn an_over_large_limit_is_clamped_rather_than_refused() {
 // --- one artifact ------------------------------------------------------------
 
 #[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn one_artifact_can_be_fetched() {
     let harness = harness(1).await;
     let id = &harness.artifact_ids[0];
@@ -234,6 +245,7 @@ async fn one_artifact_can_be_fetched() {
 }
 
 #[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn an_unknown_artifact_is_a_not_found_problem() {
     let harness = harness(1).await;
     let missing = tangible_domain::ArtifactId::generate();
@@ -247,6 +259,7 @@ async fn an_unknown_artifact_is_a_not_found_problem() {
 }
 
 #[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn a_malformed_identifier_is_a_bad_request_not_a_not_found() {
     // Distinguishing these matters: one means the caller sent nonsense, the
     // other means the library does not have it.
@@ -258,6 +271,7 @@ async fn a_malformed_identifier_is_a_bad_request_not_a_not_found() {
 }
 
 #[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn the_problem_document_names_the_failing_resource() {
     let harness = harness(1).await;
     let missing = tangible_domain::ArtifactId::generate();
@@ -276,6 +290,7 @@ async fn the_problem_document_names_the_failing_resource() {
 // --- components and manifest --------------------------------------------------
 
 #[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn components_can_be_listed() {
     let harness = harness(1).await;
     let id = &harness.artifact_ids[0];
@@ -297,6 +312,7 @@ async fn components_can_be_listed() {
 }
 
 #[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn the_manifest_is_served_verbatim() {
     // An external tool must receive the same bytes the library holds, not a
     // re-serialization that might differ.
@@ -360,6 +376,7 @@ async fn only_component(router: &axum::Router, artifact: &str) -> String {
 }
 
 #[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn a_component_serves_the_bytes_that_were_imported() {
     let harness = harness(1).await;
     let artifact = &harness.artifact_ids[0];
@@ -378,6 +395,7 @@ async fn a_component_serves_the_bytes_that_were_imported() {
 }
 
 #[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn a_range_request_returns_exactly_that_window() {
     // How a worker resumes staging a partly-downloaded image, so the window
     // has to be exact.
@@ -403,6 +421,7 @@ async fn a_range_request_returns_exactly_that_window() {
 }
 
 #[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn resuming_from_an_offset_returns_the_rest() {
     let harness = harness(1).await;
     let artifact = &harness.artifact_ids[0];
@@ -422,6 +441,7 @@ async fn resuming_from_an_offset_returns_the_rest() {
 }
 
 #[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn a_range_beyond_the_object_is_refused_with_its_size() {
     let harness = harness(1).await;
     let artifact = &harness.artifact_ids[0];
@@ -444,6 +464,7 @@ async fn a_range_beyond_the_object_is_refused_with_its_size() {
 }
 
 #[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn an_unknown_component_is_not_found() {
     let harness = harness(1).await;
     let artifact = &harness.artifact_ids[0];
@@ -459,6 +480,7 @@ async fn an_unknown_component_is_not_found() {
 }
 
 #[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn a_malformed_component_identifier_is_rejected() {
     let harness = harness(1).await;
     let artifact = &harness.artifact_ids[0];
@@ -475,14 +497,13 @@ async fn a_malformed_component_identifier_is_rejected() {
 // --- degraded storage ----------------------------------------------------------
 
 #[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn the_library_reports_unavailable_when_no_store_is_configured() {
     // The server must still start and answer when storage is misconfigured,
     // rather than refusing to boot.
-    let database = Database::connect_lazy(&DbConfig::new(
-        "postgres://tangible:tangible@127.0.0.1:1/tangible",
-    ))
-    .expect("lazy pool");
-    let router = tangible_api::router(ApiState::new(database));
+    let database = support::database().await;
+    let session = support::sign_in(database.pool(), tangible_domain::Role::Viewer).await;
+    let router = support::signed_in(tangible_api::router(ApiState::new(database)), session);
 
     let (status, body, _) = get(&router, "/api/v1/artifacts").await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
@@ -497,8 +518,34 @@ async fn the_library_reports_unavailable_when_no_store_is_configured() {
 async fn liveness_still_answers_alongside_the_library_routes() {
     // Nesting the library under /api/v1 must not disturb the operational
     // probes at the root.
-    let harness = harness(0).await;
-    let (status, body, _) = get(&harness.router, "/livez").await;
+    let (status, body, _) = get(&anonymous_router(), "/livez").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["status"], "alive");
+}
+
+/// A server nobody is signed in to, whose database is never reached.
+fn anonymous_router() -> axum::Router {
+    let database = Database::connect_lazy(&DbConfig::new(
+        "postgres://tangible:tangible@127.0.0.1:1/tangible",
+    ))
+    .expect("lazy pool");
+    tangible_api::router(ApiState::new(database))
+}
+
+#[tokio::test]
+async fn the_library_is_not_open_to_anyone_who_can_reach_the_server() {
+    // Refused before any lookup: with no cookie there is nothing to look up,
+    // which is why this needs no database.
+    for uri in [
+        "/api/v1/artifacts",
+        "/api/v1/artifacts/01890a5d-ac96-774b-bcce-b302099a8057",
+        "/api/v1/artifacts/01890a5d-ac96-774b-bcce-b302099a8057/manifest",
+        "/api/v1/burn-jobs",
+        "/api/v1/titles",
+        "/api/v1/users",
+    ] {
+        let (status, body, _) = get(&anonymous_router(), uri).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri}");
+        assert_eq!(body["code"], "UNAUTHENTICATED", "{uri}");
+    }
 }

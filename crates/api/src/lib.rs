@@ -8,6 +8,7 @@
 //! the generation step is verifiable in CI before there is anything to
 //! generate.
 
+pub mod auth;
 pub mod catalog;
 pub mod health;
 pub mod import;
@@ -23,6 +24,7 @@ use axum::routing::get;
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 
+pub use auth::{AuthSettings, CurrentUser, SignedIn};
 pub use import::{ImportCheckpoint, ImportError, ImportOutcome, ImportPipeline, ImportRequest};
 pub use import_runner::{ImportRunner, ImportRunnerSettings};
 pub use state::{ApiState, ImportContext};
@@ -47,6 +49,13 @@ pub const API_BASE: &str = "/api/v1";
     paths(
         health::livez,
         health::readyz,
+        routes::accounts::setup_status,
+        routes::accounts::complete_setup,
+        routes::accounts::sign_in,
+        routes::accounts::current_session,
+        routes::accounts::sign_out,
+        routes::accounts::list_accounts,
+        routes::accounts::create_account,
         routes::artifacts::list_artifacts,
         routes::artifacts::get_artifact,
         routes::artifacts::get_manifest,
@@ -100,6 +109,12 @@ pub const API_BASE: &str = "/api/v1";
         health::Readiness,
         health::DependencyCheck,
         problem::Problem,
+        routes::accounts::SetupStatus,
+        routes::accounts::UserView,
+        routes::accounts::UserList,
+        routes::accounts::SessionView,
+        routes::accounts::Credentials,
+        routes::accounts::CreateUserRequest,
         routes::artifacts::ArtifactSummaryPage,
         routes::artifacts::ArtifactSummary,
         routes::artifacts::ArtifactDetail,
@@ -162,9 +177,10 @@ pub const API_BASE: &str = "/api/v1";
         routes::workers::RecoveryRequest,
         routes::workers::RecoveryResponse,
     )),
-    modifiers(&WorkerSecurity),
+    modifiers(&WorkerSecurity, &SessionSecurity),
     tags(
         (name = "operations", description = "Liveness and readiness probes"),
+        (name = "accounts", description = "Setup, signing in, and accounts"),
         (name = "library", description = "Artifacts and their components"),
         (name = "catalog", description = "Titles, editions, disc sets, and discs"),
         (name = "imports", description = "Getting bytes into the library"),
@@ -192,6 +208,57 @@ impl utoipa::Modify for WorkerSecurity {
             "worker_credential",
             SecurityScheme::Http(Http::new(HttpAuthScheme::Bearer)),
         );
+    }
+}
+
+/// Declare the session cookie, and mark every operation that needs it.
+///
+/// Derived from [`auth::ACCESS_RULES`] rather than annotated route by route,
+/// so the document cannot disagree with what the server enforces.
+struct SessionSecurity;
+
+impl utoipa::Modify for SessionSecurity {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityRequirement, SecurityScheme};
+
+        let components = openapi.components.get_or_insert_with(Default::default);
+        components.add_security_scheme(
+            "session_cookie",
+            SecurityScheme::ApiKey(ApiKey::Cookie(ApiKeyValue::with_description(
+                auth::SESSION_COOKIE,
+                "Set by signing in. Mutations must also send the session's \
+                 anti-forgery token in X-CSRF-Token.",
+            ))),
+        );
+
+        for (method, path, access) in auth::ACCESS_RULES {
+            let requirements = match access {
+                auth::Access::Signed(_) => vec![SecurityRequirement::new(
+                    "session_cookie",
+                    Vec::<String>::new(),
+                )],
+                // Either will do: alternatives are separate requirements.
+                auth::Access::SignedOrLeaseholder(_) => vec![
+                    SecurityRequirement::new("session_cookie", Vec::<String>::new()),
+                    SecurityRequirement::new("worker_credential", Vec::<String>::new()),
+                ],
+                auth::Access::Public | auth::Access::Worker => continue,
+            };
+            let Some(item) = openapi.paths.paths.get_mut(*path) else {
+                continue;
+            };
+            let operation = match *method {
+                "GET" => item.get.as_mut(),
+                "POST" => item.post.as_mut(),
+                "PUT" => item.put.as_mut(),
+                "PATCH" => item.patch.as_mut(),
+                "DELETE" => item.delete.as_mut(),
+                _ => None,
+            };
+            if let Some(operation) = operation {
+                operation.security = Some(requirements);
+            }
+        }
     }
 }
 
@@ -233,12 +300,20 @@ pub fn router(state: ApiState) -> Router {
     Router::new()
         .route("/livez", get(health::livez))
         .route("/readyz", get(health::readyz))
+        .nest(API_BASE, routes::accounts::router())
         .nest(API_BASE, routes::artifacts::router())
         .nest(API_BASE, routes::burns::router())
         .nest(API_BASE, routes::imports::router())
         .nest(API_BASE, routes::physical_copies::router())
         .nest(API_BASE, routes::catalog::router())
         .nest(API_BASE, routes::workers::router())
+        // Applied per route, after routing, so the rule is looked up by the
+        // matched pattern rather than by a raw path a caller could disguise.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::authorize,
+        ))
+        .layer(axum::middleware::from_fn(auth::security_headers))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

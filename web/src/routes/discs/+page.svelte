@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  import { apiFetch } from '$lib/session';
   import { onMount } from 'svelte';
   import { conditionLabel, conditionMark, loadDiscs, type PhysicalCopyPage } from '$lib/discs';
   import type { LoadState } from '$lib/library';
@@ -9,7 +10,7 @@
   let status = $state('');
 
   async function refresh() {
-    view = await loadDiscs(fetch, { status: status || undefined });
+    view = await loadDiscs(apiFetch, { status: status || undefined });
   }
 
   onMount(refresh);

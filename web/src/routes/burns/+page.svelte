@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  import { apiFetch } from '$lib/session';
   import { onDestroy, onMount } from 'svelte';
   import {
     isLive,
@@ -47,7 +48,7 @@
   async function loadMore() {
     if (view.kind !== 'ready' || !view.data.next_cursor || loadingMore) return;
     loadingMore = true;
-    const next = await loadBurnQueue(fetch, view.data.next_cursor);
+    const next = await loadBurnQueue(apiFetch, view.data.next_cursor);
     if (next.kind === 'ready' && view.kind === 'ready') {
       view = {
         kind: 'ready',

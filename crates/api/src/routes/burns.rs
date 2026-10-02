@@ -47,6 +47,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use utoipa::{IntoParams, ToSchema};
 
+use crate::auth::SignedIn;
 use crate::pagination::{decode_cursor, encode_cursor};
 use crate::problem::{ErrorCode, Problem};
 use crate::state::ApiState;
@@ -59,13 +60,6 @@ const DEFAULT_LIMIT: usize = 50;
 
 /// Longest idempotency key accepted, matching the column's own limit.
 const MAX_IDEMPOTENCY_KEY: usize = 200;
-
-/// Who a burn is recorded as having been requested by.
-///
-/// A placeholder until there are user accounts. Recorded rather than left
-/// null because the column is part of the audit trail, and backfilling an
-/// actor after the fact is guesswork.
-const REQUESTED_BY: &str = "operator";
 
 fn rfc3339(value: OffsetDateTime) -> String {
     value.format(&Rfc3339).unwrap_or_default()
@@ -635,6 +629,7 @@ pub async fn list_jobs(
 )]
 pub async fn create_job(
     State(state): State<ApiState>,
+    SignedIn(user): SignedIn,
     headers: HeaderMap,
     Json(request): Json<CreateBurnJobRequest>,
 ) -> Result<axum::response::Response, Problem> {
@@ -668,7 +663,7 @@ pub async fn create_job(
             verification_policy: &validated.verification_policy,
             eject_policy: validated.eject_policy.as_str(),
             priority: validated.priority,
-            created_by: REQUESTED_BY,
+            created_by: &user.username,
             idempotency_key: key.as_deref(),
         },
     )

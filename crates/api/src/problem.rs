@@ -42,6 +42,18 @@ pub enum ErrorCode {
     /// distinction tells a caller probing for valid credentials which guesses
     /// were closer.
     Unauthenticated,
+    /// The signed-in account's role does not allow the request.
+    ///
+    /// 403, distinct from `UNAUTHENTICATED`: signing in again will not help,
+    /// a different account or role would.
+    Forbidden,
+    /// A mutation arrived without this session's anti-forgery token.
+    ///
+    /// Its own code so a page can tell a stale token, which it can fix by
+    /// fetching the session again, from a role it does not have.
+    CsrfTokenInvalid,
+    /// Too many attempts; the response says when to try again.
+    RateLimited,
     /// The request conflicts with the current state of the resource.
     Conflict,
     /// An idempotency key was reused for a different request.
@@ -82,6 +94,9 @@ impl ErrorCode {
             Self::StorageUnavailable => "STORAGE_UNAVAILABLE",
             Self::ManifestInvalid => "MANIFEST_INVALID",
             Self::Unauthenticated => "UNAUTHENTICATED",
+            Self::Forbidden => "FORBIDDEN",
+            Self::CsrfTokenInvalid => "CSRF_TOKEN_INVALID",
+            Self::RateLimited => "RATE_LIMITED",
             Self::Conflict => "CONFLICT",
             Self::IdempotencyConflict => "IDEMPOTENCY_CONFLICT",
             Self::ValidationFailed => "VALIDATION_FAILED",
@@ -113,10 +128,12 @@ impl ErrorCode {
             Self::ManifestInvalid | Self::ValidationFailed | Self::ReferenceNotFound => {
                 StatusCode::UNPROCESSABLE_ENTITY
             }
-            // 401 rather than 403 throughout: worker routes have no notion of
-            // an authenticated-but-unauthorised caller. Either the credential
-            // identifies a worker or the request is anonymous.
+            // Worker routes only ever answer 401: they have no notion of an
+            // authenticated-but-unauthorised caller. Operator routes answer
+            // 403 when the account is known and its role is not enough.
             Self::Unauthenticated => StatusCode::UNAUTHORIZED,
+            Self::Forbidden | Self::CsrfTokenInvalid => StatusCode::FORBIDDEN,
+            Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             Self::Conflict
             | Self::IdempotencyConflict
             | Self::WriteInProgress
@@ -135,6 +152,9 @@ impl ErrorCode {
             Self::StorageUnavailable => "Storage is unavailable",
             Self::ManifestInvalid => "Stored manifest is invalid",
             Self::Unauthenticated => "Not authenticated",
+            Self::Forbidden => "Not permitted",
+            Self::CsrfTokenInvalid => "Missing or stale anti-forgery token",
+            Self::RateLimited => "Too many attempts",
             Self::Conflict => "Conflicting request",
             Self::IdempotencyConflict => "Idempotency key reused",
             Self::ValidationFailed => "Request is not valid",
@@ -268,6 +288,9 @@ mod tests {
             ErrorCode::StorageUnavailable,
             ErrorCode::ManifestInvalid,
             ErrorCode::Unauthenticated,
+            ErrorCode::Forbidden,
+            ErrorCode::CsrfTokenInvalid,
+            ErrorCode::RateLimited,
             ErrorCode::Conflict,
             ErrorCode::IdempotencyConflict,
             ErrorCode::ValidationFailed,

@@ -12,7 +12,9 @@ mod telemetry;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use tangible_api::{ApiState, ImportContext, ImportPipeline, ImportRunner, ImportRunnerSettings};
+use tangible_api::{
+    ApiState, AuthSettings, ImportContext, ImportPipeline, ImportRunner, ImportRunnerSettings,
+};
 use tangible_db::{Database, DbConfig};
 use tangible_storage::{FilesystemStore, ManifestStore, StagingManager, WatchRoots};
 
@@ -119,11 +121,24 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
     }
 
     let pipeline = ImportPipeline::new(staging, objects, manifests.clone());
-    let state = ApiState::with_manifests(database.clone(), manifests).with_imports(ImportContext {
-        pipeline: pipeline.clone(),
-        roots: roots.clone(),
-        max_upload_bytes: serve.max_upload_bytes,
-    });
+    let auth = AuthSettings::for_public_url(&serve.public_url);
+    if !auth.secure_cookie {
+        tracing::warn!(
+            public_url = %serve.public_url,
+            "the public URL is plain HTTP, so session cookies are not marked Secure and \
+             passwords cross the network unencrypted; use this only on a network you trust, \
+             and put HTTPS in front of Tangible before exposing it further"
+        );
+    }
+    warn_if_setup_needed(&database, &serve.public_url).await;
+
+    let state = ApiState::with_manifests(database.clone(), manifests)
+        .with_imports(ImportContext {
+            pipeline: pipeline.clone(),
+            roots: roots.clone(),
+            max_upload_bytes: serve.max_upload_bytes,
+        })
+        .with_auth(auth);
 
     // The import runner is a background task rather than a separate process:
     // one binary, one deployment, and the work is already leased in the
@@ -166,6 +181,23 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
     let _ = runner.await;
 
     served
+}
+
+/// Say loudly that the server has no accounts yet.
+///
+/// Until the first administrator exists, whoever reaches the setup page
+/// first becomes one. That is the intended way in, and also the reason to do
+/// it promptly on a fresh server.
+async fn warn_if_setup_needed(database: &Database, public_url: &str) {
+    match tangible_db::accounts::count_users(database.pool()).await {
+        Ok(0) => tracing::warn!(
+            setup = %format!("{}/api/v1/setup", public_url.trim_end_matches('/')),
+            "no accounts exist yet: whoever completes setup first becomes the administrator, \
+             through the web UI's setup page or a POST to the setup route, so do it now"
+        ),
+        Ok(_) => {}
+        Err(error) => tracing::warn!(error = ?error, "could not count accounts at startup"),
+    }
 }
 
 async fn migrate_command(common: &CommonConfig) -> Result<()> {

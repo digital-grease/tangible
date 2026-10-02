@@ -34,6 +34,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use utoipa::{IntoParams, ToSchema};
 
+use crate::auth::SignedIn;
 use crate::pagination::{decode_cursor, encode_cursor};
 use crate::problem::{ErrorCode, Problem};
 use crate::state::ApiState;
@@ -49,9 +50,6 @@ const MAX_TEXT: usize = 500;
 
 /// Longest note accepted, matching the column.
 const MAX_NOTES: usize = 10_000;
-
-/// Who a check is recorded as having been performed by.
-const CHECKED_BY: &str = "operator";
 
 fn rfc3339(value: OffsetDateTime) -> String {
     value.format(&Rfc3339).unwrap_or_default()
@@ -527,6 +525,7 @@ pub async fn update_copy(
 )]
 pub async fn record_check(
     State(state): State<ApiState>,
+    SignedIn(user): SignedIn,
     Path(copy_id): Path<String>,
     Json(request): Json<RecordCheckRequest>,
 ) -> Result<Json<PhysicalCopyDetail>, Problem> {
@@ -570,7 +569,7 @@ pub async fn record_check(
             bytes_read: request.bytes_read,
             checked_with: request.checked_with.as_deref(),
             notes: request.notes.as_deref(),
-            checked_by: CHECKED_BY,
+            checked_by: &user.username,
         },
     )
     .await

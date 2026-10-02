@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import type { components } from './api-types';
+import { apiFetch } from './session';
 import type { LoadState, Problem } from './library';
 
 /**
@@ -83,7 +84,7 @@ async function request<T>(
 
 /** Fetch one page of the burn queue, newest first. */
 export async function loadBurnQueue(
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
   cursor?: string,
 ): Promise<LoadState<BurnJobPage>> {
   const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
@@ -98,7 +99,7 @@ export async function loadBurnQueue(
 /** Fetch one burn job with its attempts. */
 export async function loadBurnJob(
   id: string,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
 ): Promise<LoadState<BurnJobDetail>> {
   const result = await request<BurnJobDetail>(
     fetcher,
@@ -111,7 +112,7 @@ export async function loadBurnJob(
 /** Fetch the events one attempt reported, oldest first. */
 export async function loadAttemptEvents(
   attemptId: string,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
   after?: number,
 ): Promise<LoadState<BurnEventPage>> {
   const query = after === undefined ? '' : `?after=${after}`;
@@ -142,7 +143,7 @@ export type CommandResult<T> = { kind: 'ready'; data: T } | { kind: 'error'; pro
 export async function createBurnJob(
   body: CreateBurnJobRequest,
   idempotencyKey: string,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
 ): Promise<CommandResult<BurnJobCreated>> {
   const result = await request<BurnJobCreated>(fetcher, '/api/v1/burn-jobs', {
     method: 'POST',
@@ -156,7 +157,7 @@ export async function createBurnJob(
 /** Ask the server to cancel a burn. It may refuse, and refusing is correct. */
 export async function cancelBurnJob(
   id: string,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
 ): Promise<CommandResult<BurnJobDetail>> {
   const result = await request<BurnJobDetail>(
     fetcher,
@@ -176,7 +177,7 @@ export async function cancelBurnJob(
  */
 export async function resolveAttention(
   id: string,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
 ): Promise<CommandResult<BurnJobDetail>> {
   const result = await request<BurnJobDetail>(
     fetcher,
@@ -190,7 +191,7 @@ export async function resolveAttention(
 /** Requeue a failed or cancelled burn for another attempt. */
 export async function retryBurnJob(
   id: string,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
 ): Promise<CommandResult<BurnJobDetail>> {
   const result = await request<BurnJobDetail>(
     fetcher,

@@ -25,3 +25,12 @@ expect_used = "deny"
 panic = "deny"
 todo = "deny"
 unimplemented = "deny"
+
+# Password hashing is deliberately expensive, and unoptimised it is slow
+# enough to make signing in to a development server and the sign-in tests
+# take seconds. Optimising these two crates changes nothing about the hashes.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3

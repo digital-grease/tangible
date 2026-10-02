@@ -669,6 +669,37 @@ pub async fn authenticate_worker(
     .transpose()
 }
 
+/// Whether a worker holds a live lease on an attempt to burn an artifact.
+///
+/// The only reason a worker may read an artifact: it is about to write it.
+/// An attempt that has finished, or whose lease has lapsed, no longer counts,
+/// so a worker credential is never a way to browse the library.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn worker_holds_artifact(
+    pool: &PgPool,
+    worker_id: WorkerId,
+    artifact_id: ArtifactId,
+) -> Result<bool, DbError> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (
+             SELECT 1 FROM burn_attempts a
+             JOIN burn_jobs j ON j.id = a.burn_job_id
+             WHERE a.worker_id = $1
+               AND j.artifact_id = $2
+               AND a.state IN ('claimed', 'staging', 'preflighting', 'writing', 'written', 'verifying')
+               AND a.lease_expires_at > now()
+         )",
+    )
+    .bind(worker_id.as_uuid())
+    .bind(artifact_id.as_uuid())
+    .fetch_one(pool)
+    .await
+    .map_err(DbError::Query)
+}
+
 /// Record that a worker is alive.
 ///
 /// # Errors

@@ -31,6 +31,8 @@ use tangible_domain::{ImportJobId, LogicalPath};
 use tangible_storage::{FilesystemStore, IngestLimits, ManifestStore, StagingManager};
 use tempfile::TempDir;
 
+mod support;
+
 /// Serialises the file: a claim takes any queued job.
 static QUEUE: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
 
@@ -78,6 +80,8 @@ struct Server {
     _dir: TempDir,
     pipeline: ImportPipeline,
     database: Database,
+    /// The operator queueing burns; the worker under test has no session.
+    session: support::Session,
 }
 
 async fn server() -> Server {
@@ -117,7 +121,9 @@ async fn server() -> Server {
             .await;
     });
 
+    let session = support::administrator(&pool).await;
     Server {
+        session,
         base_url: format!("http://{address}"),
         pool,
         shutdown: Some(shutdown),
@@ -279,6 +285,8 @@ impl Server {
     async fn post(&self, path: &str, body: serde_json::Value) -> (u16, serde_json::Value) {
         let response = reqwest::Client::new()
             .post(format!("{}{path}", self.base_url))
+            .header("cookie", self.session.cookie())
+            .header("x-csrf-token", &self.session.csrf_token)
             .json(&body)
             .send()
             .await
@@ -291,6 +299,7 @@ impl Server {
     async fn get(&self, path: &str) -> serde_json::Value {
         reqwest::Client::new()
             .get(format!("{}{path}", self.base_url))
+            .header("cookie", self.session.cookie())
             .send()
             .await
             .expect("send")

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import type { components } from './api-types';
+import { apiFetch } from './session';
 import type { CommandResult } from './burns';
 import type { LoadState, Problem } from './library';
 
@@ -59,7 +60,7 @@ async function request<T>(
 
 /** Where this server will take imports from. */
 export async function loadImportSources(
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
 ): Promise<LoadState<ImportSources>> {
   const result = await request<ImportSources>(fetcher, '/api/v1/import-sources');
   if (isProblem(result)) return { kind: 'error', problem: result };
@@ -68,7 +69,7 @@ export async function loadImportSources(
 
 /** Fetch one page of imports, newest first. */
 export async function loadImports(
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
   cursor?: string,
 ): Promise<LoadState<ImportPage>> {
   const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
@@ -83,7 +84,7 @@ export async function loadImports(
 /** Import a file from a configured watched root. */
 export async function importFromWatchedRoot(
   body: CreateImportRequest,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
 ): Promise<CommandResult<ImportView>> {
   const result = await request<ImportView>(fetcher, '/api/v1/imports', {
     method: 'POST',
@@ -103,7 +104,7 @@ export async function importFromWatchedRoot(
  */
 export async function uploadImport(
   file: File,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
 ): Promise<CommandResult<ImportView>> {
   const result = await request<ImportView>(
     fetcher,
@@ -121,7 +122,7 @@ export async function uploadImport(
 /** Stop an import. */
 export async function cancelImport(
   id: string,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
 ): Promise<CommandResult<ImportView>> {
   const result = await request<ImportView>(
     fetcher,
@@ -135,7 +136,7 @@ export async function cancelImport(
 /** Try a failed or cancelled import again. */
 export async function retryImport(
   id: string,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
 ): Promise<CommandResult<ImportView>> {
   const result = await request<ImportView>(
     fetcher,

@@ -378,6 +378,25 @@ impl VerificationStep {
     }
 }
 
+// --- people -----------------------------------------------------------------
+
+string_enum! {
+    /// What a signed-in person may do, in three steps.
+    ///
+    /// A closed set and an ordering: each role can do everything the one
+    /// below it can. The permissions each one carries are in
+    /// [`crate::auth::Permission`], decided here and nowhere else.
+    Role {
+        /// Reads the library, the catalog, burns and discs. Changes nothing.
+        Viewer => "viewer",
+        /// Also imports, catalogues and burns: the day-to-day work.
+        Operator => "operator",
+        /// Also manages workers and people.
+        Administrator => "administrator",
+    }
+    default = Viewer
+}
+
 // --- workers and drives -----------------------------------------------------
 
 string_enum! {

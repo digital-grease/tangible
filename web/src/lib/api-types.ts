@@ -628,6 +628,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The signed-in session. */
+        get: operations["current_session"];
+        put?: never;
+        /**
+         * Sign in.
+         * @description Sign in with a username and password. Sets the session cookie and returns the anti-forgery token mutations must send.
+         */
+        post: operations["sign_in"];
+        /**
+         * Sign out.
+         * @description # Errors
+         *
+         *     `STORAGE_UNAVAILABLE` if the session cannot be ended.
+         */
+        delete: operations["sign_out"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether the server still needs its first account.
+         * @description # Errors
+         *
+         *     `STORAGE_UNAVAILABLE` if accounts cannot be counted.
+         */
+        get: operations["setup_status"];
+        put?: never;
+        /**
+         * Create the first administrator and sign them in.
+         * @description Create the first account, an administrator, and sign it in. Works only while no account exists.
+         */
+        post: operations["complete_setup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/titles": {
         parameters: {
             query?: never;
@@ -696,6 +749,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every account.
+         * @description # Errors
+         *
+         *     `STORAGE_UNAVAILABLE` if accounts cannot be read.
+         */
+        get: operations["list_accounts"];
+        put?: never;
+        /**
+         * Create an account.
+         * @description # Errors
+         *
+         *     `VALIDATION_FAILED` for a username, password or role that will not do;
+         *     `CONFLICT` for a username already in use.
+         */
+        post: operations["create_account"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/worker-enrollments": {
         parameters: {
             query?: never;
@@ -707,7 +789,7 @@ export interface paths {
         put?: never;
         /**
          * Issue a one-use enrollment token for a new burn worker.
-         * @description Issue a one-use enrollment token for a new burn worker. The token is returned once and cannot be recovered; it expires after 15 minutes unless asked otherwise, at most 60. Unauthenticated until operator sign-in exists, and audited.
+         * @description Issue a one-use enrollment token for a new burn worker. The token is returned once and cannot be recovered; it expires after 15 minutes unless asked otherwise, at most 60. Needs an administrator, and is audited.
          */
         post: operations["issue_enrollment_token"];
         delete?: never;
@@ -1315,6 +1397,22 @@ export interface components {
             /** @description What it sorts as. Defaults to the display title. */
             sort_title?: string | null;
         };
+        /** @description An account to create. */
+        CreateUserRequest: {
+            /** @description At least 12 characters. */
+            password: string;
+            /** @description `viewer`, `operator` or `administrator`. */
+            role: string;
+            /** @description 1 to 64 lowercase letters, digits, `.`, `_` or `-`. */
+            username: string;
+        };
+        /** @description A username and password. */
+        Credentials: {
+            /** @description The password. */
+            password: string;
+            /** @description The username. Case does not matter. */
+            username: string;
+        };
         /** @description The state of one dependency. */
         DependencyCheck: {
             /**
@@ -1814,6 +1912,27 @@ export interface components {
             /** @description The new expiry. */
             lease_expires_at: string;
         };
+        /** @description The signed-in session. */
+        SessionView: {
+            /**
+             * @description The token every mutation must send in `X-CSRF-Token`.
+             *
+             *     Not a credential on its own: it is useless without the session
+             *     cookie, which a page's script cannot read.
+             */
+            csrf_token: string;
+            /** @description When the session ends however much it is used. */
+            expires_at: string;
+            /** @description What they may do. */
+            role: string;
+            /** @description Who is signed in. */
+            username: string;
+        };
+        /** @description Whether the server still needs its first account. */
+        SetupStatus: {
+            /** @description True until the first administrator exists. */
+            needed: boolean;
+        };
         /** @description A page of titles. */
         TitlePage: {
             /** @description The titles in this page, in sort order. */
@@ -1899,6 +2018,26 @@ export interface components {
             status?: string | null;
             /** @description Where it is kept. */
             storage_location?: string | null;
+        };
+        /** @description A list of accounts. */
+        UserList: {
+            /** @description Every account, oldest first. */
+            items: components["schemas"]["UserView"][];
+        };
+        /** @description An account, without anything that would sign anybody in. */
+        UserView: {
+            /** @description When it was created. */
+            created_at: string;
+            /** @description Whether the account has been disabled. */
+            disabled: boolean;
+            /** @description Opaque identifier. */
+            id: string;
+            /** @description When it last signed in. */
+            last_signed_in_at?: string | null;
+            /** @description `viewer`, `operator` or `administrator`. */
+            role: string;
+            /** @description The username, lowercase. */
+            username: string;
         };
         /** @description The read-back comparison, when one ran. */
         VerificationReport: {
@@ -3328,6 +3467,166 @@ export interface operations {
             };
         };
     };
+    current_session: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionView"];
+                };
+            };
+            /** @description Not signed in */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    sign_in: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Credentials"];
+            };
+        };
+        responses: {
+            /** @description Signed in */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionView"];
+                };
+            };
+            /** @description The username or password is wrong */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many failures for this username */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    sign_out: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Signed out */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not signed in */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    setup_status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Whether setup is needed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupStatus"];
+                };
+            };
+        };
+    };
+    complete_setup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Credentials"];
+            };
+        };
+        responses: {
+            /** @description Created and signed in */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionView"];
+                };
+            };
+            /** @description Setup is already complete */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The username or password will not do */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     list_all_titles: {
         parameters: {
             query?: {
@@ -3478,6 +3777,86 @@ export interface operations {
                 };
             };
             /** @description No such title, or an unusable name */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_accounts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every account */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserList"];
+                };
+            };
+            /** @description Not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_account: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateUserRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserView"];
+                };
+            };
+            /** @description Not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The username is taken */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The username, password or role will not do */
             422: {
                 headers: {
                     [name: string]: unknown;

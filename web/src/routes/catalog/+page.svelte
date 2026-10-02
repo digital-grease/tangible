@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  import { apiFetch } from '$lib/session';
   import { onMount } from 'svelte';
   import {
     compatibilityLabel,
@@ -52,7 +53,7 @@
   let newDiscMedia = $state('unknown');
 
   async function refreshTitles() {
-    view = await loadTitles(fetch, search.trim() || undefined);
+    view = await loadTitles(apiFetch, search.trim() || undefined);
   }
 
   onMount(refreshTitles);

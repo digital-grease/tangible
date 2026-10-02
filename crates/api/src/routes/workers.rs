@@ -46,6 +46,7 @@ use tangible_domain::{BurnAttemptId, BurnAttemptState, DriveId, EjectPolicy, Wor
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 
+use crate::auth::SignedIn;
 use crate::problem::{ErrorCode, Problem};
 use crate::state::ApiState;
 use crate::worker_auth::{
@@ -148,9 +149,6 @@ const DEFAULT_ENROLLMENT_MINUTES: u32 = 15;
 /// The longest an enrollment token may last.
 const MAX_ENROLLMENT_MINUTES: u32 = 60;
 
-/// Who issued a token, as the audit log records it, until operators sign in.
-const UNAUTHENTICATED_ACTOR: &str = "unauthenticated";
-
 /// What an operator sends to issue an enrollment token. Every field is
 /// optional; `{}` asks for the defaults.
 #[derive(Debug, Default, Deserialize, ToSchema)]
@@ -190,7 +188,7 @@ pub struct IssuedEnrollment {
     description = "Issue a one-use enrollment token for a new burn worker. The \
                    token is returned once and cannot be recovered; it expires \
                    after 15 minutes unless asked otherwise, at most 60. \
-                   Unauthenticated until operator sign-in exists, and audited.",
+                   Needs an administrator, and is audited.",
     request_body = IssueEnrollmentRequest,
     responses(
         (status = 201, description = "Issued", body = IssuedEnrollment),
@@ -199,6 +197,7 @@ pub struct IssuedEnrollment {
 )]
 pub async fn issue_enrollment_token(
     State(state): State<ApiState>,
+    SignedIn(user): SignedIn,
     Json(request): Json<IssueEnrollmentRequest>,
 ) -> Result<axum::response::Response, Problem> {
     let minutes = request
@@ -227,7 +226,7 @@ pub async fn issue_enrollment_token(
         state.database().pool(),
         token.hash.as_str(),
         token.expires_at,
-        UNAUTHENTICATED_ACTOR,
+        &user.username,
     )
     .await
     .map_err(|error| {

@@ -21,6 +21,8 @@ use tangible_api::{ApiState, router};
 use tangible_db::{Database, DbConfig};
 use tower::ServiceExt as _;
 
+mod support;
+
 /// Serialises tests that assert on the state of the whole queue.
 ///
 /// Same reason as the repository tests: claiming takes any queued job, so a
@@ -44,6 +46,7 @@ async fn drain_queue(pool: &PgPool) {
 }
 
 struct Harness {
+    session: support::Session,
     router: axum::Router,
     pool: PgPool,
 }
@@ -58,14 +61,17 @@ async fn harness() -> Harness {
     database.migrate().await.expect("migrate");
     let pool = database.pool().clone();
 
+    let session = support::administrator(&pool).await;
     Harness {
+        session,
         router: router(ApiState::new(database)),
         pool,
     }
 }
 
 impl Harness {
-    async fn send(&self, request: Request<Body>) -> (StatusCode, serde_json::Value) {
+    async fn send(&self, mut request: Request<Body>) -> (StatusCode, serde_json::Value) {
+        self.session.apply(&mut request);
         let response = self
             .router
             .clone()
@@ -259,8 +265,12 @@ async fn only_the_hash_is_kept_and_the_issue_is_audited() {
     .expect("an audit row");
     assert_eq!(
         (actor.as_str(), action.as_str(), outcome.as_str()),
-        ("unauthenticated", "worker_enrollment.issued", "success"),
-        "the audit row says who asked, honestly"
+        (
+            harness.session.user.username.as_str(),
+            "worker_enrollment.issued",
+            "success"
+        ),
+        "the audit row names the administrator who asked"
     );
 
     let metadata: serde_json::Value =

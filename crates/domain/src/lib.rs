@@ -13,6 +13,7 @@
 //! The entity structs that carry these values are added alongside the
 //! repositories in epic E2.
 
+pub mod auth;
 pub mod burn;
 pub mod cd;
 pub mod digest;
@@ -27,7 +28,7 @@ pub use digest::{DigestParseError, Sha256Digest};
 pub use enums::{
     ArtifactFormat, ArtifactKind, ArtifactOrigin, CompatibilityClaim, ComponentRole,
     DiscRelationship, DriveStatus, EjectPolicy, EnumParseError, HashAlgorithm, IntegrationKind,
-    LossCharacter, MediaFamily, PhysicalCopyStatus, QuarantineState, SetKind, TitleKind,
+    LossCharacter, MediaFamily, PhysicalCopyStatus, QuarantineState, Role, SetKind, TitleKind,
     ValidationState, VerificationStep, WorkerStatus,
 };
 pub use id::{

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import type { components } from './api-types';
+import { apiFetch } from './session';
 
 /**
  * Wire types come from the generated OpenAPI client, never hand-written.
@@ -75,7 +76,7 @@ function isProblem(value: unknown): value is Problem {
 
 /** Fetch one page of artifacts. */
 export async function loadLibrary(
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
   cursor?: string,
 ): Promise<LoadState<ArtifactSummaryPage>> {
   const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
@@ -91,7 +92,7 @@ export async function loadLibrary(
 /** Fetch one artifact. */
 export async function loadArtifact(
   id: string,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
 ): Promise<LoadState<ArtifactDetail>> {
   const result = await request<ArtifactDetail>(
     fetcher,

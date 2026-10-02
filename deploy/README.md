@@ -31,6 +31,46 @@ Review the rendered configuration before starting: image references, volume
 mappings, ports, and the env file. Pin an image digest rather than a tag for a
 real deployment.
 
+## First sign-in
+
+Every route except the health probes and the way in needs a signed-in account.
+A fresh server has none, and logs a warning until one exists: whoever completes
+setup first becomes the administrator, so do it as soon as the server is up.
+
+From the web UI, the first visit lands on the setup page. From a shell, with
+the password typed into the terminal rather than put on the command line, where
+it would stay in shell history:
+
+```bash
+umask 077
+jar=$(mktemp)
+# Type {"username":"owner","password":"at least twelve characters"}, then
+# Ctrl-D. Use /api/v1/session instead of /api/v1/setup to sign in later.
+curl -sS -c "$jar" -H 'Content-Type: application/json' -d @- \
+  http://localhost:8080/api/v1/setup
+```
+
+The response carries a `csrf_token`. Every request that changes something
+sends it back, with the cookie:
+
+```bash
+curl -sS -b "$jar" -H 'Content-Type: application/json' \
+  -H 'X-CSRF-Token: <csrf_token from the response>' -d '{}' \
+  http://localhost:8080/api/v1/worker-enrollments
+rm -f "$jar"
+```
+
+The cookie jar holds a live session; remove it when done. Further accounts are
+created by an administrator, from the web UI's Accounts page or
+`POST /api/v1/users`, as `viewer`, `operator` or `administrator`.
+
+`TANGIBLE_PUBLIC_URL` decides how the session cookie is marked. An `https://`
+URL gets a `Secure` cookie. An `http://` URL gets one a browser will send back
+over plain HTTP, so a server on a LAN without TLS still works, and the server
+logs a warning at every start, because passwords and session cookies then cross
+the network unencrypted. Put HTTPS in front of Tangible before exposing it to
+any network you do not trust.
+
 ## Adding a real drive
 
 Hardware is opt-in and deliberately separate, so no default or development

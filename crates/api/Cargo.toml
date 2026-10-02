@@ -7,6 +7,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+argon2 = "0.6.0"
 axum = "0.8.9"
 base64 = "0.23.1"
 futures-util = { version = "0.3.31", default-features = false }
@@ -30,6 +31,7 @@ tower-http = { version = "0.7.0", features = ["trace", "cors", "limit"] }
 tracing = "0.1.44"
 utoipa = { version = "5.5.0", features = ["axum_extras", "time", "uuid"] }
 utoipa-axum = "0.2.0"
+uuid = { version = "1.24.0", features = ["v7"] }
 
 [lints]
 workspace = true
@@ -40,4 +42,3 @@ reqwest = { version = "0.13.4", default-features = false, features = ["json"] }
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "uuid", "time"] }
 tempfile = "3.27.0"
 tower = { version = "0.5.3", features = ["util"] }
-uuid = { version = "1.24.0", features = ["v7"] }

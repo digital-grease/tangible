@@ -3,6 +3,7 @@
 
 //! HTTP routes, grouped by the resource they serve.
 
+pub mod accounts;
 pub mod artifacts;
 pub mod burns;
 pub mod catalog;

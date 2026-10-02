@@ -23,6 +23,8 @@ use tangible_api::{ApiState, router};
 use tangible_db::{Database, DbConfig};
 use tower::ServiceExt as _;
 
+mod support;
+
 /// Serialises tests that let a worker claim: a claim takes any queued job.
 static QUEUE: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
 
@@ -34,6 +36,7 @@ async fn exclusive_queue() -> tokio::sync::MutexGuard<'static, ()> {
 }
 
 struct Harness {
+    session: support::Session,
     router: axum::Router,
     pool: PgPool,
     _queue: tokio::sync::MutexGuard<'static, ()>,
@@ -57,7 +60,9 @@ async fn harness() -> Harness {
     .await
     .expect("drain the burn queue");
 
+    let session = support::administrator(&pool).await;
     Harness {
+        session,
         router: router(ApiState::new(database)),
         pool,
         _queue: queue,
@@ -65,7 +70,8 @@ async fn harness() -> Harness {
 }
 
 impl Harness {
-    async fn send(&self, request: Request<Body>) -> (StatusCode, serde_json::Value) {
+    async fn send(&self, mut request: Request<Body>) -> (StatusCode, serde_json::Value) {
+        self.session.apply(&mut request);
         let response = self
             .router
             .clone()

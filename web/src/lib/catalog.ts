@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import type { components } from './api-types';
+import { apiFetch } from './session';
 import type { CommandResult } from './burns';
 import type { LoadState, Problem } from './library';
 
@@ -79,7 +80,7 @@ async function post<T>(
 
 /** Fetch titles in sort order, optionally filtered by name. */
 export async function loadTitles(
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
   search?: string,
 ): Promise<LoadState<TitlePage>> {
   const query = search ? `?search=${encodeURIComponent(search)}` : '';
@@ -94,7 +95,7 @@ export async function loadTitles(
 /** The editions of a title. */
 export async function loadEditions(
   titleId: string,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
 ): Promise<CommandResult<EditionView[]>> {
   const result = await request<EditionView[]>(
     fetcher,
@@ -107,7 +108,7 @@ export async function loadEditions(
 /** The disc sets of an edition. */
 export async function loadDiscSets(
   editionId: string,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
 ): Promise<CommandResult<DiscSetView[]>> {
   const result = await request<DiscSetView[]>(
     fetcher,
@@ -120,7 +121,7 @@ export async function loadDiscSets(
 /** The discs in a set. */
 export async function loadDiscs(
   setId: string,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
 ): Promise<CommandResult<DiscView[]>> {
   const result = await request<DiscView[]>(
     fetcher,
@@ -133,7 +134,7 @@ export async function loadDiscs(
 /** Record a title. */
 export async function createTitle(
   body: CreateTitleRequest,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
 ): Promise<CommandResult<TitleView>> {
   return post<TitleView>(fetcher, '/api/v1/titles', body);
 }
@@ -142,7 +143,7 @@ export async function createTitle(
 export async function createEdition(
   titleId: string,
   body: CreateEditionRequest,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
 ): Promise<CommandResult<EditionView>> {
   return post<EditionView>(fetcher, `/api/v1/titles/${encodeURIComponent(titleId)}/editions`, body);
 }
@@ -151,7 +152,7 @@ export async function createEdition(
 export async function createDiscSet(
   editionId: string,
   body: CreateDiscSetRequest,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
 ): Promise<CommandResult<DiscSetView>> {
   return post<DiscSetView>(
     fetcher,
@@ -164,7 +165,7 @@ export async function createDiscSet(
 export async function createDisc(
   setId: string,
   body: CreateDiscRequest,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
 ): Promise<CommandResult<DiscView>> {
   return post<DiscView>(fetcher, `/api/v1/disc-sets/${encodeURIComponent(setId)}/discs`, body);
 }
@@ -173,7 +174,7 @@ export async function createDisc(
 export async function linkArtifact(
   discId: string,
   artifactId: string,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
 ): Promise<CommandResult<DiscArtifactView[]>> {
   return post<DiscArtifactView[]>(
     fetcher,

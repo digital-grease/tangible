@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import type { components } from './api-types';
+import { apiFetch } from './session';
 import type { CommandResult } from './burns';
 import type { LoadState, Problem } from './library';
 
@@ -61,7 +62,7 @@ async function request<T>(
 
 /** Fetch one page of the disc inventory, newest first. */
 export async function loadDiscs(
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
   options: { cursor?: string; status?: string } = {},
 ): Promise<LoadState<PhysicalCopyPage>> {
   const query = new URLSearchParams();
@@ -80,7 +81,7 @@ export async function loadDiscs(
 /** Fetch one disc and its check history. */
 export async function loadDisc(
   id: string,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
 ): Promise<LoadState<PhysicalCopyDetail>> {
   const result = await request<PhysicalCopyDetail>(
     fetcher,
@@ -94,7 +95,7 @@ export async function loadDisc(
 export async function updateDisc(
   id: string,
   body: UpdatePhysicalCopyRequest,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
 ): Promise<CommandResult<PhysicalCopyDetail>> {
   const result = await request<PhysicalCopyDetail>(
     fetcher,
@@ -113,7 +114,7 @@ export async function updateDisc(
 export async function recordCheck(
   id: string,
   body: RecordCheckRequest,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
 ): Promise<CommandResult<PhysicalCopyDetail>> {
   const result = await request<PhysicalCopyDetail>(
     fetcher,
@@ -131,7 +132,7 @@ export async function recordCheck(
 /** Record that a disc has been destroyed. */
 export async function markDestroyed(
   id: string,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = apiFetch,
 ): Promise<CommandResult<PhysicalCopyDetail>> {
   const result = await request<PhysicalCopyDetail>(
     fetcher,

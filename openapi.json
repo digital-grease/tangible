@@ -76,7 +76,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/artifacts/{artifact_id}": {
@@ -129,7 +134,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/artifacts/{artifact_id}/components": {
@@ -175,7 +185,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/artifacts/{artifact_id}/components/{component_id}/content": {
@@ -245,7 +260,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          },
+          {
+            "worker_credential": []
+          }
+        ]
       }
     },
     "/api/v1/artifacts/{artifact_id}/manifest": {
@@ -281,7 +304,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          },
+          {
+            "worker_credential": []
+          }
+        ]
       }
     },
     "/api/v1/burn-attempts/{attempt_id}": {
@@ -324,7 +355,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/burn-attempts/{attempt_id}/complete": {
@@ -451,7 +487,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -660,7 +701,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -734,7 +780,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/burn-jobs/{burn_job_id}": {
@@ -777,7 +828,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/burn-jobs/{burn_job_id}/attempts": {
@@ -823,7 +879,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/burn-jobs/{burn_job_id}/cancel": {
@@ -876,7 +937,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/burn-jobs/{burn_job_id}/resolve-attention": {
@@ -929,7 +995,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/burn-jobs/{burn_job_id}/retry": {
@@ -982,7 +1053,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/disc-sets/{disc_set_id}/discs": {
@@ -1028,7 +1104,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -1089,7 +1170,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/discs/{disc_id}": {
@@ -1132,7 +1218,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/discs/{disc_id}/artifact-links": {
@@ -1188,7 +1279,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/discs/{disc_id}/artifacts": {
@@ -1234,7 +1330,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/editions/{edition_id}/disc-sets": {
@@ -1280,7 +1381,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -1331,7 +1437,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/import-sources": {
@@ -1363,7 +1474,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/imports": {
@@ -1434,7 +1550,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -1484,7 +1605,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/imports/upload": {
@@ -1561,7 +1687,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/imports/{import_id}": {
@@ -1604,7 +1735,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/imports/{import_id}/cancel": {
@@ -1657,7 +1793,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/imports/{import_id}/retry": {
@@ -1710,7 +1851,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/physical-copies": {
@@ -1805,7 +1951,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/physical-copies/{copy_id}": {
@@ -1848,7 +1999,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       },
       "patch": {
         "tags": [
@@ -1919,7 +2075,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/physical-copies/{copy_id}/checks": {
@@ -1992,7 +2153,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/physical-copies/{copy_id}/mark-destroyed": {
@@ -2027,6 +2193,197 @@
           },
           "404": {
             "description": "No such disc",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/session": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "The signed-in session.",
+        "operationId": "current_session",
+        "responses": {
+          "200": {
+            "description": "The session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Sign in.",
+        "description": "Sign in with a username and password. Sets the session cookie and returns the anti-forgery token mutations must send.",
+        "operationId": "sign_in",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Credentials"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The username or password is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many failures for this username",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Sign out.",
+        "description": "# Errors\n\n`STORAGE_UNAVAILABLE` if the session cannot be ended.",
+        "operationId": "sign_out",
+        "responses": {
+          "204": {
+            "description": "Signed out"
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/setup": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Whether the server still needs its first account.",
+        "description": "# Errors\n\n`STORAGE_UNAVAILABLE` if accounts cannot be counted.",
+        "operationId": "setup_status",
+        "responses": {
+          "200": {
+            "description": "Whether setup is needed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupStatus"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Create the first administrator and sign them in.",
+        "description": "Create the first account, an administrator, and sign it in. Works only while no account exists.",
+        "operationId": "complete_setup",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Credentials"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created and signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Setup is already complete",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The username or password will not do",
             "content": {
               "application/json": {
                 "schema": {
@@ -2096,7 +2453,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -2136,7 +2498,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/titles/{title_id}": {
@@ -2179,7 +2546,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/titles/{title_id}/editions": {
@@ -2225,7 +2597,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -2276,7 +2653,114 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/users": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Every account.",
+        "description": "# Errors\n\n`STORAGE_UNAVAILABLE` if accounts cannot be read.",
+        "operationId": "list_accounts",
+        "responses": {
+          "200": {
+            "description": "Every account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserList"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an administrator",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Create an account.",
+        "description": "# Errors\n\n`VALIDATION_FAILED` for a username, password or role that will not do;\n`CONFLICT` for a username already in use.",
+        "operationId": "create_account",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserView"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an administrator",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The username is taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The username, password or role will not do",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/worker-enrollments": {
@@ -2285,7 +2769,7 @@
           "workers"
         ],
         "summary": "Issue a one-use enrollment token for a new burn worker.",
-        "description": "Issue a one-use enrollment token for a new burn worker. The token is returned once and cannot be recovered; it expires after 15 minutes unless asked otherwise, at most 60. Unauthenticated until operator sign-in exists, and audited.",
+        "description": "Issue a one-use enrollment token for a new burn worker. The token is returned once and cannot be recovered; it expires after 15 minutes unless asked otherwise, at most 60. Needs an administrator, and is audited.",
         "operationId": "issue_enrollment_token",
         "requestBody": {
           "content": {
@@ -2318,7 +2802,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/api/v1/worker-enrollments/consume": {
@@ -3735,6 +4224,49 @@
           }
         }
       },
+      "CreateUserRequest": {
+        "type": "object",
+        "description": "An account to create.",
+        "required": [
+          "username",
+          "password",
+          "role"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "At least 12 characters."
+          },
+          "role": {
+            "type": "string",
+            "description": "`viewer`, `operator` or `administrator`."
+          },
+          "username": {
+            "type": "string",
+            "description": "1 to 64 lowercase letters, digits, `.`, `_` or `-`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Credentials": {
+        "type": "object",
+        "description": "A username and password.",
+        "required": [
+          "username",
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "The password."
+          },
+          "username": {
+            "type": "string",
+            "description": "The username. Case does not matter."
+          }
+        },
+        "additionalProperties": false
+      },
       "DependencyCheck": {
         "type": "object",
         "description": "The state of one dependency.",
@@ -4823,6 +5355,47 @@
           }
         }
       },
+      "SessionView": {
+        "type": "object",
+        "description": "The signed-in session.",
+        "required": [
+          "username",
+          "role",
+          "csrf_token",
+          "expires_at"
+        ],
+        "properties": {
+          "csrf_token": {
+            "type": "string",
+            "description": "The token every mutation must send in `X-CSRF-Token`.\n\nNot a credential on its own: it is useless without the session\ncookie, which a page's script cannot read."
+          },
+          "expires_at": {
+            "type": "string",
+            "description": "When the session ends however much it is used."
+          },
+          "role": {
+            "type": "string",
+            "description": "What they may do."
+          },
+          "username": {
+            "type": "string",
+            "description": "Who is signed in."
+          }
+        }
+      },
+      "SetupStatus": {
+        "type": "object",
+        "description": "Whether the server still needs its first account.",
+        "required": [
+          "needed"
+        ],
+        "properties": {
+          "needed": {
+            "type": "boolean",
+            "description": "True until the first administrator exists."
+          }
+        }
+      },
       "TitlePage": {
         "type": "object",
         "description": "A page of titles.",
@@ -4980,6 +5553,62 @@
           }
         }
       },
+      "UserList": {
+        "type": "object",
+        "description": "A list of accounts.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserView"
+            },
+            "description": "Every account, oldest first."
+          }
+        }
+      },
+      "UserView": {
+        "type": "object",
+        "description": "An account, without anything that would sign anybody in.",
+        "required": [
+          "id",
+          "username",
+          "role",
+          "disabled",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "description": "When it was created."
+          },
+          "disabled": {
+            "type": "boolean",
+            "description": "Whether the account has been disabled."
+          },
+          "id": {
+            "type": "string",
+            "description": "Opaque identifier."
+          },
+          "last_signed_in_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it last signed in."
+          },
+          "role": {
+            "type": "string",
+            "description": "`viewer`, `operator` or `administrator`."
+          },
+          "username": {
+            "type": "string",
+            "description": "The username, lowercase."
+          }
+        }
+      },
       "VerificationReport": {
         "type": "object",
         "description": "The read-back comparison, when one ran.",
@@ -5056,6 +5685,12 @@
       }
     },
     "securitySchemes": {
+      "session_cookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "tangible_session",
+        "description": "Set by signing in. Mutations must also send the session's anti-forgery token in X-CSRF-Token."
+      },
       "worker_credential": {
         "type": "http",
         "scheme": "bearer"
@@ -5066,6 +5701,10 @@
     {
       "name": "operations",
       "description": "Liveness and readiness probes"
+    },
+    {
+      "name": "accounts",
+      "description": "Setup, signing in, and accounts"
     },
     {
       "name": "library",

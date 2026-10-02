@@ -48,11 +48,11 @@ services:
       # volume below because a worker that loses this cannot tell, after a
       # restart, whether an interrupted attempt wrote a disc.
       TANGIBLE_WORKER_STATE_DIR: /var/lib/tangible-worker
-      # A one-use token, needed only on first start. Issue one with
-      #   curl -X POST -H 'Content-Type: application/json' -d '{}' \
-      #     http://localhost:8080/api/v1/worker-enrollments
-      # start the worker within 15 minutes, then remove this line: the
-      # credential it exchanges the token for lives on the volume.
+      # A one-use token, needed only on first start. An administrator issues
+      # one from the web UI's Workers page or the API (deploy/README.md,
+      # "First sign-in"). Start the worker within 15 minutes, then remove
+      # this line: the credential it exchanges the token for lives on the
+      # volume.
       TANGIBLE_ENROLLMENT_TOKEN: ${TANGIBLE_ENROLLMENT_TOKEN:-}
       # `fake` writes to a file and touches no drive. `auto` writes to the
       # mapped drive, ISO images through xorriso and CUE/BIN discs through

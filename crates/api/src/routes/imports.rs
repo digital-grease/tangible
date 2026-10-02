@@ -39,6 +39,7 @@ use time::format_description::well_known::Rfc3339;
 use tokio::io::AsyncWriteExt as _;
 use utoipa::{IntoParams, ToSchema};
 
+use crate::auth::SignedIn;
 use crate::pagination::{decode_cursor, encode_cursor};
 use crate::problem::{ErrorCode, Problem};
 use crate::state::ApiState;
@@ -51,12 +52,6 @@ const DEFAULT_LIMIT: usize = 50;
 
 /// Longest filename accepted on an upload.
 const MAX_FILENAME: usize = 255;
-
-/// Who an import is recorded as having been requested by.
-///
-/// A placeholder until there are user accounts, recorded rather than left
-/// null because the column is part of the audit trail.
-const REQUESTED_BY: &str = "operator";
 
 fn rfc3339(value: OffsetDateTime) -> String {
     value.format(&Rfc3339).unwrap_or_default()
@@ -298,6 +293,7 @@ pub async fn list_sources(State(state): State<ApiState>) -> Result<Json<ImportSo
 )]
 pub async fn create_import(
     State(state): State<ApiState>,
+    SignedIn(user): SignedIn,
     Json(request): Json<CreateImportRequest>,
 ) -> Result<axum::response::Response, Problem> {
     let Some(imports) = state.imports() else {
@@ -353,7 +349,7 @@ pub async fn create_import(
             state: ImportState::Requested,
             bytes_expected,
             bytes_received: 0,
-            created_by: REQUESTED_BY,
+            created_by: &user.username,
         },
     )
     .await
@@ -398,6 +394,7 @@ pub async fn create_import(
 )]
 pub async fn upload_import(
     State(state): State<ApiState>,
+    SignedIn(user): SignedIn,
     Query(query): Query<UploadQuery>,
     body: axum::body::Body,
 ) -> Result<axum::response::Response, Problem> {
@@ -483,7 +480,7 @@ pub async fn upload_import(
             state: ImportState::Staged,
             bytes_expected: i64::try_from(received).ok(),
             bytes_received: i64::try_from(received).unwrap_or(i64::MAX),
-            created_by: REQUESTED_BY,
+            created_by: &user.username,
         },
     )
     .await

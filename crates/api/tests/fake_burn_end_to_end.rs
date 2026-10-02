@@ -38,6 +38,8 @@ use tangible_storage::{FilesystemStore, IngestLimits, ManifestStore, StagingMana
 use tempfile::TempDir;
 use tower::ServiceExt as _;
 
+mod support;
+
 /// Serialises the whole file: a claim takes any queued job, so two of these
 /// running at once would take each other's work.
 static QUEUE: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
@@ -85,6 +87,7 @@ fn iso_image(volume_id: &str, blocks: u32) -> Vec<u8> {
 }
 
 struct World {
+    session: support::Session,
     router: axum::Router,
     pool: PgPool,
     pipeline: ImportPipeline,
@@ -113,7 +116,9 @@ async fn world() -> World {
         .expect("staging");
     let pipeline = ImportPipeline::new(staging, objects, manifests.clone());
 
+    let session = support::administrator(&pool).await;
     World {
+        session,
         router: router(ApiState::with_manifests(database, manifests)),
         pool,
         pipeline,
@@ -122,7 +127,8 @@ async fn world() -> World {
 }
 
 impl World {
-    async fn send(&self, request: Request<Body>) -> (StatusCode, serde_json::Value) {
+    async fn send(&self, mut request: Request<Body>) -> (StatusCode, serde_json::Value) {
+        self.session.apply(&mut request);
         let response = self
             .router
             .clone()
@@ -316,17 +322,18 @@ impl World {
     }
 
     /// Fetch raw bytes, as a worker downloading a manifest or a component.
-    async fn get_bytes(&self, path: &str) -> (StatusCode, Vec<u8>) {
+    ///
+    /// With the worker's credential and no session, as the real client
+    /// sends it.
+    async fn get_bytes(&self, path: &str, credential: Option<&str>) -> (StatusCode, Vec<u8>) {
+        let mut request = Request::builder().method("GET").uri(path);
+        if let Some(credential) = credential {
+            request = request.header("authorization", format!("Bearer {credential}"));
+        }
         let response = self
             .router
             .clone()
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri(path)
-                    .body(Body::empty())
-                    .expect("build the request"),
-            )
+            .oneshot(request.body(Body::empty()).expect("build the request"))
             .await
             .expect("route the request");
         let status = response.status();
@@ -344,13 +351,22 @@ impl World {
     /// each component and hash it as it lands. This is the check that makes
     /// "a burn starts only after hash verification" real: the bytes about to
     /// be written are the bytes the manifest describes, or nothing is written.
-    async fn stage_from_server(&self, lease: &serde_json::Value) -> (PathBuf, Sha256Digest, u64) {
+    async fn stage_from_server(
+        &self,
+        lease: &serde_json::Value,
+        credential: &str,
+    ) -> (PathBuf, Sha256Digest, u64) {
         use sha2::Digest as _;
 
         let manifest_url = lease["artifact"]["manifest_url"]
             .as_str()
             .expect("a manifest url");
-        let (status, manifest_bytes) = self.get_bytes(manifest_url).await;
+        // Not without the credential: the library is not open to anyone who
+        // can reach the server.
+        let (status, _) = self.get_bytes(manifest_url, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        let (status, manifest_bytes) = self.get_bytes(manifest_url, Some(credential)).await;
         assert_eq!(status, StatusCode::OK);
 
         let announced = lease["artifact"]["manifest_sha256"]
@@ -371,10 +387,13 @@ impl World {
         let component = manifest.components.first().expect("one component");
 
         let (status, bytes) = self
-            .get_bytes(&format!(
-                "/api/v1/artifacts/{}/components/{}/content",
-                manifest.artifact_id, component.id
-            ))
+            .get_bytes(
+                &format!(
+                    "/api/v1/artifacts/{}/components/{}/content",
+                    manifest.artifact_id, component.id
+                ),
+                Some(credential),
+            )
             .await;
         assert_eq!(status, StatusCode::OK);
 
@@ -525,7 +544,7 @@ async fn an_imported_iso_is_burned_verified_and_recorded() {
 
     // --- stage -------------------------------------------------------------
     report(&world, &worker, &attempt, 1, "staging").await;
-    let (staged, digest, bytes) = world.stage_from_server(&lease).await;
+    let (staged, digest, bytes) = world.stage_from_server(&lease, &worker.credential).await;
     let plan = plan(&attempt, &worker, staged, digest, bytes);
     let engine = FakeEngine::new(world.dir.path().join("media"));
     let sink = CollectingSink::new();
@@ -639,6 +658,17 @@ async fn an_imported_iso_is_burned_verified_and_recorded() {
     assert_eq!(status, "verified");
     assert_eq!(media_profile, "CD-R");
     assert_eq!(verification_result, "passed");
+
+    // --- and the worker's access ends with the lease --------------------------
+    // Its credential reached the artifact only to burn it. With the attempt
+    // finished, the same request is refused.
+    let manifest_url = lease["artifact"]["manifest_url"]
+        .as_str()
+        .expect("a manifest url");
+    let (status, _) = world
+        .get_bytes(manifest_url, Some(&worker.credential))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 // Long for the same reason as the happy path above: the order is the point.
@@ -688,7 +718,7 @@ async fn a_disc_that_fails_verification_is_recorded_rather_than_forgotten() {
     let attempt = lease["attempt_id"].as_str().expect("an attempt").to_owned();
     let lease_token = lease["lease_token"].as_str().expect("a lease").to_owned();
 
-    let (staged, digest, bytes) = world.stage_from_server(&lease).await;
+    let (staged, digest, bytes) = world.stage_from_server(&lease, &worker.credential).await;
     let plan = plan(&attempt, &worker, staged, digest, bytes);
     let engine = FakeEngine::new(world.dir.path().join("media")).with_behaviour(FakeBehaviour {
         corrupt_after_write: true,

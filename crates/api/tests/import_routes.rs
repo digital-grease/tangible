@@ -30,6 +30,8 @@ use tangible_storage::{FilesystemStore, ManifestStore, StagingManager, WatchRoot
 use tempfile::TempDir;
 use tower::ServiceExt as _;
 
+mod support;
+
 const SECTOR: usize = 2048;
 const SYSTEM_AREA: usize = 16 * SECTOR;
 
@@ -73,6 +75,7 @@ async fn exclusive_queue() -> tokio::sync::MutexGuard<'static, ()> {
 }
 
 struct Harness {
+    session: support::Session,
     router: axum::Router,
     runner: ImportRunner,
     pool: PgPool,
@@ -145,7 +148,9 @@ async fn harness_with_limit(max_upload_bytes: u64) -> Harness {
     .await
     .expect("drain the import queue");
 
+    let session = support::administrator(&pool).await;
     Harness {
+        session,
         router: router(state),
         runner,
         pool,
@@ -156,7 +161,8 @@ async fn harness_with_limit(max_upload_bytes: u64) -> Harness {
 }
 
 impl Harness {
-    async fn send(&self, request: Request<Body>) -> (StatusCode, serde_json::Value) {
+    async fn send(&self, mut request: Request<Body>) -> (StatusCode, serde_json::Value) {
+        self.session.apply(&mut request);
         let response = self
             .router
             .clone()

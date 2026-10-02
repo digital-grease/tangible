@@ -22,8 +22,10 @@ use tangible_api::{ApiState, router};
 use tangible_db::{Database, DbConfig};
 use tower::ServiceExt as _;
 
-/// Serialises tests that let a worker claim, because a claim takes any queued
-/// job rather than one scoped to the caller.
+mod support;
+
+/// Serialises the tests in this file: a claim takes any queued job rather
+/// than one scoped to the caller, and a drain cancels every queued job.
 static QUEUE: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
 
 async fn exclusive_queue() -> tokio::sync::MutexGuard<'static, ()> {
@@ -47,11 +49,17 @@ async fn drain_queue(pool: &PgPool) {
 }
 
 struct Harness {
+    session: support::Session,
     router: axum::Router,
     pool: PgPool,
+    /// Held for the whole test. Creating a job inserts it and reads it back,
+    /// and another test draining the queue between the two turned a fresh
+    /// job into a canceled one about one run in five.
+    _queue: tokio::sync::MutexGuard<'static, ()>,
 }
 
 async fn harness() -> Harness {
+    let queue = exclusive_queue().await;
     let url = std::env::var("TANGIBLE_TEST_DATABASE_URL")
         .or_else(|_| std::env::var("TANGIBLE_DATABASE_URL"))
         .expect("set TANGIBLE_TEST_DATABASE_URL to run integration tests");
@@ -61,14 +69,18 @@ async fn harness() -> Harness {
     database.migrate().await.expect("migrate");
     let pool = database.pool().clone();
 
+    let session = support::administrator(&pool).await;
     Harness {
+        session,
         router: router(ApiState::new(database)),
         pool,
+        _queue: queue,
     }
 }
 
 impl Harness {
-    async fn send(&self, request: Request<Body>) -> (StatusCode, serde_json::Value) {
+    async fn send(&self, mut request: Request<Body>) -> (StatusCode, serde_json::Value) {
+        self.session.apply(&mut request);
         let response = self
             .router
             .clone()
@@ -645,7 +657,6 @@ async fn cancelling_twice_is_not_an_error() {
 async fn cancelling_a_claimed_burn_stops_the_attempt_too() {
     // Nothing physical has happened yet, so the attempt is cancelled with the
     // job rather than left occupying a drive.
-    let _queue = exclusive_queue().await;
     let harness = harness().await;
     drain_queue(&harness.pool).await;
     let world = seed(&harness.pool).await;
@@ -670,7 +681,6 @@ async fn cancelling_a_claimed_burn_stops_the_attempt_too() {
 async fn a_burn_that_has_started_writing_cannot_be_cancelled() {
     // The refusal this whole route exists for. Stopping a write ruins the
     // medium, so the attempt is allowed to finish and its outcome recorded.
-    let _queue = exclusive_queue().await;
     let harness = harness().await;
     drain_queue(&harness.pool).await;
     let world = seed(&harness.pool).await;
@@ -722,7 +732,6 @@ async fn a_finished_burn_cannot_be_cancelled() {
 async fn a_failed_burn_can_be_requeued_without_losing_its_history() {
     // A retry spends another disc. The record of the discs already spent is
     // what tells an operator that, so it must survive.
-    let _queue = exclusive_queue().await;
     let harness = harness().await;
     drain_queue(&harness.pool).await;
     let world = seed(&harness.pool).await;
@@ -816,7 +825,6 @@ async fn a_burn_needing_attention_is_not_requeued() {
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
 async fn a_running_burn_is_not_requeued() {
-    let _queue = exclusive_queue().await;
     let harness = harness().await;
     drain_queue(&harness.pool).await;
     let world = seed(&harness.pool).await;
@@ -901,7 +909,6 @@ async fn a_burn_that_is_not_asking_for_attention_has_none_to_resolve() {
 async fn a_worker_waiting_for_media_says_so_on_the_job() {
     // The state an operator has to see: the server is not stuck, it is
     // waiting for them to put a disc in.
-    let _queue = exclusive_queue().await;
     let harness = harness().await;
     drain_queue(&harness.pool).await;
     let world = seed(&harness.pool).await;
@@ -925,7 +932,6 @@ async fn preflight_rejecting_a_disc_moves_the_job_back_to_waiting() {
     // Before anything physical happens the worker's account is simply the
     // truth, in either direction. Showing "preflighting" while an operator is
     // being asked for another disc would be a lie.
-    let _queue = exclusive_queue().await;
     let harness = harness().await;
     drain_queue(&harness.pool).await;
     let world = seed(&harness.pool).await;
@@ -945,7 +951,6 @@ async fn preflight_rejecting_a_disc_moves_the_job_back_to_waiting() {
 async fn a_job_that_has_started_writing_never_goes_back() {
     // The safety-critical direction. Events arriving late or out of order
     // must not make a burn look as though it had not begun.
-    let _queue = exclusive_queue().await;
     let harness = harness().await;
     drain_queue(&harness.pool).await;
     let world = seed(&harness.pool).await;
@@ -966,7 +971,6 @@ async fn a_job_that_has_started_writing_never_goes_back() {
 async fn a_stage_this_server_does_not_know_leaves_the_job_where_it_was() {
     // A worker from a later release must not be able to move a job somewhere
     // this build cannot reason about.
-    let _queue = exclusive_queue().await;
     let harness = harness().await;
     drain_queue(&harness.pool).await;
     let world = seed(&harness.pool).await;
@@ -988,7 +992,6 @@ async fn a_stage_this_server_does_not_know_leaves_the_job_where_it_was() {
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
 async fn events_are_read_back_in_sequence_and_page_forwards() {
-    let _queue = exclusive_queue().await;
     let harness = harness().await;
     drain_queue(&harness.pool).await;
     let world = seed(&harness.pool).await;
@@ -1032,7 +1035,6 @@ async fn events_for_an_unknown_attempt_are_not_an_empty_timeline() {
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
 async fn a_completed_attempt_carries_its_reports_and_its_disc() {
-    let _queue = exclusive_queue().await;
     let harness = harness().await;
     drain_queue(&harness.pool).await;
     let world = seed(&harness.pool).await;
@@ -1088,7 +1090,6 @@ async fn a_completed_attempt_carries_its_reports_and_its_disc() {
 async fn events_arriving_after_completion_do_not_reopen_the_job() {
     // The server already holds the outcome. A late batch is history, not a
     // reason to think the burn is running again.
-    let _queue = exclusive_queue().await;
     let harness = harness().await;
     drain_queue(&harness.pool).await;
     let world = seed(&harness.pool).await;

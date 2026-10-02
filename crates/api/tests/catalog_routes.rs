@@ -19,7 +19,10 @@ use tangible_api::{ApiState, router};
 use tangible_db::{Database, DbConfig};
 use tower::ServiceExt as _;
 
+mod support;
+
 struct Harness {
+    session: support::Session,
     router: axum::Router,
     pool: PgPool,
 }
@@ -33,14 +36,17 @@ async fn harness() -> Harness {
         .expect("connect");
     database.migrate().await.expect("migrate");
     let pool = database.pool().clone();
+    let session = support::administrator(&pool).await;
     Harness {
+        session,
         router: router(ApiState::new(database)),
         pool,
     }
 }
 
 impl Harness {
-    async fn send(&self, request: Request<Body>) -> (StatusCode, serde_json::Value) {
+    async fn send(&self, mut request: Request<Body>) -> (StatusCode, serde_json::Value) {
+        self.session.apply(&mut request);
         let response = self
             .router
             .clone()

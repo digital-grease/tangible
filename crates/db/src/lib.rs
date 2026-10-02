@@ -7,6 +7,7 @@
 //! initial schema, with every constraint covered by an integration test that
 //! asserts it actually rejects. Typed repositories follow in epic E2.
 
+pub mod accounts;
 pub mod repositories;
 
 use std::time::Duration;
