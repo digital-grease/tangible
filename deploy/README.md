@@ -19,6 +19,11 @@ docker compose -f deploy/compose.yaml -f deploy/compose.dev.yaml up --build
 The fake burn engine is the default. Nothing in this combination can reach an
 optical drive.
 
+The image serves the web UI at the server's own address, beside the API. For
+live reloading while working on the UI, run `pnpm --dir web dev` instead and
+open the address it prints; it forwards API requests to the server on port
+8080.
+
 ## Production
 
 ```bash
@@ -31,13 +36,19 @@ Review the rendered configuration before starting: image references, volume
 mappings, ports, and the env file. Pin an image digest rather than a tag for a
 real deployment.
 
+The web UI and the API share one address, `TANGIBLE_PUBLIC_URL`: the server
+serves the UI's built files itself, so there is no separate web container and
+no Node runtime in the image. `TANGIBLE_WEB_ROOT` points at the build, and the
+image sets it; unset, the server answers the API alone.
+
 ## First sign-in
 
 Every route except the health probes and the way in needs a signed-in account.
 A fresh server has none, and logs a warning until one exists: whoever completes
 setup first becomes the administrator, so do it as soon as the server is up.
 
-From the web UI, the first visit lands on the setup page. From a shell, with
+Open `TANGIBLE_PUBLIC_URL` in a browser: on a fresh server the first visit
+lands on the setup page. From a shell instead, with
 the password typed into the terminal rather than put on the command line, where
 it would stay in shell history:
 

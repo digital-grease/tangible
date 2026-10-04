@@ -27,7 +27,8 @@ thiserror = "2.0.19"
 time = { version = "0.3.55", features = ["serde"] }
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "fs", "io-util"] }
 tokio-util = { version = "0.7.18", features = ["io"] }
-tower-http = { version = "0.7.0", features = ["trace", "cors", "limit"] }
+tower = { version = "0.5.3", features = ["util"] }
+tower-http = { version = "0.7.0", features = ["trace", "cors", "limit", "fs"] }
 tracing = "0.1.44"
 utoipa = { version = "5.5.0", features = ["axum_extras", "time", "uuid"] }
 utoipa-axum = "0.2.0"
@@ -41,4 +42,3 @@ async-trait = "0.1.91"
 reqwest = { version = "0.13.4", default-features = false, features = ["json"] }
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "uuid", "time"] }
 tempfile = "3.27.0"
-tower = { version = "0.5.3", features = ["util"] }

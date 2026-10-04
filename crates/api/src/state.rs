@@ -10,6 +10,7 @@ use tangible_storage::{ManifestStore, WatchRoots};
 
 use crate::auth::{AuthSettings, LoginLimiter};
 use crate::import::ImportPipeline;
+use crate::web::WebUi;
 
 /// State cloned into every request handler.
 ///
@@ -34,6 +35,8 @@ struct Inner {
     auth: AuthSettings,
     /// Failed sign-ins, shared by every clone of the state.
     login_limiter: LoginLimiter,
+    /// The built web UI, when this server serves one.
+    web: Option<WebUi>,
 }
 
 /// What the import routes need beyond the database.
@@ -61,6 +64,7 @@ impl ApiState {
                 imports: None,
                 auth: AuthSettings::default(),
                 login_limiter: LoginLimiter::default(),
+                web: None,
             }),
         }
     }
@@ -75,6 +79,7 @@ impl ApiState {
                 imports: None,
                 auth: AuthSettings::default(),
                 login_limiter: LoginLimiter::default(),
+                web: None,
             }),
         }
     }
@@ -97,6 +102,22 @@ impl ApiState {
         Self {
             inner: Arc::new(inner),
         }
+    }
+
+    /// Serve a built web UI for every path the API does not claim.
+    #[must_use]
+    pub fn with_web(self, web: WebUi) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.web = Some(web);
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// The web UI, when one is served.
+    #[must_use]
+    pub fn web(&self) -> Option<&WebUi> {
+        self.inner.web.as_ref()
     }
 
     /// How sessions behave.

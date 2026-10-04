@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 digitalgrease
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The image is built from source in the repository and nothing else. Local
+# build output, dependencies and data stay out of the build context: they
+# are large, and an image must not depend on what happens to be on the
+# machine that built it.
+.git
+target
+.dev-data
+docs
+web/node_modules
+web/build
+web/.svelte-kit
+**/*.log
+deploy/.env

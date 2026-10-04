@@ -5,6 +5,18 @@
 # same image runs both `serve` and `burn-worker`; only the worker container
 # ever receives a device, so the server cannot use them.
 
+# The web UI: a static build, served by the server from the same origin as
+# the API. Node exists only in this stage; the runtime image has none.
+FROM node:24-bookworm-slim AS web
+WORKDIR /web
+RUN npm install --global pnpm@11.26.0
+# Dependencies first, from the lockfile alone, so they are cached across
+# source changes. pnpm-workspace.yaml carries the install-script allowlist.
+COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY web ./
+RUN pnpm build
+
 FROM rust:1.95-bookworm AS build
 WORKDIR /src
 
@@ -55,6 +67,10 @@ RUN mkdir -p /var/lib/tangible/library /var/lib/tangible/staging /var/lib/tangib
 USER tangible
 
 COPY --from=build /src/target/release/tangible /usr/local/bin/tangible
+COPY --from=web /web/build /usr/share/tangible/web
+
+# Serve the UI built above. Unset it to run the API alone.
+ENV TANGIBLE_WEB_ROOT=/usr/share/tangible/web
 
 ENTRYPOINT ["tangible"]
 CMD ["serve"]

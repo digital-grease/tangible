@@ -788,23 +788,53 @@ impl LoginLimiter {
 /// strictest there is: nothing may be loaded, framed, or sniffed into
 /// something else. A component download a browser rendered as HTML would
 /// otherwise be script from an imported file running on this origin.
-pub async fn security_headers(request: Request, next: Next) -> Response {
+///
+/// The web UI's files get the policy the UI's build declares, which allows
+/// its own scripts by hash and nothing else, and caching suited to them:
+/// hashed assets forever, the page itself revalidated every time so a new
+/// release is picked up.
+pub async fn security_headers(
+    State(state): State<ApiState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let path = request.uri().path().to_owned();
     let mut response = next.run(request).await;
+    let ui = state.web().filter(|_| !crate::web::is_api_path(&path));
+
+    let (csp, cache) = match ui {
+        Some(web) => (
+            HeaderValue::from_str(web.csp()).ok(),
+            if crate::web::is_immutable_asset(&path) {
+                "public, max-age=31536000, immutable"
+            } else {
+                "no-cache"
+            },
+        ),
+        // Library data is per account; no shared cache should keep it.
+        None => (
+            Some(HeaderValue::from_static(
+                "default-src 'none'; frame-ancestors 'none'",
+            )),
+            "no-store",
+        ),
+    };
+
     let headers = response.headers_mut();
+    if let Some(csp) = csp
+        && !headers.contains_key(header::CONTENT_SECURITY_POLICY)
+    {
+        headers.insert(header::CONTENT_SECURITY_POLICY, csp);
+    }
     for (name, value) in [
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         (header::REFERRER_POLICY, "no-referrer"),
         (header::X_FRAME_OPTIONS, "DENY"),
         (
-            header::CONTENT_SECURITY_POLICY,
-            "default-src 'none'; frame-ancestors 'none'",
-        ),
-        (
             header::HeaderName::from_static("cross-origin-resource-policy"),
             "same-origin",
         ),
-        // Library data is per account; no shared cache should keep it.
-        (header::CACHE_CONTROL, "no-store"),
+        (header::CACHE_CONTROL, cache),
     ] {
         if !headers.contains_key(&name) {
             headers.insert(name, HeaderValue::from_static(value));

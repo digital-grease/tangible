@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use tangible_api::{
     ApiState, AuthSettings, ImportContext, ImportPipeline, ImportRunner, ImportRunnerSettings,
+    WebUi,
 };
 use tangible_db::{Database, DbConfig};
 use tangible_storage::{FilesystemStore, ManifestStore, StagingManager, WatchRoots};
@@ -139,6 +140,7 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
             max_upload_bytes: serve.max_upload_bytes,
         })
         .with_auth(auth);
+    let state = attach_web_ui(state, serve.web_root.as_deref()).await?;
 
     // The import runner is a background task rather than a separate process:
     // one binary, one deployment, and the work is already leased in the
@@ -181,6 +183,19 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
     let _ = runner.await;
 
     served
+}
+
+/// Serve the built web UI beside the API, when one is configured.
+async fn attach_web_ui(state: ApiState, root: Option<&std::path::Path>) -> Result<ApiState> {
+    let Some(root) = root else {
+        tracing::info!("no web UI configured (TANGIBLE_WEB_ROOT); serving the API alone");
+        return Ok(state);
+    };
+    let web = WebUi::open(root)
+        .await
+        .with_context(|| format!("opening the web UI at {}", root.display()))?;
+    tracing::info!(web_root = %root.display(), "serving the web UI");
+    Ok(state.with_web(web))
 }
 
 /// Say loudly that the server has no accounts yet.

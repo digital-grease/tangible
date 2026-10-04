@@ -122,6 +122,16 @@ pub struct ServeConfig {
     /// spare. Enforced on the bytes as they arrive rather than on a header.
     #[arg(long, env = "TANGIBLE_MAX_UPLOAD_BYTES", default_value_t = 64 * 1024 * 1024 * 1024)]
     pub max_upload_bytes: u64,
+
+    /// Directory holding the built web UI, served from the same origin as
+    /// the API.
+    ///
+    /// Unset by default, which serves the API alone: in development the UI
+    /// runs from its own dev server. The container image sets it. A path that
+    /// is set but holds no build stops the server rather than starting one
+    /// that silently has no UI.
+    #[arg(long, env = "TANGIBLE_WEB_ROOT")]
+    pub web_root: Option<PathBuf>,
 }
 
 /// Settings for a burn worker.

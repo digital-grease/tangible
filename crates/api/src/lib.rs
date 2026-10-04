@@ -17,6 +17,7 @@ pub mod pagination;
 pub mod problem;
 pub mod routes;
 pub mod state;
+pub mod web;
 pub mod worker_auth;
 
 use axum::Router;
@@ -28,6 +29,7 @@ pub use auth::{AuthSettings, CurrentUser, SignedIn};
 pub use import::{ImportCheckpoint, ImportError, ImportOutcome, ImportPipeline, ImportRequest};
 pub use import_runner::{ImportRunner, ImportRunnerSettings};
 pub use state::{ApiState, ImportContext};
+pub use web::{WebUi, WebUiError};
 pub use worker_auth::{
     AuthRejection, CredentialHash, EnrollmentRejection, EnrollmentToken, Secret, WorkerCredential,
     WorkerIdentity,
@@ -313,7 +315,12 @@ pub fn router(state: ApiState) -> Router {
             state.clone(),
             auth::authorize,
         ))
-        .layer(axum::middleware::from_fn(auth::security_headers))
+        // Everything else is the web UI, or a JSON 404 under /api.
+        .fallback(web::fallback)
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::security_headers,
+        ))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
