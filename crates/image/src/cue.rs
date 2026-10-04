@@ -1052,12 +1052,24 @@ impl ReferenceResolution {
 /// guessed.
 #[must_use]
 pub fn resolve_references(sheet: &CueSheet, staged: &[LogicalPath]) -> ReferenceResolution {
+    let names: Vec<String> = sheet.files.iter().map(|file| file.name.clone()).collect();
+    resolve_names(&names, staged)
+}
+
+/// Match declared file names against the files already staged.
+///
+/// [`resolve_references`] for a descriptor that is not a CUE sheet: the same
+/// ladder, the same trust boundary, one entry per name in the order given.
+/// Each name should appear once; a descriptor that names a file in several
+/// statements passes its distinct names.
+#[must_use]
+pub fn resolve_names(names: &[String], staged: &[LogicalPath]) -> ReferenceResolution {
     let mut warnings = Vec::new();
-    let mut files = Vec::with_capacity(sheet.files.len());
+    let mut files = Vec::with_capacity(names.len());
     let mut claimed: BTreeMap<String, String> = BTreeMap::new();
 
-    for file in &sheet.files {
-        let declared = file.name.clone();
+    for name in names {
+        let declared = name.clone();
         let mut push = |resolved, failure| {
             files.push(ResolvedReference {
                 declared: declared.clone(),
@@ -1066,7 +1078,7 @@ pub fn resolve_references(sheet: &CueSheet, staged: &[LogicalPath]) -> Reference
             });
         };
 
-        let Some(candidate) = normalise_reference(&file.name, &mut warnings) else {
+        let Some(candidate) = normalise_reference(name, &mut warnings) else {
             push(
                 None,
                 Some(ReferenceFailure::Unsafe {
@@ -1096,7 +1108,7 @@ pub fn resolve_references(sheet: &CueSheet, staged: &[LogicalPath]) -> Reference
             );
             continue;
         }
-        claimed.insert(matched.as_str().to_owned(), file.name.clone());
+        claimed.insert(matched.as_str().to_owned(), name.clone());
 
         if candidate.reduced || matched.as_str() != candidate.path {
             let wanted = last_segment(&candidate.path);
@@ -1105,12 +1117,12 @@ pub fn resolve_references(sheet: &CueSheet, staged: &[LogicalPath]) -> Reference
                 && matched.file_name().eq_ignore_ascii_case(wanted)
             {
                 warnings.push(CueWarning::CaseInsensitiveMatch {
-                    declared: file.name.clone(),
+                    declared: name.clone(),
                     matched: matched.as_str().to_owned(),
                 });
             } else {
                 warnings.push(CueWarning::MatchedByFileName {
-                    declared: file.name.clone(),
+                    declared: name.clone(),
                     matched: matched.as_str().to_owned(),
                 });
             }

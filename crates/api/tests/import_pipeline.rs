@@ -760,3 +760,226 @@ async fn an_iso_describes_its_own_structure() {
             .any(|found| found.filesystem_type == "iso9660")
     );
 }
+
+// --- cdrdao TOC and BIN ----------------------------------------------------------
+
+/// A TOC in the shape cdrdao writes when it reads a disc: an absolute path it
+/// had on another machine, one file for every track, a generated gap, and the
+/// all-zero ISRC a drive reports for a track without one.
+const READ_BACK_TOC: &[u8] = b"CD_ROM\n\
+CATALOG \"1234567890123\"\n\
+\n\
+// Track 1\n\
+TRACK MODE1\n\
+NO COPY\n\
+DATAFILE \"/work/readback/disc.bin\" 00:01:00 // length in bytes: 153600\n\
+\n\
+// Track 2\n\
+TRACK AUDIO\n\
+COPY\n\
+NO PRE_EMPHASIS\n\
+TWO_CHANNEL_AUDIO\n\
+ISRC \"000000000000\"\n\
+SILENCE 00:00:02\n\
+FILE \"/work/readback/disc.bin\" #153600 0 00:00:25\n\
+START 00:00:02\n";
+
+#[tokio::test]
+async fn a_toc_and_its_bin_import_as_one_artifact_that_knows_its_tracks() {
+    let (_dir, pipeline) = pipeline().await;
+    let import_id = ImportJobId::generate();
+    let area = pipeline.open_area(import_id).await.expect("area");
+    area.write(&path("disc.toc"), READ_BACK_TOC)
+        .await
+        .expect("stage");
+    area.write(
+        &path("disc.bin"),
+        &vec![0_u8; 75 * SECTOR + 25 * RAW_SECTOR],
+    )
+    .await
+    .expect("stage");
+
+    let mut checkpoint = ImportCheckpoint::default();
+    let outcome = pipeline
+        .run(&request(import_id, "disc.toc"), &mut checkpoint)
+        .await
+        .expect("import");
+    let manifest = pipeline
+        .manifests()
+        .read(outcome.artifact_id)
+        .await
+        .expect("read");
+
+    assert_eq!(manifest.classification.format, ArtifactFormat::TocBin);
+    assert_eq!(manifest.classification.media_family, Some(MediaFamily::Cd));
+    assert_eq!(manifest.classification.detectors[0].name, "toc-parser");
+    assert!(manifest.classification.format_confidence > 0.98);
+
+    let descriptor = manifest
+        .components
+        .iter()
+        .find(|component| component.logical_path.as_str() == "disc.toc")
+        .expect("the descriptor is a component");
+    let data = manifest
+        .components
+        .iter()
+        .find(|component| component.logical_path.as_str() == "disc.bin")
+        .expect("the data is a component");
+    assert_eq!(descriptor.role, ComponentRole::Descriptor);
+    assert_eq!(data.role, ComponentRole::TrackData);
+    assert_eq!(
+        manifest.components.len(),
+        2,
+        "one file, named twice, is one component"
+    );
+
+    let Topology::CdTracks {
+        descriptor_component_id,
+        catalog,
+        tracks,
+        ..
+    } = manifest.topology
+    else {
+        panic!("expected a track topology, got {:?}", manifest.topology);
+    };
+    assert_eq!(descriptor_component_id, descriptor.id);
+    assert_eq!(catalog.as_deref(), Some("1234567890123"));
+    assert_eq!(tracks.len(), 2);
+
+    assert_eq!(tracks[0].mode, "MODE1/2048");
+    assert_eq!(tracks[0].sector_count, 75);
+    assert_eq!(tracks[0].start_lba, 0);
+    assert_eq!(tracks[0].flags, Vec::<TrackFlag>::new());
+
+    assert_eq!(tracks[1].mode, "AUDIO");
+    assert_eq!(tracks[1].component_id, data.id);
+    assert_eq!(tracks[1].file_offset_bytes, 75 * SECTOR as u64);
+    assert_eq!(tracks[1].start_lba, 77, "the generated gap is on the disc");
+    assert_eq!(tracks[1].sector_count, 25);
+    assert_eq!(tracks[1].pregap_sectors, 2);
+    assert_eq!(
+        tracks[1].isrc, None,
+        "an all-zero ISRC is the absence of one"
+    );
+    assert_eq!(tracks[1].flags, vec![TrackFlag::DigitalCopyPermitted]);
+    assert_eq!(
+        tracks[1].sample_byte_order,
+        Some(SampleByteOrder::BigEndian),
+        "no SWAP: cdrdao's own files hold big-endian samples"
+    );
+
+    // The path cdrdao recorded was on another machine. It was matched by
+    // name, and the manifest says so.
+    assert!(
+        checkpoint
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("/work/readback/disc.bin")),
+        "{:?}",
+        checkpoint.warnings
+    );
+}
+
+#[tokio::test]
+async fn a_toc_the_layout_cannot_record_still_imports_and_says_why() {
+    let (_dir, pipeline) = pipeline().await;
+    let import_id = ImportJobId::generate();
+    let area = pipeline.open_area(import_id).await.expect("area");
+    area.write(
+        &path("disc.toc"),
+        b"CD_DA\nTRACK AUDIO\nFILE \"a.bin\" 0 0:1:0\nFILE \"b.bin\" 0 0:1:0\n",
+    )
+    .await
+    .expect("stage");
+    area.write(&path("a.bin"), &vec![0_u8; 75 * RAW_SECTOR])
+        .await
+        .expect("stage");
+    area.write(&path("b.bin"), &vec![0_u8; 75 * RAW_SECTOR])
+        .await
+        .expect("stage");
+
+    let mut checkpoint = ImportCheckpoint::default();
+    let outcome = pipeline
+        .run(&request(import_id, "disc.toc"), &mut checkpoint)
+        .await
+        .expect("import");
+    let manifest = pipeline
+        .manifests()
+        .read(outcome.artifact_id)
+        .await
+        .expect("read");
+
+    assert_eq!(manifest.classification.format, ArtifactFormat::TocBin);
+    assert_eq!(manifest.components.len(), 3, "every byte kept");
+    assert!(
+        !matches!(manifest.topology, Topology::CdTracks { .. }),
+        "no layout claimed"
+    );
+    assert!(
+        checkpoint
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("more than one file")),
+        "{:?}",
+        checkpoint.warnings
+    );
+}
+
+#[tokio::test]
+async fn a_cue_and_a_toc_staged_together_claim_no_layout() {
+    let (_dir, pipeline) = pipeline().await;
+    let import_id = ImportJobId::generate();
+    let area = pipeline.open_area(import_id).await.expect("area");
+    area.write(&path("disc.cue"), MIXED_MODE_SHEET)
+        .await
+        .expect("stage");
+    area.write(&path("disc.toc"), READ_BACK_TOC)
+        .await
+        .expect("stage");
+    area.write(&path("disc.bin"), &vec![0_u8; RAW_SECTOR * 100])
+        .await
+        .expect("stage");
+
+    let mut checkpoint = ImportCheckpoint::default();
+    let outcome = pipeline
+        .run(&request(import_id, "disc.cue"), &mut checkpoint)
+        .await
+        .expect("import");
+    let manifest = pipeline
+        .manifests()
+        .read(outcome.artifact_id)
+        .await
+        .expect("read");
+    assert!(!matches!(manifest.topology, Topology::CdTracks { .. }));
+    assert!(
+        checkpoint
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("2 descriptors"))
+    );
+}
+
+#[tokio::test]
+async fn a_file_named_toc_that_is_not_one_imports_unclaimed() {
+    let (_dir, pipeline) = pipeline().await;
+    let import_id = ImportJobId::generate();
+    let area = pipeline.open_area(import_id).await.expect("area");
+    area.write(&path("notes.toc"), b"Table of contents:\n1. Intro\n")
+        .await
+        .expect("stage");
+    area.write(&path("disc.iso"), &iso_image("X", 20))
+        .await
+        .expect("stage");
+
+    let mut checkpoint = ImportCheckpoint::default();
+    let outcome = pipeline
+        .run(&request(import_id, "disc.iso"), &mut checkpoint)
+        .await
+        .expect("import");
+    let manifest = pipeline
+        .manifests()
+        .read(outcome.artifact_id)
+        .await
+        .expect("read");
+    assert_eq!(manifest.classification.format, ArtifactFormat::Iso);
+}

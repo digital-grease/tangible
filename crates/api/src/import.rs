@@ -42,7 +42,7 @@ use tangible_domain::{
     ArtifactId, ComponentId, ImportJobId, ImportState, ImportTransitionError, LogicalPath,
     Sha256Digest,
 };
-use tangible_image::{cue, iso};
+use tangible_image::{cue, iso, toc};
 use tangible_storage::{
     FilesystemStore, IngestLimits, ManifestStore, ManifestStoreError, StagingArea, StagingError,
     StagingKind, StagingManager, StorageError,
@@ -318,11 +318,18 @@ impl ImportPipeline {
     ) -> Result<Detection, ImportError> {
         let descriptors: Vec<&LogicalPath> = staged
             .iter()
-            .filter(|path| path.extension().as_deref() == Some("cue"))
+            .filter(|path| matches!(path.extension().as_deref(), Some("cue" | "toc")))
             .collect();
 
         match descriptors.as_slice() {
             [] => self.inspect_iso(area, staged, request).await,
+            [only] if only.extension().as_deref() == Some("toc") => {
+                match self.inspect_toc(area, staged, only, checkpoint).await? {
+                    Some(detection) => Ok(detection),
+                    // Named `.toc` and not one: imported, not claimed.
+                    None => self.inspect_iso(area, staged, request).await,
+                }
+            }
             [only] => match self.inspect_cue(area, staged, only, checkpoint).await? {
                 Some(detection) => Ok(detection),
                 // A file named `.cue` that is not one. The bytes are still
@@ -423,6 +430,86 @@ impl ImportPipeline {
                 // sure as detection gets; it is still not validation.
                 detection.confidence = 0.99;
                 detection.layout = Some(layout);
+                detection.track_files = paths;
+            }
+            Err(error) => detection
+                .warnings
+                .push(format!("the tracks could not be laid out: {error}")),
+        }
+
+        Ok(Some(detection))
+    }
+
+    /// Read a cdrdao table of contents and lay out the tracks it describes.
+    ///
+    /// The same shape as [`Self::inspect_cue`], and through the same
+    /// resolver: the files a TOC names are matched against what was staged,
+    /// and nothing it says is ever opened. A TOC names a file per statement,
+    /// often one file from every track, so each distinct name is resolved
+    /// once.
+    async fn inspect_toc(
+        &self,
+        area: &StagingArea,
+        staged: &[LogicalPath],
+        descriptor: &LogicalPath,
+        checkpoint: &ImportCheckpoint,
+    ) -> Result<Option<Detection>, ImportError> {
+        let resolved = area.resolve(descriptor).await?;
+        let bytes = read_prefix(&resolved, toc::MAX_TOC_BYTES + 1)
+            .await
+            .map_err(|source| ImportError::ReadStaged {
+                path: descriptor.to_string(),
+                source,
+            })?;
+        let Ok(document) = toc::parse(&bytes) else {
+            return Ok(None);
+        };
+
+        let mut detection = Detection::plain(ArtifactFormat::TocBin, document.confidence);
+        detection.descriptor = Some(descriptor.clone());
+        detection.evidence.clone_from(&document.evidence);
+        detection.warnings = document.warnings.iter().map(ToString::to_string).collect();
+
+        let resolution = cue::resolve_names(&document.files, staged);
+        detection
+            .warnings
+            .extend(resolution.warnings.iter().map(ToString::to_string));
+        for file in &resolution.files {
+            if let Some(failure) = &file.failure {
+                detection
+                    .warnings
+                    .push(format!("{} could not be used: {failure}", file.declared));
+            }
+        }
+        let Some(paths) = resolution.paths() else {
+            return Ok(Some(detection));
+        };
+        detection
+            .evidence
+            .push(format!("{} referenced file(s) resolved", paths.len()));
+
+        let sizes: Vec<u64> = paths
+            .iter()
+            .map(|path| {
+                checkpoint
+                    .promoted
+                    .get(path.as_str())
+                    .map_or(0, |promoted| promoted.length_bytes)
+            })
+            .collect();
+
+        match toc::layout(&document, &sizes) {
+            Ok(laid) => {
+                detection
+                    .warnings
+                    .extend(laid.warnings.iter().map(ToString::to_string));
+                detection.evidence.push(format!(
+                    "{} track(s) over {} sectors",
+                    laid.layout.tracks.len(),
+                    laid.layout.total_sectors()
+                ));
+                detection.confidence = 0.99;
+                detection.layout = Some(laid.layout);
                 detection.track_files = paths;
             }
             Err(error) => detection
@@ -663,6 +750,13 @@ impl ImportPipeline {
                 // A CUE sheet describes a CD; there is no other medium it is
                 // used for. An ISO could be any of three, which is why the
                 // other arm claims nothing.
+                Some(MediaFamily::Cd),
+            ),
+            // So does a cdrdao table of contents.
+            ArtifactFormat::TocBin => (
+                "toc-parser",
+                "toc-structural",
+                "TOC_STRUCTURAL_WARNING",
                 Some(MediaFamily::Cd),
             ),
             _ => ("iso9660", "iso-structural", "ISO_STRUCTURAL_WARNING", None),
