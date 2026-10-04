@@ -2,7 +2,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { describe, expect, it } from 'vitest';
-import { issueEnrollment } from './workers';
+import {
+  anyOpen,
+  cancelErasure,
+  erasureStateLabel,
+  issueEnrollment,
+  requestErasure,
+  type ErasureView,
+} from './workers';
 
 describe('issuing an enrollment token', () => {
   it('asks for the lifetime given and returns the token', async () => {
@@ -50,5 +57,69 @@ describe('issuing an enrollment token', () => {
       }) as Response) as typeof fetch;
     const result = await issueEnrollment(15, fetcher);
     expect(result).toMatchObject({ kind: 'error', problem: { code: 'FORBIDDEN' } });
+  });
+});
+
+describe('erasing a disc', () => {
+  const recorder = (status: number, body: unknown) => {
+    const seen: { path: string; method: string; body: unknown }[] = [];
+    const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
+      seen.push({
+        path: String(input),
+        method: init?.method ?? 'GET',
+        body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
+      });
+      return {
+        ok: status >= 200 && status < 300,
+        status,
+        headers: new Headers(),
+        json: async () => body,
+      } as Response;
+    }) as typeof fetch;
+    return { seen, fetcher };
+  };
+
+  it('sends the confirmation exactly as the person gave it', async () => {
+    const { seen, fetcher } = recorder(422, {
+      type: 'about:blank',
+      title: 'Request is not valid',
+      status: 422,
+      code: 'VALIDATION_FAILED',
+      detail: 'set confirm_data_loss',
+    });
+    const result = await requestErasure('drive/1', 'quick', false, fetcher);
+    expect(seen[0]).toEqual({
+      path: '/api/v1/drives/drive%2F1/erasures',
+      method: 'POST',
+      body: { mode: 'quick', confirm_data_loss: false },
+    });
+    expect(result.kind).toBe('error');
+  });
+
+  it('withdraws by identifier', async () => {
+    const { seen, fetcher } = recorder(200, { id: 'e1', state: 'canceled' });
+    await cancelErasure('e1', fetcher);
+    expect(seen[0]).toMatchObject({ path: '/api/v1/erasures/e1/cancel', method: 'POST' });
+  });
+
+  it('describes every state in words', () => {
+    for (const state of [
+      'queued',
+      'erasing',
+      'erased',
+      'already_blank',
+      'refused',
+      'failed',
+      'canceled',
+    ]) {
+      expect(erasureStateLabel(state)).not.toBe(state);
+    }
+  });
+
+  it('keeps checking only while something is still going', () => {
+    const erasure = (is_open: boolean) => ({ is_open }) as ErasureView;
+    expect(anyOpen([erasure(false), erasure(true)])).toBe(true);
+    expect(anyOpen([erasure(false)])).toBe(false);
+    expect(anyOpen([])).toBe(false);
   });
 });

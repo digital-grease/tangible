@@ -25,6 +25,12 @@ pub enum Permission {
     Catalog,
     /// Queue, cancel, retry and account for burns, and record checks on discs.
     Burn,
+    /// Erase a rewritable disc in a drive, destroying what is on it.
+    ///
+    /// Its own permission rather than part of [`Self::Burn`]: a burn consumes
+    /// a blank disc, while an erase destroys a disc that may hold somebody's
+    /// only copy of something.
+    Erase,
     /// Issue worker enrollment tokens and manage workers.
     ManageWorkers,
     /// Create, list and change accounts.
@@ -40,6 +46,7 @@ impl Permission {
             Self::Import => "import",
             Self::Catalog => "catalog",
             Self::Burn => "burn",
+            Self::Erase => "erase",
             Self::ManageWorkers => "manage_workers",
             Self::ManageUsers => "manage_users",
         }
@@ -51,7 +58,7 @@ impl Permission {
         match self {
             Self::Read => Role::Viewer,
             Self::Import | Self::Catalog | Self::Burn => Role::Operator,
-            Self::ManageWorkers | Self::ManageUsers => Role::Administrator,
+            Self::Erase | Self::ManageWorkers | Self::ManageUsers => Role::Administrator,
         }
     }
 }

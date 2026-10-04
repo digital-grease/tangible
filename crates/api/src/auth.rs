@@ -148,7 +148,7 @@ pub enum Access {
 }
 
 use Access::{Public, Signed, SignedOrLeaseholder, Worker};
-use Permission::{Burn, Catalog, Import, ManageUsers, ManageWorkers, Read};
+use Permission::{Burn, Catalog, Erase, Import, ManageUsers, ManageWorkers, Read};
 
 /// Every operation the server answers, and what it requires.
 ///
@@ -293,6 +293,19 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
         "/api/v1/burn-attempts/{attempt_id}/complete",
         Worker,
     ),
+    // Drives, and erasing the disc in one. Erasing destroys data, so it has
+    // its own permission; the worker side is the drive's own worker.
+    ("GET", "/api/v1/drives", Signed(Read)),
+    ("POST", "/api/v1/drives/{drive_id}/erasures", Signed(Erase)),
+    ("GET", "/api/v1/erasures", Signed(Read)),
+    ("GET", "/api/v1/erasures/{erasure_id}", Signed(Read)),
+    (
+        "POST",
+        "/api/v1/erasures/{erasure_id}/cancel",
+        Signed(Erase),
+    ),
+    ("POST", "/api/v1/workers/{worker_id}/erasure-claims", Worker),
+    ("POST", "/api/v1/erasures/{erasure_id}/complete", Worker),
 ];
 
 /// What a request needs, if the table names its route at all.

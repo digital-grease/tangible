@@ -383,3 +383,83 @@ fn xorriso_will_not_pretend_to_write_a_table_of_contents() {
     assert!(engine.supports_mode(WriteMode::DataTrackAtOnce));
     assert!(!engine.supports_mode(WriteMode::TocDiscAtOnce));
 }
+
+/// A minimal ISO 9660 image of `blocks` blocks, enough for xorriso to see a
+/// written session on the target afterwards.
+fn iso_image(blocks: u32) -> Vec<u8> {
+    const SECTOR: usize = 2048;
+    let mut bytes = vec![0_u8; 16 * SECTOR];
+    let mut pvd = vec![0_u8; SECTOR];
+    pvd[0] = 1;
+    pvd[1..6].copy_from_slice(b"CD001");
+    pvd[6] = 1;
+    pvd[40..72].fill(b' ');
+    pvd[40..44].copy_from_slice(b"TEST");
+    pvd[80..84].copy_from_slice(&blocks.to_le_bytes());
+    pvd[84..88].copy_from_slice(&blocks.to_be_bytes());
+    pvd[128..130].copy_from_slice(&2048_u16.to_le_bytes());
+    pvd[130..132].copy_from_slice(&2048_u16.to_be_bytes());
+    bytes.extend_from_slice(&pvd);
+    let mut terminator = vec![0_u8; SECTOR];
+    terminator[0] = 255;
+    terminator[1..6].copy_from_slice(b"CD001");
+    terminator[6] = 1;
+    bytes.extend_from_slice(&terminator);
+    bytes.resize(blocks as usize * SECTOR, 0);
+    bytes
+}
+
+#[tokio::test]
+async fn a_written_target_is_refused_until_it_is_erased_and_then_reads_blank() {
+    // The whole erase path against the real tool: a burn leaves a session,
+    // preflight refuses a second burn over it, an explicit erase empties it,
+    // and xorriso then reports it blank. xorriso treats a file target as
+    // overwritable media, where `-blank fast` invalidates the image on it,
+    // the same thing it does to a DVD+RW or a formatted DVD-RW.
+    let Some(binary) = binary() else { return };
+    let dir = match std::env::var("TANGIBLE_XORRISO_WORKDIR") {
+        Ok(root) => TempDir::new_in(root).expect("temp dir"),
+        Err(_) => TempDir::new().expect("temp dir"),
+    };
+    let bytes = iso_image(512);
+    let staged = dir.path().join("source.iso");
+    std::fs::write(&staged, &bytes).expect("stage");
+    let target = dir.path().join("medium.img");
+    let engine = XorrisoEngine::at(&binary);
+    let plan = plan(&staged, &target, &bytes);
+
+    engine
+        .write(&plan, &CollectingSink::new())
+        .await
+        .expect("the write ran");
+    let written = engine.inspect_medium(&plan.drive).await.expect("inspect");
+    assert!(!written.blank, "{written:?}");
+
+    let refused = engine.preflight(&plan).await.expect("preflight ran");
+    assert!(
+        refused.failures.iter().any(|failure| matches!(
+            failure,
+            tangible_burn::PreflightFailure::MediumNotBlank { .. }
+        )),
+        "a burn over a written disc must be refused: {:?}",
+        refused.failures
+    );
+
+    let sink = CollectingSink::new();
+    let report = engine
+        .blank(
+            &tangible_burn::BlankRequest {
+                drive: plan.drive.clone(),
+                full: false,
+                confirmed_destructive: true,
+            },
+            &sink,
+        )
+        .await
+        .expect("the erase ran");
+    assert!(report.erased, "{report:?}");
+    assert!(sink.events().iter().any(|e| e.code == "BLANK_COMPLETED"));
+
+    let erased = engine.inspect_medium(&plan.drive).await.expect("inspect");
+    assert!(erased.blank, "{erased:?}");
+}

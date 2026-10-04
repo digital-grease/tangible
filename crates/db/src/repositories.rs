@@ -87,6 +87,8 @@ pub enum ClaimOutcome {
     /// Distinct from `NoWork` because it means something different to a
     /// worker: there is work, but this drive is busy with it.
     DriveBusy,
+    /// The drive is not this worker's, or does not exist.
+    NotYourDrive,
 }
 
 /// Why an enrollment could not be completed.
@@ -137,9 +139,19 @@ pub async fn claim_next_burn_job(
 ) -> Result<Result<ClaimedJob, ClaimOutcome>, DbError> {
     let mut tx = pool.begin().await.map_err(DbError::Query)?;
 
+    // The drive's row is locked first, as taking an erasure locks it, so a
+    // burn and an erase cannot start on one drive at once. Locking it also
+    // checks it is this worker's: a worker may write only with its own drive.
+    if !crate::erasures::lock_own_drive(&mut tx, worker_id, drive_id).await? {
+        tx.rollback().await.map_err(DbError::Query)?;
+        return Ok(Err(ClaimOutcome::NotYourDrive));
+    }
+
     // Refuse before touching the queue if this drive is already working. Doing
     // it first means a busy drive does not lock a job row it cannot use.
-    if drive_has_active_attempt(&mut tx, drive_id).await? {
+    if drive_has_active_attempt(&mut tx, drive_id).await?
+        || crate::erasures::drive_is_erasing(&mut tx, drive_id).await?
+    {
         tx.rollback().await.map_err(DbError::Query)?;
         return Ok(Err(ClaimOutcome::DriveBusy));
     }
@@ -242,7 +254,7 @@ pub async fn claim_next_burn_job(
 }
 
 /// Whether a drive already has an attempt occupying it.
-async fn drive_has_active_attempt(
+pub(crate) async fn drive_has_active_attempt(
     tx: &mut Transaction<'_, Postgres>,
     drive_id: DriveId,
 ) -> Result<bool, DbError> {

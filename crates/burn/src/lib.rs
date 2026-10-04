@@ -17,6 +17,7 @@ pub mod client;
 pub mod combined;
 pub mod device_lock;
 pub mod engine;
+pub mod erasing;
 pub mod fake;
 pub mod plan;
 pub mod runner;

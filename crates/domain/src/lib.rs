@@ -18,6 +18,7 @@ pub mod burn;
 pub mod cd;
 pub mod digest;
 pub mod enums;
+pub mod erasure;
 pub mod id;
 pub mod import;
 pub mod logical_path;
@@ -27,13 +28,14 @@ pub use burn::{BurnAttemptState, BurnJobState, BurnTransitionError};
 pub use digest::{DigestParseError, Sha256Digest};
 pub use enums::{
     ArtifactFormat, ArtifactKind, ArtifactOrigin, CompatibilityClaim, ComponentRole,
-    DiscRelationship, DriveStatus, EjectPolicy, EnumParseError, HashAlgorithm, IntegrationKind,
-    LossCharacter, MediaFamily, PhysicalCopyStatus, QuarantineState, Role, SetKind, TitleKind,
-    ValidationState, VerificationStep, WorkerStatus,
+    DiscRelationship, DriveStatus, EjectPolicy, EnumParseError, ErasureMode, ErasureState,
+    HashAlgorithm, IntegrationKind, LossCharacter, MediaFamily, PhysicalCopyStatus,
+    QuarantineState, Role, SetKind, TitleKind, ValidationState, VerificationStep, WorkerStatus,
 };
 pub use id::{
     ArtifactId, BurnAttemptId, BurnJobId, ComponentId, DiscId, DiscSetId, DriveId, EditionId,
-    EventId, IdParseError, ImportJobId, IntegrationId, PhysicalCopyId, TitleId, WorkerId,
+    ErasureId, EventId, IdParseError, ImportJobId, IntegrationId, PhysicalCopyId, TitleId,
+    WorkerId,
 };
 pub use import::{ImportState, ImportTransitionError};
 pub use logical_path::{LogicalPath, LogicalPathError};

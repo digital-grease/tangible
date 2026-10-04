@@ -833,3 +833,71 @@ async fn an_engine_that_cannot_write_a_toc_refuses_before_asking_for_media() {
 
     server.stop().await;
 }
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_worker_erases_the_disc_it_is_asked_to_and_only_that() {
+    // The whole erase path over HTTP: an administrator asks for the disc in
+    // one drive to be erased, the drive's own worker takes it before any burn
+    // work, looks at what is in the drive, erases it, and says so.
+    let _queue = exclusive_queue().await;
+    let mut server = server().await;
+    server.drain_queue().await;
+
+    let worker_dir = TempDir::new().expect("temp dir");
+    let token = server.enrollment_token().await;
+    let settings = settings(&server, worker_dir.path().to_path_buf(), token);
+    let engine = || {
+        FakeEngine::new(settings.state_dir.join("media")).with_behaviour(FakeBehaviour {
+            medium_profile: Some("DVD-RW sequential recording".to_owned()),
+            medium_sessions: 1,
+            ..FakeBehaviour::default()
+        })
+    };
+
+    let drive = {
+        let mut runtime = WorkerRuntime::new(settings.clone(), engine()).expect("runtime");
+        let mut identity = runtime.identify().await.expect("enroll");
+        runtime.announce(&mut identity).await.expect("announce")
+    };
+
+    let (status, requested) = server
+        .post(
+            &format!("/api/v1/drives/{drive}/erasures"),
+            serde_json::json!({ "mode": "quick", "confirm_data_loss": true }),
+        )
+        .await;
+    assert_eq!(status, 201, "{requested}");
+    let erasure = requested["id"].as_str().expect("an erasure").to_owned();
+
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let engine = engine();
+    let worker = tokio::spawn(async move {
+        let mut runtime = WorkerRuntime::new(settings, engine).expect("runtime");
+        runtime
+            .run(async {
+                let _ = stopped.await;
+            })
+            .await
+    });
+
+    let mut record = serde_json::Value::Null;
+    for _ in 0..200 {
+        record = server.get(&format!("/api/v1/erasures/{erasure}")).await;
+        if record["is_open"] == false {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let _ = stop.send(());
+    let _ = worker.await.expect("the worker task");
+
+    assert_eq!(record["state"], "erased", "{record}");
+    assert_eq!(
+        record["medium_before"]["profile"],
+        "DVD-RW sequential recording"
+    );
+    assert_eq!(record["medium_before"]["sessions"], 1);
+
+    server.stop().await;
+}

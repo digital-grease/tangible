@@ -14,6 +14,9 @@
 //! - `TANGIBLE_HARDWARE_WRITE=1`, as well, runs the ones that burn. Each burns
 //!   one disc and a CD-R cannot be burned twice, so they refuse to write unless
 //!   preflight finds a blank disc, and they are best run one at a time by name.
+//! - `TANGIBLE_HARDWARE_ERASE=1`, as well as both, runs the one that erases.
+//!   It destroys whatever is on the rewritable disc in the drive, which is why
+//!   it has a gate of its own.
 //!
 //! `TANGIBLE_HARDWARE_DEVICE` names the drive (default `/dev/sr0`).
 //! `TANGIBLE_XORRISO_BIN` and `TANGIBLE_CDRDAO_BIN` point at the tools when
@@ -74,6 +77,16 @@ fn device_for_writing() -> Option<String> {
     let device = device()?;
     if std::env::var("TANGIBLE_HARDWARE_WRITE").unwrap_or_default() != "1" {
         eprintln!("skipping: set TANGIBLE_HARDWARE_WRITE=1 as well to burn a disc");
+        return None;
+    }
+    Some(device)
+}
+
+/// The drive, if erasing was asked for as well as writing.
+fn device_for_erasing() -> Option<String> {
+    let device = device_for_writing()?;
+    if std::env::var("TANGIBLE_HARDWARE_ERASE").unwrap_or_default() != "1" {
+        eprintln!("skipping: set TANGIBLE_HARDWARE_ERASE=1 as well to erase a rewritable disc");
         return None;
     }
     Some(device)
@@ -329,4 +342,73 @@ async fn a_mixed_mode_disc_is_burned_and_its_data_track_reads_back() {
         .await
         .expect("the read-back ran");
     assert!(verified.matched, "the data track does not hold the image");
+}
+
+// --- erasing: destroys what is on the rewritable disc in the drive ------------
+
+/// Burn `plan`, read it back, and insist both worked.
+async fn burn_and_read_back(engine: &impl BurnEngine, plan: &BurnPlan) {
+    preflight_or_refuse(engine, plan).await;
+    let report = engine.write(plan, &Print).await.expect("the write ran");
+    println!("write: {report:#?}");
+    assert!(report.engine_reported_success, "{:?}", report.diagnostics);
+    let verified = engine
+        .verify(plan, &Print)
+        .await
+        .expect("the read-back ran");
+    println!("verify: {verified:#?}");
+    assert!(verified.matched, "the disc does not hold the image");
+}
+
+#[tokio::test]
+async fn a_rewritable_disc_is_refused_when_used_erased_on_request_and_burned_again() {
+    // The whole reason erasing exists, on a real drive: a used rewritable
+    // disc is refused by a burn, an explicit erase empties it through the
+    // same code a worker runs for an erasure, and it then takes a burn that
+    // reads back identical.
+    let Some(device) = device_for_erasing() else {
+        return;
+    };
+    let dir = TempDir::new().expect("temp dir");
+    let engine = engine(dir.path()).await;
+    let target = drive(&device);
+
+    let before = engine.inspect_medium(&target).await.expect("a disc");
+    println!("in the drive: {before:#?}");
+    assert!(
+        before.erasable,
+        "this test needs a rewritable disc, not {}",
+        before.profile
+    );
+
+    // A fresh disc is given something to erase first.
+    if before.blank {
+        println!("blank: burning one image first so there is something to erase");
+        burn_and_read_back(
+            &engine,
+            &image_plan(&device, input(iso(dir.path(), 4).await)),
+        )
+        .await;
+    }
+
+    let second = image_plan(&device, input(iso(dir.path(), 6).await));
+    let refused = engine.preflight(&second).await.expect("preflight ran");
+    println!("preflight over the used disc: {:?}", refused.failures);
+    assert!(
+        refused.failures.iter().any(|failure| matches!(
+            failure,
+            tangible_burn::PreflightFailure::MediumNotBlank { .. }
+        )),
+        "a burn over a used disc must be refused, never quietly erased"
+    );
+
+    let erased = tangible_burn::erasing::erase_disc(&engine, &target, false, &Print).await;
+    println!("erase: {erased:#?}");
+    assert_eq!(erased.outcome, "erased", "{erased:?}");
+
+    let after = engine.inspect_medium(&target).await.expect("a disc");
+    println!("after erasing: {after:#?}");
+    assert!(after.blank, "the drive does not report the disc blank");
+
+    burn_and_read_back(&engine, &second).await;
 }

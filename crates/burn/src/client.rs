@@ -233,6 +233,43 @@ pub struct FailureBody {
     pub detail: Option<String>,
 }
 
+/// An erasure this worker has taken.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ErasureClaim {
+    /// The erasure.
+    pub erasure_id: String,
+    /// `quick` or `full`.
+    pub mode: String,
+}
+
+/// What was in the drive when an erasure was decided.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ErasureMediumBody {
+    /// The media profile.
+    pub profile: String,
+    /// Whether it was blank.
+    pub blank: bool,
+    /// Whether it can be erased.
+    pub rewritable: bool,
+    /// Sessions on it.
+    pub sessions: u32,
+}
+
+/// How an erasure ended.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ErasureCompletion {
+    /// `erased`, `already_blank`, `refused` or `failed`.
+    pub outcome: String,
+    /// What was in the drive.
+    pub medium: Option<ErasureMediumBody>,
+    /// Why it did not erase.
+    pub error_code: Option<String>,
+    /// More about that.
+    pub error_detail: Option<String>,
+    /// How long it took, in seconds.
+    pub duration_seconds: Option<u64>,
+}
+
 /// Everything a worker reports when an attempt ends.
 #[derive(Debug, Clone, Serialize)]
 pub struct Completion {
@@ -536,6 +573,68 @@ impl WorkerClient {
             .await
             .map(Some)
             .map_err(ClientError::Transport)
+    }
+
+    /// Take an erasure queued for this worker's drive.
+    ///
+    /// `None` means there is nothing to erase, the common answer.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Refused`] if the drive is not this worker's, or
+    /// [`ClientError::Transport`] on a network failure.
+    pub async fn claim_erasure(
+        &self,
+        worker_id: &str,
+        drive_id: &str,
+    ) -> Result<Option<ErasureClaim>, ClientError> {
+        let response = self
+            .authorised(
+                self.http
+                    .post(self.url(&format!("/api/v1/workers/{worker_id}/erasure-claims"))),
+            )
+            .json(&serde_json::json!({ "drive_id": drive_id }))
+            .send()
+            .await
+            .map_err(ClientError::Transport)?;
+
+        if response.status() == reqwest::StatusCode::NO_CONTENT {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(Self::refusal(response).await);
+        }
+        response
+            .json()
+            .await
+            .map(Some)
+            .map_err(ClientError::Transport)
+    }
+
+    /// Report how an erasure ended. Safe to repeat.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Refused`] if the server will not record it, or
+    /// [`ClientError::Transport`] on a network failure.
+    pub async fn complete_erasure(
+        &self,
+        erasure_id: &str,
+        completion: &ErasureCompletion,
+    ) -> Result<(), ClientError> {
+        let response = self
+            .authorised(
+                self.http
+                    .post(self.url(&format!("/api/v1/erasures/{erasure_id}/complete"))),
+            )
+            .json(completion)
+            .send()
+            .await
+            .map_err(ClientError::Transport)?;
+        if !response.status().is_success() {
+            return Err(Self::refusal(response).await);
+        }
+        Ok(())
     }
 
     /// Extend a lease.

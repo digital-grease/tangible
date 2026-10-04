@@ -230,6 +230,43 @@ impl XorrisoEngine {
         Ok(run)
     }
 
+    /// Run the tool for an operation that must not be interrupted, and
+    /// collect what it said.
+    ///
+    /// No timeout and no kill on drop, as for a write. An erase stopped
+    /// partway leaves the disc needing another erase, and how long one takes
+    /// is the drive's business: on the first DVD-RW a "fast" erase took 29
+    /// minutes, because that drive does a whole-disc erase either way. A
+    /// timeout set from the expected duration would have killed it with a
+    /// minute to go.
+    async fn run_to_the_end(&self, arguments: &[String]) -> Result<Run, EngineError> {
+        let mut child = Command::new(&self.program)
+            .args(arguments)
+            .current_dir(std::env::temp_dir())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|source| EngineError::Io {
+                operation: "starting xorriso",
+                source,
+            })?;
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        let (stdout, stderr) = tokio::join!(read_all(stdout), read_all(stderr));
+        let status = child.wait().await.map_err(|source| EngineError::Io {
+            operation: "waiting for xorriso",
+            source,
+        })?;
+        let mut text = String::new();
+        push_bounded(&mut text, &stdout);
+        push_bounded(&mut text, &stderr);
+        Ok(Run {
+            text,
+            exit_code: status.code(),
+        })
+    }
+
     fn check_cancelled(&self) -> Result<(), EngineError> {
         if self.cancel.is_cancelled() {
             return Err(EngineError::Cancelled);
@@ -444,7 +481,11 @@ impl BurnEngine for XorrisoEngine {
                 profile: medium.profile.clone(),
             });
         }
-        if medium.sessions > 0 && !medium.erasable {
+        // Anything already on the disc is a refusal, rewritable or not.
+        // Writing over a used rewritable disc means erasing it first, which
+        // destroys what is on it; that is an operation of its own, asked for
+        // by name, never a side effect of a burn.
+        if !medium.blank {
             failures.push(PreflightFailure::MediumNotBlank {
                 sessions: medium.sessions,
             });
@@ -661,18 +702,55 @@ impl BurnEngine for XorrisoEngine {
     async fn blank(
         &self,
         request: &BlankRequest,
-        _sink: &dyn EventSink,
+        sink: &dyn EventSink,
     ) -> Result<BlankReport, EngineError> {
-        // Refused rather than implemented for now, and refused loudly. Erasing
-        // is destructive, and an engine that quietly did nothing would be
-        // worse than one that says it cannot.
+        // Erasing destroys whatever is in the drive, so the request must say,
+        // in a field of its own, that this is intended. The worker sets it
+        // only for an erasure an operator asked for by name.
         if !request.confirmed_destructive {
-            return Err(EngineError::Unsupported {
-                what: "blanking requires explicit confirmation".to_owned(),
-            });
+            return Err(EngineError::DestructiveNotConfirmed);
         }
-        Err(EngineError::Unsupported {
-            what: "blanking is not implemented for xorriso yet".to_owned(),
+        self.check_cancelled()?;
+
+        let started = std::time::Instant::now();
+        sink.emit(BurnEvent::new(
+            "blanking",
+            "BLANK_STARTED",
+            if request.full {
+                "erasing the whole disc"
+            } else {
+                "erasing the disc quickly"
+            },
+        ));
+        let run = self
+            .run_to_the_end(&command::blank(&request.drive, request.full))
+            .await?;
+        let outcome = parse::blank_outcome(&run.text);
+
+        let mut diagnostics = outcome.problems.clone();
+        if let Some(code) = run.exit_code
+            && code != 0
+        {
+            diagnostics.push(format!("xorriso exited with status {code}"));
+        }
+        let erased = outcome.succeeded() && run.exit_code == Some(0);
+        sink.emit(BurnEvent::new(
+            "blanking",
+            if erased {
+                "BLANK_COMPLETED"
+            } else {
+                "BLANK_FAILED"
+            },
+            if erased {
+                "the disc was erased"
+            } else {
+                "the disc was not erased"
+            },
+        ));
+        Ok(BlankReport {
+            erased,
+            duration_seconds: started.elapsed().as_secs(),
+            diagnostics,
         })
     }
 

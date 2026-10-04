@@ -1338,6 +1338,111 @@
         ]
       }
     },
+    "/api/v1/drives": {
+      "get": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Every drive.",
+        "description": "# Errors\n\n`STORAGE_UNAVAILABLE` if drives cannot be read.",
+        "operationId": "list_all_drives",
+        "responses": {
+          "200": {
+            "description": "Every drive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveList"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/drives/{drive_id}/erasures": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Ask for the disc in a drive to be erased.",
+        "description": "Erase the rewritable disc in a drive, destroying everything on it. The request must set confirm_data_loss. The drive's worker takes it before any burn work, erases only a rewritable disc that holds data, and reports what it found.",
+        "operationId": "request_drive_erasure",
+        "parameters": [
+          {
+            "name": "drive_id",
+            "in": "path",
+            "description": "Drive identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestErasure"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErasureView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such drive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The drive already has an erasure open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not confirmed, or an unknown mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/editions/{edition_id}/disc-sets": {
       "get": {
         "tags": [
@@ -1441,6 +1546,229 @@
         "security": [
           {
             "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/erasures": {
+      "get": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Recent erasures.",
+        "description": "# Errors\n\n`INVALID_PARAMETER` for a limit out of range.",
+        "operationId": "list_recent_erasures",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many, at most 200. Defaults to 50.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErasureList"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/erasures/{erasure_id}": {
+      "get": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "One erasure.",
+        "description": "# Errors\n\n`NOT_FOUND` for an unknown erasure.",
+        "operationId": "get_one_erasure",
+        "parameters": [
+          {
+            "name": "erasure_id",
+            "in": "path",
+            "description": "Erasure identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The erasure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErasureView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such erasure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/erasures/{erasure_id}/cancel": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Withdraw an erasure the worker has not taken yet.",
+        "description": "Withdraw a queued erasure. Refused once the drive has started: stopping an erase partway leaves the disc needing another one.",
+        "operationId": "cancel_one_erasure",
+        "parameters": [
+          {
+            "name": "erasure_id",
+            "in": "path",
+            "description": "Erasure identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Withdrawn",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErasureView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such erasure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already started or finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/erasures/{erasure_id}/complete": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Report how an erasure ended.",
+        "description": "Report how an erasure ended. Repeating the same report is accepted.",
+        "operationId": "complete_drive_erasure",
+        "parameters": [
+          {
+            "name": "erasure_id",
+            "in": "path",
+            "description": "Erasure identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErasureCompletion"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErasureView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not this worker's erasure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not in progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "An outcome or field that will not do",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "worker_credential": []
           }
         ]
       }
@@ -3021,6 +3349,67 @@
         ]
       }
     },
+    "/api/v1/workers/{worker_id}/erasure-claims": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Ask for an erasure queued for this worker's drive.",
+        "description": "Take the next erasure queued for this worker's drive. Answers 204 when there is none, or while a burn attempt holds the drive.",
+        "operationId": "claim_drive_erasure",
+        "parameters": [
+          {
+            "name": "worker_id",
+            "in": "path",
+            "description": "Worker identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErasureClaimRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErasureClaim"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "Nothing to erase"
+          },
+          "404": {
+            "description": "Not this worker, or not its drive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "worker_credential": []
+          }
+        ]
+      }
+    },
     "/api/v1/workers/{worker_id}/heartbeat": {
       "post": {
         "tags": [
@@ -4435,6 +4824,22 @@
           }
         }
       },
+      "DriveList": {
+        "type": "object",
+        "description": "Every drive.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DriveView"
+            },
+            "description": "By worker, then by drive."
+          }
+        }
+      },
       "DriveReportBody": {
         "type": "object",
         "description": "What a worker says about one drive.",
@@ -4486,6 +4891,77 @@
               "null"
             ],
             "description": "Reported vendor."
+          }
+        }
+      },
+      "DriveView": {
+        "type": "object",
+        "description": "A drive, and the worker it belongs to.",
+        "required": [
+          "id",
+          "name",
+          "device",
+          "status",
+          "worker_id",
+          "worker_name",
+          "worker_status"
+        ],
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Its device path inside the worker's container."
+          },
+          "id": {
+            "type": "string",
+            "description": "Opaque identifier."
+          },
+          "last_seen_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was last reported."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Reported model."
+          },
+          "name": {
+            "type": "string",
+            "description": "What the worker calls it."
+          },
+          "status": {
+            "type": "string",
+            "description": "Last reported status."
+          },
+          "vendor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Reported vendor."
+          },
+          "worker_id": {
+            "type": "string",
+            "description": "The worker."
+          },
+          "worker_last_seen_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the worker last reported in."
+          },
+          "worker_name": {
+            "type": "string",
+            "description": "The worker's name."
+          },
+          "worker_status": {
+            "type": "string",
+            "description": "The worker's status."
           }
         }
       },
@@ -4618,6 +5094,233 @@
           "worker_id": {
             "type": "string",
             "description": "Its identity."
+          }
+        }
+      },
+      "ErasureClaim": {
+        "type": "object",
+        "description": "An erasure a worker has taken.",
+        "required": [
+          "erasure_id",
+          "mode"
+        ],
+        "properties": {
+          "erasure_id": {
+            "type": "string",
+            "description": "The erasure."
+          },
+          "mode": {
+            "type": "string",
+            "description": "`quick` or `full`."
+          }
+        }
+      },
+      "ErasureClaimRequest": {
+        "type": "object",
+        "description": "What a worker sends to ask for an erasure.",
+        "required": [
+          "drive_id"
+        ],
+        "properties": {
+          "drive_id": {
+            "type": "string",
+            "description": "The worker's drive."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ErasureCompletion": {
+        "type": "object",
+        "description": "How an erasure ended, as the worker reports it.",
+        "required": [
+          "outcome"
+        ],
+        "properties": {
+          "duration_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How long it took, in seconds.",
+            "minimum": 0
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A stable code saying why it did not erase."
+          },
+          "error_detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "More about that."
+          },
+          "medium": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ErasureMedium",
+                "description": "What was in the drive, when there was a disc to look at."
+              }
+            ]
+          },
+          "outcome": {
+            "type": "string",
+            "description": "`erased`, `already_blank`, `refused` or `failed`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ErasureList": {
+        "type": "object",
+        "description": "Recent erasures.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ErasureView"
+            },
+            "description": "Newest first."
+          }
+        }
+      },
+      "ErasureMedium": {
+        "type": "object",
+        "description": "What was in the drive.",
+        "required": [
+          "profile",
+          "blank",
+          "rewritable",
+          "sessions"
+        ],
+        "properties": {
+          "blank": {
+            "type": "boolean",
+            "description": "Whether it was blank."
+          },
+          "profile": {
+            "type": "string",
+            "description": "The media profile the drive reported, such as `DVD-RW`."
+          },
+          "rewritable": {
+            "type": "boolean",
+            "description": "Whether it can be erased."
+          },
+          "sessions": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Sessions on it.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "ErasureView": {
+        "type": "object",
+        "description": "A request to erase the disc in a drive, and how it went.",
+        "required": [
+          "id",
+          "drive_id",
+          "drive_name",
+          "mode",
+          "state",
+          "is_open",
+          "touched_the_disc",
+          "requested_by",
+          "created_at"
+        ],
+        "properties": {
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it ended."
+          },
+          "created_at": {
+            "type": "string",
+            "description": "When it was asked for."
+          },
+          "drive_id": {
+            "type": "string",
+            "description": "The drive."
+          },
+          "drive_name": {
+            "type": "string",
+            "description": "What the drive is called."
+          },
+          "duration_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How long the erase took, in seconds."
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it did not erase, when it did not."
+          },
+          "error_detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "More about that."
+          },
+          "id": {
+            "type": "string",
+            "description": "Opaque identifier."
+          },
+          "is_open": {
+            "type": "boolean",
+            "description": "Whether it is still going."
+          },
+          "medium_before": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ErasureMedium",
+                "description": "What the worker found in the drive before deciding."
+              }
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "description": "`quick` or `full`."
+          },
+          "requested_by": {
+            "type": "string",
+            "description": "Who asked."
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the worker took it."
+          },
+          "state": {
+            "type": "string",
+            "description": "`queued`, `erasing`, `erased`, `already_blank`, `refused`, `failed`\nor `canceled`."
+          },
+          "touched_the_disc": {
+            "type": "boolean",
+            "description": "Whether the disc may have been changed: true once an erase has run,\nwhatever it achieved."
           }
         }
       },
@@ -5354,6 +6057,25 @@
             "description": "The new expiry."
           }
         }
+      },
+      "RequestErasure": {
+        "type": "object",
+        "description": "What an operator sends to erase the disc in a drive.",
+        "required": [
+          "mode",
+          "confirm_data_loss"
+        ],
+        "properties": {
+          "confirm_data_loss": {
+            "type": "boolean",
+            "description": "Must be `true`. Erasing destroys everything on the disc in the drive,\nand the request has to say that this is intended."
+          },
+          "mode": {
+            "type": "string",
+            "description": "`quick`, which does only what makes the disc writable again, or\n`full`, which writes over the whole disc. Quick is fast on a CD-RW;\nsome drives erase a whole DVD-RW either way, which takes half an hour\nor more. Full can take an hour."
+          }
+        },
+        "additionalProperties": false
       },
       "SessionView": {
         "type": "object",

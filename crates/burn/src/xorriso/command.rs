@@ -21,8 +21,9 @@
 //!   into a half-written disc;
 //! - no `-force`, no overburn, no speed override unless the plan names a
 //!   speed from its own closed set;
-//! - `blank=as_needed` only, which erases a rewritable medium that already
-//!   holds data and does nothing to a blank one;
+//! - no `blank=` of any kind. Writing never erases: a rewritable disc that
+//!   holds data is refused at preflight, and erasing it is a separate
+//!   operation an operator asks for by name (see [`blank`]);
 //! - `-multi` only when the plan asks for the disc to be left open, and never
 //!   `-eject`. Ejecting is the runner's decision, made from the job's policy
 //!   after the disc has been read back; a tray opened by the write is a tray
@@ -75,6 +76,30 @@ pub fn inspect(drive: &DriveRef) -> Vec<String> {
     ]
 }
 
+/// Arguments that erase a rewritable medium.
+///
+/// `fast` makes a CD-RW or an unformatted DVD-RW reusable, and invalidates the
+/// image on overwritable media such as DVD+RW and BD-RE; `all` does the same
+/// more thoroughly, writing over the whole disc, and takes far longer. Never
+/// `force:`, which tells xorriso to skip its own judgement of whether the
+/// medium can be erased, and never the deformat modes, which change what kind
+/// of disc a DVD-RW is rather than emptying it.
+///
+/// `-abort_on FAILURE` so a refusal stops the run; whether it succeeded is
+/// decided from the severities xorriso prints, see
+/// [`super::parse::blank_outcome`].
+#[must_use]
+pub fn blank(drive: &DriveRef, full: bool) -> Vec<String> {
+    vec![
+        "-abort_on".to_owned(),
+        "FAILURE".to_owned(),
+        "-outdev".to_owned(),
+        device_argument(&drive.device_alias),
+        "-blank".to_owned(),
+        if full { "all" } else { "fast" }.to_owned(),
+    ]
+}
+
 /// Arguments that write one prepared image to a medium.
 ///
 /// The cdrecord personality, because the input is a finished image and the job
@@ -100,10 +125,6 @@ pub fn write(plan: &BurnPlan) -> Option<Vec<String>> {
         // the operator watching it has nothing to watch.
         "-v".to_owned(),
         format!("dev={}", device_argument(&plan.drive.device_alias)),
-        // Erases a rewritable medium that already holds data, and does
-        // nothing to a blank one. Never an unconditional blank: that would
-        // destroy a disc somebody put in the drive by mistake.
-        "blank=as_needed".to_owned(),
     ];
 
     if let Some(speed) = &plan.speed {
@@ -222,7 +243,47 @@ mod tests {
         let arguments = write(&plan(vec![input("/var/lib/staging/disc.iso")])).expect("arguments");
         assert!(arguments.contains(&"dev=/dev/disc-block".to_owned()));
         assert!(arguments.contains(&"/var/lib/staging/disc.iso".to_owned()));
-        assert!(arguments.contains(&"blank=as_needed".to_owned()));
+    }
+
+    #[test]
+    fn an_erase_names_the_device_and_one_of_two_modes() {
+        let drive = DriveRef {
+            worker_id: tangible_domain::WorkerId::generate(),
+            drive_id: tangible_domain::DriveId::generate(),
+            device_alias: "/dev/sr0".to_owned(),
+        };
+        assert_eq!(
+            blank(&drive, false),
+            [
+                "-abort_on",
+                "FAILURE",
+                "-outdev",
+                "/dev/sr0",
+                "-blank",
+                "fast"
+            ]
+        );
+        assert_eq!(blank(&drive, true).last().map(String::as_str), Some("all"));
+        for full in [false, true] {
+            let arguments = blank(&drive, full);
+            assert!(
+                !arguments
+                    .iter()
+                    .any(|a| a.contains("force") || a.contains("deformat")),
+                "{arguments:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_write_never_erases() {
+        // This once carried blank=as_needed, which let a burn job aimed at a
+        // used rewritable disc erase it with nobody having asked for that.
+        let arguments = write(&plan(vec![input("/var/lib/staging/disc.iso")])).expect("arguments");
+        assert!(
+            !arguments.iter().any(|argument| argument.contains("blank")),
+            "{arguments:?}"
+        );
     }
 
     #[test]

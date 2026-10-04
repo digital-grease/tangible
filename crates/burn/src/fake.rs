@@ -155,21 +155,24 @@ impl FakeEngine {
             .behaviour
             .medium_blocks
             .unwrap_or(DEFAULT_MEDIUM_BLOCKS);
+        let profile = self
+            .behaviour
+            .medium_profile
+            .clone()
+            .unwrap_or_else(|| "CD-R".to_owned());
+        // The same rule the real engines use: a profile naming RW or RE.
+        let rewritable = profile.contains("RW") || profile.contains("RE");
         MediumInfo {
-            profile: self
-                .behaviour
-                .medium_profile
-                .clone()
-                .unwrap_or_else(|| "CD-R".to_owned()),
             blank: self.behaviour.medium_sessions == 0,
             writable: !self.behaviour.medium_read_only,
-            rewritable: false,
+            rewritable,
             capacity_blocks: blocks,
             free_blocks: blocks,
             block_size: 2048,
             manufacturer_id: Some("SIMULATED".to_owned()),
             sessions: self.behaviour.medium_sessions,
-            erasable: false,
+            erasable: rewritable,
+            profile,
             status_warnings: vec![],
         }
     }

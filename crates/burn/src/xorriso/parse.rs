@@ -269,6 +269,41 @@ pub struct WriteOutcome {
     pub last_progress: Option<(u64, u64)>,
 }
 
+/// What an erase run said.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BlankOutcome {
+    /// Every line at SORRY or worse.
+    ///
+    /// xorriso's own rule for blanking: it "was successful if no SORRY event
+    /// or worse occurred", and the progress percentages some drives report
+    /// while blanking are not to be believed either way.
+    pub problems: Vec<String>,
+}
+
+impl BlankOutcome {
+    /// Whether the erase succeeded by xorriso's rule.
+    #[must_use]
+    pub fn succeeded(&self) -> bool {
+        self.problems.is_empty()
+    }
+}
+
+/// Severities at which an erase has not succeeded.
+const BLANK_PROBLEM_SEVERITIES: &[&str] = &["SORRY", "FAILURE", "FATAL", "ABORT"];
+
+/// Read the output of an erase.
+#[must_use]
+pub fn blank_outcome(output: &str) -> BlankOutcome {
+    BlankOutcome {
+        problems: output
+            .lines()
+            .filter_map(problem)
+            .filter(|(severity, _)| BLANK_PROBLEM_SEVERITIES.contains(&severity.as_str()))
+            .map(|(severity, message)| format!("{severity}: {message}"))
+            .collect(),
+    }
+}
+
 /// Severities xorriso uses for things that stop a job.
 const FATAL_SEVERITIES: &[&str] = &["FAILURE", "FATAL", "ABORT"];
 
@@ -820,5 +855,25 @@ xorriso 1.5.6 : RockRidge filesystem manipulator, libburnia project.
         let outcome = write_outcome("xorriso : SORRY : Something the tool tolerated\n");
         assert!(outcome.failures.is_empty(), "SORRY is tolerated");
         assert_eq!(outcome.events.len(), 1, "and still recorded");
+    }
+
+    #[test]
+    fn an_erase_succeeds_only_without_a_sorry_or_worse() {
+        let clean = blank_outcome(
+            "xorriso : NOTE : Blanking ...\n\
+             xorriso : UPDATE : Blanking ( 45.2% done )\n\
+             xorriso : NOTE : Blanking done\n",
+        );
+        assert!(clean.succeeded(), "{clean:?}");
+
+        for line in [
+            "xorriso : SORRY : -blank: Medium is not erasable\n",
+            "libburn : FAILURE : Blanking failed\n",
+            "xorriso : FATAL : drive vanished\n",
+        ] {
+            let outcome = blank_outcome(line);
+            assert!(!outcome.succeeded(), "{line}");
+            assert_eq!(outcome.problems.len(), 1);
+        }
     }
 }

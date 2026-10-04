@@ -29,12 +29,13 @@ use tangible_domain::{ArtifactId, BurnAttemptId, BurnJobId, DriveId, Sha256Diges
 use time::OffsetDateTime;
 
 use crate::client::{
-    Capabilities, ClientError, Completion, DriveDescription, EngineDescription, FailureBody,
-    Leased, PhysicalMediumBody, VerificationReportBody, WorkerClient, WorkerIdentity,
+    Capabilities, ClientError, Completion, DriveDescription, EngineDescription, ErasureClaim,
+    FailureBody, Leased, PhysicalMediumBody, VerificationReportBody, WorkerClient, WorkerIdentity,
     WriteReportBody, identity_path, rfc3339,
 };
 use crate::device_lock::{DeviceLock, DeviceLockError};
-use crate::engine::{BurnEngine, BurnEvent, EngineError, EventSink};
+use crate::engine::{BurnEngine, BurnEvent, EngineError, EventSink, NullSink};
+use crate::erasing::erase_disc;
 use crate::plan::{
     BurnPlan, DriveRef, MediumInfo, PlannedInput, PreflightFailure, VerifyReport, WriteMode,
     WriteReport,
@@ -498,6 +499,18 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             return Ok(false);
         }
 
+        // An erasure first. Somebody asked for the disc in this drive to be
+        // emptied, most likely so a burn can use it; taking a burn first would
+        // only have it wait for a blank disc that the erasure would provide.
+        if let Some(erasure) = self
+            .client
+            .claim_erasure(&identity.worker_id, &drive_id.to_string())
+            .await?
+        {
+            self.erase(identity, drive_id, &erasure).await?;
+            return Ok(true);
+        }
+
         let leased = self
             .client
             .claim(
@@ -519,6 +532,71 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         );
         self.execute(identity, drive_id, lease).await?;
         Ok(true)
+    }
+}
+
+impl<E: BurnEngine> WorkerRuntime<E> {
+    /// Carry out an erasure an operator asked for, and report how it ended.
+    async fn erase(
+        &self,
+        identity: &WorkerIdentity,
+        drive_id: DriveId,
+        erasure: &ErasureClaim,
+    ) -> Result<(), RunnerError> {
+        let full = erasure.mode == "full";
+        tracing::warn!(
+            erasure_id = %erasure.erasure_id,
+            mode = %erasure.mode,
+            "erasing the disc in the drive, as requested"
+        );
+
+        // A full erase can take most of an hour, and a worker that went quiet
+        // for that long would look gone. Heartbeats carry on beside it.
+        let stop = Arc::new(AtomicBool::new(false));
+        let beating = tokio::spawn(heartbeat_loop(
+            self.client.clone(),
+            identity.worker_id.clone(),
+            Arc::clone(&stop),
+            self.settings.report_interval,
+        ));
+        let completion = erase_disc(
+            &self.engine,
+            &self.drive_ref(identity, drive_id),
+            full,
+            &NullSink,
+        )
+        .await;
+        stop.store(true, Ordering::SeqCst);
+        let _ = beating.await;
+
+        tracing::warn!(
+            erasure_id = %erasure.erasure_id,
+            outcome = %completion.outcome,
+            error_code = ?completion.error_code,
+            "erasure finished"
+        );
+        self.client
+            .complete_erasure(&erasure.erasure_id, &completion)
+            .await?;
+        Ok(())
+    }
+}
+
+/// Report in every `interval` until told to stop.
+async fn heartbeat_loop(
+    client: WorkerClient,
+    worker_id: String,
+    stop: Arc<AtomicBool>,
+    interval: Duration,
+) {
+    while !stop.load(Ordering::SeqCst) {
+        tokio::time::sleep(interval).await;
+        if stop.load(Ordering::SeqCst) {
+            break;
+        }
+        if let Err(error) = client.heartbeat(&worker_id).await {
+            tracing::warn!(error = ?error, "heartbeat failed while erasing");
+        }
     }
 }
 

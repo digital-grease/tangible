@@ -129,6 +129,10 @@ uuid_id!(
     PhysicalCopyId
 );
 uuid_id!(
+    /// Identifies a request to erase the rewritable disc in one drive.
+    ErasureId
+);
+uuid_id!(
     /// Identifies a configured outbound integration.
     IntegrationId
 );

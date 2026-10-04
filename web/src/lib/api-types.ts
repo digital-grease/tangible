@@ -396,6 +396,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/drives": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every drive.
+         * @description # Errors
+         *
+         *     `STORAGE_UNAVAILABLE` if drives cannot be read.
+         */
+        get: operations["list_all_drives"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/drives/{drive_id}/erasures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask for the disc in a drive to be erased.
+         * @description Erase the rewritable disc in a drive, destroying everything on it. The request must set confirm_data_loss. The drive's worker takes it before any burn work, erases only a rewritable disc that holds data, and reports what it found.
+         */
+        post: operations["request_drive_erasure"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/editions/{edition_id}/disc-sets": {
         parameters: {
             query?: never;
@@ -414,6 +456,90 @@ export interface paths {
          * @description Record what an edition shipped as.
          */
         post: operations["create_edition_set"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/erasures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Recent erasures.
+         * @description # Errors
+         *
+         *     `INVALID_PARAMETER` for a limit out of range.
+         */
+        get: operations["list_recent_erasures"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/erasures/{erasure_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One erasure.
+         * @description # Errors
+         *
+         *     `NOT_FOUND` for an unknown erasure.
+         */
+        get: operations["get_one_erasure"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/erasures/{erasure_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Withdraw an erasure the worker has not taken yet.
+         * @description Withdraw a queued erasure. Refused once the drive has started: stopping an erase partway leaves the disc needing another one.
+         */
+        post: operations["cancel_one_erasure"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/erasures/{erasure_id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Report how an erasure ended.
+         * @description Report how an erasure ended. Repeating the same report is accepted.
+         */
+        post: operations["complete_drive_erasure"];
         delete?: never;
         options?: never;
         head?: never;
@@ -852,6 +978,26 @@ export interface paths {
          * @description Ask for a burn job. Answers 204 when there is nothing to do.
          */
         post: operations["claim_work"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workers/{worker_id}/erasure-claims": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask for an erasure queued for this worker's drive.
+         * @description Take the next erasure queued for this worker's drive. Answers 204 when there is none, or while a burn attempt holds the drive.
+         */
+        post: operations["claim_drive_erasure"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1502,6 +1648,11 @@ export interface components {
             /** @description The volume label read from an image of it. */
             volume_label?: string | null;
         };
+        /** @description Every drive. */
+        DriveList: {
+            /** @description By worker, then by drive. */
+            items: components["schemas"]["DriveView"][];
+        };
         /** @description What a worker says about one drive. */
         DriveReportBody: {
             /** @description What the drive says it can do. */
@@ -1532,6 +1683,31 @@ export interface components {
             status: string;
             /** @description Reported vendor. */
             vendor?: string | null;
+        };
+        /** @description A drive, and the worker it belongs to. */
+        DriveView: {
+            /** @description Its device path inside the worker's container. */
+            device: string;
+            /** @description Opaque identifier. */
+            id: string;
+            /** @description When it was last reported. */
+            last_seen_at?: string | null;
+            /** @description Reported model. */
+            model?: string | null;
+            /** @description What the worker calls it. */
+            name: string;
+            /** @description Last reported status. */
+            status: string;
+            /** @description Reported vendor. */
+            vendor?: string | null;
+            /** @description The worker. */
+            worker_id: string;
+            /** @description When the worker last reported in. */
+            worker_last_seen_at?: string | null;
+            /** @description The worker's name. */
+            worker_name: string;
+            /** @description The worker's status. */
+            worker_status: string;
         };
         /** @description A particular release of a title. */
         EditionView: {
@@ -1589,6 +1765,93 @@ export interface components {
             protocol_version: string;
             /** @description Its identity. */
             worker_id: string;
+        };
+        /** @description An erasure a worker has taken. */
+        ErasureClaim: {
+            /** @description The erasure. */
+            erasure_id: string;
+            /** @description `quick` or `full`. */
+            mode: string;
+        };
+        /** @description What a worker sends to ask for an erasure. */
+        ErasureClaimRequest: {
+            /** @description The worker's drive. */
+            drive_id: string;
+        };
+        /** @description How an erasure ended, as the worker reports it. */
+        ErasureCompletion: {
+            /**
+             * Format: int32
+             * @description How long it took, in seconds.
+             */
+            duration_seconds?: number | null;
+            /** @description A stable code saying why it did not erase. */
+            error_code?: string | null;
+            /** @description More about that. */
+            error_detail?: string | null;
+            medium?: null | components["schemas"]["ErasureMedium"];
+            /** @description `erased`, `already_blank`, `refused` or `failed`. */
+            outcome: string;
+        };
+        /** @description Recent erasures. */
+        ErasureList: {
+            /** @description Newest first. */
+            items: components["schemas"]["ErasureView"][];
+        };
+        /** @description What was in the drive. */
+        ErasureMedium: {
+            /** @description Whether it was blank. */
+            blank: boolean;
+            /** @description The media profile the drive reported, such as `DVD-RW`. */
+            profile: string;
+            /** @description Whether it can be erased. */
+            rewritable: boolean;
+            /**
+             * Format: int32
+             * @description Sessions on it.
+             */
+            sessions: number;
+        };
+        /** @description A request to erase the disc in a drive, and how it went. */
+        ErasureView: {
+            /** @description When it ended. */
+            completed_at?: string | null;
+            /** @description When it was asked for. */
+            created_at: string;
+            /** @description The drive. */
+            drive_id: string;
+            /** @description What the drive is called. */
+            drive_name: string;
+            /**
+             * Format: int32
+             * @description How long the erase took, in seconds.
+             */
+            duration_seconds?: number | null;
+            /** @description Why it did not erase, when it did not. */
+            error_code?: string | null;
+            /** @description More about that. */
+            error_detail?: string | null;
+            /** @description Opaque identifier. */
+            id: string;
+            /** @description Whether it is still going. */
+            is_open: boolean;
+            medium_before?: null | components["schemas"]["ErasureMedium"];
+            /** @description `quick` or `full`. */
+            mode: string;
+            /** @description Who asked. */
+            requested_by: string;
+            /** @description When the worker took it. */
+            started_at?: string | null;
+            /**
+             * @description `queued`, `erasing`, `erased`, `already_blank`, `refused`, `failed`
+             *     or `canceled`.
+             */
+            state: string;
+            /**
+             * @description Whether the disc may have been changed: true once an erase has run,
+             *     whatever it achieved.
+             */
+            touched_the_disc: boolean;
         };
         /** @description What the server has persisted. */
         EventAck: {
@@ -1911,6 +2174,21 @@ export interface components {
         RenewResponse: {
             /** @description The new expiry. */
             lease_expires_at: string;
+        };
+        /** @description What an operator sends to erase the disc in a drive. */
+        RequestErasure: {
+            /**
+             * @description Must be `true`. Erasing destroys everything on the disc in the drive,
+             *     and the request has to say that this is intended.
+             */
+            confirm_data_loss: boolean;
+            /**
+             * @description `quick`, which does only what makes the disc writable again, or
+             *     `full`, which writes over the whole disc. Quick is fast on a CD-RW;
+             *     some drives erase a whole DVD-RW either way, which takes half an hour
+             *     or more. Full can take an hour.
+             */
+            mode: string;
         };
         /** @description The signed-in session. */
         SessionView: {
@@ -2911,6 +3189,80 @@ export interface operations {
             };
         };
     };
+    list_all_drives: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every drive */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriveList"];
+                };
+            };
+        };
+    };
+    request_drive_erasure: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Drive identifier */
+                drive_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestErasure"];
+            };
+        };
+        responses: {
+            /** @description Queued */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErasureView"];
+                };
+            };
+            /** @description No such drive */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The drive already has an erasure open */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not confirmed, or an unknown mode */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     list_edition_sets: {
         parameters: {
             query?: never;
@@ -2969,6 +3321,156 @@ export interface operations {
                 };
             };
             /** @description No such edition, or an unusable name */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_recent_erasures: {
+        parameters: {
+            query?: {
+                /** @description How many, at most 200. Defaults to 50. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErasureList"];
+                };
+            };
+        };
+    };
+    get_one_erasure: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Erasure identifier */
+                erasure_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The erasure */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErasureView"];
+                };
+            };
+            /** @description No such erasure */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    cancel_one_erasure: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Erasure identifier */
+                erasure_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Withdrawn */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErasureView"];
+                };
+            };
+            /** @description No such erasure */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Already started or finished */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    complete_drive_erasure: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Erasure identifier */
+                erasure_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ErasureCompletion"];
+            };
+        };
+        responses: {
+            /** @description Recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErasureView"];
+                };
+            };
+            /** @description Not this worker's erasure */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not in progress */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description An outcome or field that will not do */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -4048,6 +4550,49 @@ export interface operations {
             };
             /** @description The drive is already busy */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    claim_drive_erasure: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Worker identifier */
+                worker_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ErasureClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description Taken */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErasureClaim"];
+                };
+            };
+            /** @description Nothing to erase */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not this worker, or not its drive */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -397,6 +397,45 @@ string_enum! {
     default = Viewer
 }
 
+// --- erasing ----------------------------------------------------------------
+
+string_enum! {
+    /// How thoroughly to erase a rewritable disc.
+    ErasureMode {
+        /// Enough to make the disc writable again. Quick on a CD-RW, but some
+        /// drives erase a whole DVD-RW either way: the first one measured
+        /// took 29 minutes.
+        Quick => "quick",
+        /// Writes over the whole disc. Up to an hour on a DVD-RW.
+        Full => "full",
+    }
+    default = Quick
+}
+
+string_enum! {
+    /// Where a request to erase a disc has got to. Transitions are in
+    /// [`crate::erasure`].
+    ErasureState {
+        /// Asked for, waiting for the drive's worker.
+        Queued => "queued",
+        /// The worker has it and the drive is erasing.
+        Erasing => "erasing",
+        /// The disc was erased. Terminal.
+        Erased => "erased",
+        /// The disc was already blank, so nothing was done. Terminal.
+        AlreadyBlank => "already_blank",
+        /// The worker would not erase what was in the drive: no disc, or one
+        /// that cannot be erased. Nothing was done. Terminal.
+        Refused => "refused",
+        /// The erase was attempted and did not succeed, or was interrupted.
+        /// The disc may be partly erased. Terminal.
+        Failed => "failed",
+        /// Withdrawn before the worker took it. Terminal.
+        Canceled => "canceled",
+    }
+    default = Queued
+}
+
 // --- workers and drives -----------------------------------------------------
 
 string_enum! {

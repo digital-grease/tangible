@@ -8,6 +8,7 @@
 //! asserts it actually rejects. Typed repositories follow in epic E2.
 
 pub mod accounts;
+pub mod erasures;
 pub mod repositories;
 
 use std::time::Duration;

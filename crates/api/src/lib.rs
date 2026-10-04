@@ -96,6 +96,13 @@ pub const API_BASE: &str = "/api/v1";
         routes::burns::resolve_attention,
         routes::burns::get_attempt,
         routes::burns::list_events,
+        routes::erasures::list_all_drives,
+        routes::erasures::request_drive_erasure,
+        routes::erasures::list_recent_erasures,
+        routes::erasures::get_one_erasure,
+        routes::erasures::cancel_one_erasure,
+        routes::erasures::claim_drive_erasure,
+        routes::erasures::complete_drive_erasure,
         routes::workers::issue_enrollment_token,
         routes::workers::consume_enrollment_token,
         routes::workers::report_capabilities,
@@ -152,6 +159,15 @@ pub const API_BASE: &str = "/api/v1";
         routes::burns::BurnEventPage,
         routes::burns::BurnEventView,
         routes::burns::CreateBurnJobRequest,
+        routes::erasures::DriveView,
+        routes::erasures::DriveList,
+        routes::erasures::ErasureView,
+        routes::erasures::ErasureList,
+        routes::erasures::ErasureMedium,
+        routes::erasures::RequestErasure,
+        routes::erasures::ErasureClaimRequest,
+        routes::erasures::ErasureClaim,
+        routes::erasures::ErasureCompletion,
         routes::workers::TrackVerificationReport,
         routes::workers::IssueEnrollmentRequest,
         routes::workers::IssuedEnrollment,
@@ -309,6 +325,7 @@ pub fn router(state: ApiState) -> Router {
         .nest(API_BASE, routes::physical_copies::router())
         .nest(API_BASE, routes::catalog::router())
         .nest(API_BASE, routes::workers::router())
+        .nest(API_BASE, routes::erasures::router())
         // Applied per route, after routing, so the rule is looked up by the
         // matched pattern rather than by a raw path a caller could disguise.
         .layer(axum::middleware::from_fn_with_state(

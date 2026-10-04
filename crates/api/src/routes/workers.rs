@@ -121,7 +121,10 @@ fn unauthorized(rejection: AuthRejection) -> Problem {
 /// A valid credential authorises acting as *that* worker and no other.
 /// Returning not-found rather than forbidden is deliberate: telling a caller
 /// that some other worker exists is information it has no business having.
-fn same_worker(identity: WorkerIdentity, path_worker: &str) -> Result<WorkerId, Problem> {
+pub(crate) fn same_worker(
+    identity: WorkerIdentity,
+    path_worker: &str,
+) -> Result<WorkerId, Problem> {
     let requested = path_worker
         .parse::<WorkerId>()
         .map_err(|_| Problem::invalid_parameter("worker_id", "not a valid identifier"))?;
@@ -782,6 +785,7 @@ pub async fn claim_work(
 
     match claimed {
         Err(ClaimOutcome::NoWork) => Ok(axum::http::StatusCode::NO_CONTENT.into_response()),
+        Err(ClaimOutcome::NotYourDrive) => Err(Problem::not_found("drive", &drive_id.to_string())),
         Err(ClaimOutcome::DriveBusy) => Err(Problem::new(
             ErrorCode::Conflict,
             "this drive already has an active attempt",
