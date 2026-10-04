@@ -61,6 +61,14 @@ struct Harness {
 
 /// Build a server with `count` imported artifacts.
 async fn harness(count: usize) -> Harness {
+    let sets = (0..count)
+        .map(|index| vec![(format!("disc-{index}.iso"), iso_image("VOL", 20))])
+        .collect();
+    harness_with(sets).await
+}
+
+/// Build a server with one artifact imported from each set of staged files.
+async fn harness_with(sets: Vec<Vec<(String, Vec<u8>)>>) -> Harness {
     let dir = TempDir::new().expect("temp dir");
     let objects = FilesystemStore::open(dir.path().join("library"))
         .await
@@ -74,16 +82,15 @@ async fn harness(count: usize) -> Harness {
 
     let pipeline = ImportPipeline::new(staging, objects, manifests.clone());
     let mut artifact_ids = Vec::new();
-    for index in 0..count {
+    for set in sets {
         let import_id = ImportJobId::generate();
         let area = pipeline.open_area(import_id).await.expect("area");
-        let name = format!("disc-{index}.iso");
-        area.write(
-            &LogicalPath::parse(&name).expect("path"),
-            &iso_image("VOL", 20),
-        )
-        .await
-        .expect("stage");
+        let name = set[0].0.clone();
+        for (path, bytes) in &set {
+            area.write(&LogicalPath::parse(path).expect("path"), bytes)
+                .await
+                .expect("stage");
+        }
 
         let mut checkpoint = ImportCheckpoint::default();
         let outcome = pipeline
@@ -548,4 +555,114 @@ async fn the_library_is_not_open_to_anyone_who_can_reach_the_server() {
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri}");
         assert_eq!(body["code"], "UNAUTHENTICATED", "{uri}");
     }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_disc_of_tracks_shows_its_tracks_and_where_their_bytes_are() {
+    let sheet = b"CATALOG 1234567890123\n\
+FILE \"disc.bin\" BINARY\n\
+  TRACK 01 MODE1/2352\n\
+    INDEX 01 00:00:00\n\
+  TRACK 02 AUDIO\n\
+    PREGAP 00:02:00\n\
+    FLAGS DCP\n\
+    INDEX 01 00:01:00\n"
+        .to_vec();
+    let harness = harness_with(vec![vec![
+        ("disc.cue".to_owned(), sheet),
+        ("disc.bin".to_owned(), vec![0_u8; 2352 * 200]),
+    ]])
+    .await;
+    let artifact = &harness.artifact_ids[0];
+
+    let (status, detail, _) = get(&harness.router, &format!("/api/v1/artifacts/{artifact}")).await;
+    assert_eq!(status, StatusCode::OK);
+    let disc = &detail["disc"];
+    assert_eq!(disc["catalog"], "1234567890123");
+    assert_eq!(disc["session_count"], 1);
+    let tracks = disc["tracks"].as_array().expect("tracks");
+    assert_eq!(tracks.len(), 2);
+    assert_eq!(tracks[0]["mode"], "MODE1/2352");
+    assert_eq!(tracks[0]["is_audio"], false);
+    assert_eq!(tracks[1]["is_audio"], true);
+    assert_eq!(tracks[1]["component_path"], "disc.bin");
+    assert_eq!(tracks[1]["pregap_sectors"], 150);
+    assert_eq!(tracks[1]["start_lba"], 225);
+    assert_eq!(tracks[1]["flags"][0], "DCP");
+    assert_eq!(tracks[1]["sample_byte_order"], "little_endian");
+
+    // Every component can be fetched by the identifier the view gives it.
+    let bin = detail["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|component| component["logical_path"] == "disc.bin")
+        .expect("the data file");
+    assert_eq!(bin["id"], tracks[1]["component_id"]);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_component_downloads_as_an_attachment_and_is_never_rendered() {
+    let harness = harness(1).await;
+    let artifact = &harness.artifact_ids[0];
+    let component = only_component(&harness.router, artifact).await;
+    let response = harness
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/artifacts/{artifact}/components/{component}/content"
+                ))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    let disposition = response
+        .headers()
+        .get(axum::http::header::CONTENT_DISPOSITION)
+        .and_then(|value| value.to_str().ok())
+        .expect("a disposition");
+    assert_eq!(
+        disposition,
+        "attachment; filename=\"disc-0.iso\"; filename*=UTF-8''disc-0.iso"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_awkward_file_name_cannot_break_out_of_the_header() {
+    let harness = harness_with(vec![vec![(
+        "Disc \"one\"; ünïcode.iso".to_owned(),
+        iso_image("VOL", 20),
+    )]])
+    .await;
+    let artifact = &harness.artifact_ids[0];
+    let component = only_component(&harness.router, artifact).await;
+    let response = harness
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/artifacts/{artifact}/components/{component}/content"
+                ))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    let disposition = response
+        .headers()
+        .get(axum::http::header::CONTENT_DISPOSITION)
+        .and_then(|value| value.to_str().ok())
+        .expect("a disposition");
+    assert_eq!(
+        disposition,
+        "attachment; filename=\"Disc _one__ _n_code.iso\"; \
+         filename*=UTF-8''Disc%20%22one%22%3B%20%C3%BCn%C3%AFcode.iso"
+    );
 }

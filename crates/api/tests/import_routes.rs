@@ -605,3 +605,54 @@ async fn the_configured_sources_are_discoverable() {
         "the host path must not be exposed: {sources}"
     );
 }
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_watched_directory_imports_a_disc_of_tracks_as_one_artifact() {
+    // How a CUE or TOC and the files it names reach the library: the
+    // directory they sit in is the import, and the descriptor groups them.
+    let harness = harness().await;
+    let disc = harness.watched.join("Example Disc");
+    std::fs::create_dir(&disc).expect("mkdir");
+    let toc: &[u8] = b"CD_ROM\nTRACK MODE1\nDATAFILE \"disc.bin\" 00:01:00\n\
+          TRACK AUDIO\nSILENCE 00:00:02\nFILE \"disc.bin\" #153600 0 00:00:25\nSTART 00:00:02\n";
+    std::fs::write(disc.join("disc.toc"), toc).expect("write");
+    std::fs::write(disc.join("disc.bin"), vec![0_u8; 75 * 2048 + 25 * 2352]).expect("write");
+    std::fs::write(disc.join(".DS_Store"), b"bookkeeping").expect("write");
+
+    let (status, queued) = harness
+        .post(
+            "/api/v1/imports",
+            json!({ "path_id": "incoming", "relative_path": "Example Disc" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{queued}");
+    assert_eq!(
+        queued["bytes_expected"],
+        toc.len() + 75 * 2048 + 25 * 2352,
+        "the disc's files, not the bookkeeping"
+    );
+
+    let import = queued["id"].as_str().expect("an id").to_owned();
+    let settled = harness.drain_until_settled(&import).await;
+    assert_eq!(settled["state"], "complete", "{settled}");
+
+    let artifact = settled["artifact_id"].as_str().expect("an artifact");
+    let (status, detail) = harness.get(&format!("/api/v1/artifacts/{artifact}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(detail["format"], "toc_bin");
+    assert_eq!(detail["source_filename"], "Example Disc");
+    let paths: Vec<&str> = detail["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|component| component["logical_path"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        paths.len(),
+        2,
+        "the bookkeeping file is not part of the disc: {paths:?}"
+    );
+    assert!(paths.contains(&"disc.toc") && paths.contains(&"disc.bin"));
+    assert_eq!(detail["disc"]["tracks"].as_array().unwrap().len(), 2);
+}

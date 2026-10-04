@@ -94,6 +94,8 @@ impl From<Page<ArtifactSummary>> for ArtifactSummaryPage {
 /// One file within an artifact.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ComponentView {
+    /// Opaque identifier, for downloading it.
+    pub id: String,
     /// Portable path inside the artifact.
     pub logical_path: String,
     /// What part it plays.
@@ -120,10 +122,127 @@ pub struct ArtifactDetail {
     pub warnings: Vec<String>,
     /// The files making up the artifact.
     pub components: Vec<ComponentView>,
+    /// The disc's tracks, when the artifact was described by a CUE sheet or a
+    /// TOC whose tracks could be laid out.
+    pub disc: Option<DiscLayout>,
+}
+
+/// A disc of tracks.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct DiscLayout {
+    /// Media catalogue number, when the disc carries one.
+    pub catalog: Option<String>,
+    /// Sessions the tracks span.
+    pub session_count: u32,
+    /// Tracks in disc order.
+    pub tracks: Vec<TrackView>,
+}
+
+/// One track.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct TrackView {
+    /// Track number.
+    pub number: u32,
+    /// Session.
+    pub session: u32,
+    /// Mode, as a CUE sheet spells it: `AUDIO`, `MODE1/2048`, `MODE2/2352`.
+    pub mode: String,
+    /// Whether it is audio.
+    pub is_audio: bool,
+    /// The component its bytes are in.
+    pub component_id: String,
+    /// That component's path.
+    pub component_path: String,
+    /// Where in that component its first sector is.
+    pub file_offset_bytes: u64,
+    /// Its first present sector, counted from the start of the image.
+    pub start_lba: u64,
+    /// Sectors present.
+    pub sector_count: u64,
+    /// Sectors of gap before index 1, generated and in the file together.
+    pub pregap_sectors: u64,
+    /// Index points, relative to the first present sector.
+    pub indexes: Vec<TrackIndexView>,
+    /// International Standard Recording Code.
+    pub isrc: Option<String>,
+    /// Flags: `DCP`, `4CH`, `PRE`, `SCMS`.
+    pub flags: Vec<String>,
+    /// How an audio track's samples are stored: `little_endian` or
+    /// `big_endian`.
+    pub sample_byte_order: Option<String>,
+}
+
+/// An index point.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct TrackIndexView {
+    /// Index number; 0 is the pregap, 1 the track proper.
+    pub number: u32,
+    /// Sectors from the track's first present sector.
+    pub relative_lba: u64,
+}
+
+fn disc_view(manifest: &ArtifactManifest) -> Option<DiscLayout> {
+    let tangible_domain::manifest::Topology::CdTracks {
+        catalog,
+        session_count,
+        tracks,
+        ..
+    } = &manifest.topology
+    else {
+        return None;
+    };
+    let path_of = |id| {
+        manifest
+            .components
+            .iter()
+            .find(|component| component.id == id)
+            .map_or_else(String::new, |component| component.logical_path.to_string())
+    };
+    Some(DiscLayout {
+        catalog: catalog.clone(),
+        session_count: *session_count,
+        tracks: tracks
+            .iter()
+            .map(|track| TrackView {
+                number: track.number,
+                session: track.session,
+                mode: track.mode.clone(),
+                is_audio: tangible_domain::cd::is_audio(&track.mode),
+                component_id: track.component_id.to_string(),
+                component_path: path_of(track.component_id),
+                file_offset_bytes: track.file_offset_bytes,
+                start_lba: track.start_lba,
+                sector_count: track.sector_count,
+                pregap_sectors: track.pregap_sectors,
+                indexes: track
+                    .indexes
+                    .iter()
+                    .map(|index| TrackIndexView {
+                        number: index.number,
+                        relative_lba: index.relative_lba,
+                    })
+                    .collect(),
+                isrc: track.isrc.clone(),
+                flags: track
+                    .flags
+                    .iter()
+                    .map(|flag| flag.as_str().to_owned())
+                    .collect(),
+                sample_byte_order: track.sample_byte_order.map(|order| {
+                    match order {
+                        tangible_domain::cd::SampleByteOrder::LittleEndian => "little_endian",
+                        tangible_domain::cd::SampleByteOrder::BigEndian => "big_endian",
+                    }
+                    .to_owned()
+                }),
+            })
+            .collect(),
+    })
 }
 
 fn component_view(component: &tangible_domain::manifest::Component) -> ComponentView {
     ComponentView {
+        id: component.id.to_string(),
         logical_path: component.logical_path.to_string(),
         role: component.role.to_string(),
         ordinal: component.ordinal,
@@ -265,6 +384,7 @@ pub async fn get_artifact(
         source_kind: manifest.origin.source_kind.clone(),
         warnings,
         components: manifest.components.iter().map(component_view).collect(),
+        disc: disc_view(&manifest),
     }))
 }
 
@@ -485,32 +605,7 @@ pub async fn component_content(
         return Err(Problem::storage_unavailable());
     };
 
-    // The manifest's length is the contract, but the object on disk is what
-    // will be sent. Disagreement means the store has been altered underneath
-    // the catalog, which is worth refusing rather than serving.
-    let object = objects
-        .stat(&component.content.sha256)
-        .await
-        .map_err(|error| {
-            tracing::error!(error = ?error, "could not stat a component object");
-            Problem::storage_unavailable()
-        })?
-        .ok_or_else(|| {
-            tracing::error!(
-                artifact_id = %id,
-                "a manifest references an object the store does not hold"
-            );
-            Problem::storage_unavailable()
-        })?;
-    if object.size_bytes != component.length_bytes {
-        tracing::error!(
-            artifact_id = %id,
-            expected = component.length_bytes,
-            found = object.size_bytes,
-            "a stored object no longer matches the length its manifest records"
-        );
-        return Err(Problem::storage_unavailable());
-    }
+    let object = checked_object(objects, component, id).await?;
 
     let total = object.size_bytes;
     let range = requested_range(
@@ -555,6 +650,13 @@ pub async fn component_content(
     let mut response = axum::response::Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, media_type)
+        // Always a download, never rendered: these are bytes somebody
+        // imported, and a browser shown one inline would be interpreting
+        // them on this origin.
+        .header(
+            header::CONTENT_DISPOSITION,
+            attachment(component.logical_path.file_name()),
+        )
         .header(header::CONTENT_LENGTH, length)
         .header(header::ACCEPT_RANGES, "bytes")
         .body(axum::body::Body::from_stream(
@@ -575,6 +677,73 @@ pub async fn component_content(
     }
 
     Ok(response)
+}
+
+/// The stored object behind a component, if it is still the one the manifest
+/// describes.
+async fn checked_object(
+    objects: &tangible_storage::FilesystemStore,
+    component: &tangible_domain::manifest::Component,
+    id: ArtifactId,
+) -> Result<tangible_storage::ObjectStat, Problem> {
+    // The manifest's length is the contract, but the object on disk is what
+    // will be sent. Disagreement means the store has been altered underneath
+    // the catalog, which is worth refusing rather than serving.
+    let object = objects
+        .stat(&component.content.sha256)
+        .await
+        .map_err(|error| {
+            tracing::error!(error = ?error, "could not stat a component object");
+            Problem::storage_unavailable()
+        })?
+        .ok_or_else(|| {
+            tracing::error!(
+                artifact_id = %id,
+                "a manifest references an object the store does not hold"
+            );
+            Problem::storage_unavailable()
+        })?;
+    if object.size_bytes != component.length_bytes {
+        tracing::error!(
+            artifact_id = %id,
+            expected = component.length_bytes,
+            found = object.size_bytes,
+            "a stored object no longer matches the length its manifest records"
+        );
+        return Err(Problem::storage_unavailable());
+    }
+
+    Ok(object)
+}
+
+/// A `Content-Disposition` value that downloads under `name`.
+///
+/// The plain `filename` is ASCII with anything awkward replaced, for clients
+/// that read only that; `filename*` carries the real name, percent-encoded,
+/// for those that read RFC 6266. Neither can carry a quote, a separator or a
+/// control character into the header.
+fn attachment(name: &str) -> String {
+    use std::fmt::Write as _;
+
+    let plain: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ' ' | '(' | ')') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let mut encoded = String::new();
+    for byte in name.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_') {
+            encoded.push(char::from(byte));
+        } else {
+            let _ = write!(encoded, "%{byte:02X}");
+        }
+    }
+    format!("attachment; filename=\"{plain}\"; filename*=UTF-8''{encoded}")
 }
 
 /// The library routes.

@@ -59,6 +59,39 @@ pub enum WatchRootError {
     /// The filesystem could not be read.
     #[error("the watched root could not be read")]
     Unreadable,
+
+    /// A directory with nothing in it to import.
+    #[error("that directory holds no files to import")]
+    EmptyDirectory,
+
+    /// A directory past the bounds a disc's files fit in.
+    #[error(
+        "that directory holds more than {MAX_DIRECTORY_FILES} files or is nested deeper than {MAX_DIRECTORY_DEPTH} levels"
+    )]
+    DirectoryTooLarge,
+}
+
+/// Most files one directory import may hold. A 99-track CUE/BIN set with one
+/// file per track, its sheet and some notes fits several times over.
+pub const MAX_DIRECTORY_FILES: usize = 256;
+
+/// Deepest a directory import may go below the directory named.
+pub const MAX_DIRECTORY_DEPTH: usize = 4;
+
+/// What a watched path names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WatchedSource {
+    /// One regular file.
+    File(PathBuf),
+    /// A directory: every file in it, as a path relative to the directory
+    /// with `/` separators, and where it is on disk.
+    ///
+    /// The files of one disc kept together, a CUE or TOC and the files it
+    /// names, which become one artifact.
+    Directory {
+        /// The files, sorted by relative path.
+        files: Vec<(String, PathBuf)>,
+    },
 }
 
 /// The roots an administrator configured.
@@ -177,6 +210,110 @@ impl WatchRoots {
         }
 
         Ok(resolved)
+    }
+
+    /// Resolve a relative path that may name a file or a directory.
+    ///
+    /// A directory is walked, and every file in it is resolved by
+    /// [`Self::resolve`] in turn, so each one gets exactly the checks a file
+    /// named on its own gets. Two more rules apply to a directory:
+    ///
+    /// - a symbolic link anywhere in it refuses the whole import, rather than
+    ///   being followed or quietly left out, so the operator learns why;
+    /// - names beginning with `.` are left out, which is where operating
+    ///   systems put their own bookkeeping (`.DS_Store`, `._disc.bin`), none
+    ///   of it part of a disc.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::resolve`], plus [`WatchRootError::EmptyDirectory`] and
+    /// [`WatchRootError::DirectoryTooLarge`].
+    pub async fn resolve_source(
+        &self,
+        path_id: &str,
+        relative: &str,
+    ) -> Result<WatchedSource, WatchRootError> {
+        match self.resolve(path_id, relative).await {
+            Ok(file) => return Ok(WatchedSource::File(file)),
+            Err(WatchRootError::NotAFile) => {}
+            Err(error) => return Err(error),
+        }
+
+        // Not a file, and not a link (resolve refused links before saying
+        // not-a-file), so a directory or something stranger.
+        let root = self
+            .roots
+            .get(path_id)
+            .ok_or_else(|| WatchRootError::UnknownRoot {
+                path_id: path_id.to_owned(),
+            })?;
+        let directory = root.join(relative);
+        let metadata = fs::symlink_metadata(&directory)
+            .await
+            .map_err(|_| WatchRootError::Unreadable)?;
+        if !metadata.is_dir() {
+            return Err(WatchRootError::NotAFile);
+        }
+
+        let mut files = Vec::new();
+        let mut pending = vec![(String::new(), 0_usize)];
+        while let Some((below, depth)) = pending.pop() {
+            let here = if below.is_empty() {
+                directory.clone()
+            } else {
+                directory.join(&below)
+            };
+            let mut entries = fs::read_dir(&here)
+                .await
+                .map_err(|_| WatchRootError::Unreadable)?;
+            while let Some(entry) = entries
+                .next_entry()
+                .await
+                .map_err(|_| WatchRootError::Unreadable)?
+            {
+                let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
+                    return Err(WatchRootError::UnsafePath {
+                        reason: "a name in the directory is not UTF-8",
+                    });
+                };
+                if name.starts_with('.') {
+                    continue;
+                }
+                let inside = if below.is_empty() {
+                    name
+                } else {
+                    format!("{below}/{name}")
+                };
+                let kind = entry
+                    .file_type()
+                    .await
+                    .map_err(|_| WatchRootError::Unreadable)?;
+                if kind.is_symlink() {
+                    return Err(WatchRootError::UnsafePath {
+                        reason: "the directory contains a symbolic link, and links are not followed",
+                    });
+                }
+                if kind.is_dir() {
+                    if depth + 1 > MAX_DIRECTORY_DEPTH {
+                        return Err(WatchRootError::DirectoryTooLarge);
+                    }
+                    pending.push((inside, depth + 1));
+                    continue;
+                }
+                let resolved = self
+                    .resolve(path_id, &format!("{relative}/{inside}"))
+                    .await?;
+                files.push((inside, resolved));
+                if files.len() > MAX_DIRECTORY_FILES {
+                    return Err(WatchRootError::DirectoryTooLarge);
+                }
+            }
+        }
+        if files.is_empty() {
+            return Err(WatchRootError::EmptyDirectory);
+        }
+        files.sort();
+        Ok(WatchedSource::Directory { files })
     }
 }
 
@@ -404,6 +541,88 @@ mod tests {
                 .resolve("incoming", "elsewhere/secret.iso")
                 .await
                 .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_file_is_still_a_file() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        std::fs::write(dir.path().join("disc.iso"), b"x").unwrap();
+        assert!(matches!(
+            roots(dir.path())
+                .resolve_source("incoming", "disc.iso")
+                .await,
+            Ok(WatchedSource::File(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_directory_is_every_file_in_it_with_its_bookkeeping_left_out() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let disc = dir.path().join("Example Disc");
+        std::fs::create_dir_all(disc.join("tracks")).unwrap();
+        std::fs::write(disc.join("disc.cue"), b"cue").unwrap();
+        std::fs::write(disc.join("tracks/track01.bin"), b"bin").unwrap();
+        std::fs::write(disc.join(".DS_Store"), b"junk").unwrap();
+        std::fs::write(disc.join("._disc.cue"), b"junk").unwrap();
+
+        let Ok(WatchedSource::Directory { files }) = roots(dir.path())
+            .resolve_source("incoming", "Example Disc")
+            .await
+        else {
+            panic!("a directory");
+        };
+        let names: Vec<&str> = files.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, vec!["disc.cue", "tracks/track01.bin"]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_link_anywhere_in_a_directory_refuses_the_whole_import() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let outside = tempfile::TempDir::new().expect("temp dir");
+        std::fs::write(outside.path().join("secret"), b"no").unwrap();
+        let disc = dir.path().join("disc");
+        std::fs::create_dir(&disc).unwrap();
+        std::fs::write(disc.join("disc.cue"), b"cue").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret"), disc.join("disc.bin")).unwrap();
+
+        assert!(matches!(
+            roots(dir.path()).resolve_source("incoming", "disc").await,
+            Err(WatchRootError::UnsafePath { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_empty_or_too_deep_directory_is_refused() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        std::fs::create_dir(dir.path().join("empty")).unwrap();
+        std::fs::write(dir.path().join("empty/.hidden"), b"x").unwrap();
+        assert_eq!(
+            roots(dir.path()).resolve_source("incoming", "empty").await,
+            Err(WatchRootError::EmptyDirectory)
+        );
+
+        let deep = dir.path().join("deep/a/b/c/d/e");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("f.bin"), b"x").unwrap();
+        assert_eq!(
+            roots(dir.path()).resolve_source("incoming", "deep").await,
+            Err(WatchRootError::DirectoryTooLarge)
+        );
+    }
+
+    #[tokio::test]
+    async fn too_many_files_are_refused() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let many = dir.path().join("many");
+        std::fs::create_dir(&many).unwrap();
+        for n in 0..=MAX_DIRECTORY_FILES {
+            std::fs::write(many.join(format!("{n}.bin")), b"x").unwrap();
+        }
+        assert_eq!(
+            roots(dir.path()).resolve_source("incoming", "many").await,
+            Err(WatchRootError::DirectoryTooLarge)
         );
     }
 }

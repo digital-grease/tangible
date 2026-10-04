@@ -1092,6 +1092,7 @@ export interface components {
         ArtifactDetail: components["schemas"]["ArtifactSummary"] & {
             /** @description The files making up the artifact. */
             components: components["schemas"]["ComponentView"][];
+            disc?: null | components["schemas"]["DiscLayout"];
             /**
              * Format: float
              * @description Detection confidence, from 0 to 1. Diagnostic only.
@@ -1452,6 +1453,8 @@ export interface components {
         };
         /** @description One file within an artifact. */
         ComponentView: {
+            /** @description Opaque identifier, for downloading it. */
+            id: string;
             /**
              * Format: int64
              * @description Size in bytes.
@@ -1582,6 +1585,18 @@ export interface components {
             confidence: number;
             /** @description What the artifact is to the disc. */
             relationship: string;
+        };
+        /** @description A disc of tracks. */
+        DiscLayout: {
+            /** @description Media catalogue number, when the disc carries one. */
+            catalog?: string | null;
+            /**
+             * Format: int32
+             * @description Sessions the tracks span.
+             */
+            session_count: number;
+            /** @description Tracks in disc order. */
+            tracks: components["schemas"]["TrackView"][];
         };
         /** @description The discs an edition shipped as. */
         DiscSetView: {
@@ -2247,6 +2262,19 @@ export interface components {
             /** @description What it sorts as. */
             sort_title: string;
         };
+        /** @description An index point. */
+        TrackIndexView: {
+            /**
+             * Format: int32
+             * @description Index number; 0 is the pregap, 1 the track proper.
+             */
+            number: number;
+            /**
+             * Format: int64
+             * @description Sectors from the track's first present sector.
+             */
+            relative_lba: number;
+        };
         /** @description The check on one track of a disc described as tracks. */
         TrackVerificationReport: {
             /**
@@ -2275,6 +2303,58 @@ export interface components {
              * @description Sectors found on the disc.
              */
             sectors_read: number;
+        };
+        /** @description One track. */
+        TrackView: {
+            /** @description The component its bytes are in. */
+            component_id: string;
+            /** @description That component's path. */
+            component_path: string;
+            /**
+             * Format: int64
+             * @description Where in that component its first sector is.
+             */
+            file_offset_bytes: number;
+            /** @description Flags: `DCP`, `4CH`, `PRE`, `SCMS`. */
+            flags: string[];
+            /** @description Index points, relative to the first present sector. */
+            indexes: components["schemas"]["TrackIndexView"][];
+            /** @description Whether it is audio. */
+            is_audio: boolean;
+            /** @description International Standard Recording Code. */
+            isrc?: string | null;
+            /** @description Mode, as a CUE sheet spells it: `AUDIO`, `MODE1/2048`, `MODE2/2352`. */
+            mode: string;
+            /**
+             * Format: int32
+             * @description Track number.
+             */
+            number: number;
+            /**
+             * Format: int64
+             * @description Sectors of gap before index 1, generated and in the file together.
+             */
+            pregap_sectors: number;
+            /**
+             * @description How an audio track's samples are stored: `little_endian` or
+             *     `big_endian`.
+             */
+            sample_byte_order?: string | null;
+            /**
+             * Format: int64
+             * @description Sectors present.
+             */
+            sector_count: number;
+            /**
+             * Format: int32
+             * @description Session.
+             */
+            session: number;
+            /**
+             * Format: int64
+             * @description Its first present sector, counted from the start of the image.
+             */
+            start_lba: number;
         };
         /**
          * @description What an operator may change about a disc.

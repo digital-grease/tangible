@@ -26,4 +26,6 @@ pub use filesystem::{
 pub use manifest_store::{ManifestStore, ManifestStoreError};
 pub use object_key::ObjectKey;
 pub use staging::{StagingArea, StagingError, StagingKind, StagingManager};
-pub use watch_roots::{WatchRootError, WatchRoots};
+pub use watch_roots::{
+    MAX_DIRECTORY_DEPTH, MAX_DIRECTORY_FILES, WatchRootError, WatchRoots, WatchedSource,
+};

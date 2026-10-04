@@ -9,6 +9,14 @@ import {
   loadLibrary,
   validationLabel,
   validationMark,
+  componentUrl,
+  msf,
+  trackFlagLabel,
+  trackModeLabel,
+  discSummary,
+  trackDetails,
+  type DiscLayout,
+  type TrackView,
 } from './library';
 
 function stubFetch(routes: Record<string, { status: number; body: unknown }>): typeof fetch {
@@ -184,5 +192,53 @@ describe('labels', () => {
     expect(formatLabel('iso')).toBe('ISO');
     expect(formatLabel('cue_bin')).toBe('CUE/BIN');
     expect(formatLabel('unknown')).toBe('Unrecognised');
+  });
+});
+
+describe('disc tracks', () => {
+  it('counts sectors as a CD does', () => {
+    expect(msf(0)).toBe('00:00:00');
+    expect(msf(150)).toBe('00:02:00');
+    expect(msf(74)).toBe('00:00:74');
+    expect(msf(75 * 60 * 79 + 75 * 59 + 74)).toBe('79:59:74');
+  });
+
+  it('says what a mode and a flag are', () => {
+    expect(trackModeLabel('AUDIO')).toBe('Audio');
+    expect(trackModeLabel('mode1/2048')).toContain('mode 1');
+    expect(trackModeLabel('CDG')).toBe('CDG');
+    expect(trackFlagLabel('PRE')).toBe('pre-emphasis');
+    expect(trackFlagLabel('XYZ')).toBe('XYZ');
+  });
+
+  it('builds a download address that cannot be steered elsewhere', () => {
+    expect(componentUrl('a/b', 'c?d')).toBe('/api/v1/artifacts/a%2Fb/components/c%3Fd/content');
+  });
+});
+
+describe('describing a disc', () => {
+  const track = (overrides: Partial<TrackView>): TrackView =>
+    ({ isrc: null, flags: [], ...overrides }) as TrackView;
+
+  it('joins a code and flags without stray spaces', () => {
+    expect(trackDetails(track({ isrc: 'USRC17607839', flags: ['DCP', 'PRE'] }))).toBe(
+      'ISRC USRC17607839; copying permitted; pre-emphasis',
+    );
+    expect(trackDetails(track({ flags: ['4CH'] }))).toBe('four-channel audio');
+    expect(trackDetails(track({}))).toBe('');
+  });
+
+  it('summarises tracks, sessions and catalogue', () => {
+    const tracks = [track({}), track({})];
+    expect(discSummary({ tracks, session_count: 1, catalog: null } as DiscLayout)).toBe(
+      '2 tracks.',
+    );
+    expect(
+      discSummary({
+        tracks: [track({})],
+        session_count: 2,
+        catalog: '1234567890123',
+      } as DiscLayout),
+    ).toBe('1 track in 2 sessions, catalogue number 1234567890123.');
   });
 });

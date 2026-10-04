@@ -184,3 +184,77 @@ export function formatLabel(format: string): string {
       return format;
   }
 }
+
+export type DiscLayout = components['schemas']['DiscLayout'];
+export type TrackView = components['schemas']['TrackView'];
+
+/** Sectors, or frames, in one second of a CD. */
+const FRAMES_PER_SECOND = 75;
+
+/** A sector count as `MM:SS:FF`, the way a CD player and a TOC count. */
+export function msf(sectors: number): string {
+  const frames = sectors % FRAMES_PER_SECOND;
+  const seconds = Math.floor(sectors / FRAMES_PER_SECOND) % 60;
+  const minutes = Math.floor(sectors / FRAMES_PER_SECOND / 60);
+  const two = (n: number) => String(n).padStart(2, '0');
+  return `${two(minutes)}:${two(seconds)}:${two(frames)}`;
+}
+
+/** A track's mode in words. */
+export function trackModeLabel(mode: string): string {
+  switch (mode.toUpperCase()) {
+    case 'AUDIO':
+      return 'Audio';
+    case 'MODE1/2048':
+      return 'Data, mode 1 (2048-byte sectors)';
+    case 'MODE1/2352':
+      return 'Data, mode 1 (raw sectors)';
+    case 'MODE2/2048':
+      return 'Data, mode 2 form 1';
+    case 'MODE2/2324':
+      return 'Data, mode 2 form 2';
+    case 'MODE2/2336':
+      return 'Data, mode 2 (2336-byte sectors)';
+    case 'MODE2/2352':
+      return 'Data, mode 2 (raw sectors)';
+    default:
+      return mode;
+  }
+}
+
+/** A track flag in words. */
+export function trackFlagLabel(flag: string): string {
+  switch (flag) {
+    case 'DCP':
+      return 'copying permitted';
+    case '4CH':
+      return 'four-channel audio';
+    case 'PRE':
+      return 'pre-emphasis';
+    case 'SCMS':
+      return 'serial copy management';
+    default:
+      return flag;
+  }
+}
+
+/** Where to download one component of an artifact. */
+export function componentUrl(artifactId: string, componentId: string): string {
+  return `/api/v1/artifacts/${encodeURIComponent(artifactId)}/components/${encodeURIComponent(componentId)}/content`;
+}
+
+/** One line saying what a disc of tracks is. */
+export function discSummary(disc: DiscLayout): string {
+  const tracks = `${disc.tracks.length} track${disc.tracks.length === 1 ? '' : 's'}`;
+  const sessions = disc.session_count > 1 ? ` in ${disc.session_count} sessions` : '';
+  const catalog = disc.catalog ? `, catalogue number ${disc.catalog}` : '';
+  return `${tracks}${sessions}${catalog}.`;
+}
+
+/** What else there is to say about a track: its code and its flags. */
+export function trackDetails(track: TrackView): string {
+  const parts = [];
+  if (track.isrc) parts.push(`ISRC ${track.isrc}`);
+  parts.push(...track.flags.map(trackFlagLabel));
+  return parts.join('; ');
+}

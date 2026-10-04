@@ -128,6 +128,9 @@ pub const API_BASE: &str = "/api/v1";
         routes::artifacts::ArtifactSummary,
         routes::artifacts::ArtifactDetail,
         routes::artifacts::ComponentView,
+        routes::artifacts::DiscLayout,
+        routes::artifacts::TrackView,
+        routes::artifacts::TrackIndexView,
         routes::catalog::TitleView,
         routes::catalog::TitlePage,
         routes::catalog::EditionView,
@@ -358,6 +361,42 @@ mod tests {
     fn openapi_declares_the_project_license() {
         let json = openapi_json().expect("document serializes");
         assert!(json.contains("AGPL-3.0-or-later"));
+    }
+
+    #[test]
+    fn no_schema_is_silently_replaced_by_another_of_the_same_name() {
+        // utoipa keys schemas by type name, so two structs called the same in
+        // different modules leave one of them out of the document without a
+        // word. This happened once, to the catalog's DiscView.
+        let document = serde_json::to_value(ApiDoc::openapi()).expect("document");
+        let schemas = &document["components"]["schemas"];
+        assert!(schemas["DiscView"]["properties"]["disc_set_id"].is_object());
+        assert!(schemas["DiscLayout"]["properties"]["tracks"].is_object());
+
+        let source = [
+            include_str!("routes/accounts.rs"),
+            include_str!("routes/artifacts.rs"),
+            include_str!("routes/burns.rs"),
+            include_str!("routes/catalog.rs"),
+            include_str!("routes/erasures.rs"),
+            include_str!("routes/imports.rs"),
+            include_str!("routes/physical_copies.rs"),
+            include_str!("routes/workers.rs"),
+            include_str!("health.rs"),
+            include_str!("problem.rs"),
+        ];
+        let mut seen = std::collections::BTreeSet::new();
+        for file in source {
+            for line in file.lines() {
+                if let Some(rest) = line.strip_prefix("pub struct ") {
+                    let name: String = rest
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
+                    assert!(seen.insert(name.clone()), "two structs are called {name}");
+                }
+            }
+        }
     }
 
     #[test]

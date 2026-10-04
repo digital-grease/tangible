@@ -171,15 +171,18 @@
       </p>
       <p>
         <label for="relative">Path within the folder</label><br />
-        <input id="relative" bind:value={relativePath} placeholder="Example Disc/disc.iso" />
+        <input id="relative" bind:value={relativePath} placeholder="Example Disc" />
         <br />
         <!-- The server never accepts a host path, and saying so here means an
              operator does not try one. -->
-        <small>Relative to the folder above. The file is copied; your original is left alone.</small
+        <small
+          >Relative to the folder above: a file, or a folder holding one disc, such as a CUE or TOC
+          sheet and the files it names, which become one artifact. Everything is copied; your
+          originals are left alone.</small
         >
       </p>
       <button type="submit" disabled={busy || relativePath.trim() === ''}>
-        {busy ? 'Working…' : 'Import this file'}
+        {busy ? 'Working…' : 'Import'}
       </button>
     </form>
   {/if}

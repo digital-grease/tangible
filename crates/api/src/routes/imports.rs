@@ -306,7 +306,7 @@ pub async fn create_import(
     // between and the check that matters is the one before the read.
     let source = imports
         .roots
-        .resolve(&request.path_id, &request.relative_path)
+        .resolve_source(&request.path_id, &request.relative_path)
         .await
         .map_err(|error| match error {
             tangible_storage::WatchRootError::UnknownRoot { path_id } => Problem::new(
@@ -320,15 +320,27 @@ pub async fn create_import(
             other => Problem::new(ErrorCode::ValidationFailed, other.to_string()),
         })?;
 
-    let filename = source
-        .file_name()
-        .and_then(|name| name.to_str())
+    // A directory is recorded under its own name: it is the disc, and its
+    // files are the disc's parts.
+    let filename = request
+        .relative_path
+        .rsplit('/')
+        .find(|segment| !segment.is_empty())
         .unwrap_or("import.bin")
         .to_owned();
-    let bytes_expected = tokio::fs::metadata(&source)
-        .await
-        .ok()
-        .and_then(|metadata| i64::try_from(metadata.len()).ok());
+    let paths: Vec<std::path::PathBuf> = match &source {
+        tangible_storage::WatchedSource::File(path) => vec![path.clone()],
+        tangible_storage::WatchedSource::Directory { files } => {
+            files.iter().map(|(_, path)| path.clone()).collect()
+        }
+    };
+    let mut total = 0_u64;
+    for path in &paths {
+        if let Ok(metadata) = tokio::fs::metadata(path).await {
+            total = total.saturating_add(metadata.len());
+        }
+    }
+    let bytes_expected = i64::try_from(total).ok();
 
     let descriptor = serde_json::json!({
         "kind": "watch_folder",

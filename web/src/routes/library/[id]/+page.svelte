@@ -4,9 +4,14 @@
   import { onMount } from 'svelte';
   import { page } from '$app/state';
   import {
+    componentUrl,
+    discSummary,
     formatBytes,
     formatLabel,
     loadArtifact,
+    msf,
+    trackDetails,
+    trackModeLabel,
     validationLabel,
     validationMark,
     type ArtifactDetail,
@@ -103,6 +108,7 @@
             <th scope="col">Role</th>
             <th scope="col">Size</th>
             <th scope="col">SHA-256</th>
+            <th scope="col"><span class="visually-hidden">Download</span></th>
           </tr>
         </thead>
         <tbody>
@@ -114,11 +120,57 @@
               <td>
                 <code title={component.sha256}>{component.sha256.slice(0, 12)}…</code>
               </td>
+              <td>
+                <a href={componentUrl(view.data.id, component.id)} download
+                  >Download <span class="visually-hidden">{component.logical_path}</span></a
+                >
+              </td>
             </tr>
           {/each}
         </tbody>
       </table>
     </section>
+
+    {#if view.data.disc}
+      <section aria-labelledby="tracks-heading">
+        <h2 id="tracks-heading">Tracks</h2>
+        <p>
+          {discSummary(view.data.disc)} Times are minutes, seconds and frames, 75 frames to the second,
+          as a CD counts them.
+        </p>
+        <table>
+          <caption class="visually-hidden">Tracks on this disc</caption>
+          <thead>
+            <tr>
+              <th scope="col">Track</th>
+              <th scope="col">Kind</th>
+              <th scope="col">Starts</th>
+              <th scope="col">Length</th>
+              <th scope="col">Pregap</th>
+              <th scope="col">Details</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each view.data.disc.tracks as track (track.number)}
+              <tr>
+                <th scope="row">{track.number}</th>
+                <td>{trackModeLabel(track.mode)}</td>
+                <td><code>{msf(track.start_lba)}</code></td>
+                <td><code>{msf(track.sector_count)}</code></td>
+                <td>{track.pregap_sectors > 0 ? msf(track.pregap_sectors) : 'None'}</td>
+                <td>
+                  {trackDetails(track)}
+                  {#if track.indexes.length > 1 + (track.pregap_sectors > 0 ? 1 : 0)}
+                    <br /><small>{track.indexes.length} index points</small>
+                  {/if}
+                  <br /><small>from <code>{track.component_path}</code></small>
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </section>
+    {/if}
 
     <section aria-labelledby="compatibility-heading">
       <h2 id="compatibility-heading">Burn compatibility</h2>

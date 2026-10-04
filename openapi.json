@@ -3605,6 +3605,17 @@
                 },
                 "description": "The files making up the artifact."
               },
+              "disc": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/DiscLayout",
+                    "description": "The disc's tracks, when the artifact was described by a CUE sheet or a\nTOC whose tracks could be laid out."
+                  }
+                ]
+              },
               "format_confidence": {
                 "type": "number",
                 "format": "float",
@@ -4387,6 +4398,7 @@
         "type": "object",
         "description": "One file within an artifact.",
         "required": [
+          "id",
           "logical_path",
           "role",
           "ordinal",
@@ -4394,6 +4406,10 @@
           "sha256"
         ],
         "properties": {
+          "id": {
+            "type": "string",
+            "description": "Opaque identifier, for downloading it."
+          },
           "length_bytes": {
             "type": "integer",
             "format": "int64",
@@ -4702,6 +4718,36 @@
           "relationship": {
             "type": "string",
             "description": "What the artifact is to the disc."
+          }
+        }
+      },
+      "DiscLayout": {
+        "type": "object",
+        "description": "A disc of tracks.",
+        "required": [
+          "session_count",
+          "tracks"
+        ],
+        "properties": {
+          "catalog": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Media catalogue number, when the disc carries one."
+          },
+          "session_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Sessions the tracks span.",
+            "minimum": 0
+          },
+          "tracks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TrackView"
+            },
+            "description": "Tracks in disc order."
           }
         }
       },
@@ -6188,6 +6234,28 @@
           }
         }
       },
+      "TrackIndexView": {
+        "type": "object",
+        "description": "An index point.",
+        "required": [
+          "number",
+          "relative_lba"
+        ],
+        "properties": {
+          "number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Index number; 0 is the pregap, 1 the track proper.",
+            "minimum": 0
+          },
+          "relative_lba": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sectors from the track's first present sector.",
+            "minimum": 0
+          }
+        }
+      },
       "TrackVerificationReport": {
         "type": "object",
         "description": "The check on one track of a disc described as tracks.",
@@ -6237,6 +6305,106 @@
             "type": "integer",
             "format": "int64",
             "description": "Sectors found on the disc.",
+            "minimum": 0
+          }
+        }
+      },
+      "TrackView": {
+        "type": "object",
+        "description": "One track.",
+        "required": [
+          "number",
+          "session",
+          "mode",
+          "is_audio",
+          "component_id",
+          "component_path",
+          "file_offset_bytes",
+          "start_lba",
+          "sector_count",
+          "pregap_sectors",
+          "indexes",
+          "flags"
+        ],
+        "properties": {
+          "component_id": {
+            "type": "string",
+            "description": "The component its bytes are in."
+          },
+          "component_path": {
+            "type": "string",
+            "description": "That component's path."
+          },
+          "file_offset_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Where in that component its first sector is.",
+            "minimum": 0
+          },
+          "flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Flags: `DCP`, `4CH`, `PRE`, `SCMS`."
+          },
+          "indexes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TrackIndexView"
+            },
+            "description": "Index points, relative to the first present sector."
+          },
+          "is_audio": {
+            "type": "boolean",
+            "description": "Whether it is audio."
+          },
+          "isrc": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "International Standard Recording Code."
+          },
+          "mode": {
+            "type": "string",
+            "description": "Mode, as a CUE sheet spells it: `AUDIO`, `MODE1/2048`, `MODE2/2352`."
+          },
+          "number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Track number.",
+            "minimum": 0
+          },
+          "pregap_sectors": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sectors of gap before index 1, generated and in the file together.",
+            "minimum": 0
+          },
+          "sample_byte_order": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How an audio track's samples are stored: `little_endian` or\n`big_endian`."
+          },
+          "sector_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sectors present.",
+            "minimum": 0
+          },
+          "session": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Session.",
+            "minimum": 0
+          },
+          "start_lba": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its first present sector, counted from the start of the image.",
             "minimum": 0
           }
         }

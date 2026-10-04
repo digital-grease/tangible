@@ -284,47 +284,62 @@ impl ImportRunner {
         let source = self
             .settings
             .roots
-            .resolve(&path_id, &relative)
+            .resolve_source(&path_id, &relative)
             .await
             .map_err(|error| {
                 let retryable = matches!(error, tangible_storage::WatchRootError::Unreadable);
                 ("IMPORT_SOURCE_UNUSABLE", error.to_string(), retryable)
             })?;
 
-        // The staged name is the source's filename, not its path: the staging
-        // area is flat for a single-file import, and the logical path is
-        // validated before anything is written.
-        let filename = source.file_name().and_then(|name| name.to_str()).ok_or((
-            "IMPORT_SOURCE_UNUSABLE",
-            "the file has no usable name".to_owned(),
-            false,
-        ))?;
-        let logical = LogicalPath::parse(filename).map_err(|error| {
-            (
-                "IMPORT_SOURCE_UNUSABLE",
-                format!("the filename is not a usable logical path: {error}"),
-                false,
-            )
-        })?;
+        // A file is staged under its own name, flat. A directory's files keep
+        // their paths within it, so a sheet that names `tracks/01.bin` finds
+        // it. Every logical path is validated before anything is written.
+        let files: Vec<(String, std::path::PathBuf)> = match source {
+            tangible_storage::WatchedSource::File(path) => {
+                let name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or((
+                        "IMPORT_SOURCE_UNUSABLE",
+                        "the file has no usable name".to_owned(),
+                        false,
+                    ))?
+                    .to_owned();
+                vec![(name, path)]
+            }
+            tangible_storage::WatchedSource::Directory { files } => files,
+        };
 
         let area = self
             .pipeline
             .open_area(job.id)
             .await
             .map_err(|error| ("IMPORT_STAGING_FAILED", error.to_string(), true))?;
-        let destination = area
-            .prepare_parent(&logical)
-            .await
-            .map_err(|error| ("IMPORT_STAGING_FAILED", error.to_string(), true))?;
-
-        let copied = tokio::fs::copy(&source, &destination)
-            .await
-            .map_err(|error| ("IMPORT_COPY_FAILED", error.to_string(), true))?;
+        let mut copied = 0_u64;
+        for (name, path) in &files {
+            let logical = LogicalPath::parse(name).map_err(|error| {
+                (
+                    "IMPORT_SOURCE_UNUSABLE",
+                    format!("{name} is not a usable logical path: {error}"),
+                    false,
+                )
+            })?;
+            let destination = area
+                .prepare_parent(&logical)
+                .await
+                .map_err(|error| ("IMPORT_STAGING_FAILED", error.to_string(), true))?;
+            copied = copied.saturating_add(
+                tokio::fs::copy(path, &destination)
+                    .await
+                    .map_err(|error| ("IMPORT_COPY_FAILED", error.to_string(), true))?,
+            );
+        }
 
         tracing::info!(
             import_id = %job.id,
             bytes = copied,
-            "copied a watched file into staging"
+            files = files.len(),
+            "copied a watched source into staging"
         );
 
         if let Err(error) = record_import_progress(
