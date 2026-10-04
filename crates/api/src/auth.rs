@@ -295,6 +295,10 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
     ),
     // Drives, and erasing the disc in one. Erasing destroys data, so it has
     // its own permission; the worker side is the drive's own worker.
+    // RomM export settings belong to the catalog.
+    ("GET", "/api/v1/romm", Signed(Read)),
+    ("GET", "/api/v1/editions/{edition_id}/romm", Signed(Read)),
+    ("PUT", "/api/v1/editions/{edition_id}/romm", Signed(Catalog)),
     ("GET", "/api/v1/drives", Signed(Read)),
     ("POST", "/api/v1/drives/{drive_id}/erasures", Signed(Erase)),
     ("GET", "/api/v1/erasures", Signed(Read)),

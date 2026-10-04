@@ -10,6 +10,7 @@
 pub mod accounts;
 pub mod erasures;
 pub mod repositories;
+pub mod romm;
 
 use std::time::Duration;
 

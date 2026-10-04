@@ -132,6 +132,14 @@ pub struct ServeConfig {
     /// that silently has no UI.
     #[arg(long, env = "TANGIBLE_WEB_ROOT")]
     pub web_root: Option<PathBuf>,
+
+    /// RomM's `roms` directory, which game exports are written into as
+    /// `{platform}/{game}/`.
+    ///
+    /// Unset by default, and then nothing is exported. Tangible writes only
+    /// folders it marks as its own and never touches anything else in it.
+    #[arg(long, env = "TANGIBLE_ROMM_EXPORT_ROOT")]
+    pub romm_export_root: Option<PathBuf>,
 }
 
 /// Settings for a burn worker.

@@ -289,6 +289,25 @@ impl FilesystemStore {
             });
         }
 
+        // Read-only before it is published, so no object is ever writable
+        // under its content name. Originals are immutable by rule; this makes
+        // the filesystem say so too, which matters the moment anything else
+        // can reach the inode, such as a hard-linked export.
+        let read_only = |source| StorageError::Io {
+            operation: "making the object read-only",
+            path: incoming.clone(),
+            source,
+        };
+        let mut permissions = fs::metadata(&incoming)
+            .await
+            .map_err(read_only)?
+            .permissions();
+        // Clears every write bit, for owner, group and others alike.
+        permissions.set_readonly(true);
+        fs::set_permissions(&incoming, permissions)
+            .await
+            .map_err(read_only)?;
+
         fs::rename(&incoming, &destination)
             .await
             .map_err(|source| StorageError::Io {

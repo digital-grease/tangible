@@ -10,6 +10,7 @@ use tangible_storage::{ManifestStore, WatchRoots};
 
 use crate::auth::{AuthSettings, LoginLimiter};
 use crate::import::ImportPipeline;
+use crate::romm_export::RommExport;
 use crate::web::WebUi;
 
 /// State cloned into every request handler.
@@ -37,6 +38,8 @@ struct Inner {
     login_limiter: LoginLimiter,
     /// The built web UI, when this server serves one.
     web: Option<WebUi>,
+    /// The RomM export, when an export root is configured.
+    romm: Option<RommExport>,
 }
 
 /// What the import routes need beyond the database.
@@ -65,6 +68,7 @@ impl ApiState {
                 auth: AuthSettings::default(),
                 login_limiter: LoginLimiter::default(),
                 web: None,
+                romm: None,
             }),
         }
     }
@@ -80,6 +84,7 @@ impl ApiState {
                 auth: AuthSettings::default(),
                 login_limiter: LoginLimiter::default(),
                 web: None,
+                romm: None,
             }),
         }
     }
@@ -112,6 +117,22 @@ impl ApiState {
         Self {
             inner: Arc::new(inner),
         }
+    }
+
+    /// Export to RomM through `romm`.
+    #[must_use]
+    pub fn with_romm(self, romm: RommExport) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.romm = Some(romm);
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// The RomM export, when one is configured.
+    #[must_use]
+    pub fn romm(&self) -> Option<&RommExport> {
+        self.inner.romm.as_ref()
     }
 
     /// The web UI, when one is served.

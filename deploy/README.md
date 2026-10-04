@@ -130,6 +130,37 @@ The group's number differs between distributions, which is why
 `TANGIBLE_OPTICAL_GID` has no default and Compose refuses to start the worker
 until it is set.
 
+## Showing games in RomM
+
+Tangible can write chosen games into RomM's library folder, laid out the way
+RomM scans it: `{platform}/{Title} ({Region})/`, with a multi-disc game's
+discs together in one folder. It is off until you give the server RomM's
+`roms` directory:
+
+1. In `compose.yaml`, uncomment `TANGIBLE_ROMM_EXPORT_ROOT` and the matching
+   volume, and set the host side of the volume to the `roms` folder of RomM's
+   library.
+2. Make that folder writable by the server's user, uid 10001 in the image.
+   RomM only needs to read it.
+3. Run `docker compose -f deploy/compose.yaml config`, check the mount, and
+   restart the stack.
+
+Then, in the catalog, open an edition, choose its platform and tick "Show this
+game in RomM". The status underneath says when the folder has been written,
+or why it could not be. Unticking removes the folder again. Scan the library
+in RomM to pick up changes.
+
+Tangible writes only folders it created, each marked with a
+`.tangible-export.json` file, and never modifies or removes anything else in
+RomM's folder. If a folder of the same name already exists and is not
+Tangible's, the game is reported as blocked rather than written over.
+
+Files are hard-linked from the library when the export folder is on the same
+filesystem, and copied otherwise. With the library in a named volume and
+RomM's folder bind-mounted, as above, they are copied, so allow the space. ISO
+and CUE/BIN images are exported; a disc imported only as a cdrdao TOC is not,
+because RomM's emulators do not read that format.
+
 ## What this deployment will not do
 
 - run with `privileged: true`

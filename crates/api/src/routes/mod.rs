@@ -10,4 +10,5 @@ pub mod catalog;
 pub mod erasures;
 pub mod imports;
 pub mod physical_copies;
+pub mod romm;
 pub mod workers;

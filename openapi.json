@@ -1550,6 +1550,130 @@
         ]
       }
     },
+    "/api/v1/editions/{edition_id}/romm": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "An edition's RomM settings and export status.",
+        "description": "# Errors\n\n`NOT_FOUND` for an unknown edition.",
+        "operationId": "get_edition_romm",
+        "parameters": [
+          {
+            "name": "edition_id",
+            "in": "path",
+            "description": "Edition identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Settings and status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditionRommView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such edition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Set an edition's platform and whether it appears in RomM.",
+        "description": "Set the edition's platform and whether it should appear in RomM. The exporter writes, rebuilds or removes the game's folder in the background; read the status back to see how it went.",
+        "operationId": "set_edition_romm_route",
+        "parameters": [
+          {
+            "name": "edition_id",
+            "in": "path",
+            "description": "Edition identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetEditionRomm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditionRommView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such edition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No export root is configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "An unknown platform, or an export without one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/erasures": {
       "get": {
         "tags": [
@@ -2525,6 +2649,32 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/romm": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Whether this server exports to RomM, and the platforms it knows.",
+        "operationId": "romm_settings",
+        "responses": {
+          "200": {
+            "description": "The export's settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RommSettings"
                 }
               }
             }
@@ -5011,6 +5161,67 @@
           }
         }
       },
+      "EditionRommView": {
+        "type": "object",
+        "description": "An edition's RomM settings and how its export stands.",
+        "required": [
+          "export",
+          "file_count"
+        ],
+        "properties": {
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the exporter last looked."
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it is blocked or failed."
+          },
+          "export": {
+            "type": "boolean",
+            "description": "Whether it should appear in RomM."
+          },
+          "exported_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the folder was last written."
+          },
+          "file_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Files in the folder."
+          },
+          "folder": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The folder in RomM's library, `platform/game`."
+          },
+          "platform": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The platform, as a RomM slug."
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`current`, `blocked`, `failed` or `removed`; absent until the\nexporter has looked."
+          }
+        }
+      },
       "EditionView": {
         "type": "object",
         "description": "A particular release of a title.",
@@ -5911,6 +6122,24 @@
           }
         }
       },
+      "PlatformView": {
+        "type": "object",
+        "description": "A platform a game can be exported to.",
+        "required": [
+          "slug",
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "slug": {
+            "type": "string",
+            "description": "RomM's folder slug."
+          }
+        }
+      },
       "Problem": {
         "type": "object",
         "description": "An RFC 9457 problem document.",
@@ -6123,6 +6352,27 @@
         },
         "additionalProperties": false
       },
+      "RommSettings": {
+        "type": "object",
+        "description": "Whether this server exports to RomM, and to which platforms.",
+        "required": [
+          "configured",
+          "platforms"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean",
+            "description": "Whether an export root is configured. Without one, nothing exports."
+          },
+          "platforms": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlatformView"
+            },
+            "description": "The platforms an edition may name."
+          }
+        }
+      },
       "SessionView": {
         "type": "object",
         "description": "The signed-in session.",
@@ -6150,6 +6400,27 @@
             "description": "Who is signed in."
           }
         }
+      },
+      "SetEditionRomm": {
+        "type": "object",
+        "description": "What an operator sends to change an edition's RomM settings.",
+        "required": [
+          "export"
+        ],
+        "properties": {
+          "export": {
+            "type": "boolean",
+            "description": "Whether it should appear in RomM. Needs a platform."
+          },
+          "platform": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The platform, as a RomM slug, or null for none."
+          }
+        },
+        "additionalProperties": false
       },
       "SetupStatus": {
         "type": "object",

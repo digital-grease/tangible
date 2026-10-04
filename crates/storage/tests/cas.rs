@@ -184,8 +184,15 @@ async fn verification_detects_corruption() {
         .await
         .expect("store");
 
-    // Corrupt the object behind the store's back.
-    std::fs::write(store.object_path(&stored.digest), b"tampered content!").expect("tamper");
+    // Corrupt the object behind the store's back. It is read-only, so this
+    // takes deliberately making it writable first, as anything that got hold
+    // of the file would have to.
+    let path = store.object_path(&stored.digest);
+    let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(&path, permissions).unwrap();
+    std::fs::write(&path, b"tampered content!").expect("tamper");
 
     let error = store
         .verify(&stored.digest)
@@ -378,4 +385,20 @@ async fn content_larger_than_the_copy_buffer_streams_correctly() {
         .await
         .expect("read");
     assert_eq!(read, payload);
+}
+
+#[tokio::test]
+async fn a_stored_object_is_read_only() {
+    // Immutable by rule, and by the filesystem too: an accidental write to an
+    // original, or one through a hard link somebody else can reach, fails.
+    let (_dir, store) = store().await;
+    let stored = store
+        .put_stream(&b"original content"[..], fast())
+        .await
+        .expect("store");
+    let path = store.object_path(&stored.digest);
+    assert!(std::fs::metadata(&path).unwrap().permissions().readonly());
+    assert!(std::fs::OpenOptions::new().write(true).open(&path).is_err());
+    // And the store can still remove it, which is a directory operation.
+    assert!(store.remove(&stored.digest).await.expect("remove"));
 }

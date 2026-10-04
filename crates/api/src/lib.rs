@@ -15,6 +15,7 @@ pub mod import;
 pub mod import_runner;
 pub mod pagination;
 pub mod problem;
+pub mod romm_export;
 pub mod routes;
 pub mod state;
 pub mod web;
@@ -28,6 +29,7 @@ use utoipa::OpenApi;
 pub use auth::{AuthSettings, CurrentUser, SignedIn};
 pub use import::{ImportCheckpoint, ImportError, ImportOutcome, ImportPipeline, ImportRequest};
 pub use import_runner::{ImportRunner, ImportRunnerSettings};
+pub use romm_export::{RommExport, RommExporter};
 pub use state::{ApiState, ImportContext};
 pub use web::{WebUi, WebUiError};
 pub use worker_auth::{
@@ -96,6 +98,9 @@ pub const API_BASE: &str = "/api/v1";
         routes::burns::resolve_attention,
         routes::burns::get_attempt,
         routes::burns::list_events,
+        routes::romm::romm_settings,
+        routes::romm::get_edition_romm,
+        routes::romm::set_edition_romm_route,
         routes::erasures::list_all_drives,
         routes::erasures::request_drive_erasure,
         routes::erasures::list_recent_erasures,
@@ -162,6 +167,10 @@ pub const API_BASE: &str = "/api/v1";
         routes::burns::BurnEventPage,
         routes::burns::BurnEventView,
         routes::burns::CreateBurnJobRequest,
+        routes::romm::PlatformView,
+        routes::romm::RommSettings,
+        routes::romm::EditionRommView,
+        routes::romm::SetEditionRomm,
         routes::erasures::DriveView,
         routes::erasures::DriveList,
         routes::erasures::ErasureView,
@@ -329,6 +338,7 @@ pub fn router(state: ApiState) -> Router {
         .nest(API_BASE, routes::catalog::router())
         .nest(API_BASE, routes::workers::router())
         .nest(API_BASE, routes::erasures::router())
+        .nest(API_BASE, routes::romm::router())
         // Applied per route, after routing, so the rule is looked up by the
         // matched pattern rather than by a raw path a caller could disguise.
         .layer(axum::middleware::from_fn_with_state(
@@ -381,6 +391,7 @@ mod tests {
             include_str!("routes/erasures.rs"),
             include_str!("routes/imports.rs"),
             include_str!("routes/physical_copies.rs"),
+            include_str!("routes/romm.rs"),
             include_str!("routes/workers.rs"),
             include_str!("health.rs"),
             include_str!("problem.rs"),

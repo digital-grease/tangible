@@ -2,6 +2,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   import { apiFetch } from '$lib/session';
+  import RommExport from '$lib/components/RommExport.svelte';
   import { onMount } from 'svelte';
   import {
     compatibilityLabel,
@@ -277,6 +278,8 @@
 {/if}
 
 {#if selectedEdition}
+  <RommExport editionId={selectedEdition} />
+
   <section aria-labelledby="sets-heading">
     <h2 id="sets-heading">Disc sets</h2>
     {#if sets.length === 0}

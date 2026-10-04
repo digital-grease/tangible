@@ -462,6 +462,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/editions/{edition_id}/romm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * An edition's RomM settings and export status.
+         * @description # Errors
+         *
+         *     `NOT_FOUND` for an unknown edition.
+         */
+        get: operations["get_edition_romm"];
+        /**
+         * Set an edition's platform and whether it appears in RomM.
+         * @description Set the edition's platform and whether it should appear in RomM. The exporter writes, rebuilds or removes the game's folder in the background; read the status back to see how it went.
+         */
+        put: operations["set_edition_romm_route"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/erasures": {
         parameters: {
             query?: never;
@@ -748,6 +774,23 @@ export interface paths {
          * @description Record that a disc has been destroyed. Irreversible: the record remains, but nothing further can be recorded against it.
          */
         post: operations["mark_destroyed"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/romm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Whether this server exports to RomM, and the platforms it knows. */
+        get: operations["romm_settings"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1724,6 +1767,31 @@ export interface components {
             /** @description The worker's status. */
             worker_status: string;
         };
+        /** @description An edition's RomM settings and how its export stands. */
+        EditionRommView: {
+            /** @description When the exporter last looked. */
+            checked_at?: string | null;
+            /** @description Why it is blocked or failed. */
+            detail?: string | null;
+            /** @description Whether it should appear in RomM. */
+            export: boolean;
+            /** @description When the folder was last written. */
+            exported_at?: string | null;
+            /**
+             * Format: int32
+             * @description Files in the folder.
+             */
+            file_count: number;
+            /** @description The folder in RomM's library, `platform/game`. */
+            folder?: string | null;
+            /** @description The platform, as a RomM slug. */
+            platform?: string | null;
+            /**
+             * @description `current`, `blocked`, `failed` or `removed`; absent until the
+             *     exporter has looked.
+             */
+            state?: string | null;
+        };
         /** @description A particular release of a title. */
         EditionView: {
             /** @description When it was catalogued. */
@@ -2112,6 +2180,13 @@ export interface components {
             /** @description Media serial, when the drive reported one. */
             serial?: string | null;
         };
+        /** @description A platform a game can be exported to. */
+        PlatformView: {
+            /** @description Its name. */
+            name: string;
+            /** @description RomM's folder slug. */
+            slug: string;
+        };
         /** @description An RFC 9457 problem document. */
         Problem: {
             /** @description Stable machine-readable code. Clients branch on this, not on `detail`. */
@@ -2205,6 +2280,13 @@ export interface components {
              */
             mode: string;
         };
+        /** @description Whether this server exports to RomM, and to which platforms. */
+        RommSettings: {
+            /** @description Whether an export root is configured. Without one, nothing exports. */
+            configured: boolean;
+            /** @description The platforms an edition may name. */
+            platforms: components["schemas"]["PlatformView"][];
+        };
         /** @description The signed-in session. */
         SessionView: {
             /**
@@ -2220,6 +2302,13 @@ export interface components {
             role: string;
             /** @description Who is signed in. */
             username: string;
+        };
+        /** @description What an operator sends to change an edition's RomM settings. */
+        SetEditionRomm: {
+            /** @description Whether it should appear in RomM. Needs a platform. */
+            export: boolean;
+            /** @description The platform, as a RomM slug, or null for none. */
+            platform?: string | null;
         };
         /** @description Whether the server still needs its first account. */
         SetupStatus: {
@@ -3411,6 +3500,92 @@ export interface operations {
             };
         };
     };
+    get_edition_romm: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Edition identifier */
+                edition_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Settings and status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EditionRommView"];
+                };
+            };
+            /** @description No such edition */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    set_edition_romm_route: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Edition identifier */
+                edition_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetEditionRomm"];
+            };
+        };
+        responses: {
+            /** @description Saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EditionRommView"];
+                };
+            };
+            /** @description No such edition */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No export root is configured */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description An unknown platform, or an export without one */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     list_recent_erasures: {
         parameters: {
             query?: {
@@ -4045,6 +4220,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    romm_settings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The export's settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RommSettings"];
                 };
             };
         };

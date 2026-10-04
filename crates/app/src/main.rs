@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use tangible_api::{
     ApiState, AuthSettings, ImportContext, ImportPipeline, ImportRunner, ImportRunnerSettings,
-    WebUi,
+    RommExport, RommExporter, WebUi,
 };
 use tangible_db::{Database, DbConfig};
 use tangible_storage::{FilesystemStore, ManifestStore, StagingManager, WatchRoots};
@@ -123,17 +123,10 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
 
     let pipeline = ImportPipeline::new(staging, objects, manifests.clone());
     let auth = AuthSettings::for_public_url(&serve.public_url);
-    if !auth.secure_cookie {
-        tracing::warn!(
-            public_url = %serve.public_url,
-            "the public URL is plain HTTP, so session cookies are not marked Secure and \
-             passwords cross the network unencrypted; use this only on a network you trust, \
-             and put HTTPS in front of Tangible before exposing it further"
-        );
-    }
+    warn_if_plain_http(auth, &serve.public_url);
     warn_if_setup_needed(&database, &serve.public_url).await;
 
-    let state = ApiState::with_manifests(database.clone(), manifests)
+    let state = ApiState::with_manifests(database.clone(), manifests.clone())
         .with_imports(ImportContext {
             pipeline: pipeline.clone(),
             roots: roots.clone(),
@@ -141,6 +134,13 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         })
         .with_auth(auth);
     let state = attach_web_ui(state, serve.web_root.as_deref()).await?;
+    let (state, romm) = start_romm_export(
+        state,
+        &database,
+        &manifests,
+        serve.romm_export_root.as_deref(),
+    )
+    .await?;
 
     // The import runner is a background task rather than a separate process:
     // one binary, one deployment, and the work is already leased in the
@@ -181,8 +181,74 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
     // Abandoning it would leave staged bytes and a lease behind for no gain.
     let _ = stop_runner.send(());
     let _ = runner.await;
+    if let Some((stop, task)) = romm {
+        let _ = stop.send(());
+        let _ = task.await;
+    }
 
     served
+}
+
+/// Say at every start that a plain HTTP server sends passwords in the clear.
+fn warn_if_plain_http(auth: AuthSettings, public_url: &str) {
+    if !auth.secure_cookie {
+        tracing::warn!(
+            public_url = %public_url,
+            "the public URL is plain HTTP, so session cookies are not marked Secure and \
+             passwords cross the network unencrypted; use this only on a network you trust, \
+             and put HTTPS in front of Tangible before exposing it further"
+        );
+    }
+}
+
+/// A background task and the means to stop it.
+type Stoppable = (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+);
+
+/// Start exporting games to RomM, when an export root is configured.
+async fn start_romm_export(
+    state: ApiState,
+    database: &Database,
+    manifests: &ManifestStore,
+    root: Option<&std::path::Path>,
+) -> Result<(ApiState, Option<Stoppable>)> {
+    let Some(root) = root else {
+        tracing::info!(
+            "no RomM export root configured (TANGIBLE_ROMM_EXPORT_ROOT); nothing exports"
+        );
+        return Ok((state, None));
+    };
+    if !tokio::fs::metadata(root)
+        .await
+        .is_ok_and(|metadata| metadata.is_dir())
+    {
+        // Not fatal: the exporter reports it against every export, where an
+        // operator will see it, and recovers when the mount appears.
+        tracing::warn!(root = %root.display(), "the RomM export root is not a directory");
+    }
+    // Configuration names the layout, never the host path.
+    let integration = tangible_db::romm::ensure_integration(
+        database.pool(),
+        &serde_json::json!({ "kind": "romm_filesystem", "layout": "{platform}/{game}" }),
+    )
+    .await
+    .context("recording the RomM export integration")?;
+
+    let export = RommExport::new(root.to_path_buf());
+    let exporter = RommExporter::new(
+        export.clone(),
+        database.clone(),
+        manifests.clone(),
+        integration,
+    );
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(exporter.run(async {
+        let _ = stopped.await;
+    }));
+    tracing::info!(root = %root.display(), "exporting games to RomM");
+    Ok((state.with_romm(export), Some((stop, task))))
 }
 
 /// Serve the built web UI beside the API, when one is configured.

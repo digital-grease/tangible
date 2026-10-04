@@ -956,6 +956,10 @@ pub async fn link_artifact(
     .map_err(|outcome| catalog_problem(outcome, "disc or artifact"))?;
 
     tracing::info!(disc_id = %id, artifact_id = %artifact_id, "artifact linked to disc");
+    // A disc gaining an image can complete a game's RomM export.
+    if let Some(romm) = state.romm() {
+        romm.nudge();
+    }
     list_linked_artifacts(State(state), Path(disc_id)).await
 }
 

@@ -6,4 +6,6 @@
 //! Integrations may submit a user-selected job to a client the operator
 //! already runs. They must never turn Tangible into a release-search platform.
 //!
-//! Scaffold status: empty. RomM export arrives with epic E9.
+//! In place: exporting games to a RomM library as a managed folder view.
+
+pub mod romm;
