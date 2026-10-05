@@ -1591,7 +1591,10 @@ export interface components {
         };
         /** @description An account to create. */
         CreateUserRequest: {
-            /** @description At least 12 characters. */
+            /**
+             * Format: password
+             * @description At least 12 characters.
+             */
             password: string;
             /** @description `viewer`, `operator` or `administrator`. */
             role: string;
@@ -1600,7 +1603,10 @@ export interface components {
         };
         /** @description A username and password. */
         Credentials: {
-            /** @description The password. */
+            /**
+             * Format: password
+             * @description The password.
+             */
             password: string;
             /** @description The username. Case does not matter. */
             username: string;
@@ -1821,7 +1827,10 @@ export interface components {
         };
         /** @description What a worker sends to enroll. */
         EnrollmentRequest: {
-            /** @description The one-use token an administrator issued. */
+            /**
+             * Format: password
+             * @description The one-use token an administrator issued.
+             */
             enrollment_token: string;
             /** @description A human-meaningful name for this worker. */
             name: string;

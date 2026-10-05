@@ -367,7 +367,7 @@ impl Server {
 /// briefly.
 fn settings(server: &Server, state_dir: PathBuf, token: String) -> WorkerSettings {
     WorkerSettings {
-        enrollment_token: Some(token),
+        enrollment_token: Some(token.into()),
         poll_interval: Duration::from_millis(100),
         media_wait: Duration::from_secs(3),
         media_poll_interval: Duration::from_millis(100),

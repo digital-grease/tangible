@@ -23,8 +23,8 @@ use tangible_db::accounts::{
     CreateUserOutcome, UserRecord, count_users, create_first_administrator, create_session,
     create_user, list_users, record_failed_sign_in, revoke_session, user_for_sign_in,
 };
-use tangible_domain::Role;
 use tangible_domain::auth::{MAX_PASSWORD_BYTES, check_new_password, normalize_username};
+use tangible_domain::{Role, SecretString};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use utoipa::ToSchema;
@@ -91,7 +91,8 @@ impl From<UserRecord> for UserView {
 }
 
 /// The signed-in session.
-#[derive(Debug, Clone, Serialize, ToSchema)]
+// No `Debug`: it carries the anti-forgery token, and nothing needs to print it.
+#[derive(Clone, Serialize, ToSchema)]
 pub struct SessionView {
     /// Who is signed in.
     pub username: String,
@@ -133,7 +134,8 @@ pub struct Credentials {
     /// The username. Case does not matter.
     pub username: String,
     /// The password.
-    pub password: String,
+    #[schema(value_type = String, format = Password)]
+    pub password: SecretString,
 }
 
 /// An account to create.
@@ -143,7 +145,8 @@ pub struct CreateUserRequest {
     /// 1 to 64 lowercase letters, digits, `.`, `_` or `-`.
     pub username: String,
     /// At least 12 characters.
-    pub password: String,
+    #[schema(value_type = String, format = Password)]
+    pub password: SecretString,
     /// `viewer`, `operator` or `administrator`.
     pub role: String,
 }
@@ -234,7 +237,7 @@ pub async fn complete_setup(
     Json(request): Json<Credentials>,
 ) -> Result<Response, Problem> {
     let username = normalize_username(&request.username).map_err(|error| invalid(&error))?;
-    check_new_password(&request.password).map_err(|error| invalid(&error))?;
+    check_new_password(request.password.expose()).map_err(|error| invalid(&error))?;
 
     // Checked before hashing so a finished server does not spend a hash on
     // every visit to its setup route. The insert checks again under a lock.
@@ -312,7 +315,7 @@ pub async fn sign_in(
         return Ok(response);
     }
 
-    let account = if request.password.len() > MAX_PASSWORD_BYTES {
+    let account = if request.password.expose().len() > MAX_PASSWORD_BYTES {
         None
     } else {
         user_for_sign_in(state.database().pool(), &name)
@@ -441,7 +444,7 @@ pub async fn create_account(
     Json(request): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<UserView>), Problem> {
     let username = normalize_username(&request.username).map_err(|error| invalid(&error))?;
-    check_new_password(&request.password).map_err(|error| invalid(&error))?;
+    check_new_password(request.password.expose()).map_err(|error| invalid(&error))?;
     let role = Role::from_str(&request.role).map_err(|_| {
         Problem::new(
             ErrorCode::ValidationFailed,

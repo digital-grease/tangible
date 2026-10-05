@@ -49,7 +49,7 @@ use subtle::ConstantTimeEq;
 use tangible_db::accounts::{SessionRecord, session_for_token};
 use tangible_db::repositories::{authenticate_worker, worker_holds_artifact};
 use tangible_domain::auth::Permission;
-use tangible_domain::{ArtifactId, Role};
+use tangible_domain::{ArtifactId, Role, SecretString, redacted};
 use time::OffsetDateTime;
 
 use crate::problem::{ErrorCode, Problem};
@@ -340,7 +340,9 @@ fn rule_for(method: &Method, path: &str) -> Result<Access, bool> {
 // --- the signed-in person ------------------------------------------------------
 
 /// The person behind a request, once [`authorize`] has found their session.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` is written by hand so the anti-forgery token never prints.
+#[derive(Clone, PartialEq, Eq)]
 pub struct CurrentUser {
     /// The account.
     pub user_id: uuid::Uuid,
@@ -355,6 +357,19 @@ pub struct CurrentUser {
     pub csrf_token: String,
     /// When that session ends regardless of use.
     pub expires_at: OffsetDateTime,
+}
+
+impl std::fmt::Debug for CurrentUser {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CurrentUser")
+            .field("user_id", &self.user_id)
+            .field("username", &self.username)
+            .field("role", &self.role)
+            .field("session_id", &self.session_id)
+            .field("csrf_token", &redacted(&self.csrf_token))
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 impl From<SessionRecord> for CurrentUser {
@@ -674,11 +689,12 @@ pub fn set_cookie(response: &mut Response, value: &str) {
 /// # Errors
 ///
 /// A problem if hashing fails, which it should not.
-pub async fn hash_password(password: String) -> Result<String, Problem> {
+pub async fn hash_password(password: impl Into<SecretString>) -> Result<String, Problem> {
+    let password = password.into();
     let _permit = password_permit().await?;
     tokio::task::spawn_blocking(move || {
         Argon2::default()
-            .hash_password(password.as_bytes())
+            .hash_password(password.expose().as_bytes())
             .map(|hash| hash.to_string())
     })
     .await
@@ -695,13 +711,17 @@ pub async fn hash_password(password: String) -> Result<String, Problem> {
 /// # Errors
 ///
 /// A problem if the check cannot run at all.
-pub async fn verify_password(password: String, stored: Option<String>) -> Result<bool, Problem> {
+pub async fn verify_password(
+    password: impl Into<SecretString>,
+    stored: Option<String>,
+) -> Result<bool, Problem> {
+    let password = password.into();
     let _permit = password_permit().await?;
     tokio::task::spawn_blocking(move || {
         let hash = stored.clone().unwrap_or_else(stand_in_hash);
         let matches = PasswordHash::new(&hash).is_ok_and(|parsed| {
             Argon2::default()
-                .verify_password(password.as_bytes(), &parsed)
+                .verify_password(password.expose().as_bytes(), &parsed)
                 .is_ok()
         });
         matches && stored.is_some()

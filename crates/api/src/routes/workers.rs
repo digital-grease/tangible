@@ -42,7 +42,9 @@ use tangible_db::repositories::{
     complete_attempt, consume_enrollment, issue_enrollment, record_capabilities, record_events,
     record_heartbeat, renew_lease,
 };
-use tangible_domain::{BurnAttemptId, BurnAttemptState, DriveId, EjectPolicy, WorkerId};
+use tangible_domain::{
+    BurnAttemptId, BurnAttemptState, DriveId, EjectPolicy, SecretString, WorkerId,
+};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 
@@ -162,7 +164,8 @@ pub struct IssueEnrollmentRequest {
 }
 
 /// A newly issued enrollment token.
-#[derive(Debug, Serialize, ToSchema)]
+// No `Debug`: it carries the token, and nothing needs to print it.
+#[derive(Serialize, ToSchema)]
 pub struct IssuedEnrollment {
     /// The enrollment's identifier, for the audit log and for revoking it.
     pub enrollment_id: String,
@@ -262,7 +265,8 @@ pub async fn issue_enrollment_token(
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct EnrollmentRequest {
     /// The one-use token an administrator issued.
-    pub enrollment_token: String,
+    #[schema(value_type = String, format = Password)]
+    pub enrollment_token: SecretString,
     /// A human-meaningful name for this worker.
     pub name: String,
     /// Protocol versions the worker speaks.
@@ -272,7 +276,8 @@ pub struct EnrollmentRequest {
 }
 
 /// What a newly enrolled worker receives.
-#[derive(Debug, Serialize, ToSchema)]
+// No `Debug`: it carries the credential, and nothing needs to print it.
+#[derive(Serialize, ToSchema)]
 pub struct EnrollmentResponse {
     /// Its identity.
     pub worker_id: String,
@@ -327,7 +332,7 @@ pub async fn consume_enrollment_token(
         ));
     }
 
-    let supplied = Secret::from_supplied(request.enrollment_token);
+    let supplied = Secret::from_supplied(request.enrollment_token.expose());
     let credential = WorkerCredential::issue().map_err(|error| {
         tracing::error!(error = ?error, "could not generate a worker credential");
         Problem::new(

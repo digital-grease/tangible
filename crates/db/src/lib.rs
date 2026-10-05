@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{ConnectOptions, PgPool};
+use tangible_domain::SecretString;
 
 /// Migrations are embedded at compile time so the shipped binary can run them
 /// without carrying a separate SQL directory.
@@ -54,8 +55,9 @@ pub enum DbError {
 /// from configuration rather than from code.
 #[derive(Debug, Clone)]
 pub struct DbConfig {
-    /// PostgreSQL connection URL.
-    pub url: String,
+    /// PostgreSQL connection URL. It carries the password, so it never
+    /// prints.
+    pub url: SecretString,
     /// Maximum pooled connections.
     pub max_connections: u32,
     /// How long to wait for a connection before giving up.
@@ -67,7 +69,7 @@ impl DbConfig {
     #[must_use]
     pub fn new(url: impl Into<String>) -> Self {
         Self {
-            url: url.into(),
+            url: SecretString::new(url),
             max_connections: 10,
             acquire_timeout: Duration::from_secs(5),
         }
@@ -93,6 +95,7 @@ impl Database {
         // logs add context without leaking secrets.
         let options: PgConnectOptions = config
             .url
+            .expose()
             .parse::<PgConnectOptions>()
             .map_err(DbError::InvalidUrl)?
             .log_statements(tracing::log::LevelFilter::Trace);
@@ -121,6 +124,7 @@ impl Database {
     pub fn connect_lazy(config: &DbConfig) -> Result<Self, DbError> {
         let options: PgConnectOptions = config
             .url
+            .expose()
             .parse::<PgConnectOptions>()
             .map_err(DbError::InvalidUrl)?
             .log_statements(tracing::log::LevelFilter::Trace);

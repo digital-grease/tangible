@@ -25,7 +25,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use tangible_domain::{ArtifactId, BurnAttemptId, BurnJobId, DriveId, Sha256Digest, WorkerId};
+use tangible_domain::{
+    ArtifactId, BurnAttemptId, BurnJobId, DriveId, SecretString, Sha256Digest, WorkerId,
+};
 use time::OffsetDateTime;
 
 use crate::client::{
@@ -51,7 +53,7 @@ pub struct WorkerSettings {
     pub worker_name: String,
     /// One-use enrollment token, needed only until this worker has a
     /// credential.
-    pub enrollment_token: Option<String>,
+    pub enrollment_token: Option<SecretString>,
     /// Where the credential, recovery record and staging cache live.
     ///
     /// Must survive a container restart, or every restart looks like a new
@@ -242,7 +244,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
 
         let identity = WorkerIdentity {
             worker_id: enrolled.worker_id,
-            credential: enrolled.credential,
+            credential: enrolled.credential.expose().to_owned(),
             drive_id: None,
         };
         // Stored before anything else is attempted: the credential is

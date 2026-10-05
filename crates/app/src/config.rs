@@ -12,6 +12,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use clap::{Args, ValueEnum};
+use tangible_domain::SecretString;
 
 /// Which storage backend holds canonical bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -41,12 +42,16 @@ pub enum BurnEngineKind {
 #[derive(Debug, Clone, Args)]
 pub struct CommonConfig {
     /// PostgreSQL connection URL.
+    ///
+    /// It carries the database password, so its value is hidden from
+    /// `--help` and never prints.
     #[arg(
         long,
         env = "TANGIBLE_DATABASE_URL",
+        hide_env_values = true,
         default_value = "postgres://tangible:tangible@localhost:5432/tangible"
     )]
-    pub database_url: String,
+    pub database_url: SecretString,
 
     /// Tracing filter directive.
     #[arg(
@@ -166,7 +171,7 @@ pub struct WorkerConfig {
     /// Needed only until this worker holds a credential; after that the token
     /// is spent and the variable can be removed. Never logged.
     #[arg(long, env = "TANGIBLE_ENROLLMENT_TOKEN", hide_env_values = true)]
-    pub enrollment_token: Option<String>,
+    pub enrollment_token: Option<SecretString>,
 
     /// Where the credential, recovery record and staging cache live.
     ///

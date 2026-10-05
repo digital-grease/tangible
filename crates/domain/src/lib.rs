@@ -23,6 +23,7 @@ pub mod id;
 pub mod import;
 pub mod logical_path;
 pub mod manifest;
+pub mod secret;
 
 pub use burn::{BurnAttemptState, BurnJobState, BurnTransitionError};
 pub use digest::{DigestParseError, Sha256Digest};
@@ -40,3 +41,4 @@ pub use id::{
 pub use import::{ImportState, ImportTransitionError};
 pub use logical_path::{LogicalPath, LogicalPathError};
 pub use manifest::{ArtifactManifest, ManifestError, ManifestParseError, SCHEMA_ID};
+pub use secret::{SecretString, redacted};

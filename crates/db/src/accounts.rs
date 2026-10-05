@@ -32,7 +32,9 @@ pub struct UserRecord {
 }
 
 /// A live session and the account it belongs to.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` is written by hand so the anti-forgery token never prints.
+#[derive(Clone, PartialEq, Eq)]
 pub struct SessionRecord {
     /// The session's identifier.
     pub id: uuid::Uuid,
@@ -42,6 +44,17 @@ pub struct SessionRecord {
     pub expires_at: OffsetDateTime,
     /// Whose it is.
     pub user: UserRecord,
+}
+
+impl std::fmt::Debug for SessionRecord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionRecord")
+            .field("id", &self.id)
+            .field("csrf_token", &tangible_domain::redacted(&self.csrf_token))
+            .field("expires_at", &self.expires_at)
+            .field("user", &self.user)
+            .finish()
+    }
 }
 
 /// Why an account could not be created.

@@ -69,7 +69,7 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
     // Lazy pool: the listener must come up even if PostgreSQL is still
     // starting, so that /readyz can report the problem instead of the
     // process crash-looping.
-    let database = Database::connect_lazy(&DbConfig::new(&common.database_url))
+    let database = Database::connect_lazy(&DbConfig::new(common.database_url.expose()))
         .context("configuring the database pool")?;
 
     if serve.migrate_on_start {
@@ -283,7 +283,7 @@ async fn warn_if_setup_needed(database: &Database, public_url: &str) {
 
 async fn migrate_command(common: &CommonConfig) -> Result<()> {
     // Eager connection: there is nothing useful to do without a database.
-    let database = Database::connect(&DbConfig::new(&common.database_url))
+    let database = Database::connect(&DbConfig::new(common.database_url.expose()))
         .await
         .context("connecting to the database")?;
     database.migrate().await.context("applying migrations")?;
@@ -300,7 +300,7 @@ fn openapi_command() -> Result<()> {
 async fn doctor_command(common: &CommonConfig) -> Result<()> {
     let mut problems = 0_u32;
 
-    match Database::connect(&DbConfig::new(&common.database_url)).await {
+    match Database::connect(&DbConfig::new(common.database_url.expose())).await {
         Ok(database) => match database.ping().await {
             Ok(()) => tracing::info!("database: reachable"),
             Err(error) => {
@@ -448,5 +448,100 @@ async fn shutdown_signal() {
     tokio::select! {
         () = ctrl_c => tracing::info!("received interrupt, shutting down"),
         () = terminate => tracing::info!("received SIGTERM, shutting down"),
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// Variables whose value is a secret: a password inside a URL, a token.
+    /// Their values must never appear in `--help`, which shows the live value
+    /// of every variable that is set unless told not to.
+    const SECRET_ENV: &[&str] = &["TANGIBLE_DATABASE_URL", "TANGIBLE_ENROLLMENT_TOKEN"];
+
+    /// Every other variable, each one looked at and found not to be secret.
+    const PUBLIC_ENV: &[&str] = &[
+        "TANGIBLE_BIND",
+        "TANGIBLE_BLOCK_DEVICE",
+        "TANGIBLE_BURN_ENGINE",
+        "TANGIBLE_LOG",
+        "TANGIBLE_LOG_JSON",
+        "TANGIBLE_MAX_UPLOAD_BYTES",
+        "TANGIBLE_MIGRATE_ON_START",
+        "TANGIBLE_PUBLIC_URL",
+        "TANGIBLE_ROMM_EXPORT_ROOT",
+        "TANGIBLE_SERVER_URL",
+        "TANGIBLE_STAGING_ROOT",
+        "TANGIBLE_STORAGE_KIND",
+        "TANGIBLE_STORAGE_ROOT",
+        "TANGIBLE_WATCH_ROOTS",
+        "TANGIBLE_WEB_ROOT",
+        "TANGIBLE_WORKER_NAME",
+        "TANGIBLE_WORKER_STATE_DIR",
+    ];
+
+    fn every_arg(command: &clap::Command, found: &mut Vec<(String, bool)>) {
+        for arg in command.get_arguments() {
+            if let Some(env) = arg.get_env() {
+                found.push((
+                    env.to_string_lossy().into_owned(),
+                    arg.is_hide_env_values_set(),
+                ));
+            }
+        }
+        for sub in command.get_subcommands() {
+            every_arg(sub, found);
+        }
+    }
+
+    #[test]
+    fn no_secret_variable_shows_its_value_in_help() {
+        let mut found = Vec::new();
+        every_arg(&Cli::command(), &mut found);
+        assert!(!found.is_empty());
+        for (env, hidden) in found {
+            if SECRET_ENV.contains(&env.as_str()) {
+                assert!(hidden, "{env} holds a secret, so its value must be hidden");
+            } else {
+                assert!(
+                    PUBLIC_ENV.contains(&env.as_str()),
+                    "{env} is new: decide whether it holds a secret and add it to \
+                     SECRET_ENV (with hide_env_values) or PUBLIC_ENV"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_parsed_configuration_never_prints_the_database_password() {
+        let cli = Cli::try_parse_from([
+            "tangible",
+            "--database-url",
+            "postgres://user:placeholder-password@db/tangible",
+            "doctor",
+        ])
+        .expect("parse");
+        let shown = format!("{:?}", cli.common);
+        assert!(!shown.contains("placeholder-password"), "{shown}");
+        assert_eq!(
+            cli.common.database_url.expose(),
+            "postgres://user:placeholder-password@db/tangible"
+        );
+    }
+
+    #[test]
+    fn a_worker_configuration_never_prints_its_enrollment_token() {
+        let cli = Cli::try_parse_from([
+            "tangible",
+            "burn-worker",
+            "--enrollment-token",
+            "tgw_enroll_placeholder",
+        ])
+        .expect("parse");
+        let shown = format!("{:?}", cli.command);
+        assert!(!shown.contains("tgw_enroll_placeholder"), "{shown}");
     }
 }

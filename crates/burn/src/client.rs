@@ -25,7 +25,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tangible_domain::manifest::ArtifactManifest;
-use tangible_domain::{ArtifactId, BurnAttemptId, ComponentId, Sha256Digest};
+use tangible_domain::{
+    ArtifactId, BurnAttemptId, ComponentId, SecretString, Sha256Digest, redacted,
+};
 use time::OffsetDateTime;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
@@ -130,7 +132,7 @@ pub struct Enrolled {
     /// The protocol version the server selected.
     pub protocol_version: String,
     /// The credential, returned exactly once and never recoverable.
-    pub credential: String,
+    pub credential: SecretString,
     /// How often to report in.
     pub heartbeat_interval_seconds: i64,
     /// How long a lease lasts.
@@ -376,7 +378,7 @@ pub struct DriveDescription {
 pub struct WorkerClient {
     http: reqwest::Client,
     base: String,
-    credential: Option<String>,
+    credential: Option<SecretString>,
 }
 
 impl WorkerClient {
@@ -404,7 +406,7 @@ impl WorkerClient {
     /// Attach the credential this worker authenticates with.
     #[must_use]
     pub fn with_credential(mut self, credential: impl Into<String>) -> Self {
-        self.credential = Some(credential.into());
+        self.credential = Some(SecretString::new(credential));
         self
     }
 
@@ -423,7 +425,7 @@ impl WorkerClient {
         match &self.credential {
             // The one place the credential is used. It is never formatted
             // into a log line or an error.
-            Some(credential) => request.bearer_auth(credential),
+            Some(credential) => request.bearer_auth(credential.expose()),
             None => request,
         }
     }
@@ -455,7 +457,7 @@ impl WorkerClient {
     /// taken, or [`ClientError::Transport`] if the server cannot be reached.
     pub async fn enroll(
         &self,
-        enrollment_token: &str,
+        enrollment_token: &SecretString,
         name: &str,
         software_version: &str,
     ) -> Result<Enrolled, ClientError> {
@@ -463,7 +465,7 @@ impl WorkerClient {
             .http
             .post(self.url("/api/v1/worker-enrollments/consume"))
             .json(&serde_json::json!({
-                "enrollment_token": enrollment_token,
+                "enrollment_token": enrollment_token.expose(),
                 "name": name,
                 "protocol_versions": [PROTOCOL_VERSION],
                 "software_version": software_version,
@@ -984,7 +986,10 @@ pub fn rfc3339(value: OffsetDateTime) -> String {
 /// Written after enrollment and read on every start, because the credential is
 /// returned exactly once: a worker that lost it would need an operator to
 /// issue another enrollment token.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// The credential stays a plain string because writing it to the state file
+/// is the point; `Debug` is written by hand so it never prints.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct WorkerIdentity {
     /// The worker.
     pub worker_id: String,
@@ -993,6 +998,16 @@ pub struct WorkerIdentity {
     /// The drive the server assigned, when capabilities have been reported.
     #[serde(default)]
     pub drive_id: Option<String>,
+}
+
+impl std::fmt::Debug for WorkerIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkerIdentity")
+            .field("worker_id", &self.worker_id)
+            .field("credential", &redacted(&self.credential))
+            .field("drive_id", &self.drive_id)
+            .finish()
+    }
 }
 
 impl WorkerIdentity {
@@ -1102,6 +1117,35 @@ mod tests {
             "waiting_for_media"
         );
         assert_eq!(stage_wire_name(WorkerStage::Writing), "writing");
+    }
+
+    #[test]
+    fn credentials_never_print() {
+        let identity = WorkerIdentity {
+            worker_id: "w".to_owned(),
+            credential: "tgw_live_placeholder".to_owned(),
+            drive_id: None,
+        };
+        let client = WorkerClient::new("http://server.invalid")
+            .expect("client")
+            .with_credential("tgw_live_placeholder");
+        let enrolled: Enrolled = serde_json::from_value(serde_json::json!({
+            "worker_id": "w",
+            "protocol_version": "1",
+            "credential": "tgw_live_placeholder",
+            "heartbeat_interval_seconds": 30,
+            "lease_duration_seconds": 120,
+        }))
+        .expect("enrolled");
+        for shown in [
+            format!("{identity:?}"),
+            format!("{client:?}"),
+            format!("{enrolled:?}"),
+        ] {
+            assert!(!shown.contains("placeholder"), "{shown}");
+            assert!(shown.contains("[redacted]"), "{shown}");
+        }
+        assert_eq!(enrolled.credential.expose(), "tgw_live_placeholder");
     }
 
     #[tokio::test]

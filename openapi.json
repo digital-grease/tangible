@@ -4790,6 +4790,7 @@
         "properties": {
           "password": {
             "type": "string",
+            "format": "password",
             "description": "At least 12 characters."
           },
           "role": {
@@ -4813,6 +4814,7 @@
         "properties": {
           "password": {
             "type": "string",
+            "format": "password",
             "description": "The password."
           },
           "username": {
@@ -5300,6 +5302,7 @@
         "properties": {
           "enrollment_token": {
             "type": "string",
+            "format": "password",
             "description": "The one-use token an administrator issued."
           },
           "name": {

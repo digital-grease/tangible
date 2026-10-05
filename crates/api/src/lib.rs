@@ -327,7 +327,7 @@ where
 
 /// Build the application router.
 pub fn router(state: ApiState) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/livez", get(health::livez))
         .route("/readyz", get(health::readyz))
         .nest(API_BASE, routes::accounts::router())
@@ -350,15 +350,99 @@ pub fn router(state: ApiState) -> Router {
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::security_headers,
-        ))
+        ));
+    traced(router).with_state(state)
+}
+
+/// Request and response headers that carry a secret: the session cookie, a
+/// worker's bearer credential, the anti-forgery token.
+fn sensitive_headers() -> [axum::http::HeaderName; 4] {
+    use axum::http::header::{AUTHORIZATION, COOKIE, SET_COOKIE};
+    [
+        AUTHORIZATION,
+        COOKIE,
+        SET_COOKIE,
+        axum::http::HeaderName::from_static(auth::CSRF_HEADER),
+    ]
+}
+
+/// Mark the secret-bearing headers of a request as sensitive, so they print
+/// as `Sensitive` wherever a header map is formatted.
+async fn mark_sensitive_headers(
+    mut request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    mark_sensitive(request.headers_mut());
+    let mut response = next.run(request).await;
+    mark_sensitive(response.headers_mut());
+    response
+}
+
+fn mark_sensitive(headers: &mut axum::http::HeaderMap) {
+    for name in sensitive_headers() {
+        if let axum::http::header::Entry::Occupied(mut entry) = headers.entry(name) {
+            for value in entry.iter_mut() {
+                value.set_sensitive(true);
+            }
+        }
+    }
+}
+
+/// Request tracing, with secret headers marked before the trace sees them.
+///
+/// The default trace does not record headers. Marking them anyway means a
+/// later `include_headers(true)` prints `Sensitive` rather than every cookie
+/// and bearer token. Marked on both sides of the trace: outside it for the
+/// request on the way in, inside it for the response on the way out.
+fn traced<S: Clone + Send + Sync + 'static>(router: Router<S>) -> Router<S> {
+    router
+        .layer(axum::middleware::from_fn(mark_sensitive_headers))
         .layer(TraceLayer::new_for_http())
-        .with_state(state)
+        .layer(axum::middleware::from_fn(mark_sensitive_headers))
 }
 
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn secret_headers_are_marked_sensitive_around_the_trace() {
+        use axum::http::header::{AUTHORIZATION, COOKIE, SET_COOKIE};
+        use tower::ServiceExt as _;
+
+        async fn probe(headers: axum::http::HeaderMap) -> axum::response::Response {
+            for name in [AUTHORIZATION, COOKIE] {
+                assert!(
+                    headers[&name].is_sensitive(),
+                    "{name} reached the handler unmarked"
+                );
+            }
+            assert!(headers[auth::CSRF_HEADER].is_sensitive());
+            assert!(
+                !headers["accept"].is_sensitive(),
+                "only secret headers are marked"
+            );
+            axum::response::Response::builder()
+                .header(SET_COOKIE, "tangible_session=placeholder")
+                .body(axum::body::Body::empty())
+                .unwrap()
+        }
+
+        let app = traced(Router::new().route("/", get(probe)));
+        let request = axum::http::Request::builder()
+            .uri("/")
+            .header(AUTHORIZATION, "Bearer placeholder")
+            .header(COOKIE, "tangible_session=placeholder")
+            .header(auth::CSRF_HEADER, "placeholder")
+            .header("accept", "application/json")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), 200);
+        assert!(response.headers()[SET_COOKIE].is_sensitive());
+        assert_eq!(format!("{:?}", response.headers()[SET_COOKIE]), "Sensitive");
+    }
 
     #[test]
     fn openapi_document_generates() {
