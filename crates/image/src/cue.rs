@@ -40,7 +40,7 @@ pub use tangible_domain::cd::{FRAMES_PER_SECOND, SECONDS_PER_MINUTE};
 pub const MAX_CUE_BYTES: usize = 1 << 20;
 
 /// Longest line the parser will consider.
-const MAX_LINE_BYTES: usize = 4096;
+pub const MAX_LINE_BYTES: usize = 4096;
 
 /// Most lines the parser will read.
 const MAX_LINES: usize = 20_000;
@@ -1571,4 +1571,121 @@ pub fn layout(sheet: &CueSheet, file_sizes: &[u64]) -> Result<CdLayout, LayoutEr
         session_count,
         warnings,
     })
+}
+
+/// Why a sheet's file names could not be rewritten.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum RewriteError {
+    /// The sheet does not parse, so there are no FILE lines to trust.
+    #[error("the sheet could not be read: {0}")]
+    Unreadable(#[from] CueError),
+    /// No new name was given for a file the sheet declares.
+    #[error("no new name for {0:?}")]
+    NoNewName(String),
+    /// A new name cannot be written inside quotes: it is empty, or holds a
+    /// quote or a control character.
+    #[error("{0:?} cannot be written as a CUE file name")]
+    Unwritable(String),
+    /// The rewritten sheet does not read back as the same sheet with the new
+    /// names, for example because a line grew past the line limit.
+    #[error("the rewritten sheet does not read back as intended")]
+    Changed,
+}
+
+/// Rewrite the file names a sheet declares, keeping every other byte.
+///
+/// `rename` maps each declared name, exactly as [`parse`] reports it, to its
+/// replacement. FILE lines are found and split by the same tokenizer [`parse`]
+/// uses, so the two can never disagree about which file a line names; each is
+/// written again as `FILE "<new name>"` followed by its remaining words, with
+/// its indentation and line ending kept. Every other line is copied byte for
+/// byte, including text that is not UTF-8.
+///
+/// The result is parsed before it is returned, and refused unless it reads as
+/// the same files, in the same order, with the new names and the same formats.
+///
+/// # Errors
+///
+/// [`RewriteError`] when the sheet does not parse, a declared name has no
+/// replacement, a replacement cannot be quoted, or the result would not read
+/// back as intended.
+pub fn rewrite_file_names(
+    bytes: &[u8],
+    rename: impl Fn(&str) -> Option<String>,
+) -> Result<Vec<u8>, RewriteError> {
+    let original = parse(bytes)?;
+    let mut out = Vec::with_capacity(bytes.len() + 64);
+    let mut rest = bytes;
+    let mut first = true;
+    while !rest.is_empty() {
+        let end = rest
+            .iter()
+            .position(|&b| b == b'\n')
+            .map_or(rest.len(), |i| i + 1);
+        let (raw, tail) = rest.split_at(end);
+        rest = tail;
+
+        // The same view of the line `parse` takes: lossy text, the byte order
+        // mark dropped from the very first line, the line ending set aside.
+        let mut body = raw;
+        let mut ending: &[u8] = b"";
+        if let Some(stripped) = body.strip_suffix(b"\n") {
+            body = stripped;
+            ending = b"\n";
+            if let Some(stripped) = body.strip_suffix(b"\r") {
+                body = stripped;
+                ending = b"\r\n";
+            }
+        }
+        let mut bom: &[u8] = b"";
+        if first && let Some(stripped) = body.strip_prefix(b"\xef\xbb\xbf") {
+            body = stripped;
+            bom = b"\xef\xbb\xbf";
+        }
+        first = false;
+
+        let text = String::from_utf8_lossy(body);
+        let tokens = tokenize(text.trim());
+        let is_file = tokens
+            .first()
+            .is_some_and(|command| command.eq_ignore_ascii_case("FILE"));
+        let Some(declared) = tokens.get(1).filter(|_| is_file) else {
+            out.extend_from_slice(raw);
+            continue;
+        };
+
+        let new_name = rename(declared).ok_or_else(|| RewriteError::NoNewName(declared.clone()))?;
+        if new_name.is_empty() || new_name.contains('"') || new_name.chars().any(char::is_control) {
+            return Err(RewriteError::Unwritable(new_name));
+        }
+        let indent = &text[..text.len() - text.trim_start().len()];
+        out.extend_from_slice(bom);
+        out.extend_from_slice(indent.as_bytes());
+        out.extend_from_slice(b"FILE \"");
+        out.extend_from_slice(new_name.as_bytes());
+        out.push(b'"');
+        for word in &tokens[2..] {
+            out.push(b' ');
+            if word.is_empty() || word.contains(char::is_whitespace) {
+                out.push(b'"');
+                out.extend_from_slice(word.as_bytes());
+                out.push(b'"');
+            } else {
+                out.extend_from_slice(word.as_bytes());
+            }
+        }
+        out.extend_from_slice(ending);
+    }
+
+    let reread = parse(&out).map_err(|_| RewriteError::Changed)?;
+    let same = reread.files.len() == original.files.len()
+        && reread.files.iter().zip(&original.files).all(|(new, old)| {
+            rename(&old.name).as_deref() == Some(new.name.as_str())
+                && new.format == old.format
+                && new.tracks == old.tracks
+        });
+    if !same {
+        return Err(RewriteError::Changed);
+    }
+    Ok(out)
 }

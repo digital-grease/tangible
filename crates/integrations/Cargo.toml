@@ -19,4 +19,8 @@ tracing = "0.1.44"
 workspace = true
 
 [dev-dependencies]
+# The CUE rewriter the server passes to the planner, so the tests plan with
+# the real one. A test dependency only: the planner itself does not depend
+# on the image crate.
+tangible-image = { version = "0.1.0", path = "../image" }
 tempfile = "3.27.0"

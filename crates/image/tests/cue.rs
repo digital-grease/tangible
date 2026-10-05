@@ -872,3 +872,89 @@ fn a_word_that_is_not_a_flag_is_warned_about_and_left_out() {
         "known flags kept, once each"
     );
 }
+
+// --- rewriting file names ----------------------------------------------------
+
+fn renamed(name: &str) -> Option<String> {
+    match name {
+        "disc.bin" => Some("Game (Track 01).bin".to_owned()),
+        "two.bin" => Some("Game (Track 02).bin".to_owned()),
+        _ => None,
+    }
+}
+
+#[test]
+fn only_file_lines_change_when_a_sheet_is_rewritten() {
+    let sheet = b"\xef\xbb\xbfFILE disc.bin BINARY\r\n  TRACK 01 MODE1/2352\r\n    INDEX 01 00:00:00\r\nREM FILE \"not.bin\"\r\n  file \"two.bin\" BINARY\n  TRACK 02 AUDIO\n    INDEX 01 00:00:00\n";
+    let out = String::from_utf8(cue::rewrite_file_names(sheet, renamed).unwrap()).unwrap();
+    assert_eq!(
+        out,
+        "\u{feff}FILE \"Game (Track 01).bin\" BINARY\r\n  TRACK 01 MODE1/2352\r\n    INDEX 01 00:00:00\r\nREM FILE \"not.bin\"\r\n  FILE \"Game (Track 02).bin\" BINARY\n  TRACK 02 AUDIO\n    INDEX 01 00:00:00\n"
+    );
+}
+
+#[test]
+fn a_file_without_a_new_name_is_refused() {
+    let sheet = b"FILE \"other.bin\" BINARY\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n";
+    assert_eq!(
+        cue::rewrite_file_names(sheet, renamed),
+        Err(cue::RewriteError::NoNewName("other.bin".to_owned()))
+    );
+}
+
+#[test]
+fn a_new_name_that_cannot_be_quoted_is_refused() {
+    let sheet = b"FILE disc.bin BINARY\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n";
+    for bad in ["", "a\"b.bin", "a\nb.bin"] {
+        assert_eq!(
+            cue::rewrite_file_names(sheet, |_| Some(bad.to_owned())),
+            Err(cue::RewriteError::Unwritable(bad.to_owned()))
+        );
+    }
+}
+
+/// Found by fuzzing. The parser reads a quote anywhere in a word as a
+/// toggle, so `"s2.bin"1` names `s2.bin1`; the RomM export's own rewriter
+/// read it as `s2.bin` and wrote a sheet naming a file that did not exist.
+/// The rewrite now uses the parser's tokenizer.
+#[test]
+fn a_glued_quote_is_read_as_the_parser_reads_it() {
+    let sheet = b"FILE \"s2.bin\"1 BINARY\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\nFILE \"s2.bin\" BINARY\n  TRACK 02 AUDIO\n    INDEX 01 00:00:00\n";
+    let names = |bytes: &[u8]| -> Vec<String> {
+        cue::parse(bytes)
+            .unwrap()
+            .files
+            .into_iter()
+            .map(|f| f.name)
+            .collect()
+    };
+    assert_eq!(names(sheet), ["s2.bin1", "s2.bin"]);
+
+    let out = cue::rewrite_file_names(sheet, |name| match name {
+        "s2.bin1" => Some("Game (Track 01).bin".to_owned()),
+        "s2.bin" => Some("Game (Track 02).bin".to_owned()),
+        _ => None,
+    })
+    .unwrap();
+    assert_eq!(names(&out), ["Game (Track 01).bin", "Game (Track 02).bin"]);
+}
+
+#[test]
+fn bytes_that_are_not_utf8_are_kept_outside_file_lines() {
+    // A Latin-1 title, as older Windows tools wrote them.
+    let sheet = b"TITLE \"Caf\xe9\"\nFILE disc.bin BINARY\n  TRACK 01 AUDIO\n    TITLE \"M\xfcsik\"\n    INDEX 01 00:00:00\n";
+    let out = cue::rewrite_file_names(sheet, renamed).unwrap();
+    assert!(out.starts_with(b"TITLE \"Caf\xe9\"\nFILE \"Game (Track 01).bin\" BINARY\n"));
+    assert!(out.ends_with(b"    TITLE \"M\xfcsik\"\n    INDEX 01 00:00:00\n"));
+}
+
+#[test]
+fn a_rewrite_that_would_break_the_sheet_is_refused() {
+    // A new name long enough to push the line past the parser's limit.
+    let sheet = b"FILE disc.bin BINARY\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n";
+    let long = "x".repeat(cue::MAX_LINE_BYTES);
+    assert_eq!(
+        cue::rewrite_file_names(sheet, |_| Some(long.clone())),
+        Err(cue::RewriteError::Changed)
+    );
+}

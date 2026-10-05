@@ -77,19 +77,49 @@ dev-worker token="":
 # Format everything.
 fmt:
     cargo fmt --all
+    cargo fmt --manifest-path fuzz/Cargo.toml
     pnpm --dir web format
 
 # Lint everything. Warnings are errors, as in CI.
 lint:
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets --all-features -- -D warnings
+    cargo fmt --manifest-path fuzz/Cargo.toml -- --check
+    cargo clippy --manifest-path fuzz/Cargo.toml --lib --tests -- -D warnings
     pnpm --dir web lint
     pnpm --dir web check
 
 # Unit and contract tests. No database, no hardware.
 test:
     cargo test --workspace --all-features
+    just test-fuzz-corpus
     pnpm --dir web test
+
+# Every saved fuzz input through its target, on the stable toolchain: the seeds
+# and every input that once crashed. No fuzzing happens here.
+test-fuzz-corpus:
+    cargo test --manifest-path fuzz/Cargo.toml --test replay
+
+# Fuzz one parser: cue, toc, iso, manifest, logical_path, cdrdao_output,
+# xorriso_output or romm_names. Needs a nightly toolchain and cargo-fuzz.
+# What it learns accumulates in fuzz/corpus/, which is not committed. A crash
+# is written to fuzz/artifacts/; once fixed, copy it into fuzz/regressions/.
+fuzz target seconds="300":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd fuzz
+    # Real tool output kept for the parser tests seeds these targets too
+    # (FIXTURE_SEEDS in fuzz/src/lib.rs).
+    case "{{target}}" in
+        toc) fixtures=(../fixtures/tool-output/cdrdao/toc) ;;
+        cdrdao_output) fixtures=(../fixtures/tool-output/cdrdao) ;;
+        xorriso_output) fixtures=(../fixtures/tool-output/xorriso) ;;
+        *) fixtures=() ;;
+    esac
+    mkdir -p corpus/{{target}} seeds/{{target}} regressions/{{target}}
+    cargo +nightly fuzz run {{target}} corpus/{{target}} seeds/{{target}} \
+        regressions/{{target}} "${fixtures[@]}" -- \
+        -max_total_time={{seconds}} -rss_limit_mb=1024 -max_len=65536
 
 # Tests that need a live PostgreSQL.
 test-integration: dev-db

@@ -46,8 +46,12 @@ pub const MARKER: &str = ".tangible-export.json";
 /// The marker's schema identifier.
 pub const MARKER_SCHEMA: &str = "org.tangible.romm-export/v1";
 
-/// Longest name a folder or file is given.
-const MAX_NAME_CHARS: usize = 150;
+/// Longest name a folder or file is given, in bytes.
+///
+/// Bytes, not characters: filesystems limit a name to 255 bytes, and a title
+/// in Japanese is three bytes a character. A disc and track suffix and an
+/// extension add at most a few dozen more.
+pub const MAX_NAME_BYTES: usize = 150;
 
 /// The platforms a disc image can be exported to: RomM's folder slug and its
 /// display name.
@@ -214,13 +218,13 @@ pub enum PlanError {
     /// Nothing to export.
     #[error("the edition has no discs with an image linked")]
     NoDiscs,
-    /// A CUE sheet names a file under a name that cannot be rewritten.
-    #[error("disc {disc}: the sheet's FILE line for {name:?} could not be rewritten")]
+    /// A CUE sheet's FILE lines could not be rewritten to the new names.
+    #[error("disc {disc}: the sheet's FILE lines could not be rewritten: {reason}")]
     Unrewritable {
         /// One-based disc number.
         disc: usize,
-        /// The declared name.
-        name: String,
+        /// Why, as the rewriter put it.
+        reason: String,
     },
 }
 
@@ -245,16 +249,21 @@ pub fn safe_name(raw: &str) -> String {
         }
         out.push(c);
     }
-    let mut out: String = out.chars().take(MAX_NAME_CHARS).collect();
+    // A leading dot would hide the folder, and RomM would not see it. Added
+    // before the length limit, so the prefix cannot carry a name past it.
+    if out.starts_with('.') {
+        out.insert_str(0, "Untitled ");
+    }
+    let mut end = out.len().min(MAX_NAME_BYTES);
+    while !out.is_char_boundary(end) {
+        end -= 1;
+    }
+    out.truncate(end);
     while out.ends_with(' ') || out.ends_with('.') {
         out.pop();
     }
-    if out.is_empty() || out.starts_with('.') {
-        // A leading dot would hide the folder, and RomM would not see it.
-        out.insert_str(0, "Untitled ");
-        while out.ends_with(' ') || out.ends_with('.') {
-            out.pop();
-        }
+    if out.is_empty() {
+        out.push_str("Untitled");
     }
     out
 }
@@ -280,6 +289,17 @@ fn with_extension(base: &str, path: &str, fallback: &str) -> String {
     )
 }
 
+/// Rewrites the file names in a CUE sheet: the sheet and a map from each
+/// declared name to its new one in, the new sheet or the reason it cannot be
+/// written out.
+///
+/// The CUE grammar lives in the image crate, and the rewrite must find FILE
+/// lines exactly as that parser does, so the caller passes its rewriter in
+/// rather than this crate keeping a second, subtly different, reading of the
+/// same syntax.
+pub type SheetRewriter<'a> =
+    &'a dyn Fn(&[u8], &BTreeMap<String, String>) -> Result<Vec<u8>, String>;
+
 /// Plan one edition's export.
 ///
 /// The folder is the game's name and region, `Title (Region)`, which is how
@@ -292,7 +312,10 @@ fn with_extension(base: &str, path: &str, fallback: &str) -> String {
 /// # Errors
 ///
 /// [`PlanError`] when the edition cannot be exported as it stands.
-pub fn plan(request: &ExportRequest) -> Result<ExportPlan, PlanError> {
+pub fn plan(
+    request: &ExportRequest,
+    rewrite_sheet: SheetRewriter<'_>,
+) -> Result<ExportPlan, PlanError> {
     if !is_platform(&request.platform) {
         return Err(PlanError::UnknownPlatform(request.platform.clone()));
     }
@@ -350,8 +373,12 @@ pub fn plan(request: &ExportRequest) -> Result<ExportPlan, PlanError> {
                         length: file.length,
                     });
                 }
-                let rewritten = rewrite_cue_files(sheet_bytes, &renames)
-                    .map_err(|name| PlanError::Unrewritable { disc: number, name })?;
+                let rewritten = rewrite_sheet(sheet_bytes, &renames).map_err(|reason| {
+                    PlanError::Unrewritable {
+                        disc: number,
+                        reason,
+                    }
+                })?;
                 let sha256 = hex::encode(Sha256::digest(&rewritten));
                 files.push(PlannedFile {
                     name: with_extension(&base, &sheet.logical_path, "cue"),
@@ -370,65 +397,6 @@ pub fn plan(request: &ExportRequest) -> Result<ExportPlan, PlanError> {
         folder: game,
         files,
     })
-}
-
-/// Rewrite the names a CUE sheet's `FILE` lines declare.
-///
-/// Only the name in each `FILE` line changes; every other byte of the sheet,
-/// its line endings, its other commands, its comments, is kept. Returns the
-/// declared name that has no rename, or that a new name cannot replace
-/// safely, as the error.
-///
-/// # Errors
-///
-/// The declared name that could not be rewritten.
-pub fn rewrite_cue_files(
-    sheet: &[u8],
-    renames: &BTreeMap<String, String>,
-) -> Result<Vec<u8>, String> {
-    let text = String::from_utf8_lossy(sheet);
-    let mut out = String::with_capacity(text.len() + 64);
-    for line in text.split_inclusive('\n') {
-        let body = line.trim_end_matches(['\n', '\r']);
-        let ending = &line[body.len()..];
-        let indent_len = body.len() - body.trim_start_matches([' ', '\t', '\u{feff}']).len();
-        let (indent, rest) = body.split_at(indent_len);
-        let Some(after) = rest
-            .get(..5)
-            .filter(|word| {
-                word.eq_ignore_ascii_case("FILE ") || word.eq_ignore_ascii_case("FILE\t")
-            })
-            .map(|_| &rest[5..])
-        else {
-            out.push_str(line);
-            continue;
-        };
-        let after = after.trim_start();
-        let (declared, tail) = if let Some(quoted) = after.strip_prefix('"') {
-            let Some(end) = quoted.find('"') else {
-                return Err(after.to_owned());
-            };
-            (&quoted[..end], &quoted[end + 1..])
-        } else {
-            match after.find([' ', '\t']) {
-                Some(end) => (&after[..end], &after[end..]),
-                None => (after, ""),
-            }
-        };
-        let Some(new_name) = renames.get(declared) else {
-            return Err(declared.to_owned());
-        };
-        if new_name.contains('"') || new_name.chars().any(char::is_control) {
-            return Err(declared.to_owned());
-        }
-        out.push_str(indent);
-        out.push_str("FILE \"");
-        out.push_str(new_name);
-        out.push('"');
-        out.push_str(tail);
-        out.push_str(ending);
-    }
-    Ok(out.into_bytes())
 }
 
 // --- the marker -------------------------------------------------------------------------
@@ -819,25 +787,26 @@ mod tests {
         assert_eq!(safe_name("..."), "Untitled");
         assert_eq!(safe_name(".hidden"), "Untitled .hidden");
         assert_eq!(safe_name("tab\there"), "tabhere");
-        assert_eq!(safe_name(&"x".repeat(500)).chars().count(), MAX_NAME_CHARS);
+        assert_eq!(safe_name(&"x".repeat(500)).len(), MAX_NAME_BYTES);
+        // Three bytes a character: limited by bytes, cut on a character.
+        let japanese = safe_name(&"ゲーム".repeat(100));
+        assert!(japanese.len() <= MAX_NAME_BYTES && japanese.len() > MAX_NAME_BYTES - 3);
+        // Found by fuzzing: the prefix for a hidden name was added after the
+        // limit, so a long one came out longer than the limit, and changed
+        // again when cleaned a second time.
+        let hidden = safe_name(&format!(".{}", "x".repeat(300)));
+        assert!(hidden.starts_with("Untitled .") && hidden.len() == MAX_NAME_BYTES);
+        assert_eq!(safe_name(&hidden), hidden);
     }
 
-    #[test]
-    fn only_file_lines_change_when_a_sheet_is_rewritten() {
-        let sheet = b"\xef\xbb\xbfFILE disc.bin BINARY\r\n  TRACK 01 MODE1/2352\r\nREM FILE \"not.bin\"\r\n  file \"two.bin\" BINARY\n";
-        let renames = BTreeMap::from([
-            ("disc.bin".to_owned(), "Game (Track 01).bin".to_owned()),
-            ("two.bin".to_owned(), "Game (Track 02).bin".to_owned()),
-        ]);
-        let out = String::from_utf8(rewrite_cue_files(sheet, &renames).unwrap()).unwrap();
-        assert_eq!(
-            out,
-            "\u{feff}FILE \"Game (Track 01).bin\" BINARY\r\n  TRACK 01 MODE1/2352\r\nREM FILE \"not.bin\"\r\n  FILE \"Game (Track 02).bin\" BINARY\n"
-        );
-        assert_eq!(
-            rewrite_cue_files(b"FILE \"other.bin\" BINARY\n", &renames),
-            Err("other.bin".to_owned())
-        );
+    /// The rewriter the server passes in, from the image crate.
+    fn rewrite(sheet: &[u8], renames: &BTreeMap<String, String>) -> Result<Vec<u8>, String> {
+        tangible_image::rewrite_file_names(sheet, |name| renames.get(name).cloned())
+            .map_err(|error| error.to_string())
+    }
+
+    fn plan(request: &ExportRequest) -> Result<ExportPlan, PlanError> {
+        super::plan(request, &rewrite)
     }
 
     #[test]

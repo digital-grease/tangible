@@ -1,0 +1,84 @@
+{
+  "schema": "org.tangible.artifact-manifest/v1alpha1",
+  "artifact_id": "01a1088f-0165-7652-819b-cac12fcbe043",
+  "created_at": "2026-10-04T20:00:00Z",
+  "origin": {
+    "kind": "imported_original",
+    "source_kind": "watched_root",
+    "source_reference": null,
+    "source_filename": "Game",
+    "acquired_at": null,
+    "operator_note": null
+  },
+  "classification": {
+    "artifact_kind": "single_file_image",
+    "format": "iso",
+    "format_confidence": 0.99,
+    "detectors": [
+      {
+        "name": "iso9660",
+        "version": "1",
+        "evidence": [
+          "CD001 at 32768"
+        ]
+      }
+    ],
+    "media_family": "dvd",
+    "total_bytes": 204800
+  },
+  "components": [
+    {
+      "id": "01a1088f-0165-7652-819b-cac12fcbe044",
+      "logical_path": "disc.iso",
+      "source_filename": "disc.iso",
+      "role": "primary_image",
+      "ordinal": 0,
+      "length_bytes": 204800,
+      "content": {
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "crc32": "deadbeef"
+      },
+      "storage": {
+        "algorithm": "sha256",
+        "object_key": "sha256/aa/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "media_type": null,
+      "attributes": {}
+    }
+  ],
+  "topology": {
+    "kind": "single_track_block_image",
+    "block_size": 2048,
+    "block_count": 100,
+    "volume_labels": [
+      "EXAMPLE"
+    ],
+    "filesystems": [
+      {
+        "type": "iso9660",
+        "version": null,
+        "evidence": "primary volume descriptor"
+      }
+    ]
+  },
+  "validation": {
+    "state": "valid",
+    "validated_at": null,
+    "validators": []
+  },
+  "lineage": null,
+  "associations": [],
+  "compatibility": {
+    "structurally_valid": true,
+    "burn_support": {
+      "state": "supported",
+      "profiles": [],
+      "engines": [
+        "xorriso"
+      ],
+      "warnings": []
+    },
+    "target_claims": []
+  },
+  "extensions": {}
+}

@@ -33,6 +33,14 @@ TANGIBLE_HARDWARE_TESTS=1 just test-hardware
 
 The hardware suite must also require a configured test drive and explicit test-media policy. Merely setting one environment variable must not be enough to overwrite arbitrary inserted media.
 
+A change to a parser of untrusted input (CUE, TOC, ISO, manifests, paths, burn-tool output) should be fuzzed before review. This needs a nightly toolchain and `cargo-fuzz`; see `fuzz/README.md`:
+
+```bash
+just fuzz cue 600
+```
+
+An input the fuzzer finds goes into `fuzz/regressions/<target>/` with the fix, so `just test` replays it from then on.
+
 ## Pull requests
 
 A pull request should:

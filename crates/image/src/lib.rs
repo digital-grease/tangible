@@ -16,7 +16,7 @@ pub mod toc;
 
 pub use cue::{
     CdLayout, CueError, CueFile, CueSheet, CueTrack, CueWarning, LayoutError, Msf,
-    ReferenceFailure, ReferenceResolution, ResolvedReference, TrackLayout, TrackMode, layout,
-    parse, resolve_names, resolve_references,
+    ReferenceFailure, ReferenceResolution, ResolvedReference, RewriteError, TrackLayout, TrackMode,
+    layout, parse, resolve_names, resolve_references, rewrite_file_names,
 };
 pub use iso::{FilesystemEvidence, IsoInspection, IsoWarning, PrimaryVolume, inspect};

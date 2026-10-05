@@ -1,0 +1,142 @@
+{
+  "schema": "org.tangible.artifact-manifest/v1alpha1",
+  "artifact_id": "01a1088f-0165-7652-819b-cac12fcbe043",
+  "created_at": "2026-10-04T20:00:00Z",
+  "origin": {
+    "kind": "imported_original",
+    "source_kind": "watched_root",
+    "source_reference": null,
+    "source_filename": "Game",
+    "acquired_at": null,
+    "operator_note": null
+  },
+  "classification": {
+    "artifact_kind": "multi_file_image",
+    "format": "cue_bin",
+    "format_confidence": 0.99,
+    "detectors": [
+      {
+        "name": "iso9660",
+        "version": "1",
+        "evidence": [
+          "CD001 at 32768"
+        ]
+      }
+    ],
+    "media_family": "cd",
+    "total_bytes": 705682
+  },
+  "components": [
+    {
+      "id": "01a1088f-0165-7652-819b-cac12fcbe045",
+      "logical_path": "game.cue",
+      "source_filename": "game.cue",
+      "role": "descriptor",
+      "ordinal": 0,
+      "length_bytes": 82,
+      "content": {
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "crc32": "deadbeef"
+      },
+      "storage": {
+        "algorithm": "sha256",
+        "object_key": "sha256/bb/bb/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "media_type": null,
+      "attributes": {}
+    },
+    {
+      "id": "01a1088f-0165-7652-819b-cac12fcbe046",
+      "logical_path": "game.bin",
+      "source_filename": "game.bin",
+      "role": "primary_image",
+      "ordinal": 1,
+      "length_bytes": 705600,
+      "content": {
+        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "crc32": "deadbeef"
+      },
+      "storage": {
+        "algorithm": "sha256",
+        "object_key": "sha256/cc/cc/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "media_type": null,
+      "attributes": {}
+    }
+  ],
+  "topology": {
+    "kind": "cd_tracks",
+    "descriptor_component_id": "01a1088f-0165-7652-819b-cac12fcbe045",
+    "catalog": "0123456789012",
+    "session_count": 1,
+    "tracks": [
+      {
+        "number": 1,
+        "session": 1,
+        "mode": "MODE2/2352",
+        "component_id": "01a1088f-0165-7652-819b-cac12fcbe046",
+        "file_offset_bytes": 0,
+        "start_lba": 0,
+        "sector_count": 150,
+        "pregap_sectors": 0,
+        "indexes": [
+          {
+            "number": 1,
+            "relative_lba": 0
+          }
+        ],
+        "isrc": null,
+        "sample_byte_order": null,
+        "flags": [],
+        "hashes": {}
+      },
+      {
+        "number": 2,
+        "session": 1,
+        "mode": "AUDIO",
+        "component_id": "01a1088f-0165-7652-819b-cac12fcbe046",
+        "file_offset_bytes": 352800,
+        "start_lba": 150,
+        "sector_count": 150,
+        "pregap_sectors": 150,
+        "indexes": [
+          {
+            "number": 0,
+            "relative_lba": 0
+          },
+          {
+            "number": 1,
+            "relative_lba": 150
+          }
+        ],
+        "isrc": "USXXX2600001",
+        "sample_byte_order": "little_endian",
+        "flags": [
+          "DCP"
+        ],
+        "hashes": {}
+      }
+    ],
+    "subchannel": null
+  },
+  "validation": {
+    "state": "valid",
+    "validated_at": null,
+    "validators": []
+  },
+  "lineage": null,
+  "associations": [],
+  "compatibility": {
+    "structurally_valid": true,
+    "burn_support": {
+      "state": "supported",
+      "profiles": [],
+      "engines": [
+        "xorriso"
+      ],
+      "warnings": []
+    },
+    "target_claims": []
+  },
+  "extensions": {}
+}

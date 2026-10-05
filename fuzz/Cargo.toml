@@ -1,0 +1,82 @@
+[package]
+name = "tangible-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+description = "Fuzz targets for the parsers that read untrusted input"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Its own workspace: libFuzzer needs a nightly compiler and sanitizer flags,
+# and the main workspace builds on stable. The replay test in tests/ runs on
+# stable, so every saved input is still checked by the normal test suite.
+[workspace]
+members = ["."]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tangible-burn = { path = "../crates/burn" }
+tangible-domain = { path = "../crates/domain" }
+tangible-image = { path = "../crates/image" }
+tangible-integrations = { path = "../crates/integrations" }
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "cue"
+path = "fuzz_targets/cue.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "toc"
+path = "fuzz_targets/toc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "iso"
+path = "fuzz_targets/iso.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "manifest"
+path = "fuzz_targets/manifest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "logical_path"
+path = "fuzz_targets/logical_path.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cdrdao_output"
+path = "fuzz_targets/cdrdao_output.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xorriso_output"
+path = "fuzz_targets/xorriso_output.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "romm_names"
+path = "fuzz_targets/romm_names.rs"
+test = false
+doc = false
+bench = false

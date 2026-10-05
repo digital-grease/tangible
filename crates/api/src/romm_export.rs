@@ -18,6 +18,7 @@
 //! what to export from the catalog and the manifests, and records what
 //! happened.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -283,7 +284,7 @@ impl RommExporter {
             platform,
             discs,
         };
-        let plan = match romm::plan(&request) {
+        let plan = match romm::plan(&request, &rewrite_sheet) {
             Ok(plan) => plan,
             Err(error) => return Ok(blocked(error.to_string())),
         };
@@ -449,6 +450,12 @@ impl RommExporter {
             files,
         })
     }
+}
+
+/// Rewrite a CUE sheet's file names with the CUE parser's own grammar.
+fn rewrite_sheet(sheet: &[u8], renames: &BTreeMap<String, String>) -> Result<Vec<u8>, String> {
+    tangible_image::rewrite_file_names(sheet, |name| renames.get(name).cloned())
+        .map_err(|error| error.to_string())
 }
 
 /// The artifact a disc exports from: the first image linked as a
