@@ -161,6 +161,51 @@ RomM's folder bind-mounted, as above, they are copied, so allow the space. ISO
 and CUE/BIN images are exported; a disc imported only as a cdrdao TOC is not,
 because RomM's emulators do not read that format.
 
+## Verifying a release
+
+Each release is built by `.github/workflows/release.yml` from its tag, and
+signed by that workflow with a short-lived Sigstore certificate: there is no
+long-lived key to steal, and a signature proves which workflow, at which tag,
+in which repository, built the bytes. The release page gives the image's
+digest. Use the digest, not the tag, in `compose.yaml`; a tag can be moved,
+a digest cannot.
+
+With [cosign](https://docs.sigstore.dev/cosign/system_config/installation/)
+installed from your distribution or its release page:
+
+```bash
+IMAGE=ghcr.io/digital-grease/tangible@sha256:<digest from the release page>
+TAG=v0.1.0
+
+# The image was signed by this repository's release workflow at this tag.
+cosign verify "$IMAGE" \
+  --certificate-identity "https://github.com/digital-grease/tangible/.github/workflows/release.yml@refs/tags/$TAG" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+The release files are covered by `SHA256SUMS`, which is signed the same way:
+
+```bash
+cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity "https://github.com/digital-grease/tangible/.github/workflows/release.yml@refs/tags/$TAG" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+sha256sum --check SHA256SUMS
+```
+
+GitHub's build provenance covers the image and every release file as well,
+for anyone using the GitHub CLI:
+
+```bash
+gh attestation verify "oci://$IMAGE" --repo digital-grease/tangible
+gh attestation verify tangible-deploy-$TAG.tar.gz --repo digital-grease/tangible
+```
+
+Each release also carries `sbom.spdx.json`, the image's software bill of
+materials, and `SOURCES.md`, which names the Debian source package and exact
+version of everything in the image: publishing the image conveys object code
+for GPL programs such as xorriso and cdrdao, and that is where their source
+is.
+
 ## What this deployment will not do
 
 - run with `privileged: true`

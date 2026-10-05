@@ -4,10 +4,16 @@
 # Multi-stage build. The runtime stage carries the burn engines because the
 # same image runs both `serve` and `burn-worker`; only the worker container
 # ever receives a device, so the server cannot use them.
+#
+# Every base image is pinned by digest, so a release rebuilt from its tag uses
+# the same bases, and the SBOM and SOURCES.md name exactly what shipped. The
+# tag beside each digest says what it is; to move to newer bases, pull the
+# tag and replace the digest with `docker image inspect --format
+# '{{index .RepoDigests 0}}' <tag>`.
 
 # The web UI: a static build, served by the server from the same origin as
 # the API. Node exists only in this stage; the runtime image has none.
-FROM node:24-bookworm-slim AS web
+FROM node:24-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS web
 WORKDIR /web
 RUN npm install --global pnpm@11.26.0
 # Dependencies first, from the lockfile alone, so they are cached across
@@ -17,7 +23,7 @@ RUN pnpm install --frozen-lockfile
 COPY web ./
 RUN pnpm build
 
-FROM rust:1.95-bookworm AS build
+FROM rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS build
 WORKDIR /src
 
 # Cache dependencies separately from source.
@@ -26,7 +32,7 @@ COPY crates ./crates
 COPY migrations ./migrations
 RUN cargo build --release --locked -p tangible-app
 
-FROM debian:bookworm-slim AS runtime
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS runtime
 
 # xorriso for ISO-oriented workflows, cdrdao for DAO/audio/mixed-mode CD.
 # ca-certificates for TLS to the database and integration endpoints.
@@ -71,6 +77,25 @@ COPY --from=web /web/build /usr/share/tangible/web
 
 # Serve the UI built above. Unset it to run the API alone.
 ENV TANGIBLE_WEB_ROOT=/usr/share/tangible/web
+
+# Set by the release workflow; a local build says what it is not. Last, so
+# a new version or revision does not rebuild the layers above.
+ARG VERSION=dev
+ARG REVISION=unknown
+ARG CREATED=unknown
+
+# Where the Corresponding Source is: this image conveys object code for every
+# GPL program in it, and for Tangible itself under the AGPL. SOURCES.md, with
+# each release, lists the Debian source package of everything installed.
+LABEL org.opencontainers.image.title="Tangible" \
+      org.opencontainers.image.description="Self-hosted disc-image preservation, cataloguing and burning" \
+      org.opencontainers.image.source="https://github.com/digital-grease/tangible" \
+      org.opencontainers.image.url="https://github.com/digital-grease/tangible" \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later" \
+      org.opencontainers.image.vendor="digitalgrease" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}" \
+      org.opencontainers.image.created="${CREATED}"
 
 ENTRYPOINT ["tangible"]
 CMD ["serve"]

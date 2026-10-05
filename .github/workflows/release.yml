@@ -1,0 +1,157 @@
+# SPDX-FileCopyrightText: 2026 digitalgrease
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Build, sign and stage a release from a version tag.
+#
+# Pushing a tag vX.Y.Z (matching the workspace version) builds the image,
+# pushes it to GHCR by that tag, and produces:
+#
+#   - an SBOM and a SLSA provenance attestation inside the registry (BuildKit)
+#   - a keyless Sigstore signature on the image digest (cosign), bound to this
+#     workflow at this tag
+#   - a GitHub artifact attestation for the image and for every release file
+#   - tangible-vX.Y.Z-source.tar.gz and tangible-deploy-vX.Y.Z.tar.gz
+#   - SOURCES.md, where the Corresponding Source of everything in the image is
+#   - sbom.spdx.json, the image's SBOM as a file
+#   - SHA256SUMS, signed (SHA256SUMS.sigstore.json)
+#
+# The GitHub release is created as a DRAFT. A person reads it, checks it
+# against the release checklist, and publishes it; nothing here does.
+#
+# Every action is pinned to a commit, not a tag: this job can mint signing
+# identities and push images, so what it runs must not change under it.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, sign and stage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # the draft release
+      packages: write # GHCR
+      id-token: write # keyless signing and attestations
+      attestations: write
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: The tag is the workspace version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::tag $TAG does not match the workspace version $version"
+            exit 1
+          fi
+
+      - name: Image name
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit time
+        id: created
+        # The commit's time, not the build's, so the label is reproducible.
+        run: echo "at=$(git log -1 --format=%cI)" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: deploy/Dockerfile
+          push: true
+          tags: ${{ steps.image.outputs.name }}:${{ env.TAG }}
+          build-args: |
+            VERSION=${{ env.TAG }}
+            REVISION=${{ github.sha }}
+            CREATED=${{ steps.created.outputs.at }}
+          sbom: true
+          provenance: mode=max
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign the image
+        env:
+          REF: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "$REF"
+
+      - name: Attest the image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Release files
+        env:
+          REF: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
+        run: |
+          mkdir dist
+          git archive --format=tar.gz --prefix="tangible-$TAG/" \
+            -o "dist/tangible-$TAG-source.tar.gz" "$TAG"
+          git archive --format=tar.gz --prefix="tangible-deploy-$TAG/" \
+            -o "dist/tangible-deploy-$TAG.tar.gz" "$TAG:deploy"
+          docker pull --quiet "$REF"
+          deploy/sources.sh "$REF" "$TAG" > dist/SOURCES.md
+          docker buildx imagetools inspect "$REF" --format '{{ json .SBOM.SPDX }}' \
+            > dist/sbom.spdx.json
+          jq -e '.spdxVersion' dist/sbom.spdx.json > /dev/null
+          (cd dist && sha256sum -- * > SHA256SUMS)
+
+      - name: Sign the checksums
+        run: |
+          cosign sign-blob --yes --bundle dist/SHA256SUMS.sigstore.json \
+            dist/SHA256SUMS
+
+      - name: Attest the release files
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/tangible-*.tar.gz
+            dist/SOURCES.md
+            dist/sbom.spdx.json
+
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cat > notes.md <<EOF
+          Image: \`$IMAGE:$TAG\`
+
+          Digest: \`$IMAGE@$DIGEST\`
+
+          Pin the digest in your Compose file, and verify it before use; see
+          "Verifying a release" in deploy/README.md.
+
+          \`\`\`bash
+          cosign verify "$IMAGE@$DIGEST" \\
+            --certificate-identity "https://github.com/$GITHUB_REPOSITORY/.github/workflows/release.yml@refs/tags/$TAG" \\
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          \`\`\`
+          EOF
+          gh release create "$TAG" --draft --verify-tag \
+            --title "Tangible $TAG" --notes-file notes.md dist/*
