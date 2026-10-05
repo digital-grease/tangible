@@ -230,6 +230,15 @@ compose-config:
     TANGIBLE_WORKER_NAME=validate TANGIBLE_OPTICAL_GID=990 docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml --env-file deploy/.env.example config >/dev/null
     TANGIBLE_WORKER_NAME=validate TANGIBLE_OPTICAL_GID=990 TANGIBLE_SCSI_DEVICE=/dev/sg4 docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml -f deploy/compose.hardware-sg.yaml --env-file deploy/.env.example config >/dev/null
     @echo "all compose combinations render"
+    just compose-hardening
+
+# Fail if any Compose combination loosens a container's confinement
+# (deploy/check-hardening.sh says what is required).
+compose-hardening:
+    docker compose -f deploy/compose.yaml --env-file deploy/.env.example config --format json | deploy/check-hardening.sh
+    docker compose -f deploy/compose.yaml -f deploy/compose.dev.yaml --env-file deploy/.env.example config --format json | deploy/check-hardening.sh --allow-writable server
+    TANGIBLE_WORKER_NAME=validate TANGIBLE_OPTICAL_GID=990 docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml --env-file deploy/.env.example config --format json | deploy/check-hardening.sh
+    TANGIBLE_WORKER_NAME=validate TANGIBLE_OPTICAL_GID=990 TANGIBLE_SCSI_DEVICE=/dev/sg4 docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml -f deploy/compose.hardware-sg.yaml --env-file deploy/.env.example config --format json | deploy/check-hardening.sh
 
 # Assert that no default stack can reach an optical drive.
 verify-no-devices:

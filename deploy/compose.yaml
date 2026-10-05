@@ -66,6 +66,9 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    # Bounds a runaway or a fork bomb. Threads count: tokio's blocking pool
+    # alone may grow to 512.
+    pids_limit: 1024
 
   postgres:
     image: postgres:17-alpine
@@ -83,6 +86,24 @@ services:
       retries: 10
     security_opt:
       - no-new-privileges:true
+    # The image's entrypoint starts as root to own the data directory, then
+    # drops to the postgres user; these five are what that takes, and the
+    # server process itself runs with none. Checked on a fresh volume and a
+    # restart.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    read_only: true
+    tmpfs:
+      - /var/run/postgresql
+      - /tmp
+    # One process per connection; the server's pool holds ten.
+    pids_limit: 256
 
 volumes:
   library:

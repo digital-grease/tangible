@@ -67,7 +67,18 @@ services:
       - no-new-privileges:true
     # privileged: true is never an accepted default.
     # The device mapping and the drive's group are the entire required
-    # privilege.
+    # privilege. The worker runs as an unprivileged user, so it holds no
+    # capability anyway; dropping them all also empties what a setuid binary
+    # could regain. Both engines burned and read back on the first real drive
+    # with no effective capability.
+    cap_drop:
+      - ALL
+    # It writes only to its state volume, /tmp (the tools' working directory)
+    # and the drive, which is under /dev, a separate mount.
+    read_only: true
+    tmpfs:
+      - /tmp
+    pids_limit: 1024
 
 volumes:
   burner-sr0-cache:

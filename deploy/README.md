@@ -165,5 +165,8 @@ because RomM's emulators do not read that format.
 
 - run with `privileged: true`
 - give the server container any device access
+- leave a container its default capabilities or a writable root filesystem
+  (`deploy/check-hardening.sh` checks a rendered stack; run it after editing
+  the Compose files)
 - pipe a remote script into a shell
 - use a `latest` image tag

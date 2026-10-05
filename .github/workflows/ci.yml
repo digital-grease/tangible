@@ -166,6 +166,23 @@ jobs:
             -f deploy/compose.hardware-sg.yaml \
             --env-file deploy/.env.example config >/dev/null
 
+      # Every service drops all capabilities (PostgreSQL keeps the five its
+      # entrypoint needs), sets no-new-privileges, a read-only root and a
+      # process limit; only a burn worker maps a device, and only a drive.
+      - name: Every container is confined
+        run: |
+          E="--env-file deploy/.env.example"
+          docker compose -f deploy/compose.yaml $E config --format json \
+            | deploy/check-hardening.sh
+          docker compose -f deploy/compose.yaml -f deploy/compose.dev.yaml $E \
+            config --format json | deploy/check-hardening.sh --allow-writable server
+          export TANGIBLE_WORKER_NAME=validate TANGIBLE_OPTICAL_GID=990
+          docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml $E \
+            config --format json | deploy/check-hardening.sh
+          TANGIBLE_SCSI_DEVICE=/dev/sg4 docker compose -f deploy/compose.yaml \
+            -f deploy/compose.hardware.yaml -f deploy/compose.hardware-sg.yaml $E \
+            config --format json | deploy/check-hardening.sh
+
       - name: No default stack can reach an optical drive
         run: |
           for combo in \
