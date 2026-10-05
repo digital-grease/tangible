@@ -395,13 +395,19 @@ pub struct SignedIn(pub CurrentUser);
 impl<S: Send + Sync> FromRequestParts<S> for SignedIn {
     type Rejection = Problem;
 
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        parts
-            .extensions
-            .get::<CurrentUser>()
-            .cloned()
-            .map(Self)
-            .ok_or_else(not_signed_in)
+    // Nothing to wait for: the middleware already found the session.
+    fn from_request_parts(
+        parts: &mut Parts,
+        _state: &S,
+    ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
+        std::future::ready(
+            parts
+                .extensions
+                .get::<CurrentUser>()
+                .cloned()
+                .map(Self)
+                .ok_or_else(not_signed_in),
+        )
     }
 }
 

@@ -1,0 +1,80 @@
+# SPDX-FileCopyrightText: 2026 digitalgrease
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Issue Labeler
+
+# Adds labels to new issues from what they say: the form's Area and engine
+# answers, and words that point at a part of the system. Belt and braces for
+# the labels the forms apply, covering issues filed through the API,
+# `gh issue create`, or the "Something else" fallback.
+#
+# Idempotent: adding a label an issue already has is a no-op.
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  label:
+    name: Apply content-based labels
+    runs-on: ubuntu-latest
+    steps:
+      - name: Apply labels from issue title and body
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          TITLE: ${{ github.event.issue.title }}
+          BODY: ${{ github.event.issue.body }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          labels_to_add=()
+
+          # The answer under a form heading: "### Area\n\nimport".
+          answer() {
+            printf '%s\n' "$BODY" \
+              | awk -v h="### $1" '$0 == h {flag=1; next} flag && NF {print; flag=0}' \
+              | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' | head -c 32 || true
+          }
+
+          # --- Form answers ---
+          case "$(answer Area)" in
+            import|library|catalog|romm|web|api|deployment)
+              labels_to_add+=("area:$(answer Area)") ;;
+          esac
+          case "$(answer 'Burn engine')" in
+            xorriso|cdrdao) labels_to_add+=("area:burn" "engine:$(answer 'Burn engine')") ;;
+          esac
+
+          # --- Content, for issues that skipped the forms ---
+          if echo "$TITLE $BODY" | grep -qiE 'xorriso|cdrdao|burn(ing|ed)?\b|/dev/sr[0-9]|preflight|read-?back'; then
+            labels_to_add+=("area:burn")
+          fi
+          if echo "$BODY" | grep -qiE 'enrol(l)?ment|worker credential|burner-sr|lease'; then
+            labels_to_add+=("area:worker")
+          fi
+          if echo "$BODY" | grep -qiE 'watched folder|watch root|upload|staging|import job'; then
+            labels_to_add+=("area:import")
+          fi
+          if echo "$BODY" | grep -qiE 'romm|roms/|tangible-export\.json'; then
+            labels_to_add+=("area:romm")
+          fi
+          if echo "$BODY" | grep -qiE 'docker compose|compose\.yaml|check-hardening|ghcr\.io'; then
+            labels_to_add+=("area:deployment")
+          fi
+          if echo "$TITLE" | grep -qiE 'regress|used to work|stopped working'; then
+            labels_to_add+=("regression")
+          fi
+
+          # --- Dedup and apply ---
+          if [ "${#labels_to_add[@]}" -eq 0 ]; then
+            echo "No content-based labels matched; nothing to add."
+            exit 0
+          fi
+          unique_labels=$(printf '%s\n' "${labels_to_add[@]}" | sort -u | paste -sd, -)
+          echo "Applying labels: $unique_labels"
+          gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "$unique_labels"

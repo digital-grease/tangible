@@ -1,4 +1,7 @@
 [toolchain]
-channel = "stable"
+# An exact release, so CI, the image (deploy/Dockerfile's rust:1.95) and local
+# builds agree, and a new Rust's lints arrive as a deliberate bump rather than
+# a red build nobody caused.
+channel = "1.95.0"
 components = ["rustfmt", "clippy"]
 profile = "minimal"

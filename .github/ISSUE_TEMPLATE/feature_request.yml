@@ -1,0 +1,36 @@
+name: Feature request
+description: Suggest a new capability, setting or behaviour
+title: "Feature: "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Quick checks first:
+        - Has someone already asked? Browse open `enhancement` issues.
+        - Is it a bigger-picture idea that needs discussing before it is work? Start a [discussion](https://github.com/digital-grease/tangible/discussions/categories/ideas) instead.
+
+        Some things are outside what Tangible will do, whatever the request: finding or downloading copyrighted releases, removing copy protection, or running software from inside an image.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would it solve?
+      description: The situation you are in, rather than the solution you have in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What would you like to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Optional. Workarounds you use today, or other approaches.
+    validations:
+      required: false

@@ -1,0 +1,54 @@
+# SPDX-FileCopyrightText: 2026 digitalgrease
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Comment-Triggered Labels
+
+# Adds labels to issues from the maintainer's own comments:
+#   - awaiting-user-update: the maintainer asked the reporter to try a newer
+#     release, by the /awaiting-update command or one of a few usual phrases.
+#   - needs-info: the maintainer asked for more, by /needs-info.
+#
+# Only the repository owner's comments trigger it; anyone else's are no-ops,
+# so nobody else can apply labels this way.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  awaiting-user-update:
+    name: Apply awaiting-user-update
+    if: |
+      github.event.issue.pull_request == null &&
+      github.event.comment.user.login == github.event.repository.owner.login &&
+      (contains(github.event.comment.body, '/awaiting-update') ||
+       contains(github.event.comment.body, 'try the latest release') ||
+       contains(github.event.comment.body, 'should be fixed in v') ||
+       contains(github.event.comment.body, 'fixed in the latest release'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add the label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "awaiting-user-update"
+
+  needs-info:
+    name: Apply needs-info
+    if: |
+      github.event.issue.pull_request == null &&
+      github.event.comment.user.login == github.event.repository.owner.login &&
+      contains(github.event.comment.body, '/needs-info')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add the label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "needs-info"

@@ -1,0 +1,19 @@
+# Disable the empty "Open a blank issue" link so reports land on a structured form.
+# The "Something else" Markdown fallback is still available for unusual cases.
+blank_issues_enabled: false
+
+# Links shown beside the forms, so questions and early ideas go to Discussions
+# and security problems are never filed in public.
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/digital-grease/tangible/security/advisories/new
+    about: Privately. Never open a public issue for a suspected vulnerability.
+  - name: Latest release and changelog
+    url: https://github.com/digital-grease/tangible/releases/latest
+    about: If the bug you hit is fixed in a newer release, that saves a round trip.
+  - name: Questions (Discussions)
+    url: https://github.com/digital-grease/tangible/discussions/categories/q-a
+    about: How to set something up, whether a drive or format should work, how a feature behaves.
+  - name: Ideas (Discussions)
+    url: https://github.com/digital-grease/tangible/discussions/categories/ideas
+    about: Bigger-picture asks that are not ready to be a tracked feature request.

@@ -1,0 +1,112 @@
+name: Burn or drive problem
+description: A disc failed to write or verify, a drive was not recognised, or a burn did something unexpected
+title: "Burn: "
+labels: ["bug", "area:burn", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks. Drive and media details matter more here than anywhere else: the same image can burn on one drive and fail on another. These reports also feed the hardware compatibility list.
+
+  - type: input
+    id: version
+    attributes:
+      label: Tangible version
+      placeholder: v0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: drive
+    attributes:
+      label: Drive
+      description: Model and firmware, as the worker logged them or `cdrdao drive-info` reports. Leave out the serial number.
+      placeholder: Pioneer BDR-212, firmware 1.02
+    validations:
+      required: true
+
+  - type: dropdown
+    id: connection
+    attributes:
+      label: Connection
+      options:
+        - USB
+        - SATA
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: media
+    attributes:
+      label: Media
+      description: Type and brand.
+      placeholder: CD-R, Verbatim
+    validations:
+      required: true
+
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Burn engine
+      options:
+        - auto
+        - xorriso
+        - cdrdao
+        - fake
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: format
+    attributes:
+      label: Image format
+      options:
+        - ISO
+        - CUE/BIN
+        - TOC/BIN
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: What did Tangible record?
+      options:
+        - The drive was never recognised
+        - The burn waited for a disc that was already in the drive
+        - Refused before writing (preflight)
+        - Write failed
+        - Written, but verification failed
+        - Verified, but the disc does not work where I use it
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: worker_log
+    attributes:
+      label: Worker log
+      description: |
+        The burn worker's log for the attempt (`docker compose logs burner-sr0`). Remove the enrollment token and worker credential if they appear, and the drive's serial number.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: medium
+    attributes:
+      label: What the drive reports
+      description: Optional. Output of `xorriso -outdev /dev/sr0 -toc` or `cdrdao disk-info --device /dev/sr0` with the disc in the drive. Both only read.
+      render: text
+    validations:
+      required: false

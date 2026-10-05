@@ -1,0 +1,37 @@
+title: "[Idea] "
+labels: ["idea"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For bigger-picture or speculative asks: a new format family, a new
+        kind of integration, a different deployment model, anything worth a
+        conversation before it becomes committed work.
+
+        For a concrete change to something that already exists, file a
+        [feature request](https://github.com/digital-grease/tangible/issues/new/choose)
+        instead.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: audience
+    attributes:
+      label: Who else would benefit?
+      description: |
+        A personal setup, or something many people preserving discs would
+        want? "Mostly me" is a fine answer.
+    validations:
+      required: false
+  - type: textarea
+    id: why-discussion
+    attributes:
+      label: Why this is not a feature request yet
+      description: |
+        Optional. For example: it is speculative, depends on a design
+        decision, or you are not sure it is the right shape.
+    validations:
+      required: false

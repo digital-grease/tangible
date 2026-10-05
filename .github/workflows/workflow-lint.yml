@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: 2026 digitalgrease
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Workflow Lint
+
+# Lints the workflows themselves with actionlint, which bundles shellcheck for
+# `run:` blocks, so a malformed workflow, an invalid expression, a bad runner
+# label or an unsafe shell snippet is caught in review rather than failing
+# live, or worse, in the middle of a release. Runs only when a workflow
+# changes.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Pinned by digest; it ships actionlint with shellcheck and pyflakes.
+      - name: Run actionlint
+        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 # 1.7.12
+        with:
+          args: -color

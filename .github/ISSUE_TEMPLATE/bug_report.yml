@@ -1,0 +1,95 @@
+name: Bug report
+description: Something works incorrectly (an import, the catalog, the web UI, the API, deployment). For a burn or drive problem, use the burn form.
+title: "Bug: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Quick checks first:
+        - Is it already fixed? See the [releases page](https://github.com/digital-grease/tangible/releases).
+        - A disc that failed to write or verify, or a drive the worker cannot use, has its own form: **Burn or drive problem**.
+        - A security problem does not belong here. Report it privately; see [SECURITY.md](https://github.com/digital-grease/tangible/blob/main/SECURITY.md).
+
+  - type: input
+    id: version
+    attributes:
+      label: Tangible version
+      description: The release tag, or the commit if you built it yourself.
+      placeholder: v0.1.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment
+      options:
+        - Release image with the Compose files
+        - Built from source with Docker
+        - Built from source, run directly
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: host
+    attributes:
+      label: Host
+      description: Operating system, and the Docker and Compose versions if you use them.
+      placeholder: Debian 12, Docker 27.3, Compose 2.30
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Best guess. The auto-labeller reads this to tag the issue.
+      options:
+        - import
+        - library
+        - catalog
+        - romm
+        - web
+        - api
+        - deployment
+        - other
+    validations:
+      required: false
+
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: what_expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps are great. If an image is involved, say what kind (ISO, CUE/BIN, TOC/BIN) rather than attaching one you may not have the right to share.
+      placeholder: |
+        1. Import …
+        2. Open …
+        3. …
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        The server's log around the problem (`docker compose logs server`). Remove anything private first: session cookies, enrollment tokens, worker credentials, database URLs, and file names from your library you would rather not share.
+      render: text
+    validations:
+      required: false
