@@ -13,7 +13,7 @@
 
 # The web UI: a static build, served by the server from the same origin as
 # the API. Node exists only in this stage; the runtime image has none.
-FROM node:24-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS web
+FROM node:24-bookworm-slim@sha256:eae779f20e0cdf264247f6f3b4e62510d91f168a615117ed38430ba295f55590 AS web
 WORKDIR /web
 RUN npm install --global pnpm@11.26.0
 # Dependencies first, from the lockfile alone, so they are cached across
