@@ -16,6 +16,14 @@ export default ts.config(
     },
   },
   {
+    rules: {
+      // Guards links in an app served under a base path. Tangible's UI is
+      // always served at the root by its own server, beside /api/v1, and its
+      // API calls are absolute, so there is no base path to resolve against.
+      'svelte/no-navigation-without-resolve': 'off',
+    },
+  },
+  {
     files: ['**/*.svelte'],
     languageOptions: {
       parserOptions: { parser: ts.parser },

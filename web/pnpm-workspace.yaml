@@ -13,3 +13,19 @@
 # without it.
 allowBuilds:
   esbuild: true
+
+# Versions forced past what a dependency asks for, each to clear a security
+# advisory the dependency has not yet taken up. Remove an entry once the
+# dependency's own range moves past it.
+#
+# cookie: @sveltejs/kit 2.x asks for ^0.6.0, which is affected by
+# GHSA-pxg6-pf52-xh8x; 0.7 is API-compatible. Tangible builds the UI as static
+# files and never runs SvelteKit's server, where cookie is used, so this is
+# hygiene rather than an exposure.
+#
+# js-yaml: @redocly/openapi-core, which openapi-typescript uses to read the
+# API description, pins exactly 4.3.1, affected by GHSA-2883-xcg3-v3hh; 4.3.2
+# is the patch release that fixes it.
+overrides:
+  cookie@<0.7.0: ^0.7.0
+  js-yaml@4.3.1: 4.3.2
