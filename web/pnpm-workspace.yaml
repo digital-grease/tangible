@@ -1,16 +1,3 @@
-# SPDX-FileCopyrightText: 2026 digitalgrease
-# SPDX-License-Identifier: AGPL-3.0-or-later
-#
-# pnpm blocks dependency install scripts by default. This is the explicit,
-# committed allowlist of the exceptions, so the decision is reviewable in the
-# diff rather than living in an untracked local approval.
-#
-# Each entry is a dependency permitted to execute code at install time. Adding
-# one is a supply-chain decision: that package's install script runs with the
-# developer's and CI's privileges.
-#
-# esbuild: links its platform-specific binary during install. vite cannot run
-# without it.
 allowBuilds:
   esbuild: true
 
@@ -28,4 +15,4 @@ allowBuilds:
 # is the patch release that fixes it.
 overrides:
   cookie@<0.7.0: ^0.7.0
-  js-yaml@4.3.1: 4.3.2
+  js-yaml@4.3.1: 5.4.2
