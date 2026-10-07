@@ -83,6 +83,8 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
             .migrate()
             .await
             .context("applying migrations at startup")?;
+    } else {
+        warn_if_schema_behind(&database).await;
     }
 
     // Open the library so the read API has something to serve. A storage
@@ -274,6 +276,26 @@ async fn start_derivations(
     (state.with_derivations(derivations), Some((stop, task)))
 }
 
+/// Say loudly at start when the database schema is behind this build.
+///
+/// Not fatal: the database may still be starting, and the healthcheck
+/// (`tangible doctor`) fails for as long as the schema is behind, which keeps
+/// workers from starting against it. But a server that served quietly on an
+/// empty schema would fail every request with nothing to say why.
+async fn warn_if_schema_behind(database: &Database) {
+    match database.pending_migrations().await {
+        Ok(pending) if !pending.is_empty() => tracing::error!(
+            pending = ?pending,
+            "the database schema is behind this build by {} migration(s); nothing will work \
+             until they are applied: run `tangible migrate` (with Compose: docker compose run \
+             --rm server migrate)",
+            pending.len()
+        ),
+        Ok(_) => {}
+        Err(error) => tracing::debug!(error = ?error, "could not check the schema version yet"),
+    }
+}
+
 /// Say at every start that a plain HTTP server sends passwords in the clear.
 fn warn_if_plain_http(auth: AuthSettings, public_url: &str) {
     if !auth.secure_cookie {
@@ -387,7 +409,25 @@ async fn doctor_command(common: &CommonConfig) -> Result<()> {
 
     match Database::connect(&DbConfig::new(common.database_url.expose())).await {
         Ok(database) => match database.ping().await {
-            Ok(()) => tracing::info!("database: reachable"),
+            Ok(()) => {
+                tracing::info!("database: reachable");
+                match database.pending_migrations().await {
+                    Ok(pending) if pending.is_empty() => tracing::info!("database: schema current"),
+                    Ok(pending) => {
+                        problems += 1;
+                        tracing::error!(
+                            pending = ?pending,
+                            "database: {} migration(s) not applied; run `tangible migrate` \
+                             (with Compose: docker compose run --rm server migrate)",
+                            pending.len()
+                        );
+                    }
+                    Err(error) => {
+                        problems += 1;
+                        tracing::error!(error = ?error, "database: could not read the schema version");
+                    }
+                }
+            }
             Err(error) => {
                 problems += 1;
                 tracing::error!(error = ?error, "database: connected but not answering queries");

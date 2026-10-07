@@ -28,13 +28,20 @@ open the address it prints; it forwards API requests to the server on port
 
 ```bash
 cp deploy/.env.example deploy/.env
-docker compose -f deploy/compose.yaml config    # read the rendered output
+docker compose -f deploy/compose.yaml config                 # read the rendered output
+docker compose -f deploy/compose.yaml up -d postgres
+docker compose -f deploy/compose.yaml run --rm server migrate
 docker compose -f deploy/compose.yaml up -d
 ```
 
 Review the rendered configuration before starting: image references, volume
 mappings, ports, and the env file. Pin an image digest rather than a tag for a
 real deployment.
+
+Migrations are a step of their own, never run behind your back. Until they are
+applied the server says so in its log at every start, and its healthcheck
+fails, so `docker compose ps` shows it unhealthy and no burn worker starts
+against it.
 
 The web UI and the API share one address, `TANGIBLE_PUBLIC_URL`: the server
 serves the UI's built files itself, so there is no separate web container and
@@ -99,6 +106,21 @@ docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml up -d
 
 One worker per drive. To add a second, copy the `burner-sr0` service, rename
 it, and map that drive's own block device.
+
+## Tested hardware
+
+What has actually been burned and checked, through the worker as it deploys
+(unprivileged, in its container, with only the block device):
+
+| Drive | Connection | Media | Result |
+|---|---|---|---|
+| Slimtype DVD A DS8A8SH, firmware KS21 | USB | CD-R, 80 minutes (CMC Magnetics) | ISO through xorriso, read back identical; mixed-mode CUE/BIN through cdrdao, data track identical, audio measured |
+| Slimtype DVD A DS8A8SH, firmware KS21 | USB | DVD-RW (Ritek) | burned and read back identical, a second burn refused, erased on request, burned again and read back identical |
+
+Nothing else has been tried yet, including DVD-R, DVD+R and Blu-ray media,
+which the engines support but which have not been through a real drive here.
+Reports of other drives and media, with the burn form on the issue tracker,
+are how this table grows.
 
 ## Why one device node
 
@@ -235,6 +257,49 @@ materials, and `SOURCES.md`, which names the Debian source package and exact
 version of everything in the image: publishing the image conveys object code
 for GPL programs such as xorriso and cdrdao, and that is where their source
 is.
+
+## Backups
+
+Three volumes hold everything that cannot be rebuilt:
+
+| Volume | Holds |
+|---|---|
+| `postgres-data` | the catalogue, jobs, burn history, physical copies, accounts, audit trail |
+| `library` | every stored file and every artifact's manifest |
+| each worker's `burner-*-cache` | its credential, and its recovery record while a burn is in progress |
+
+`staging` holds only work in progress and needs no backup.
+
+Back up the database with PostgreSQL's own tool, and the library with whatever
+you use for large files; it only ever grows, and nothing in it is rewritten:
+
+```bash
+docker compose -f deploy/compose.yaml exec -T postgres \
+  pg_dump -U tangible -Fc tangible > tangible-$(date +%F).dump
+```
+
+Take the database dump before the library copy, so every artifact the
+database names is in the copy. A backup is not a backup until a restore from
+it has been tried.
+
+To restore: stop the stack, restore the `library` volume, start only
+PostgreSQL, restore the dump with `pg_restore --clean --if-exists`, then start
+the rest.
+
+## Upgrading
+
+1. Read the release notes, especially anything about migrations.
+2. Take a backup, as above.
+3. Note the image digests you are running now (`docker compose images`).
+4. Change the image reference in `compose.yaml` to the new version's digest,
+   from its release page, and check it with `docker compose config`.
+5. `docker compose pull`, then `docker compose run --rm server migrate`.
+6. `docker compose up -d`, and check the server becomes healthy.
+
+Migrations only ever move forward. Rolling back to the previous version is
+possible only if it understands the migrated schema, which the release notes
+say; otherwise roll back by restoring the backup from step 2 and running the
+digests from step 3.
 
 ## What this deployment will not do
 

@@ -167,6 +167,37 @@ impl Database {
     pub async fn migrate(&self) -> Result<(), DbError> {
         MIGRATOR.run(&self.pool).await.map_err(DbError::Migrate)
     }
+
+    /// The versions of this build's migrations the database has not applied,
+    /// oldest first. Empty when the schema is current.
+    ///
+    /// Production migrations are a deliberate step (`tangible migrate`), so a
+    /// server whose schema is behind would otherwise start, report healthy
+    /// and fail every request; this is how it can say what is wrong instead.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Query`] on a database failure.
+    pub async fn pending_migrations(&self) -> Result<Vec<i64>, DbError> {
+        let table: Option<String> =
+            sqlx::query_scalar("SELECT to_regclass('_sqlx_migrations')::text")
+                .fetch_one(&self.pool)
+                .await
+                .map_err(DbError::Query)?;
+        let applied: Vec<i64> = if table.is_some() {
+            sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE success")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(DbError::Query)?
+        } else {
+            Vec::new()
+        };
+        Ok(MIGRATOR
+            .iter()
+            .map(|migration| migration.version)
+            .filter(|version| !applied.contains(version))
+            .collect())
+    }
 }
 
 pub use repositories::{ClaimOutcome, ClaimedJob, IncomingEvent};
