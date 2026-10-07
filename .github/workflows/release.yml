@@ -13,6 +13,8 @@
 #   - tangible-vX.Y.Z-source.tar.gz and tangible-deploy-vX.Y.Z.tar.gz
 #   - SOURCES.md, where the Corresponding Source of everything in the image is
 #   - sbom.spdx.json, the image's SBOM as a file
+#   - THIRD_PARTY_NOTICES-rust.txt and THIRD_PARTY_NOTICES-web.txt, the
+#     licence notices of the crates and JavaScript in the image, taken from it
 #   - SHA256SUMS, signed (SHA256SUMS.sigstore.json)
 #
 # The GitHub release is created as a DRAFT. A person reads it, checks it
@@ -118,6 +120,12 @@ jobs:
           docker buildx imagetools inspect "$REF" --format '{{ json .SBOM.SPDX }}' \
             > dist/sbom.spdx.json
           jq -e '.spdxVersion' dist/sbom.spdx.json > /dev/null
+          container=$(docker create "$REF")
+          for part in rust web; do
+            docker cp "$container:/usr/share/doc/tangible/THIRD_PARTY_NOTICES-$part.txt" dist/
+            test -s "dist/THIRD_PARTY_NOTICES-$part.txt"
+          done
+          docker rm "$container" > /dev/null
           (cd dist && sha256sum -- * > SHA256SUMS)
 
       - name: Sign the checksums
@@ -132,6 +140,7 @@ jobs:
             dist/tangible-*.tar.gz
             dist/SOURCES.md
             dist/sbom.spdx.json
+            dist/THIRD_PARTY_NOTICES-*.txt
 
       - name: Draft the release
         env:

@@ -258,6 +258,12 @@ version of everything in the image: publishing the image conveys object code
 for GPL programs such as xorriso and cdrdao, and that is where their source
 is.
 
+`THIRD_PARTY_NOTICES-rust.txt` and `THIRD_PARTY_NOTICES-web.txt` carry the
+licence notices of the Rust crates compiled into Tangible and of the
+JavaScript bundled into its web UI. They are generated while the image is
+built, so they match what shipped, and the image carries them too, under
+`/usr/share/doc/tangible/`.
+
 ## Backups
 
 Three volumes hold everything that cannot be rebuilt:

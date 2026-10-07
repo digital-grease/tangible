@@ -59,6 +59,8 @@ The first release.
   CSRF protection, sign-in rate limits, and an audit trail.
 - Hardened containers checked in CI, parsers fuzzed, secrets kept out of logs
   and help text, and release images signed with SBOM and provenance.
+- The licence notices of every bundled Rust crate and JavaScript package,
+  generated at build time, in the image and with each release.
 
 ### Known limitations
 

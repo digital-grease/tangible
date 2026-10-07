@@ -31,6 +31,11 @@ COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
 COPY migrations ./migrations
 RUN cargo build --release --locked -p tangible-app
+# The licence notices of every crate compiled in, from the sources the build
+# just used, so they always match the binary. MIT and Apache-2.0 require them
+# to travel with it.
+COPY deploy/third-party-notices.py ./deploy/
+RUN python3 deploy/third-party-notices.py > THIRD_PARTY_NOTICES-rust.txt
 
 FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS runtime
 
@@ -77,6 +82,12 @@ USER tangible
 
 COPY --from=build /src/target/release/tangible /usr/local/bin/tangible
 COPY --from=web /web/build /usr/share/tangible/web
+# Third-party licence notices: the Rust crates in the binary, and the
+# JavaScript bundled into the web UI (also served beside it). Debian's own
+# packages keep theirs under /usr/share/doc as usual.
+COPY --from=build /src/THIRD_PARTY_NOTICES-rust.txt /usr/share/doc/tangible/
+COPY --from=web /web/build/THIRD_PARTY_NOTICES.txt /usr/share/doc/tangible/THIRD_PARTY_NOTICES-web.txt
+COPY LICENSE /usr/share/doc/tangible/LICENSE
 
 # Serve the UI built above. Unset it to run the API alone.
 ENV TANGIBLE_WEB_ROOT=/usr/share/tangible/web
