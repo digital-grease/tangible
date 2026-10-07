@@ -264,6 +264,11 @@ JavaScript bundled into its web UI. They are generated while the image is
 built, so they match what shipped, and the image carries them too, under
 `/usr/share/doc/tangible/`.
 
+Before an image is signed, the release workflow scans it with Grype, and a
+high or critical vulnerability with a fix available stops the release. The
+image applies Debian's security updates when it is built, so a rebuild picks
+up fixes published after the base image.
+
 ## Backups
 
 Three volumes hold everything that cannot be rebuilt:

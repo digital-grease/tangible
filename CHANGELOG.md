@@ -61,6 +61,8 @@ The first release.
   and help text, and release images signed with SBOM and provenance.
 - The licence notices of every bundled Rust crate and JavaScript package,
   generated at build time, in the image and with each release.
+- Release images are scanned for vulnerabilities before they are signed, and
+  one with a fixable high or critical vulnerability is not released.
 
 ### Known limitations
 

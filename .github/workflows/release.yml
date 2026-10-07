@@ -17,6 +17,9 @@
 #     licence notices of the crates and JavaScript in the image, taken from it
 #   - SHA256SUMS, signed (SHA256SUMS.sigstore.json)
 #
+# The image is scanned with Grype before it is signed; a high or critical
+# vulnerability with a fix available stops the release there.
+#
 # The GitHub release is created as a DRAFT. A person reads it, checks it
 # against the release checklist, and publishes it; nothing here does.
 #
@@ -91,6 +94,29 @@ jobs:
             CREATED=${{ steps.created.outputs.at }}
           sbom: true
           provenance: mode=max
+
+      # Before anything is signed: an image with a known high or critical
+      # vulnerability that already has a fix is rebuilt on newer bases, not
+      # released. Unfixed ones are reported but do not block, since nothing
+      # but waiting for the distribution would clear them.
+      - name: Scan the image
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
+          severity-cutoff: high
+          only-fixed: true
+          output-format: table
+          output-file: grype.txt
+
+      - name: Scan report
+        if: ${{ !cancelled() && hashFiles('grype.txt') != '' }}
+        run: |
+          {
+            echo '### Vulnerabilities with a fix available'
+            echo '```'
+            cat grype.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 

@@ -37,7 +37,7 @@ RUN cargo build --release --locked -p tangible-app
 COPY deploy/third-party-notices.py ./deploy/
 RUN python3 deploy/third-party-notices.py > THIRD_PARTY_NOTICES-rust.txt
 
-FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS runtime
+FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS runtime
 
 # xorriso for ISO-oriented workflows, cdrdao for DAO/audio/mixed-mode CD,
 # mame-tools for chdman, which makes CHD derivatives (it brings SDL2 and its
@@ -58,7 +58,14 @@ FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2
 #                                            the product boundary
 # Adding any of these breaks distribution of the entire image, not just the
 # one package. Adding to this list is a licence decision, not a build tweak.
+#
+# The upgrade applies Debian security fixes published since the base image
+# was cut: Debian refreshes its images about monthly, its security archive
+# daily, and the release workflow refuses an image with a fixable high or
+# critical vulnerability. SOURCES.md is read from the built image, so it
+# names the upgraded versions.
 RUN apt-get update \
+ && apt-get upgrade -y \
  && apt-get install --no-install-recommends -y \
       xorriso \
       cdrdao \
