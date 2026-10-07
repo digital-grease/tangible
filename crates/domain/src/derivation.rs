@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use crate::digest::Sha256Digest;
-use crate::enums::{ArtifactFormat, ChdCodec, MediaFamily, Transformation};
+use crate::enums::{ArtifactFormat, ChdCodec, DerivationJobState, MediaFamily, Transformation};
 use crate::logical_path::LogicalPath;
 use crate::manifest::ToolRef;
 
@@ -256,22 +256,23 @@ pub struct DerivationSpec {
 impl DerivationSpec {
     /// A specification, with its options checked.
     ///
+    /// `tool` is the program that will actually run, by name and version:
+    /// the fingerprint covers it, so a derivative made by one tool is never
+    /// mistaken for one made by another.
+    ///
     /// # Errors
     ///
     /// [`OptionsError`] when the options do not suit the transformation.
     pub fn new(
         transformation: Transformation,
         options: ChdOptions,
-        tool_version: impl Into<String>,
+        tool: ToolRef,
     ) -> Result<Self, OptionsError> {
         options.validate(transformation)?;
         Ok(Self {
             transformation,
             options,
-            tool: ToolRef {
-                name: transformation.tool_name().to_owned(),
-                version: tool_version.into(),
-            },
+            tool,
         })
     }
 
@@ -319,6 +320,64 @@ impl DerivationSpec {
     }
 }
 
+/// Why a job could not move to a state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("cannot move a derivation job from {from} to {to}")]
+pub struct JobTransitionError {
+    /// Where it is.
+    pub from: DerivationJobState,
+    /// Where it was asked to go.
+    pub to: DerivationJobState,
+}
+
+impl DerivationJobState {
+    /// Whether the job has finished, one way or another.
+    #[must_use]
+    pub const fn is_terminal(self) -> bool {
+        matches!(self, Self::Complete | Self::FailedTerminal | Self::Canceled)
+    }
+
+    /// Whether a queue worker may take it: waiting, being retried, or running
+    /// under a lease that lapsed because its worker died.
+    #[must_use]
+    pub const fn is_claimable(self) -> bool {
+        matches!(self, Self::Queued | Self::Running | Self::FailedRetryable)
+    }
+
+    /// Move to `to`, if the machine allows it.
+    ///
+    /// ```text
+    /// queued -> running -> complete
+    ///              |-> failed_retryable -> running
+    ///              `-> failed_terminal
+    /// queued, failed_retryable -> canceled
+    /// ```
+    ///
+    /// A running job cannot be cancelled: the tool is writing, and stopping
+    /// it buys nothing a failed job would not. Running to running is a worker
+    /// taking over a job whose previous worker's lease lapsed.
+    ///
+    /// # Errors
+    ///
+    /// [`JobTransitionError`] for any other move.
+    pub fn transition(self, to: Self) -> Result<Self, JobTransitionError> {
+        use DerivationJobState::{
+            Canceled, Complete, FailedRetryable, FailedTerminal, Queued, Running,
+        };
+        let allowed = matches!(
+            (self, to),
+            (Queued | FailedRetryable | Running, Running)
+                | (Running, Complete | FailedRetryable | FailedTerminal)
+                | (Queued | FailedRetryable, Canceled)
+        );
+        if allowed {
+            Ok(to)
+        } else {
+            Err(JobTransitionError { from: self, to })
+        }
+    }
+}
+
 /// One digest for an artifact's content: its components' paths and digests,
 /// sorted by path.
 ///
@@ -359,11 +418,18 @@ mod tests {
         LogicalPath::parse(text).unwrap()
     }
 
+    fn chdman(version: &str) -> ToolRef {
+        ToolRef {
+            name: CHDMAN.to_owned(),
+            version: version.to_owned(),
+        }
+    }
+
     fn cd_spec(version: &str) -> DerivationSpec {
         DerivationSpec::new(
             Transformation::ChdCreateCd,
             ChdOptions::defaults(Transformation::ChdCreateCd),
-            version,
+            chdman(version),
         )
         .unwrap()
     }
@@ -480,7 +546,7 @@ mod tests {
         assert_ne!(base, cd_spec("0.252").fingerprint(&parent), "tool version");
         let mut options = ChdOptions::defaults(Transformation::ChdCreateCd);
         options.compression.reverse();
-        let reordered = DerivationSpec::new(Transformation::ChdCreateCd, options, "0.251")
+        let reordered = DerivationSpec::new(Transformation::ChdCreateCd, options, chdman("0.251"))
             .unwrap()
             .fingerprint(&parent);
         assert_ne!(base, reordered, "codec order is a preference, so it counts");
@@ -494,6 +560,41 @@ mod tests {
             cd_spec("0.251").fingerprint(&digest(0xab)),
             "465188990d420155c4e051e63374fcd9965b62fe304525f78cdcaeb7619a677e"
         );
+    }
+
+    #[test]
+    fn the_job_machine_allows_only_its_own_moves() {
+        use DerivationJobState::{
+            Canceled, Complete, FailedRetryable, FailedTerminal, Queued, Running,
+        };
+        for (from, to) in [
+            (Queued, Running),
+            (Running, Complete),
+            (Running, FailedRetryable),
+            (Running, FailedTerminal),
+            (FailedRetryable, Running),
+            (Running, Running),
+            (Queued, Canceled),
+            (FailedRetryable, Canceled),
+        ] {
+            assert_eq!(from.transition(to), Ok(to), "{from} -> {to}");
+        }
+        for (from, to) in [
+            (Queued, Complete),
+            (Running, Canceled),
+            (Complete, Running),
+            (FailedTerminal, Running),
+            (Canceled, Queued),
+            (Complete, Canceled),
+        ] {
+            assert!(
+                from.transition(to).is_err(),
+                "{from} -> {to} must be refused"
+            );
+        }
+        assert!(Complete.is_terminal() && FailedTerminal.is_terminal() && Canceled.is_terminal());
+        assert!(Queued.is_claimable() && Running.is_claimable() && FailedRetryable.is_claimable());
+        assert!(!Complete.is_claimable());
     }
 
     #[test]

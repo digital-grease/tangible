@@ -22,6 +22,17 @@ pub enum StorageKind {
     Filesystem,
 }
 
+/// Which engine makes derivatives, such as a CHD of a disc image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum DerivationEngineKind {
+    /// None: derivatives cannot be asked for.
+    None,
+    /// Simulated engine: writes a small placeholder, runs no tool. For tests
+    /// and development.
+    Fake,
+}
+
 /// Which burn engine executes write operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "kebab-case")]
@@ -145,6 +156,16 @@ pub struct ServeConfig {
     /// folders it marks as its own and never touches anything else in it.
     #[arg(long, env = "TANGIBLE_ROMM_EXPORT_ROOT")]
     pub romm_export_root: Option<PathBuf>,
+
+    /// Engine that makes derivatives. `none` by default: nothing is derived
+    /// until an engine is chosen.
+    #[arg(
+        long,
+        env = "TANGIBLE_DERIVATION_ENGINE",
+        value_enum,
+        default_value_t = DerivationEngineKind::None
+    )]
+    pub derivation_engine: DerivationEngineKind,
 }
 
 /// Settings for a burn worker.

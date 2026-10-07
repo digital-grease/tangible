@@ -2407,6 +2407,7 @@ dependencies = [
  "tangible-burn",
  "tangible-db",
  "tangible-domain",
+ "tangible-image",
  "tangible-storage",
  "tokio",
  "tracing",
@@ -2463,10 +2464,12 @@ dependencies = [
 name = "tangible-image"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "hex",
  "serde",
  "sha2 0.11.0",
  "tangible-domain",
+ "tempfile",
  "thiserror",
  "tokio",
  "tracing",

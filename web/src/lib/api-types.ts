@@ -84,6 +84,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/artifacts/{artifact_id}/derivatives": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask for a derivative of an artifact.
+         * @description Ask for a derivative, such as a CHD of a disc image. Idempotent: the same request for the same artifact returns the derivative already made (200) or the job already making it (202). The original is never changed.
+         */
+        post: operations["request_derivative"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/artifacts/{artifact_id}/lineage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * An artifact's lineage.
+         * @description # Errors
+         *
+         *     `NOT_FOUND` for an unknown artifact.
+         */
+        get: operations["artifact_lineage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/artifacts/{artifact_id}/manifest": {
         parameters: {
             query?: never;
@@ -306,6 +348,51 @@ export interface paths {
          * @description Requeue a failed or cancelled burn job. Previous attempts are left as they are: a retry spends another disc and records another attempt.
          */
         post: operations["retry_job"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/derivation-jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One derivation job.
+         * @description # Errors
+         *
+         *     `NOT_FOUND` for an unknown job.
+         */
+        get: operations["get_derivation_job_route"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/derivation-jobs/{job_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Withdraw a derivation job that has not started.
+         * @description # Errors
+         *
+         *     `NOT_FOUND` for an unknown job, `CONFLICT` for one that is running or
+         *     finished.
+         */
+        post: operations["cancel_derivation_job_route"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1623,6 +1710,84 @@ export interface components {
             /** @description `"up"` or `"down"`. */
             status: string;
         };
+        /** @description A derivation job. */
+        DerivationJobView: {
+            /**
+             * Format: int32
+             * @description How many times a worker has taken it.
+             */
+            attempts: number;
+            /** @description The derivative, once made. */
+            child_artifact_id?: string | null;
+            /** @description When it finished. */
+            completed_at?: string | null;
+            /** @description When it was asked for. */
+            created_at: string;
+            /** @description Who asked. */
+            created_by: string;
+            /** @description Why it last failed. */
+            error_code?: string | null;
+            /** @description Detail of the last failure. */
+            error_detail?: string | null;
+            /** @description The fingerprint that makes a repeated request the same request. */
+            fingerprint: string;
+            /** @description The job. */
+            id: string;
+            /** @description The options, every default written out. */
+            options: Record<string, never>;
+            /** @description What it derives from. */
+            parent_artifact_id: string;
+            /** @description When a worker first took it. */
+            started_at?: string | null;
+            /**
+             * @description `queued`, `running`, `complete`, `failed_retryable`, `failed_terminal`
+             *     or `canceled`.
+             */
+            state: string;
+            /** @description The tool. */
+            tool_name: string;
+            /** @description The tool version the job was fingerprinted for. */
+            tool_version: string;
+            /** @description `chd_create_cd` or `chd_create_dvd`. */
+            transformation: string;
+        };
+        /** @description What a request came to. */
+        DerivationRequestView: {
+            derivation?: null | components["schemas"]["DerivationView"];
+            job?: null | components["schemas"]["DerivationJobView"];
+            /**
+             * @description `queued` for a new job, `pending` when the same work is already
+             *     queued or running, `exists` when the derivative was already made.
+             */
+            result: string;
+        };
+        /** @description A derivation: the lineage between a parent and its derivative. */
+        DerivationView: {
+            /** @description The derivative. */
+            child_artifact_id: string;
+            /** @description When it finished. */
+            completed_at?: string | null;
+            /** @description The fingerprint. */
+            fingerprint: string;
+            /**
+             * @description What the derivative preserved: `bit_exact_repack`,
+             *     `structurally_equivalent`, `semantically_equivalent`, `lossy` or
+             *     `unknown`.
+             */
+            loss_character: string;
+            /** @description The options used. */
+            options: Record<string, never>;
+            /** @description The parent. */
+            parent_artifact_id: string;
+            /** @description When the work started. */
+            started_at: string;
+            /** @description The tool. */
+            tool_name: string;
+            /** @description Its version. */
+            tool_version: string;
+            /** @description What was done. */
+            transformation: string;
+        };
         /** @description An artifact linked to a disc. */
         DiscArtifactView: {
             /** @description The artifact. */
@@ -2098,6 +2263,16 @@ export interface components {
             /** @description When it lapses, RFC 3339. */
             expires_at: string;
         };
+        /** @description An artifact's lineage, and what could still be derived from it. */
+        LineageView: {
+            /** @description What has been derived from it. */
+            derivatives: components["schemas"]["DerivationView"][];
+            derived_from?: null | components["schemas"]["DerivationView"];
+            /** @description Derivation jobs asked of it, newest first. */
+            jobs: components["schemas"]["DerivationJobView"][];
+            /** @description The transformation that suits it, when this server can run one. */
+            suggested_transformation?: string | null;
+        };
         /** @description A link between an artifact and a disc. */
         LinkArtifactRequest: {
             /** @description The artifact. */
@@ -2273,6 +2448,24 @@ export interface components {
         RenewResponse: {
             /** @description The new expiry. */
             lease_expires_at: string;
+        };
+        /** @description A request for a derivative. */
+        RequestDerivation: {
+            /**
+             * @description Codecs, in the order chdman should try them. Omitted, chdman's
+             *     defaults for the transformation.
+             */
+            compression?: string[] | null;
+            /**
+             * Format: int32
+             * @description Bytes per hunk. Omitted, chdman's default.
+             */
+            hunk_bytes?: number | null;
+            /**
+             * @description `chd_create_cd` or `chd_create_dvd`. Omitted, the one that suits the
+             *     artifact.
+             */
+            transformation?: string | null;
         };
         /** @description What an operator sends to erase the disc in a drive. */
         RequestErasure: {
@@ -2693,6 +2886,101 @@ export interface operations {
             };
             /** @description The range lies outside the object */
             416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    request_derivative: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Artifact identifier */
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestDerivation"];
+            };
+        };
+        responses: {
+            /** @description Already made */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DerivationRequestView"];
+                };
+            };
+            /** @description Queued, or already being made */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DerivationRequestView"];
+                };
+            };
+            /** @description No such artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No derivation engine is configured */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Nothing applies, or the options are refused */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    artifact_lineage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Artifact identifier */
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Lineage */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LineageView"];
+                };
+            };
+            /** @description No such artifact */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3180,6 +3468,79 @@ export interface operations {
                 };
             };
             /** @description Not in a state that can be retried */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_derivation_job_route: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Derivation job identifier */
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The job */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DerivationJobView"];
+                };
+            };
+            /** @description No such job */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    cancel_derivation_job_route: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Derivation job identifier */
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cancelled */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DerivationJobView"];
+                };
+            };
+            /** @description No such job */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Running or finished */
             409: {
                 headers: {
                     [name: string]: unknown;

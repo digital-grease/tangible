@@ -271,6 +271,142 @@
         ]
       }
     },
+    "/api/v1/artifacts/{artifact_id}/derivatives": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Ask for a derivative of an artifact.",
+        "description": "Ask for a derivative, such as a CHD of a disc image. Idempotent: the same request for the same artifact returns the derivative already made (200) or the job already making it (202). The original is never changed.",
+        "operationId": "request_derivative",
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "description": "Artifact identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestDerivation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Already made",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DerivationRequestView"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Queued, or already being made",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DerivationRequestView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No derivation engine is configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Nothing applies, or the options are refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/artifacts/{artifact_id}/lineage": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "An artifact's lineage.",
+        "description": "# Errors\n\n`NOT_FOUND` for an unknown artifact.",
+        "operationId": "artifact_lineage",
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "description": "Artifact identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Lineage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LineageView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/artifacts/{artifact_id}/manifest": {
       "get": {
         "tags": [
@@ -1045,6 +1181,112 @@
           },
           "409": {
             "description": "Not in a state that can be retried",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/derivation-jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "One derivation job.",
+        "description": "# Errors\n\n`NOT_FOUND` for an unknown job.",
+        "operationId": "get_derivation_job_route",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "description": "Derivation job identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DerivationJobView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/derivation-jobs/{job_id}/cancel": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Withdraw a derivation job that has not started.",
+        "description": "# Errors\n\n`NOT_FOUND` for an unknown job, `CONFLICT` for one that is running or\nfinished.",
+        "operationId": "cancel_derivation_job_route",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "description": "Derivation job identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DerivationJobView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Running or finished",
             "content": {
               "application/json": {
                 "schema": {
@@ -4849,6 +5091,200 @@
           }
         }
       },
+      "DerivationJobView": {
+        "type": "object",
+        "description": "A derivation job.",
+        "required": [
+          "id",
+          "parent_artifact_id",
+          "transformation",
+          "tool_name",
+          "tool_version",
+          "options",
+          "fingerprint",
+          "state",
+          "attempts",
+          "created_by",
+          "created_at"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many times a worker has taken it."
+          },
+          "child_artifact_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The derivative, once made."
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it finished."
+          },
+          "created_at": {
+            "type": "string",
+            "description": "When it was asked for."
+          },
+          "created_by": {
+            "type": "string",
+            "description": "Who asked."
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it last failed."
+          },
+          "error_detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Detail of the last failure."
+          },
+          "fingerprint": {
+            "type": "string",
+            "description": "The fingerprint that makes a repeated request the same request."
+          },
+          "id": {
+            "type": "string",
+            "description": "The job."
+          },
+          "options": {
+            "type": "object",
+            "description": "The options, every default written out."
+          },
+          "parent_artifact_id": {
+            "type": "string",
+            "description": "What it derives from."
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When a worker first took it."
+          },
+          "state": {
+            "type": "string",
+            "description": "`queued`, `running`, `complete`, `failed_retryable`, `failed_terminal`\nor `canceled`."
+          },
+          "tool_name": {
+            "type": "string",
+            "description": "The tool."
+          },
+          "tool_version": {
+            "type": "string",
+            "description": "The tool version the job was fingerprinted for."
+          },
+          "transformation": {
+            "type": "string",
+            "description": "`chd_create_cd` or `chd_create_dvd`."
+          }
+        }
+      },
+      "DerivationRequestView": {
+        "type": "object",
+        "description": "What a request came to.",
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "derivation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DerivationView",
+                "description": "The derivation, when it already exists."
+              }
+            ]
+          },
+          "job": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DerivationJobView",
+                "description": "The job, when one is queued or running."
+              }
+            ]
+          },
+          "result": {
+            "type": "string",
+            "description": "`queued` for a new job, `pending` when the same work is already\nqueued or running, `exists` when the derivative was already made."
+          }
+        }
+      },
+      "DerivationView": {
+        "type": "object",
+        "description": "A derivation: the lineage between a parent and its derivative.",
+        "required": [
+          "parent_artifact_id",
+          "child_artifact_id",
+          "transformation",
+          "tool_name",
+          "tool_version",
+          "options",
+          "fingerprint",
+          "loss_character",
+          "started_at"
+        ],
+        "properties": {
+          "child_artifact_id": {
+            "type": "string",
+            "description": "The derivative."
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it finished."
+          },
+          "fingerprint": {
+            "type": "string",
+            "description": "The fingerprint."
+          },
+          "loss_character": {
+            "type": "string",
+            "description": "What the derivative preserved: `bit_exact_repack`,\n`structurally_equivalent`, `semantically_equivalent`, `lossy` or\n`unknown`."
+          },
+          "options": {
+            "type": "object",
+            "description": "The options used."
+          },
+          "parent_artifact_id": {
+            "type": "string",
+            "description": "The parent."
+          },
+          "started_at": {
+            "type": "string",
+            "description": "When the work started."
+          },
+          "tool_name": {
+            "type": "string",
+            "description": "The tool."
+          },
+          "tool_version": {
+            "type": "string",
+            "description": "Its version."
+          },
+          "transformation": {
+            "type": "string",
+            "description": "What was done."
+          }
+        }
+      },
       "DiscArtifactView": {
         "type": "object",
         "description": "An artifact linked to a disc.",
@@ -5889,6 +6325,48 @@
           }
         }
       },
+      "LineageView": {
+        "type": "object",
+        "description": "An artifact's lineage, and what could still be derived from it.",
+        "required": [
+          "derivatives",
+          "jobs"
+        ],
+        "properties": {
+          "derivatives": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DerivationView"
+            },
+            "description": "What has been derived from it."
+          },
+          "derived_from": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DerivationView",
+                "description": "How it was made, when it is itself a derivative."
+              }
+            ]
+          },
+          "jobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DerivationJobView"
+            },
+            "description": "Derivation jobs asked of it, newest first."
+          },
+          "suggested_transformation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The transformation that suits it, when this server can run one."
+          }
+        }
+      },
       "LinkArtifactRequest": {
         "type": "object",
         "description": "A link between an artifact and a disc.",
@@ -6335,6 +6813,39 @@
             "description": "The new expiry."
           }
         }
+      },
+      "RequestDerivation": {
+        "type": "object",
+        "description": "A request for a derivative.",
+        "properties": {
+          "compression": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Codecs, in the order chdman should try them. Omitted, chdman's\ndefaults for the transformation."
+          },
+          "hunk_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Bytes per hunk. Omitted, chdman's default.",
+            "minimum": 0
+          },
+          "transformation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`chd_create_cd` or `chd_create_dvd`. Omitted, the one that suits the\nartifact."
+          }
+        },
+        "additionalProperties": false
       },
       "RequestErasure": {
         "type": "object",

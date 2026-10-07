@@ -107,6 +107,10 @@ uuid_id!(
     ImportJobId
 );
 uuid_id!(
+    /// Identifies a request to derive a new artifact from an existing one.
+    DerivationJobId
+);
+uuid_id!(
     /// Identifies a requested burn of an artifact to physical media.
     BurnJobId
 );

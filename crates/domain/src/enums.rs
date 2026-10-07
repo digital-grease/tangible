@@ -584,6 +584,26 @@ string_enum! {
 }
 
 string_enum! {
+    /// Where a derivation job has got to.
+    DerivationJobState {
+        /// Accepted, not started.
+        Queued => "queued",
+        /// Being worked.
+        Running => "running",
+        /// The derivative exists. Terminal.
+        Complete => "complete",
+        /// Failed for a reason that may pass on another try; held off, then
+        /// offered again.
+        FailedRetryable => "failed_retryable",
+        /// Failed for a reason that will not change. Terminal.
+        FailedTerminal => "failed_terminal",
+        /// Withdrawn before it ran. Terminal.
+        Canceled => "canceled",
+    }
+    default = Queued
+}
+
+string_enum! {
     /// A compression codec chdman can use inside a CHD.
     ChdCodec {
         /// LZMA, for CD data frames.

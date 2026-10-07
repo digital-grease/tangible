@@ -10,16 +10,21 @@
 mod config;
 mod telemetry;
 
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use tangible_api::{
-    ApiState, AuthSettings, ImportContext, ImportPipeline, ImportRunner, ImportRunnerSettings,
-    RommExport, RommExporter, WebUi,
+    ApiState, AuthSettings, DerivationPipeline, DerivationRunner, DerivationRunnerSettings,
+    Derivations, ImportContext, ImportPipeline, ImportRunner, ImportRunnerSettings, RommExport,
+    RommExporter, WebUi,
 };
 use tangible_db::{Database, DbConfig};
 use tangible_storage::{FilesystemStore, ManifestStore, StagingManager, WatchRoots};
 
-use crate::config::{BurnEngineKind, CommonConfig, ServeConfig, WorkerConfig};
+use crate::config::{
+    BurnEngineKind, CommonConfig, DerivationEngineKind, ServeConfig, WorkerConfig,
+};
 
 /// Self-hosted disc-image preservation, management, and burning.
 #[derive(Debug, Parser)]
@@ -121,7 +126,7 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         tracing::info!(roots = ?roots.ids(), "watched roots configured");
     }
 
-    let pipeline = ImportPipeline::new(staging, objects, manifests.clone());
+    let pipeline = ImportPipeline::new(staging.clone(), objects.clone(), manifests.clone());
     let auth = AuthSettings::for_public_url(&serve.public_url);
     warn_if_plain_http(auth, &serve.public_url);
     warn_if_setup_needed(&database, &serve.public_url).await;
@@ -141,22 +146,18 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         serve.romm_export_root.as_deref(),
     )
     .await?;
-
-    // The import runner is a background task rather than a separate process:
-    // one binary, one deployment, and the work is already leased in the
-    // database so a second server can be added without changing anything.
-    let runner = ImportRunner::new(
-        database,
-        pipeline,
-        ImportRunnerSettings {
-            roots,
-            ..ImportRunnerSettings::default()
+    let (state, derivations) = start_derivations(
+        state,
+        &database,
+        DerivationPipelineParts {
+            staging,
+            objects,
+            manifests: manifests.clone(),
         },
+        serve.derivation_engine,
     );
-    let (stop_runner, runner_stopped) = tokio::sync::oneshot::channel();
-    let runner = tokio::spawn(runner.run(async {
-        let _ = runner_stopped.await;
-    }));
+
+    let imports = start_import_runner(database, pipeline, roots);
 
     let listener = tokio::net::TcpListener::bind(serve.bind)
         .await
@@ -177,16 +178,85 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         .await
         .context("serving HTTP");
 
-    // The import already running finishes before the process exits.
-    // Abandoning it would leave staged bytes and a lease behind for no gain.
-    let _ = stop_runner.send(());
-    let _ = runner.await;
-    if let Some((stop, task)) = romm {
+    // Work already running finishes before the process exits. Abandoning an
+    // import would leave staged bytes and a lease behind for no gain.
+    for (stop, task) in [Some(imports), romm, derivations].into_iter().flatten() {
         let _ = stop.send(());
         let _ = task.await;
     }
 
     served
+}
+
+/// Start the import runner.
+///
+/// A background task rather than a separate process: one binary, one
+/// deployment, and the work is already leased in the database so a second
+/// server can be added without changing anything.
+fn start_import_runner(
+    database: Database,
+    pipeline: ImportPipeline,
+    roots: WatchRoots,
+) -> Stoppable {
+    let runner = ImportRunner::new(
+        database,
+        pipeline,
+        ImportRunnerSettings {
+            roots,
+            ..ImportRunnerSettings::default()
+        },
+    );
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(runner.run(async {
+        let _ = stopped.await;
+    }));
+    (stop, task)
+}
+
+/// What a derivation pipeline is built from.
+struct DerivationPipelineParts {
+    staging: StagingManager,
+    objects: FilesystemStore,
+    manifests: ManifestStore,
+}
+
+/// Start the derivation runner when an engine is configured.
+fn start_derivations(
+    state: ApiState,
+    database: &Database,
+    parts: DerivationPipelineParts,
+    kind: DerivationEngineKind,
+) -> (ApiState, Option<Stoppable>) {
+    let engine: Arc<dyn tangible_image::derive::DerivationEngine> = match kind {
+        DerivationEngineKind::None => {
+            tracing::info!(
+                "no derivation engine configured (TANGIBLE_DERIVATION_ENGINE); derivatives cannot be asked for"
+            );
+            return (state, None);
+        }
+        DerivationEngineKind::Fake => Arc::new(tangible_image::derive::FakeDeriver::default()),
+    };
+    tracing::info!(
+        tool = engine.tool_name(),
+        version = %engine.tool_version(),
+        "derivations enabled"
+    );
+    let derivations = Derivations::new(DerivationPipeline::new(
+        parts.staging,
+        parts.objects,
+        parts.manifests,
+        engine,
+    ));
+    let runner = DerivationRunner::new(
+        database.clone(),
+        derivations.clone(),
+        DerivationRunnerSettings::default(),
+    );
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(runner.run(async {
+        let _ = stopped.await;
+    }));
+    (state.with_derivations(derivations), Some((stop, task)))
 }
 
 /// Say at every start that a plain HTTP server sends passwords in the clear.
@@ -467,6 +537,7 @@ mod tests {
         "TANGIBLE_BIND",
         "TANGIBLE_BLOCK_DEVICE",
         "TANGIBLE_BURN_ENGINE",
+        "TANGIBLE_DERIVATION_ENGINE",
         "TANGIBLE_LOG",
         "TANGIBLE_LOG_JSON",
         "TANGIBLE_MAX_UPLOAD_BYTES",

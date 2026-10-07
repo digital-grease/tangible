@@ -9,6 +9,7 @@ use tangible_db::Database;
 use tangible_storage::{ManifestStore, WatchRoots};
 
 use crate::auth::{AuthSettings, LoginLimiter};
+use crate::derivation::Derivations;
 use crate::import::ImportPipeline;
 use crate::romm_export::RommExport;
 use crate::web::WebUi;
@@ -40,6 +41,8 @@ struct Inner {
     web: Option<WebUi>,
     /// The RomM export, when an export root is configured.
     romm: Option<RommExport>,
+    /// Derivations, when a derivation engine is configured.
+    derivations: Option<Derivations>,
 }
 
 /// What the import routes need beyond the database.
@@ -69,6 +72,7 @@ impl ApiState {
                 login_limiter: LoginLimiter::default(),
                 web: None,
                 romm: None,
+                derivations: None,
             }),
         }
     }
@@ -85,6 +89,7 @@ impl ApiState {
                 login_limiter: LoginLimiter::default(),
                 web: None,
                 romm: None,
+                derivations: None,
             }),
         }
     }
@@ -127,6 +132,22 @@ impl ApiState {
         Self {
             inner: Arc::new(inner),
         }
+    }
+
+    /// Make derivatives through `derivations`.
+    #[must_use]
+    pub fn with_derivations(self, derivations: Derivations) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.derivations = Some(derivations);
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Derivations, when an engine is configured.
+    #[must_use]
+    pub fn derivations(&self) -> Option<&Derivations> {
+        self.inner.derivations.as_ref()
     }
 
     /// The RomM export, when one is configured.

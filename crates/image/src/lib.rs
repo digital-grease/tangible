@@ -11,6 +11,7 @@
 //! parsing with track layout.
 
 pub mod cue;
+pub mod derive;
 pub mod iso;
 pub mod toc;
 

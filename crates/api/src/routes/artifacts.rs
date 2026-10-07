@@ -252,7 +252,7 @@ fn component_view(component: &tangible_domain::manifest::Component) -> Component
 }
 
 /// Read one manifest, mapping absence and corruption to distinct problems.
-async fn load(state: &ApiState, id: ArtifactId) -> Result<ArtifactManifest, Problem> {
+pub(crate) async fn load(state: &ApiState, id: ArtifactId) -> Result<ArtifactManifest, Problem> {
     use tangible_storage::ManifestStoreError;
 
     let Some(manifests) = state.manifests() else {

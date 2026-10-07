@@ -19,6 +19,7 @@ tangible-api = { version = "0.1.0", path = "../api" }
 tangible-burn = { version = "0.1.0", path = "../burn" }
 tangible-db = { version = "0.1.0", path = "../db" }
 tangible-domain = { version = "0.1.0", path = "../domain" }
+tangible-image = { version = "0.1.0", path = "../image" }
 tangible-storage = { version = "0.1.0", path = "../storage" }
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "signal"] }
 tracing = "0.1.44"

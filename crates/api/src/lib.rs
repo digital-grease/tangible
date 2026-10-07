@@ -10,6 +10,7 @@
 
 pub mod auth;
 pub mod catalog;
+pub mod derivation;
 pub mod health;
 pub mod import;
 pub mod import_runner;
@@ -27,6 +28,7 @@ use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 
 pub use auth::{AuthSettings, CurrentUser, SignedIn};
+pub use derivation::{DerivationPipeline, DerivationRunner, DerivationRunnerSettings, Derivations};
 pub use import::{ImportCheckpoint, ImportError, ImportOutcome, ImportPipeline, ImportRequest};
 pub use import_runner::{ImportRunner, ImportRunnerSettings};
 pub use romm_export::{RommExport, RommExporter};
@@ -98,6 +100,10 @@ pub const API_BASE: &str = "/api/v1";
         routes::burns::resolve_attention,
         routes::burns::get_attempt,
         routes::burns::list_events,
+        routes::derivations::request_derivative,
+        routes::derivations::artifact_lineage,
+        routes::derivations::get_derivation_job_route,
+        routes::derivations::cancel_derivation_job_route,
         routes::romm::romm_settings,
         routes::romm::get_edition_romm,
         routes::romm::set_edition_romm_route,
@@ -167,6 +173,11 @@ pub const API_BASE: &str = "/api/v1";
         routes::burns::BurnEventPage,
         routes::burns::BurnEventView,
         routes::burns::CreateBurnJobRequest,
+        routes::derivations::DerivationJobView,
+        routes::derivations::DerivationView,
+        routes::derivations::LineageView,
+        routes::derivations::RequestDerivation,
+        routes::derivations::DerivationRequestView,
         routes::romm::PlatformView,
         routes::romm::RommSettings,
         routes::romm::EditionRommView,
@@ -339,6 +350,7 @@ pub fn router(state: ApiState) -> Router {
         .nest(API_BASE, routes::workers::router())
         .nest(API_BASE, routes::erasures::router())
         .nest(API_BASE, routes::romm::router())
+        .nest(API_BASE, routes::derivations::router())
         // Applied per route, after routing, so the rule is looked up by the
         // matched pattern rather than by a raw path a caller could disguise.
         .layer(axum::middleware::from_fn_with_state(
@@ -458,6 +470,26 @@ mod tests {
     }
 
     #[test]
+    fn every_operation_has_its_own_id() {
+        // Operation ids come from handler names, and the generated web client
+        // keys operations by them: two handlers called `get_job` in different
+        // modules made the client's types contradict themselves.
+        let document = serde_json::to_value(ApiDoc::openapi()).expect("document");
+        let mut seen = std::collections::BTreeMap::new();
+        for (path, item) in document["paths"].as_object().expect("paths") {
+            for (method, operation) in item.as_object().expect("path item") {
+                if let Some(id) = operation["operationId"].as_str() {
+                    let place = format!("{} {path}", method.to_uppercase());
+                    if let Some(first) = seen.insert(id.to_owned(), place.clone()) {
+                        panic!("operation id {id:?} is used by {first} and {place}");
+                    }
+                }
+            }
+        }
+        assert!(seen.len() > 50, "found only {} operations", seen.len());
+    }
+
+    #[test]
     fn no_schema_is_silently_replaced_by_another_of_the_same_name() {
         // utoipa keys schemas by type name, so two structs called the same in
         // different modules leave one of them out of the document without a
@@ -476,6 +508,7 @@ mod tests {
             include_str!("routes/imports.rs"),
             include_str!("routes/physical_copies.rs"),
             include_str!("routes/romm.rs"),
+            include_str!("routes/derivations.rs"),
             include_str!("routes/workers.rs"),
             include_str!("health.rs"),
             include_str!("problem.rs"),
