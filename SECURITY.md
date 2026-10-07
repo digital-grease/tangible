@@ -2,10 +2,13 @@
 
 ## Reporting a vulnerability
 
-Report suspected vulnerabilities privately, through GitHub's private
-vulnerability reporting:
+Report suspected vulnerabilities privately, through one of these channels:
 
-https://github.com/digital-grease/tangible/security/advisories/new
+1. **GitHub private vulnerability reporting** (preferred):
+   https://github.com/digital-grease/tangible/security/advisories/new
+   opens a private advisory that only the maintainer can see.
+2. **Email**: dg@digitalgrease.net, for reporters without a GitHub account.
+   To encrypt the report, ask for a key in a short first message.
 
 Do not open a public issue, pull request or discussion about a suspected
 vulnerability.
@@ -33,8 +36,9 @@ guarantees:
 - a fix released, and a GitHub security advisory published crediting the
   reporter unless they ask otherwise, once users can update
 
-Please allow a fix to be released before disclosing publicly. If a report
-goes unanswered for thirty days, you are free to disclose.
+Please allow a fix to be released before disclosing publicly. If no fix has
+been released ninety days after your report, you are free to disclose,
+unless we have agreed a different date together.
 
 ## Supported versions
 
