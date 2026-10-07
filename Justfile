@@ -144,6 +144,14 @@ test-xorriso:
 test-cdrdao:
     TANGIBLE_CDRDAO_TESTS=1 cargo test -p tangible-burn --test cdrdao_engine --all-features
 
+# Tests that run the real chdman: make a CHD, verify it, extract it again and
+# compare every track with the original. Skipped rather than failed when
+# chdman is missing. TANGIBLE_CHDMAN_BIN may point at a wrapper that runs it
+# in a container, if the wrapper mounts the temporary directory at the same
+# path and keeps the working directory.
+test-chdman:
+    TANGIBLE_CHDMAN_TESTS=1 cargo test -p tangible-image --test chdman --all-features
+
 # Tests that touch a real optical drive. Never run in normal CI.
 #
 # TANGIBLE_HARDWARE_TESTS=1 runs the ones that only ask the drive questions.

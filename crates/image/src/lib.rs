@@ -10,6 +10,7 @@
 //! In place: ISO 9660 and UDF detection, and CUE sheet and cdrdao TOC
 //! parsing with track layout.
 
+pub mod chdman;
 pub mod cue;
 pub mod derive;
 pub mod iso;

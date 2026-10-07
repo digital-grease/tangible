@@ -155,7 +155,8 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
             manifests: manifests.clone(),
         },
         serve.derivation_engine,
-    );
+    )
+    .await;
 
     let imports = start_import_runner(database, pipeline, roots);
 
@@ -221,7 +222,7 @@ struct DerivationPipelineParts {
 }
 
 /// Start the derivation runner when an engine is configured.
-fn start_derivations(
+async fn start_derivations(
     state: ApiState,
     database: &Database,
     parts: DerivationPipelineParts,
@@ -235,6 +236,17 @@ fn start_derivations(
             return (state, None);
         }
         DerivationEngineKind::Fake => Arc::new(tangible_image::derive::FakeDeriver::default()),
+        DerivationEngineKind::Chdman => {
+            match tangible_image::chdman::Chdman::probe(tangible_image::chdman::CHDMAN).await {
+                Ok(chdman) => Arc::new(chdman),
+                Err(error) => {
+                    // Not fatal: everything else works without derivatives,
+                    // and the derivative route says why it refuses.
+                    tracing::warn!(error = %error, "chdman cannot be run, so derivatives are disabled");
+                    return (state, None);
+                }
+            }
+        }
     };
     tracing::info!(
         tool = engine.tool_name(),

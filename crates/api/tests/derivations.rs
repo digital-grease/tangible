@@ -515,6 +515,27 @@ async fn a_reported_loss_character_is_recorded() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
+async fn a_transformation_the_engine_cannot_run_is_refused_with_its_reason() {
+    let h = harness_with(Some(Arc::new(
+        FakeDeriver::default().refusing(tangible_domain::Transformation::ChdCreateCd),
+    )))
+    .await;
+    let _queue = exclusive_queue(h.pool()).await;
+    let parent = h.import(&cue_disc("unsupported")).await;
+    let (status, body) = h.derive(&parent, json!({})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(
+        body["detail"].as_str().unwrap().contains("told not to run"),
+        "{body}"
+    );
+    let (_, lineage) = h
+        .send("GET", &format!("/api/v1/artifacts/{parent}/lineage"), None)
+        .await;
+    assert_eq!(lineage["jobs"], json!([]));
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn a_server_without_an_engine_refuses_to_derive() {
     let dir = TempDir::new().unwrap();
     let objects = FilesystemStore::open(dir.path().join("library"))

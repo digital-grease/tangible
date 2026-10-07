@@ -106,6 +106,18 @@ pub trait DerivationEngine: Send + Sync {
     /// The tool's version, as lineage and the fingerprint record it.
     fn tool_version(&self) -> String;
 
+    /// Whether this engine can run a transformation, and why not. Asked
+    /// before a job is queued, so an operator hears it at once rather than
+    /// from a failed job.
+    ///
+    /// # Errors
+    ///
+    /// Why it cannot, in words an operator can act on.
+    fn check_supported(&self, transformation: Transformation) -> Result<(), String> {
+        let _ = transformation;
+        Ok(())
+    }
+
     /// Make the derivative.
     ///
     /// # Errors
@@ -128,6 +140,7 @@ pub trait DerivationEngine: Send + Sync {
 pub struct FakeDeriver {
     loss_character: LossCharacter,
     fail_with: Option<(&'static str, bool)>,
+    unsupported: Option<Transformation>,
 }
 
 impl Default for FakeDeriver {
@@ -135,6 +148,7 @@ impl Default for FakeDeriver {
         Self {
             loss_character: LossCharacter::Unknown,
             fail_with: None,
+            unsupported: None,
         }
     }
 }
@@ -147,6 +161,14 @@ impl FakeDeriver {
     #[must_use]
     pub const fn reporting(mut self, loss_character: LossCharacter) -> Self {
         self.loss_character = loss_character;
+        self
+    }
+
+    /// Say this transformation is not supported, as a tool too old to run it
+    /// would.
+    #[must_use]
+    pub const fn refusing(mut self, transformation: Transformation) -> Self {
+        self.unsupported = Some(transformation);
         self
     }
 
@@ -166,6 +188,16 @@ impl DerivationEngine for FakeDeriver {
 
     fn tool_version(&self) -> String {
         Self::VERSION.to_owned()
+    }
+
+    fn check_supported(&self, transformation: Transformation) -> Result<(), String> {
+        if self.unsupported == Some(transformation) {
+            Err(format!(
+                "the fake engine was told not to run {transformation}"
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     async fn derive(&self, request: &DeriveRequest<'_>) -> Result<DeriveReport, DeriveError> {

@@ -31,6 +31,9 @@ pub enum DerivationEngineKind {
     /// Simulated engine: writes a small placeholder, runs no tool. For tests
     /// and development.
     Fake,
+    /// chdman, from MAME: CHDs of CD images, checked by extracting them
+    /// again and comparing every track with the original.
+    Chdman,
 }
 
 /// Which burn engine executes write operations.
@@ -157,13 +160,15 @@ pub struct ServeConfig {
     #[arg(long, env = "TANGIBLE_ROMM_EXPORT_ROOT")]
     pub romm_export_root: Option<PathBuf>,
 
-    /// Engine that makes derivatives. `none` by default: nothing is derived
-    /// until an engine is chosen.
+    /// Engine that makes derivatives. `chdman` by default, which the image
+    /// carries; nothing is derived until somebody asks for a derivative of a
+    /// particular artifact. A server where chdman cannot be run says so at
+    /// start and carries on without derivations.
     #[arg(
         long,
         env = "TANGIBLE_DERIVATION_ENGINE",
         value_enum,
-        default_value_t = DerivationEngineKind::None
+        default_value_t = DerivationEngineKind::Chdman
     )]
     pub derivation_engine: DerivationEngineKind,
 }

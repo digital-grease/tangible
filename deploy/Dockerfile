@@ -34,7 +34,9 @@ RUN cargo build --release --locked -p tangible-app
 
 FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS runtime
 
-# xorriso for ISO-oriented workflows, cdrdao for DAO/audio/mixed-mode CD.
+# xorriso for ISO-oriented workflows, cdrdao for DAO/audio/mixed-mode CD,
+# mame-tools for chdman, which makes CHD derivatives (it brings SDL2 and its
+# libraries, about 75 MB; Debian builds chdman only in that package).
 # ca-certificates for TLS to the database and integration endpoints.
 #
 # Installed from distro packages on purpose: publishing this image conveys
@@ -55,6 +57,7 @@ RUN apt-get update \
  && apt-get install --no-install-recommends -y \
       xorriso \
       cdrdao \
+      mame-tools \
       ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 

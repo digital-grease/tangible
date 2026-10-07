@@ -161,6 +161,32 @@ RomM's folder bind-mounted, as above, they are copied, so allow the space. ISO
 and CUE/BIN images are exported; a disc imported only as a cdrdao TOC is not,
 because RomM's emulators do not read that format.
 
+## Making CHDs
+
+The image carries chdman, from MAME, so the server can make a CHD of a disc
+image: a compressed copy that RomM and its emulators read. Nothing is converted
+on its own. Ask for one artifact at a time:
+
+```bash
+curl -sS -b "$jar" -H 'Content-Type: application/json' \
+  -H 'X-CSRF-Token: <csrf_token>' -d '{}' \
+  http://localhost:8080/api/v1/artifacts/<artifact id>/derivatives
+```
+
+The CHD becomes a new artifact, linked to the same disc as its original, and
+the original is never changed. Before it is kept, the CHD is extracted again
+and compared with the original track by track; one that does not come back
+the same is refused, and the job says which track differed.
+`GET /api/v1/artifacts/<id>/lineage` shows what was made from what.
+
+CUE/BIN images and CD ISOs work. The chdman in this image (0.251) cannot make
+DVD CHDs, and it misreads a cdrdao TOC whose track has its pregap in the file,
+so such a TOC is refused rather than converted wrongly.
+
+A conversion needs room in the staging volume for a copy of the original and
+the CHD, briefly. Set `TANGIBLE_DERIVATION_ENGINE=none` to turn conversions
+off.
+
 ## Verifying a release
 
 Each release is built by `.github/workflows/release.yml` from its tag, and

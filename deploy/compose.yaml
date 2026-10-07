@@ -33,6 +33,9 @@ services:
       # at all. Anything listed here must also be mounted below.
       TANGIBLE_WATCH_ROOTS: ${TANGIBLE_WATCH_ROOTS:-}
       TANGIBLE_MAX_UPLOAD_BYTES: ${TANGIBLE_MAX_UPLOAD_BYTES:-68719476736}
+      # What makes derivatives (CHDs of disc images), each one only when asked
+      # for: chdman, which the image carries, or none.
+      TANGIBLE_DERIVATION_ENGINE: ${TANGIBLE_DERIVATION_ENGINE:-chdman}
       # RomM's roms directory, to show chosen games in RomM (deploy/README.md,
       # "Showing games in RomM"). Off unless set: uncomment this and the
       # matching volume below. Tangible writes only folders it marks as its

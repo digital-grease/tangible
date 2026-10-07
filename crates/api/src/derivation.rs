@@ -74,6 +74,9 @@ pub enum PlanError {
     /// The options were refused.
     #[error(transparent)]
     Options(#[from] OptionsError),
+    /// This server's engine cannot run the transformation.
+    #[error("{0}")]
+    Unsupported(String),
 }
 
 /// Why a job did not produce a derivative.
@@ -219,6 +222,9 @@ impl DerivationPipeline {
             None => Transformation::suited_to(format, media)
                 .ok_or(PlanError::NothingSuits { format, media })?,
         };
+        self.engine
+            .check_supported(transformation)
+            .map_err(PlanError::Unsupported)?;
         let options = options.unwrap_or_else(|| ChdOptions::defaults(transformation));
         let spec = DerivationSpec::new(
             transformation,
