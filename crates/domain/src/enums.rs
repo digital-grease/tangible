@@ -570,6 +570,39 @@ impl PhysicalCopyStatus {
     }
 }
 
+// --- derivations ------------------------------------------------------------
+
+string_enum! {
+    /// A transformation Tangible knows how to run.
+    Transformation {
+        /// A CD image (CUE/BIN, TOC/BIN, or a CD-sized ISO) to a CD CHD,
+        /// keeping its tracks.
+        ChdCreateCd => "chd_create_cd",
+        /// A DVD or Blu-ray ISO to a DVD CHD.
+        ChdCreateDvd => "chd_create_dvd",
+    }
+}
+
+string_enum! {
+    /// A compression codec chdman can use inside a CHD.
+    ChdCodec {
+        /// LZMA, for CD data frames.
+        Cdlz => "cdlz",
+        /// Deflate, for CD data frames.
+        Cdzl => "cdzl",
+        /// FLAC, for CD audio frames.
+        Cdfl => "cdfl",
+        /// LZMA.
+        Lzma => "lzma",
+        /// Deflate.
+        Zlib => "zlib",
+        /// Huffman.
+        Huff => "huff",
+        /// FLAC.
+        Flac => "flac",
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {

@@ -16,6 +16,7 @@
 pub mod auth;
 pub mod burn;
 pub mod cd;
+pub mod derivation;
 pub mod digest;
 pub mod enums;
 pub mod erasure;
