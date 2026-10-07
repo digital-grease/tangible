@@ -259,11 +259,14 @@ async fn start_derivations(
         parts.manifests,
         engine,
     ));
-    let runner = DerivationRunner::new(
+    let mut runner = DerivationRunner::new(
         database.clone(),
         derivations.clone(),
         DerivationRunnerSettings::default(),
     );
+    if let Some(romm) = state.romm() {
+        runner = runner.with_romm(romm.clone());
+    }
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(runner.run(async {
         let _ = stopped.await;

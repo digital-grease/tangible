@@ -7,7 +7,7 @@
 use serde_json::Value;
 use sqlx::{PgPool, Row};
 use std::str::FromStr;
-use tangible_domain::{ArtifactFormat, ArtifactId, DiscId, EditionId};
+use tangible_domain::{ArtifactFormat, ArtifactId, DiscId, EditionId, LossCharacter};
 use time::OffsetDateTime;
 
 use crate::DbError;
@@ -65,9 +65,21 @@ pub struct ExportInputs {
 pub struct DiscInputs {
     /// The disc.
     pub disc_id: DiscId,
-    /// Linked artifacts, in the order they were linked: id, format and the
-    /// link's relationship.
-    pub artifacts: Vec<(ArtifactId, ArtifactFormat, String)>,
+    /// Linked artifacts, in the order they were linked.
+    pub artifacts: Vec<LinkedArtifact>,
+}
+
+/// An artifact linked to a disc.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkedArtifact {
+    /// The artifact.
+    pub id: ArtifactId,
+    /// Its format.
+    pub format: ArtifactFormat,
+    /// The link's relationship, such as `representation_of`.
+    pub relationship: String,
+    /// When it is a derivative, what it was shown to preserve of its parent.
+    pub loss_character: Option<LossCharacter>,
 }
 
 /// One file an export put in place.
@@ -222,7 +234,10 @@ pub async fn export_inputs(
     .map_err(DbError::Query)?;
 
     let links = sqlx::query(
-        "SELECT l.disc_id, a.id, a.format, l.relationship
+        "SELECT l.disc_id, a.id, a.format, l.relationship,
+                (SELECT d.loss_character FROM derivations d
+                 WHERE d.child_artifact_id = a.id AND NOT d.superseded
+                 ORDER BY d.started_at DESC LIMIT 1) AS loss_character
          FROM artifact_disc_links l JOIN artifacts a ON a.id = l.artifact_id
          WHERE l.disc_id = ANY($1)
          ORDER BY l.created_at, a.id",
@@ -248,13 +263,25 @@ pub async fn export_inputs(
             value: format.clone(),
         })?;
         let relationship: String = link.try_get("relationship").map_err(DbError::Query)?;
+        let loss: Option<String> = link.try_get("loss_character").map_err(DbError::Query)?;
+        let loss_character = loss
+            .map(|value| {
+                LossCharacter::from_str(&value).map_err(|_| DbError::Enum {
+                    column: "derivations.loss_character",
+                    value,
+                })
+            })
+            .transpose()?;
         if let Some(entry) = out
             .iter_mut()
             .find(|entry| *entry.disc_id.as_uuid() == disc)
         {
-            entry
-                .artifacts
-                .push((ArtifactId::from_uuid(artifact), format, relationship));
+            entry.artifacts.push(LinkedArtifact {
+                id: ArtifactId::from_uuid(artifact),
+                format,
+                relationship,
+                loss_character,
+            });
         }
     }
 

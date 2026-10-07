@@ -2,6 +2,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   import { onMount } from 'svelte';
+  import Lineage from '$lib/components/Lineage.svelte';
   import { page } from '$app/state';
   import {
     componentUrl,
@@ -171,6 +172,8 @@
         </table>
       </section>
     {/if}
+
+    <Lineage artifactId={view.data.id} />
 
     <section aria-labelledby="compatibility-heading">
       <h2 id="compatibility-heading">Burn compatibility</h2>

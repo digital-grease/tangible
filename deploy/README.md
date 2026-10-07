@@ -157,15 +157,19 @@ Tangible's, the game is reported as blocked rather than written over.
 
 Files are hard-linked from the library when the export folder is on the same
 filesystem, and copied otherwise. With the library in a named volume and
-RomM's folder bind-mounted, as above, they are copied, so allow the space. ISO
-and CUE/BIN images are exported; a disc imported only as a cdrdao TOC is not,
-because RomM's emulators do not read that format.
+RomM's folder bind-mounted, as above, they are copied, so allow the space.
+
+For each disc the export takes a checked CHD when the disc has one (see
+"Making CHDs"), otherwise its ISO or CUE/BIN. A disc imported only as a cdrdao
+TOC reaches RomM through its CHD, since RomM's emulators do not read TOC
+files. A CHD that was not checked against its original is never exported.
 
 ## Making CHDs
 
 The image carries chdman, from MAME, so the server can make a CHD of a disc
 image: a compressed copy that RomM and its emulators read. Nothing is converted
-on its own. Ask for one artifact at a time:
+on its own. Ask for one artifact at a time, with "Make a CHD" on its page in
+the library, or from a shell:
 
 ```bash
 curl -sS -b "$jar" -H 'Content-Type: application/json' \

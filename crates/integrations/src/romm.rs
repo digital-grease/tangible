@@ -118,8 +118,9 @@ pub struct SourceFile {
 /// One disc's image.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiscImage {
-    /// A single image file.
-    Iso(SourceFile),
+    /// A single image file: an ISO, or a CHD. Exported under the disc's
+    /// name with its own extension.
+    SingleFile(SourceFile),
     /// A CUE sheet and the files its `FILE` lines name.
     CueBin {
         /// The sheet.
@@ -343,7 +344,7 @@ pub fn plan(
             game.clone()
         };
         match disc {
-            DiscImage::Iso(image) => files.push(PlannedFile {
+            DiscImage::SingleFile(image) => files.push(PlannedFile {
                 name: with_extension(&base, &image.logical_path, "iso"),
                 source: FileSource::Object(image.object_path.clone()),
                 sha256: image.sha256.clone(),
@@ -843,10 +844,32 @@ mod tests {
     #[test]
     fn a_single_iso_is_named_for_the_game() {
         let dir = tempfile::tempdir().unwrap();
-        let mut req = request(vec![DiscImage::Iso(object(dir.path(), "disc.ISO", b"iso"))]);
+        let mut req = request(vec![DiscImage::SingleFile(object(
+            dir.path(),
+            "disc.ISO",
+            b"iso",
+        ))]);
         req.region = None;
         let plan = plan(&req).unwrap();
         assert_eq!(plan.files[0].name, "Example The Game.iso");
+    }
+
+    #[test]
+    fn a_chd_keeps_its_extension_and_two_are_numbered_discs() {
+        let dir = tempfile::tempdir().unwrap();
+        let req = request(vec![
+            DiscImage::SingleFile(object(dir.path(), "disc1.chd", b"chd-one")),
+            DiscImage::SingleFile(object(dir.path(), "disc2.chd", b"chd-two")),
+        ]);
+        let plan = plan(&req).unwrap();
+        let names: Vec<&str> = plan.files.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Example The Game (USA) (Disc 1).chd",
+                "Example The Game (USA) (Disc 2).chd"
+            ]
+        );
     }
 
     #[test]

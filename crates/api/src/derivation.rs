@@ -571,6 +571,7 @@ pub struct DerivationRunner {
     database: Database,
     derivations: Derivations,
     settings: DerivationRunnerSettings,
+    romm: Option<crate::romm_export::RommExport>,
 }
 
 impl DerivationRunner {
@@ -585,7 +586,16 @@ impl DerivationRunner {
             database,
             derivations,
             settings,
+            romm: None,
         }
+    }
+
+    /// Wake the RomM exporter after each derivative, so a game already in
+    /// RomM switches to its new CHD at once rather than at the next pass.
+    #[must_use]
+    pub fn with_romm(mut self, romm: crate::romm_export::RommExport) -> Self {
+        self.romm = Some(romm);
+        self
     }
 
     /// Work the queue until `shutdown` resolves. A job already running
@@ -673,12 +683,17 @@ impl DerivationRunner {
         )
         .await
         {
-            Ok(true) => tracing::info!(
-                job_id = %job.id,
-                child = %outcome.child_artifact_id,
-                loss = %outcome.loss_character,
-                "derivation complete"
-            ),
+            Ok(true) => {
+                tracing::info!(
+                    job_id = %job.id,
+                    child = %outcome.child_artifact_id,
+                    loss = %outcome.loss_character,
+                    "derivation complete"
+                );
+                if let Some(romm) = &self.romm {
+                    romm.nudge();
+                }
+            }
             Ok(false) => {
                 tracing::warn!(job_id = %job.id, "the derivation finished but its job was no longer running");
             }

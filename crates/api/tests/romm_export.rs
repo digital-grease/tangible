@@ -17,11 +17,14 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use serde_json::{Value, json};
 use sqlx::PgPool;
+use std::sync::Arc;
+
 use tangible_api::{
-    ApiState, ImportCheckpoint, ImportPipeline, ImportRequest, RommExport, RommExporter, catalog,
-    router,
+    ApiState, DerivationPipeline, DerivationRunner, DerivationRunnerSettings, Derivations,
+    ImportCheckpoint, ImportPipeline, ImportRequest, RommExport, RommExporter, catalog, router,
 };
 use tangible_domain::{EditionId, ImportJobId, LogicalPath};
+use tangible_image::derive::FakeDeriver;
 use tangible_storage::{FilesystemStore, IngestLimits, ManifestStore, StagingManager};
 use tempfile::TempDir;
 use tower::ServiceExt as _;
@@ -38,6 +41,7 @@ struct Harness {
     database: tangible_db::Database,
     pipeline: ImportPipeline,
     exporter: RommExporter,
+    derivations: DerivationRunner,
 }
 
 async fn harness() -> Harness {
@@ -49,7 +53,7 @@ async fn harness() -> Harness {
     let staging = StagingManager::open(dir.path().join("staging"))
         .await
         .unwrap();
-    let pipeline = ImportPipeline::new(staging, objects, manifests.clone());
+    let pipeline = ImportPipeline::new(staging.clone(), objects.clone(), manifests.clone());
     let root = dir.path().join("roms");
     std::fs::create_dir(&root).unwrap();
 
@@ -66,7 +70,27 @@ async fn harness() -> Harness {
         manifests.clone(),
         integration,
     );
-    let state = ApiState::with_manifests(database.clone(), manifests).with_romm(export);
+    // A fake engine that reports what chdman's round trip establishes for a
+    // CD layout, so the export's preference for a checked CHD is exercised
+    // without the tool.
+    let derivations = Derivations::new(DerivationPipeline::new(
+        staging,
+        objects,
+        manifests.clone(),
+        Arc::new(
+            FakeDeriver::default()
+                .reporting(tangible_domain::LossCharacter::StructurallyEquivalent),
+        ),
+    ));
+    let runner = DerivationRunner::new(
+        database.clone(),
+        derivations.clone(),
+        DerivationRunnerSettings::default(),
+    )
+    .with_romm(export.clone());
+    let state = ApiState::with_manifests(database.clone(), manifests)
+        .with_romm(export)
+        .with_derivations(derivations);
     Harness {
         _dir: dir,
         root,
@@ -75,6 +99,7 @@ async fn harness() -> Harness {
         database,
         pipeline,
         exporter,
+        derivations: runner,
     }
 }
 
@@ -303,6 +328,72 @@ async fn a_two_disc_game_appears_in_romm_as_one_game_and_goes_when_switched_off(
     .await
     .unwrap();
     assert_eq!(present, 0);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_checked_chd_replaces_the_cue_bin_in_romm() {
+    let harness = harness().await;
+    // Only this test makes derivatives in this binary; anything a previous
+    // run left claimable is withdrawn so the runner takes this job.
+    sqlx::query(
+        "UPDATE derivation_jobs SET state = 'canceled', completed_at = now(),
+                lease_owner = NULL, lease_expires_at = NULL
+         WHERE state IN ('queued', 'failed_retryable', 'running')",
+    )
+    .execute(&harness.pool)
+    .await
+    .unwrap();
+    let parent = harness.import(&cue_disc("chd")).await;
+    let title = format!("Romm Chd {}", uuid::Uuid::now_v7().simple());
+    let edition = harness
+        .game(&title, "USA", std::slice::from_ref(&parent))
+        .await;
+    harness.set(&edition, Some("psx"), true).await;
+    let folder = harness.root.join(format!("psx/{title} (USA)"));
+    assert_eq!(harness.reconcile(&edition).await["state"], "current");
+    assert_eq!(
+        names(&folder),
+        vec![
+            ".tangible-export.json".to_owned(),
+            format!("{title} (USA).bin"),
+            format!("{title} (USA).cue"),
+        ]
+    );
+
+    let (status, asked) = harness
+        .send(
+            "POST",
+            &format!("/api/v1/artifacts/{parent}/derivatives"),
+            Some(json!({})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{asked}");
+    assert!(harness.derivations.step().await.unwrap());
+
+    // The CHD is linked to the same disc and checked, so it is what RomM gets.
+    let status = harness.reconcile(&edition).await;
+    assert_eq!(status["state"], "current", "{status}");
+    assert_eq!(
+        names(&folder),
+        vec![
+            ".tangible-export.json".to_owned(),
+            format!("{title} (USA).chd")
+        ],
+        "the CUE/BIN is replaced, not kept beside it"
+    );
+    let marker: Value =
+        serde_json::from_slice(&std::fs::read(folder.join(".tangible-export.json")).unwrap())
+            .unwrap();
+    assert_eq!(marker["files"].as_array().unwrap().len(), 1);
+    let present: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM export_receipts WHERE destination_key LIKE $1 AND state = 'present'",
+    )
+    .bind(format!("psx/{title} (USA)/%"))
+    .fetch_one(&harness.pool)
+    .await
+    .unwrap();
+    assert_eq!(present, 1, "the old files' receipts are marked removed");
 }
 
 #[tokio::test]

@@ -25,12 +25,12 @@ use std::time::Duration;
 
 use tangible_db::Database;
 use tangible_db::romm::{
-    DiscInputs, Receipt, edition_romm, editions_to_reconcile, export_inputs, record_folder_removed,
-    record_receipts, record_status,
+    DiscInputs, LinkedArtifact, Receipt, edition_romm, editions_to_reconcile, export_inputs,
+    record_folder_removed, record_receipts, record_status,
 };
 use tangible_domain::enums::ComponentRole;
 use tangible_domain::manifest::ArtifactManifest;
-use tangible_domain::{ArtifactFormat, ArtifactId, EditionId};
+use tangible_domain::{ArtifactFormat, ArtifactId, EditionId, LossCharacter};
 use tangible_integrations::romm::{
     self, Applied, ApplyError, DiscImage, ExportRequest, SourceFile,
 };
@@ -402,9 +402,9 @@ impl RommExporter {
             length: component.length_bytes,
         };
 
-        if format == ArtifactFormat::Iso {
-            let image = primary_image(&manifest).ok_or("the ISO has no image file")?;
-            return Ok(DiscImage::Iso(source(image)));
+        if matches!(format, ArtifactFormat::Iso | ArtifactFormat::Chd) {
+            let image = primary_image(&manifest).ok_or("the image has no image file")?;
+            return Ok(DiscImage::SingleFile(source(image)));
         }
 
         let sheet = manifest
@@ -458,20 +458,36 @@ fn rewrite_sheet(sheet: &[u8], renames: &BTreeMap<String, String>) -> Result<Vec
         .map_err(|error| error.to_string())
 }
 
-/// The artifact a disc exports from: the first image linked as a
-/// representation of it, or failing that the first image linked at all.
+/// Whether a CHD was shown, by extracting it again, to hold its parent's
+/// tracks. Only such a CHD is exported: one made without that check, or
+/// whose check found less, is not offered to an emulator as the disc.
+fn is_checked_chd(link: &LinkedArtifact) -> bool {
+    link.format == ArtifactFormat::Chd
+        && matches!(
+            link.loss_character,
+            Some(LossCharacter::BitExactRepack | LossCharacter::StructurallyEquivalent)
+        )
+}
+
+/// The artifact a disc exports from, in order of preference: a checked CHD,
+/// which RomM's emulators read and which is a fraction of the size; then an
+/// ISO or CUE/BIN linked as a representation of the disc; then any ISO or
+/// CUE/BIN linked at all.
 fn chosen_artifact(disc: &DiscInputs) -> Option<(ArtifactId, ArtifactFormat)> {
-    let exportable =
-        |format: &ArtifactFormat| matches!(format, ArtifactFormat::Iso | ArtifactFormat::CueBin);
+    let exportable = |link: &&LinkedArtifact| {
+        matches!(link.format, ArtifactFormat::Iso | ArtifactFormat::CueBin)
+    };
     disc.artifacts
         .iter()
-        .find(|(_, format, relationship)| exportable(format) && relationship == "representation_of")
+        .find(|link| is_checked_chd(link))
         .or_else(|| {
             disc.artifacts
                 .iter()
-                .find(|(_, format, _)| exportable(format))
+                .filter(exportable)
+                .find(|link| link.relationship == "representation_of")
         })
-        .map(|(id, format, _)| (*id, *format))
+        .or_else(|| disc.artifacts.iter().find(exportable))
+        .map(|link| (link.id, link.format))
 }
 
 /// Why a disc has nothing to export, in words that say what to do.
@@ -479,16 +495,25 @@ fn missing_image(number: usize, disc: &DiscInputs) -> String {
     if disc
         .artifacts
         .iter()
-        .any(|(_, format, _)| *format == ArtifactFormat::TocBin)
+        .any(|link| link.format == ArtifactFormat::TocBin)
     {
         format!(
             "disc {number} is linked only to a TOC/BIN image, which RomM and its emulators do not \
-             read; link a CUE/BIN or ISO image of it"
+             read; make a CHD of it, or link a CUE/BIN or ISO image of it"
         )
     } else if disc.artifacts.is_empty() {
         format!("disc {number} has no image linked")
+    } else if disc
+        .artifacts
+        .iter()
+        .any(|link| link.format == ArtifactFormat::Chd)
+    {
+        format!(
+            "disc {number} has a CHD that was not checked against its original; make a CHD of \
+             the original here, or link a CUE/BIN or ISO image"
+        )
     } else {
-        format!("disc {number} has no ISO or CUE/BIN image linked")
+        format!("disc {number} has no ISO, CUE/BIN or CHD image linked")
     }
 }
 
@@ -535,15 +560,71 @@ mod tests {
     use tangible_domain::DiscId;
 
     fn disc(links: &[(ArtifactFormat, &str)]) -> DiscInputs {
+        derived(
+            &links
+                .iter()
+                .map(|(format, relationship)| (*format, *relationship, None))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn derived(links: &[(ArtifactFormat, &str, Option<LossCharacter>)]) -> DiscInputs {
         DiscInputs {
             disc_id: DiscId::generate(),
             artifacts: links
                 .iter()
-                .map(|(format, relationship)| {
-                    (ArtifactId::generate(), *format, (*relationship).to_owned())
+                .map(|(format, relationship, loss)| LinkedArtifact {
+                    id: ArtifactId::generate(),
+                    format: *format,
+                    relationship: (*relationship).to_owned(),
+                    loss_character: *loss,
                 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn a_checked_chd_is_preferred_and_an_unchecked_one_never_chosen() {
+        let checked = derived(&[
+            (ArtifactFormat::CueBin, "representation_of", None),
+            (
+                ArtifactFormat::Chd,
+                "representation_of",
+                Some(LossCharacter::StructurallyEquivalent),
+            ),
+        ]);
+        assert_eq!(
+            chosen_artifact(&checked).map(|(_, f)| f),
+            Some(ArtifactFormat::Chd)
+        );
+        for loss in [
+            None,
+            Some(LossCharacter::Unknown),
+            Some(LossCharacter::Lossy),
+        ] {
+            let unchecked = derived(&[
+                (ArtifactFormat::CueBin, "representation_of", None),
+                (ArtifactFormat::Chd, "representation_of", loss),
+            ]);
+            assert_eq!(
+                chosen_artifact(&unchecked).map(|(_, f)| f),
+                Some(ArtifactFormat::CueBin),
+                "a CHD whose loss is {loss:?} must not be exported"
+            );
+        }
+        let toc_with_chd = derived(&[
+            (ArtifactFormat::TocBin, "representation_of", None),
+            (
+                ArtifactFormat::Chd,
+                "representation_of",
+                Some(LossCharacter::StructurallyEquivalent),
+            ),
+        ]);
+        assert_eq!(
+            chosen_artifact(&toc_with_chd).map(|(_, f)| f),
+            Some(ArtifactFormat::Chd),
+            "a TOC/BIN disc reaches RomM through its checked CHD"
+        );
     }
 
     #[test]
@@ -576,8 +657,11 @@ mod tests {
         );
         assert_eq!(missing_image(1, &disc(&[])), "disc 1 has no image linked");
         assert!(
-            missing_image(3, &disc(&[(ArtifactFormat::Chd, "unknown")]))
-                .contains("no ISO or CUE/BIN")
+            missing_image(3, &disc(&[(ArtifactFormat::Chd, "unknown")])).contains("not checked")
+        );
+        assert!(
+            missing_image(4, &disc(&[(ArtifactFormat::TocBin, "representation_of")]))
+                .contains("make a CHD")
         );
     }
 
