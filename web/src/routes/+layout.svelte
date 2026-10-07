@@ -12,6 +12,7 @@
     whenSignedOut,
     type SessionView,
   } from '$lib/session';
+  import { LICENSE_NAME, SOURCE_URL } from '$lib/source';
   let { children } = $props();
 
   const links = [
@@ -152,6 +153,12 @@
   </main>
 {/if}
 
+<!-- On every page, signed in or not: users of a network service are owed
+     the means to get its source (AGPL section 13). -->
+<footer>
+  <a href={SOURCE_URL} rel="noreferrer">Source code</a>, free software under {LICENSE_NAME}
+</footer>
+
 <style>
   :global(body) {
     margin: 0;
@@ -202,6 +209,12 @@
     max-width: 60rem;
     margin: 0 auto;
     padding: 1.5rem 1rem;
+  }
+  footer {
+    max-width: 60rem;
+    margin: 0 auto;
+    padding: 1rem;
+    font-size: 0.875rem;
   }
   :global(a:focus-visible),
   :global(button:focus-visible) {

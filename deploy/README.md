@@ -254,9 +254,14 @@ gh attestation verify tangible-deploy-$TAG.tar.gz --repo digital-grease/tangible
 
 Each release also carries `sbom.spdx.json`, the image's software bill of
 materials, and `SOURCES.md`, which names the Debian source package and exact
-version of everything in the image: publishing the image conveys object code
+version of everything in the image, with a link to that version's archived
+source and to the upstream project: publishing the image conveys object code
 for GPL programs such as xorriso and cdrdao, and that is where their source
 is.
+
+The web UI links to Tangible's source from every page, as the AGPL expects of
+a network service. If you run a modified Tangible for other people, point
+`SOURCE_URL` in `web/src/lib/source.ts` at your modified source.
 
 `THIRD_PARTY_NOTICES-rust.txt` and `THIRD_PARTY_NOTICES-web.txt` carry the
 licence notices of the Rust crates compiled into Tangible and of the

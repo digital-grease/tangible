@@ -63,6 +63,9 @@ The first release.
   generated at build time, in the image and with each release.
 - Release images are scanned for vulnerabilities before they are signed, and
   one with a fixable high or critical vulnerability is not released.
+- `SOURCES.md` with each release links every Debian package in the image to
+  its archived source and its upstream project, and every page of the web UI
+  links to Tangible's source.
 
 ### Known limitations
 
