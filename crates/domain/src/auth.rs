@@ -192,10 +192,7 @@ mod tests {
     #[test]
     fn a_username_is_stored_lowercase_and_plain() {
         assert_eq!(normalize_username(" Alice "), Ok("alice".to_owned()));
-        assert_eq!(
-            normalize_username("m.flowers-2"),
-            Ok("m.flowers-2".to_owned())
-        );
+        assert_eq!(normalize_username("j.doe-2"), Ok("j.doe-2".to_owned()));
         for bad in ["", "a b", "émile", "../x", "a@b", &"x".repeat(65)] {
             assert_eq!(
                 normalize_username(bad),
