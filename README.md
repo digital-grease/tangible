@@ -2,10 +2,9 @@
 
 > A self-hosted disc-image preservation, management, and burning platform.
 
-**Status:** pre-release. Everything listed under "What it does" works and is
-tested, including on a real optical drive; the first tagged release, 0.1.0, is
-being prepared. Expect the API and the manifest schema to change during 0.x,
-with release notes.
+**Status:** early release, 0.1.0. Everything listed under "What it does" works
+and is tested, including on a real optical drive. Expect the API and the
+manifest schema to change during 0.x, with release notes.
 
 Publishers keep moving toward digital-only distribution, where a purchase is a revocable license
 and a delisted title simply stops existing. Discs do not work that way. Tangible exists to keep

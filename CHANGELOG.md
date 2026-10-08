@@ -4,7 +4,7 @@ Notable changes to Tangible, newest first. Versions follow semantic
 versioning; during 0.x the API, the manifest schema and the database schema
 may change between minor versions, and the release notes say how.
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-10-07)
 
 The first release.
 

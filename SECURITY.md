@@ -42,7 +42,7 @@ unless we have agreed a different date together.
 
 ## Supported versions
 
-Tangible is pre-release. Only the latest release receives security fixes.
+Tangible is in its 0.x series. Only the latest release receives security fixes.
 
 ## Verifying what you run
 
