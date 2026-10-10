@@ -367,6 +367,8 @@ pub struct DriveDescription {
     /// SHA-256 of the drive serial, hashed here so the raw serial never
     /// leaves this machine.
     pub serial_hash: Option<String>,
+    /// How the drive is attached: `usb`, `sata` or `unknown`.
+    pub connection: String,
     /// Current drive status.
     pub status: String,
     /// What the drive says it can do.

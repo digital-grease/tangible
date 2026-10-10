@@ -13,6 +13,9 @@ may change between minor versions, and the release notes say how.
   send it, and two settings say where reports go
   (`TANGIBLE_REPORT_ISSUES_URL`, empty to turn them off) and whether
   addresses are scrubbed. The server names its release and commit in them.
+- Drives are recorded with their vendor, model and firmware, from what the
+  drive itself reports, and with how they are attached (USB or SATA), read
+  from the host's device tree. The Workers page shows both.
 
 ## 0.1.0 (2026-10-07)
 

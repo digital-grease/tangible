@@ -49,7 +49,7 @@ use crate::engine::{BurnEngine, BurnEvent, EngineError, EventSink};
 use crate::fake::CancelToken;
 use crate::plan::{
     BlankReport, BlankRequest, BurnPlan, DriveCapabilities, DriveRef, MediumInfo, PreflightFailure,
-    PreflightReport, VerifyReport, WriteMode, WriteReport,
+    PreflightReport, VerifyReport, WriteMode, WriteReport, identity_field,
 };
 use crate::xorriso::{command, parse};
 
@@ -421,6 +421,18 @@ impl BurnEngine for XorrisoEngine {
             capabilities
                 .engine_evidence
                 .insert("xorriso".to_owned(), identity);
+            capabilities.identity.vendor = found.vendor.as_deref().and_then(identity_field);
+            capabilities.identity.model = found.model.as_deref().and_then(identity_field);
+            // The listing has no firmware revision; reading the drive's table
+            // of contents does, whether or not a disc is in it. A drive that
+            // will not answer simply goes without one here.
+            if let Ok(toc) = self.run(&command::inspect(drive), PROBE_TIMEOUT).await
+                && let Some(drive_type) = parse::medium(&toc.text).drive_identity
+            {
+                capabilities
+                    .identity
+                    .fill_from(&parse::drive_type(&drive_type));
+            }
         } else {
             capabilities.engine_evidence.insert(
                 "xorriso".to_owned(),

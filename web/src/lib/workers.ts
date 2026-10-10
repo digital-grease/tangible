@@ -88,3 +88,22 @@ export function erasureStateLabel(state: string): string {
 export function anyOpen(erasures: ErasureView[]): boolean {
   return erasures.some((erasure) => erasure.is_open);
 }
+
+/** What a drive says it is, in one line: "Slimtype DVD A DS8A8SH, firmware KS21". */
+export function driveModel(drive: Pick<DriveView, 'vendor' | 'model' | 'firmware'>): string {
+  const name = [drive.vendor, drive.model].filter(Boolean).join(' ');
+  if (!name) return drive.firmware ? `Firmware ${drive.firmware}` : 'Not reported';
+  return drive.firmware ? `${name}, firmware ${drive.firmware}` : name;
+}
+
+/** How a drive is attached, in words. */
+export function connectionLabel(connection: string): string {
+  switch (connection) {
+    case 'usb':
+      return 'USB';
+    case 'sata':
+      return 'SATA';
+    default:
+      return 'Not known';
+  }
+}

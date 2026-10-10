@@ -21,6 +21,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::plan::{DriveIdentity, identity_field};
+
 /// What xorriso says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Version {
@@ -102,6 +104,22 @@ pub fn devices(output: &str) -> Vec<Device> {
     }
 
     found
+}
+
+/// A drive's identity from the value of `-toc`'s `Drive type` line:
+/// `vendor 'Slimtype' product 'DVD A DS8A8SH' revision 'KS21'`.
+#[must_use]
+pub fn drive_type(value: &str) -> DriveIdentity {
+    let quoted = |key: &str| {
+        let start = value.find(&format!("{key} '"))? + key.len() + 2;
+        let end = value[start..].find('\'')? + start;
+        identity_field(&value[start..end])
+    };
+    DriveIdentity {
+        vendor: quoted("vendor"),
+        model: quoted("product"),
+        firmware: quoted("revision"),
+    }
 }
 
 /// What is in a drive, as `-toc` describes it.
@@ -535,6 +553,22 @@ mod tests {
     fn something_that_is_not_xorriso_reports_no_version() {
         assert!(version("bash: xorriso: command not found").is_none());
         assert!(version("").is_none());
+    }
+
+    #[test]
+    fn the_drive_type_line_gives_vendor_model_and_firmware() {
+        // Captured from a Slimtype DS8A8SH with its tray empty.
+        let report = medium(&fixture("toc-no-disc.txt"));
+        let identity = drive_type(report.drive_identity.as_deref().expect("a drive type"));
+        assert_eq!(identity.vendor.as_deref(), Some("Slimtype"));
+        assert_eq!(identity.model.as_deref(), Some("DVD A DS8A8SH"));
+        assert_eq!(identity.firmware.as_deref(), Some("KS21"));
+        // Padding collapsed, missing parts absent, nothing invented.
+        let padded = drive_type("vendor 'PIONEER ' product 'BD-RW   BDR-212M'");
+        assert_eq!(padded.vendor.as_deref(), Some("PIONEER"));
+        assert_eq!(padded.model.as_deref(), Some("BD-RW BDR-212M"));
+        assert_eq!(padded.firmware, None);
+        assert_eq!(drive_type("garbled"), DriveIdentity::default());
     }
 
     #[test]

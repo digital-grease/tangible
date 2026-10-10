@@ -24,6 +24,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::plan::{DriveIdentity, identity_field};
+
 /// Split output into lines the way cdrdao means them.
 ///
 /// Both `\r` and `\n` end a line, and the empty strings between a `\r\n` or a
@@ -446,6 +448,27 @@ pub struct DriveInfo {
     pub max_write_kbps: Option<u32>,
     /// Whether buffer-underrun protection is available.
     pub burn_proof: Option<bool>,
+    /// The drive's identity, split from the banner and its `Rev:`.
+    pub parts: DriveIdentity,
+}
+
+/// The banner after the device, `Slimtype DVD A DS8A8SH\tRev: KS21`, as
+/// vendor, model and firmware. SCSI vendor names are one word, so the first
+/// word is the vendor and the rest the model.
+fn banner_identity(banner: &str) -> DriveIdentity {
+    let (identity, revision) = banner.split_once('\t').unwrap_or((banner, ""));
+    let mut words = identity.split_whitespace();
+    let vendor = words.next().and_then(identity_field);
+    let model = identity_field(&words.collect::<Vec<_>>().join(" "));
+    let firmware = revision
+        .trim()
+        .strip_prefix("Rev:")
+        .and_then(identity_field);
+    DriveIdentity {
+        vendor,
+        model,
+        firmware,
+    }
 }
 
 /// Read a `drive-info` report, or the device banner from any command.
@@ -459,6 +482,7 @@ pub fn drive_info(output: &str, device: &str) -> DriveInfo {
             // "/dev/sr0: HL-DT-ST BD-RE  WH16NS60\tRev: 1.02"
             let identity = rest.split('\t').next().unwrap_or(rest);
             info.identity = Some(identity.split_whitespace().collect::<Vec<_>>().join(" "));
+            info.parts = banner_identity(rest);
         } else if let Some(rest) = line.strip_prefix("Using driver: ") {
             info.driver = Some(rest.trim().to_owned());
         } else if let Some(rest) = line.strip_prefix("Maximum writing speed:") {
@@ -918,6 +942,31 @@ mod tests {
         );
         assert_eq!(info.max_write_kbps, Some(4234));
         assert_eq!(info.burn_proof, Some(true));
+        assert_eq!(
+            info.parts,
+            DriveIdentity {
+                vendor: Some("Slimtype".to_owned()),
+                model: Some("DVD A DS8A8SH".to_owned()),
+                firmware: Some("KS21".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn a_banner_splits_into_vendor_model_and_firmware() {
+        // cdrdao pads the model with SCSI's spaces.
+        assert_eq!(
+            banner_identity("HL-DT-ST BD-RE  WH16NS60\tRev: 1.02"),
+            DriveIdentity {
+                vendor: Some("HL-DT-ST".to_owned()),
+                model: Some("BD-RE WH16NS60".to_owned()),
+                firmware: Some("1.02".to_owned()),
+            }
+        );
+        // A banner with no revision, or nothing at all.
+        assert_eq!(banner_identity("PIONEER").model, None);
+        assert_eq!(banner_identity("PIONEER").firmware, None);
+        assert_eq!(banner_identity(""), DriveIdentity::default());
     }
 
     // --- write --------------------------------------------------------------------------

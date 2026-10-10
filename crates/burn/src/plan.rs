@@ -37,6 +37,61 @@ pub struct DriveRef {
     pub device_alias: String,
 }
 
+/// What a drive says it is, from the probes the engines already run.
+///
+/// Each part is what the drive itself answered, trimmed of the padding SCSI
+/// pads its identity fields with. Never the serial number: that identifies
+/// one physical drive, and this goes into issue reports.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriveIdentity {
+    /// The vendor, such as `Slimtype` or `HL-DT-ST`.
+    pub vendor: Option<String>,
+    /// The model, such as `DVD A DS8A8SH`.
+    pub model: Option<String>,
+    /// The firmware revision, such as `KS21`.
+    pub firmware: Option<String>,
+}
+
+impl DriveIdentity {
+    /// Fill whatever this one lacks from `other`, keeping what it has.
+    pub fn fill_from(&mut self, other: &Self) {
+        if self.vendor.is_none() {
+            self.vendor.clone_from(&other.vendor);
+        }
+        if self.model.is_none() {
+            self.model.clone_from(&other.model);
+        }
+        if self.firmware.is_none() {
+            self.firmware.clone_from(&other.firmware);
+        }
+    }
+}
+
+/// The longest identity field kept. SCSI's fields are 8, 16 and 4
+/// characters; anything far longer is not an identity.
+pub const MAX_IDENTITY_CHARS: usize = 100;
+
+/// One identity field as a drive reported it: control characters dropped,
+/// trimmed, inner runs of spaces collapsed, at most
+/// [`MAX_IDENTITY_CHARS`], and nothing if that leaves nothing. What a drive
+/// answers is untrusted text that ends up in the database and in reports.
+#[must_use]
+pub fn identity_field(raw: &str) -> Option<String> {
+    let printable: String = raw
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let value: String = printable
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(MAX_IDENTITY_CHARS)
+        .collect();
+    let value = value.trim_end().to_owned();
+    (!value.is_empty()).then_some(value)
+}
+
 /// What a drive can do.
 ///
 /// Observations, not guarantees: a drive reporting a capability may still fail
@@ -66,6 +121,9 @@ pub struct DriveCapabilities {
     pub max_write_speed_by_profile: BTreeMap<String, String>,
     /// What each engine reported, kept so a disagreement is visible.
     pub engine_evidence: BTreeMap<String, String>,
+    /// What the drive says it is.
+    #[serde(default)]
+    pub identity: DriveIdentity,
 }
 
 /// What is actually in the drive.
@@ -786,6 +844,38 @@ pub struct BlankReport {
 #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_a_drive_calls_itself_is_bounded_and_printable() {
+        assert_eq!(
+            identity_field("  DVD A   DS8A8SH  ").as_deref(),
+            Some("DVD A DS8A8SH")
+        );
+        assert_eq!(
+            identity_field("KS\u{0}21\u{1b}[31m").as_deref(),
+            Some("KS 21 [31m")
+        );
+        assert_eq!(identity_field(" \t\n "), None);
+        let long = identity_field(&"x".repeat(500)).expect("kept");
+        assert_eq!(long.chars().count(), MAX_IDENTITY_CHARS);
+    }
+
+    #[test]
+    fn an_identity_fills_only_its_gaps() {
+        let mut first = DriveIdentity {
+            vendor: Some("Slimtype".to_owned()),
+            model: None,
+            firmware: None,
+        };
+        first.fill_from(&DriveIdentity {
+            vendor: Some("SLIMTYPE".to_owned()),
+            model: Some("DVD A DS8A8SH".to_owned()),
+            firmware: Some("KS21".to_owned()),
+        });
+        assert_eq!(first.vendor.as_deref(), Some("Slimtype"));
+        assert_eq!(first.model.as_deref(), Some("DVD A DS8A8SH"));
+        assert_eq!(first.firmware.as_deref(), Some("KS21"));
+    }
 
     fn medium(free_blocks: u64) -> MediumInfo {
         MediumInfo {

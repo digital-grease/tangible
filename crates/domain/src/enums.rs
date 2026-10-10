@@ -477,6 +477,18 @@ string_enum! {
     default = Unknown
 }
 
+string_enum! {
+    /// How a drive is attached to the host, as the kernel's device tree
+    /// shows it. USB bridges and SATA ports behave differently enough that a
+    /// burn report needs to say which; unknown is a valid answer.
+    DriveConnection {
+        Usb => "usb",
+        Sata => "sata",
+        Unknown => "unknown",
+    }
+    default = Unknown
+}
+
 impl DriveStatus {
     /// Whether a burn could plausibly start on this drive right now.
     #[must_use]
@@ -673,6 +685,7 @@ mod tests {
             EjectPolicy,
             WorkerStatus,
             DriveStatus,
+            DriveConnection,
             IntegrationKind,
             PhysicalCopyStatus,
         );

@@ -30,6 +30,10 @@ pub struct DriveRecord {
     pub vendor: Option<String>,
     /// Reported model.
     pub model: Option<String>,
+    /// Reported firmware revision.
+    pub firmware: Option<String>,
+    /// How it is attached: `usb`, `sata` or `unknown`.
+    pub connection: String,
     /// Its last reported status.
     pub status: String,
     /// When it was last reported.
@@ -168,7 +172,8 @@ async fn erasure_in(
 /// [`DbError::Query`] on a database failure.
 pub async fn list_drives(pool: &PgPool) -> Result<Vec<DriveRecord>, DbError> {
     let rows = sqlx::query(
-        "SELECT d.id, d.configured_name, d.device_alias, d.vendor, d.model, d.status,
+        "SELECT d.id, d.configured_name, d.device_alias, d.vendor, d.model, d.firmware,
+                d.connection, d.status,
                 d.last_seen_at, w.id AS worker_id, w.name AS worker_name,
                 w.status AS worker_status, w.last_seen_at AS worker_last_seen_at
          FROM drives d JOIN workers w ON w.id = d.worker_id
@@ -186,6 +191,8 @@ pub async fn list_drives(pool: &PgPool) -> Result<Vec<DriveRecord>, DbError> {
                 device_alias: row.try_get("device_alias").map_err(get)?,
                 vendor: row.try_get("vendor").map_err(get)?,
                 model: row.try_get("model").map_err(get)?,
+                firmware: row.try_get("firmware").map_err(get)?,
+                connection: row.try_get("connection").map_err(get)?,
                 status: row.try_get("status").map_err(get)?,
                 last_seen_at: row.try_get("last_seen_at").map_err(get)?,
                 worker_id: WorkerId::from_uuid(row.try_get("worker_id").map_err(get)?),

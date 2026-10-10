@@ -86,6 +86,9 @@ impl<D: BurnEngine, T: BurnEngine> BurnEngine for CombinedEngine<D, T> {
         // the other engine makes of it.
         match self.toc.probe_drive(drive).await {
             Ok(other) => {
+                // Whatever the data engine could not say about the drive,
+                // such as xorriso's missing firmware, the other may.
+                capabilities.identity.fill_from(&other.identity);
                 capabilities.engine_evidence.extend(other.engine_evidence);
                 capabilities.supports_buffer_underrun_protection |=
                     other.supports_buffer_underrun_protection;
@@ -197,6 +200,13 @@ mod tests {
             capabilities
                 .engine_evidence
                 .insert(self.name.to_owned(), "seen".to_owned());
+            // Like xorriso and cdrdao: the data engine knows no firmware, the
+            // other does, and they spell the vendor differently.
+            capabilities.identity = crate::plan::DriveIdentity {
+                vendor: Some(format!("{} vendor", self.name)),
+                model: Some("Model 1".to_owned()),
+                firmware: (self.name == "toc").then(|| "F1".to_owned()),
+            };
             Ok(capabilities)
         }
         async fn inspect_medium(&self, _drive: &DriveRef) -> Result<MediumInfo, EngineError> {
@@ -357,6 +367,9 @@ mod tests {
 
         assert!(capabilities.engine_evidence.contains_key("data"));
         assert!(capabilities.engine_evidence.contains_key("toc"));
+        // The data engine's identity, with the firmware only the other gave.
+        assert_eq!(capabilities.identity.vendor.as_deref(), Some("data vendor"));
+        assert_eq!(capabilities.identity.firmware.as_deref(), Some("F1"));
         assert_eq!(engine.data.calls(), vec!["inspect", "eject", "probe"]);
         assert_eq!(engine.toc.calls(), vec!["probe"]);
     }

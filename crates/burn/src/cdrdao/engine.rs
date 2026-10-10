@@ -962,6 +962,7 @@ impl BurnEngine for CdrdaoEngine {
         let info = parse::drive_info(&text, &drive.device_alias);
         let mut capabilities = DriveCapabilities {
             supports_buffer_underrun_protection: info.burn_proof == Some(true),
+            identity: info.parts.clone(),
             ..DriveCapabilities::default()
         };
         let evidence = if parse::no_disc(&text) {

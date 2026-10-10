@@ -35,6 +35,7 @@ use axum::response::IntoResponse as _;
 use axum::routing::post;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use tangible_burn::plan::identity_field;
 use tangible_burn::worker::{RecoveryDirective, WorkerStage, plan_for};
 use tangible_db::repositories::{
     AttemptCompletion, ClaimOutcome, DriveReport, EnrollmentOutcome, IncomingEvent, ReportedStage,
@@ -43,7 +44,7 @@ use tangible_db::repositories::{
     record_heartbeat, renew_lease,
 };
 use tangible_domain::{
-    BurnAttemptId, BurnAttemptState, DriveId, EjectPolicy, SecretString, WorkerId,
+    BurnAttemptId, BurnAttemptState, DriveConnection, DriveId, EjectPolicy, SecretString, WorkerId,
 };
 use time::OffsetDateTime;
 use utoipa::ToSchema;
@@ -479,6 +480,10 @@ pub struct DriveReportBody {
     /// its hardware in an export.
     #[serde(default)]
     pub serial_hash: Option<String>,
+    /// How the drive is attached: `usb`, `sata` or `unknown`. Absent from
+    /// workers older than this field, which then count as `unknown`.
+    #[serde(default)]
+    pub connection: Option<String>,
     /// Current drive status.
     pub status: String,
     /// What the drive says it can do.
@@ -611,6 +616,22 @@ pub async fn report_capabilities(
         ));
     }
 
+    // What the drive called itself is the drive's own answer, relayed: kept,
+    // but printable and bounded, the same way the worker bounds it, so one
+    // odd answer cannot stop a worker announcing itself.
+    let vendor = report.drive.vendor.as_deref().and_then(identity_field);
+    let model = report.drive.model.as_deref().and_then(identity_field);
+    let firmware = report.drive.firmware.as_deref().and_then(identity_field);
+    // A connection this server does not know, from a newer worker, is
+    // recorded as unknown rather than refused.
+    let connection = report
+        .drive
+        .connection
+        .as_deref()
+        .map_or(DriveConnection::Unknown, |value| {
+            value.parse().unwrap_or(DriveConnection::Unknown)
+        });
+
     // Capabilities are stored as an object. A bare array or string would be
     // accepted by JSONB and then confuse every reader of the column.
     let capabilities = if report.drive.capabilities.is_null() {
@@ -638,10 +659,11 @@ pub async fn report_capabilities(
         DriveReport {
             device_alias: &report.drive.device_alias,
             configured_name: &report.drive.configured_name,
-            vendor: report.drive.vendor.as_deref(),
-            model: report.drive.model.as_deref(),
-            firmware: report.drive.firmware.as_deref(),
+            vendor: vendor.as_deref(),
+            model: model.as_deref(),
+            firmware: firmware.as_deref(),
             serial_hash: report.drive.serial_hash.as_deref(),
+            connection,
             status: &report.drive.status,
             capabilities: &capabilities,
         },

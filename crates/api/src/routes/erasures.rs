@@ -88,6 +88,11 @@ pub struct DriveView {
     pub vendor: Option<String>,
     /// Reported model.
     pub model: Option<String>,
+    /// Reported firmware revision.
+    pub firmware: Option<String>,
+    /// How it is attached: `usb`, `sata` or `unknown`, as the worker read it
+    /// from the host's device tree.
+    pub connection: String,
     /// Last reported status.
     pub status: String,
     /// When it was last reported.
@@ -110,6 +115,8 @@ impl From<DriveRecord> for DriveView {
             device: drive.device_alias,
             vendor: drive.vendor,
             model: drive.model,
+            firmware: drive.firmware,
+            connection: drive.connection,
             status: drive.status,
             last_seen_at: drive.last_seen_at.map(rfc3339),
             worker_id: drive.worker_id.to_string(),

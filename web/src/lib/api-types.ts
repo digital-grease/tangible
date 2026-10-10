@@ -1906,6 +1906,11 @@ export interface components {
             /** @description Human-meaningful name an operator chose. */
             configured_name: string;
             /**
+             * @description How the drive is attached: `usb`, `sata` or `unknown`. Absent from
+             *     workers older than this field, which then count as `unknown`.
+             */
+            connection?: string | null;
+            /**
              * @description Worker-local stable alias, such as `/dev/disc-block`.
              *
              *     Supplied by the worker and never a host device node. Together with the
@@ -1932,8 +1937,15 @@ export interface components {
         };
         /** @description A drive, and the worker it belongs to. */
         DriveView: {
+            /**
+             * @description How it is attached: `usb`, `sata` or `unknown`, as the worker read it
+             *     from the host's device tree.
+             */
+            connection: string;
             /** @description Its device path inside the worker's container. */
             device: string;
+            /** @description Reported firmware revision. */
+            firmware?: string | null;
             /** @description Opaque identifier. */
             id: string;
             /** @description When it was last reported. */

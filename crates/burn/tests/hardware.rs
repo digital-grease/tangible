@@ -218,6 +218,23 @@ async fn both_engines_can_reach_the_drive() {
             "{name}: {evidence}"
         );
     }
+    // Every real drive so far has given all three, between the two engines.
+    let identity = &capabilities.identity;
+    assert!(identity.vendor.is_some(), "no vendor: {identity:?}");
+    assert!(identity.model.is_some(), "no model: {identity:?}");
+    assert!(identity.firmware.is_some(), "no firmware: {identity:?}");
+}
+
+#[tokio::test]
+async fn the_drive_says_how_it_is_attached() {
+    let Some(device) = device() else { return };
+    let connection = tangible_burn::connection::detect(Path::new(&device));
+    println!("{device} is attached by {connection}");
+    assert_ne!(
+        connection,
+        tangible_domain::DriveConnection::Unknown,
+        "the device tree did not say how {device} is attached"
+    );
 }
 
 #[tokio::test]

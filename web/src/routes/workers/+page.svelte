@@ -6,6 +6,8 @@
     anyOpen,
     cancelErasure,
     ENROLLMENT_MINUTES,
+    connectionLabel,
+    driveModel,
     erasureStateLabel,
     issueEnrollment,
     loadDrives,
@@ -129,6 +131,7 @@
           <th scope="col">Drive</th>
           <th scope="col">Worker</th>
           <th scope="col">Model</th>
+          <th scope="col">Connection</th>
           <th scope="col">Worker last seen</th>
           <th scope="col"><span class="visually-hidden">Actions</span></th>
         </tr>
@@ -138,7 +141,8 @@
           <tr>
             <th scope="row">{drive.name} <small>({drive.device})</small></th>
             <td>{drive.worker_name} <small>({drive.worker_status})</small></td>
-            <td>{[drive.vendor, drive.model].filter(Boolean).join(' ') || 'Not reported'}</td>
+            <td>{driveModel(drive)}</td>
+            <td>{connectionLabel(drive.connection)}</td>
             <td>{when(drive.worker_last_seen_at) || 'Never'}</td>
             <td>
               <button type="button" onclick={() => startErase(drive)}>

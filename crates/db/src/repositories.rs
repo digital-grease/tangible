@@ -20,8 +20,8 @@ use std::str::FromStr;
 
 use tangible_domain::{
     ArtifactId, BurnAttemptId, BurnAttemptState, BurnJobId, BurnJobState, ComponentId, DiscId,
-    DiscSetId, DriveId, EditionId, ImportJobId, ImportState, PhysicalCopyId, PhysicalCopyStatus,
-    TitleId, WorkerId,
+    DiscSetId, DriveConnection, DriveId, EditionId, ImportJobId, ImportState, PhysicalCopyId,
+    PhysicalCopyStatus, TitleId, WorkerId,
 };
 use time::OffsetDateTime;
 
@@ -2081,6 +2081,8 @@ pub struct DriveReport<'a> {
     /// hardware an operator may not wish to expose in an export or a support
     /// bundle, and the server only ever needs to recognise it.
     pub serial_hash: Option<&'a str>,
+    /// How the drive is attached.
+    pub connection: DriveConnection,
     /// Current drive status.
     pub status: &'a str,
     /// What the drive says it can do.
@@ -2126,8 +2128,8 @@ pub async fn record_capabilities(
     let row = sqlx::query(
         "INSERT INTO drives
              (id, worker_id, configured_name, device_alias, vendor, model, firmware,
-              serial_hash, capabilities_json, status, last_seen_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+              serial_hash, capabilities_json, status, connection, last_seen_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
          ON CONFLICT (worker_id, device_alias) DO UPDATE SET
              configured_name = EXCLUDED.configured_name,
              vendor = EXCLUDED.vendor,
@@ -2136,6 +2138,7 @@ pub async fn record_capabilities(
              serial_hash = EXCLUDED.serial_hash,
              capabilities_json = EXCLUDED.capabilities_json,
              status = EXCLUDED.status,
+             connection = EXCLUDED.connection,
              last_seen_at = now()
          RETURNING id",
     )
@@ -2149,6 +2152,7 @@ pub async fn record_capabilities(
     .bind(drive.serial_hash)
     .bind(drive.capabilities)
     .bind(drive.status)
+    .bind(drive.connection.as_str())
     .fetch_one(&mut *tx)
     .await
     .map_err(DbError::Query)?;

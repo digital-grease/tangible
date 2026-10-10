@@ -39,8 +39,8 @@ use crate::device_lock::{DeviceLock, DeviceLockError};
 use crate::engine::{BurnEngine, BurnEvent, EngineError, EventSink, NullSink};
 use crate::erasing::erase_disc;
 use crate::plan::{
-    BurnPlan, DriveRef, MediumInfo, PlannedInput, PreflightFailure, VerifyReport, WriteMode,
-    WriteReport,
+    BurnPlan, DriveCapabilities, DriveRef, MediumInfo, PlannedInput, PreflightFailure,
+    VerifyReport, WriteMode, WriteReport,
 };
 use crate::worker::{EventBuffer, RecoveryRecord, RecoveryStore, WorkerStage, plan_for};
 
@@ -269,7 +269,9 @@ impl<E: BurnEngine> WorkerRuntime<E> {
     ///
     /// [`RunnerError::Client`] if the report is refused.
     pub async fn announce(&self, identity: &mut WorkerIdentity) -> Result<DriveId, RunnerError> {
-        let describe = |capabilities: serde_json::Value, status: &str| Capabilities {
+        let connection =
+            crate::connection::detect(std::path::Path::new(&self.settings.device_alias));
+        let describe = |capabilities: &DriveCapabilities, status: &str| Capabilities {
             software_version: self.settings.software_version.clone(),
             engines: vec![EngineDescription {
                 name: self.engine.name().to_owned(),
@@ -278,12 +280,14 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             drive: DriveDescription {
                 device_alias: self.settings.device_alias.clone(),
                 configured_name: self.settings.configured_name.clone(),
-                vendor: None,
-                model: None,
-                firmware: None,
+                vendor: capabilities.identity.vendor.clone(),
+                model: capabilities.identity.model.clone(),
+                firmware: capabilities.identity.firmware.clone(),
                 serial_hash: None,
+                connection: connection.as_str().to_owned(),
                 status: status.to_owned(),
-                capabilities,
+                capabilities: serde_json::to_value(capabilities)
+                    .unwrap_or_else(|_| serde_json::json!({})),
             },
             cache_free_bytes: None,
         };
@@ -292,7 +296,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             .client
             .report_capabilities(
                 &identity.worker_id,
-                &describe(serde_json::json!({}), "unknown"),
+                &describe(&DriveCapabilities::default(), "unknown"),
             )
             .await?;
         let drive_id = drive_id
@@ -307,8 +311,6 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         let drive = self.drive_ref(identity, drive_id);
         match self.engine.probe_drive(&drive).await {
             Ok(capabilities) => {
-                let json =
-                    serde_json::to_value(&capabilities).unwrap_or_else(|_| serde_json::json!({}));
                 let status = match self.engine.inspect_medium(&drive).await {
                     Ok(_) => "ready_with_media",
                     // Not an error: an empty drive is the normal resting
@@ -316,7 +318,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
                     Err(_) => "ready_empty",
                 };
                 self.client
-                    .report_capabilities(&identity.worker_id, &describe(json, status))
+                    .report_capabilities(&identity.worker_id, &describe(&capabilities, status))
                     .await?;
             }
             Err(error) => {
@@ -327,7 +329,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
                 self.client
                     .report_capabilities(
                         &identity.worker_id,
-                        &describe(serde_json::json!({}), "error"),
+                        &describe(&DriveCapabilities::default(), "error"),
                     )
                     .await?;
             }

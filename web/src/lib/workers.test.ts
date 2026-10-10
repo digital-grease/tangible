@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest';
 import {
   anyOpen,
   cancelErasure,
+  connectionLabel,
+  driveModel,
   erasureStateLabel,
   issueEnrollment,
   requestErasure,
@@ -121,5 +123,23 @@ describe('erasing a disc', () => {
     expect(anyOpen([erasure(false), erasure(true)])).toBe(true);
     expect(anyOpen([erasure(false)])).toBe(false);
     expect(anyOpen([])).toBe(false);
+  });
+});
+
+describe('drive descriptions', () => {
+  it('names the drive with its firmware when it gave one', () => {
+    expect(driveModel({ vendor: 'Slimtype', model: 'DVD A DS8A8SH', firmware: 'KS21' })).toBe(
+      'Slimtype DVD A DS8A8SH, firmware KS21',
+    );
+    expect(driveModel({ vendor: 'PIONEER', model: null, firmware: null })).toBe('PIONEER');
+    expect(driveModel({ vendor: null, model: null, firmware: 'KS21' })).toBe('Firmware KS21');
+    expect(driveModel({ vendor: null, model: null, firmware: null })).toBe('Not reported');
+  });
+
+  it('says how a drive is attached in words', () => {
+    expect(connectionLabel('usb')).toBe('USB');
+    expect(connectionLabel('sata')).toBe('SATA');
+    expect(connectionLabel('unknown')).toBe('Not known');
+    expect(connectionLabel('thunderbolt')).toBe('Not known');
   });
 });

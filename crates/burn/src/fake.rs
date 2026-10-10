@@ -28,8 +28,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::engine::{BurnEngine, BurnEvent, EngineError, EventSink};
 use crate::plan::{
-    BlankReport, BlankRequest, BurnPlan, DriveCapabilities, DriveRef, MediumInfo, PreflightFailure,
-    PreflightReport, VerifyReport, WriteMode, WriteReport,
+    BlankReport, BlankRequest, BurnPlan, DriveCapabilities, DriveIdentity, DriveRef, MediumInfo,
+    PreflightFailure, PreflightReport, VerifyReport, WriteMode, WriteReport,
 };
 
 /// How the fake engine should misbehave.
@@ -222,6 +222,13 @@ impl BurnEngine for FakeEngine {
             supports_subchannel_rw: false,
             max_write_speed_by_profile: speeds,
             engine_evidence: evidence,
+            // Plainly not hardware, so a report from a development stack
+            // cannot be mistaken for one about a real drive.
+            identity: DriveIdentity {
+                vendor: Some("Tangible".to_owned()),
+                model: Some("Fake drive".to_owned()),
+                firmware: None,
+            },
         })
     }
 

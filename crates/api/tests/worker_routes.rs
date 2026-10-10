@@ -901,6 +901,73 @@ async fn a_worker_reporting_a_drive_is_given_an_identifier_for_it() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
+async fn a_drive_is_recorded_with_its_firmware_and_how_it_is_attached() {
+    let harness = harness().await;
+    let (worker_id, credential) = enroll(&harness).await;
+    let mut body = capability_body("/dev/disc-block");
+    body["drive"]["vendor"] = "  Slimtype ".into();
+    body["drive"]["model"] = "DVD A   DS8A8SH".into();
+    body["drive"]["firmware"] = "KS21\u{1b}[0m".into();
+    body["drive"]["connection"] = "usb".into();
+
+    let (status, reply) = put(
+        &harness,
+        &format!("/api/v1/workers/{worker_id}/capabilities"),
+        &credential,
+        body,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    let drive_id = reply["drive_id"].as_str().expect("a drive id");
+    let stored: (Option<String>, Option<String>, Option<String>, String) = sqlx::query_as(
+        "SELECT vendor, model, firmware, connection FROM drives WHERE id = $1::uuid",
+    )
+    .bind(drive_id)
+    .fetch_one(&harness.pool)
+    .await
+    .expect("the drive");
+    // Padding collapsed and a control character dropped, as the worker
+    // itself would have.
+    assert_eq!(
+        stored,
+        (
+            Some("Slimtype".to_owned()),
+            Some("DVD A DS8A8SH".to_owned()),
+            Some("KS21 [0m".to_owned()),
+            "usb".to_owned()
+        )
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_older_or_newer_worker_is_not_refused_over_its_connection() {
+    let harness = harness().await;
+    let (worker_id, credential) = enroll(&harness).await;
+    let path = format!("/api/v1/workers/{worker_id}/capabilities");
+
+    // An older worker sends no connection at all.
+    let (status, reply) = put(&harness, &path, &credential, capability_body("/dev/a")).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    // A newer one may know a kind this server does not.
+    let mut newer = capability_body("/dev/b");
+    newer["drive"]["connection"] = "thunderbolt".into();
+    let (status, newer_reply) = put(&harness, &path, &credential, newer).await;
+    assert_eq!(status, StatusCode::OK, "{newer_reply}");
+
+    for id in [&reply["drive_id"], &newer_reply["drive_id"]] {
+        let connection: String =
+            sqlx::query_scalar("SELECT connection FROM drives WHERE id = $1::uuid")
+                .bind(id.as_str().expect("an id"))
+                .fetch_one(&harness.pool)
+                .await
+                .expect("the drive");
+        assert_eq!(connection, "unknown");
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn a_restarting_worker_reports_the_same_drive_rather_than_a_second_one() {
     // Identity is the worker plus the alias. A new row per restart would
     // leave burn history pointing at drives nobody can find.
