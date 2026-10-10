@@ -80,3 +80,10 @@ path = "fuzz_targets/romm_names.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "report_scrub"
+path = "fuzz_targets/report_scrub.rs"
+test = false
+doc = false
+bench = false

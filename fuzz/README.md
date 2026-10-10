@@ -14,6 +14,7 @@ tools.
 | `cdrdao_output` | text cdrdao printed | every reader of cdrdao output |
 | `xorriso_output` | text xorriso printed | every reader of xorriso output |
 | `romm_names` | a title or region | the RomM file name holds nothing a share refuses, is not hidden, does not end in a space or dot, and is stable when cleaned twice |
+| `report_scrub` | a name to replace, a NUL, then text for an issue report | output within its bound; no Tangible credential prefix survives; the name never appears in the output; scrubbing scrubbed text changes nothing |
 
 The checks live in `src/lib.rs`. Each file in `fuzz_targets/` is one line
 that hands libFuzzer's input to one of them.

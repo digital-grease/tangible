@@ -24,6 +24,7 @@ pub mod id;
 pub mod import;
 pub mod logical_path;
 pub mod manifest;
+pub mod report;
 pub mod secret;
 
 pub use burn::{BurnAttemptState, BurnJobState, BurnTransitionError};

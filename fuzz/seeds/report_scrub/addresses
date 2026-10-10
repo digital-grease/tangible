@@ -1,0 +1,2 @@
+TANGIBLE_DATABASE_URL=postgres://tangible:hunter2@192.168.1.13:5432/tangible
+connect [fe80::1%eth0]:8080 and nas.lan, at 04:25:21, Self::new

@@ -1,0 +1,3 @@
+Drive id     : 'K3DD12345678   '
+Serial number = 0042
+C:\Users\someone\disc.iso and ~/discs/one.cue, /dev/sr0, GET /api/v1/burn-jobs

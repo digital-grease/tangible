@@ -20,6 +20,7 @@ use tangible_burn::{cdrdao, xorriso};
 use tangible_domain::LogicalPath;
 use tangible_domain::logical_path::{MAX_PATH_BYTES, MAX_SEGMENT_BYTES};
 use tangible_domain::manifest::ArtifactManifest;
+use tangible_domain::report::{self, ScrubContext};
 use tangible_image::{cue, iso, toc};
 use tangible_integrations::romm;
 
@@ -36,6 +37,7 @@ pub const TARGETS: &[Target] = &[
     ("cdrdao_output", cdrdao_output),
     ("xorriso_output", xorriso_output),
     ("romm_names", romm_names),
+    ("report_scrub", report_scrub),
 ];
 
 /// Fixture directories, relative to the repository root, that also seed a
@@ -45,6 +47,8 @@ pub const FIXTURE_SEEDS: &[(&str, &str)] = &[
     ("toc", "fixtures/tool-output/cdrdao/toc"),
     ("cdrdao_output", "fixtures/tool-output/cdrdao"),
     ("xorriso_output", "fixtures/tool-output/xorriso"),
+    ("report_scrub", "fixtures/tool-output/cdrdao"),
+    ("report_scrub", "fixtures/tool-output/xorriso"),
 ];
 
 /// File sizes to lay a descriptor out against: plausible, empty, one sector
@@ -307,4 +311,61 @@ pub fn romm_names(data: &[u8]) {
         name,
         "safe_name is not idempotent on {raw:?}"
     );
+}
+
+/// Text scrubbed for a public issue report. The input is a name to replace,
+/// a NUL, then the text; without a NUL it is all text.
+///
+/// The scrubber's promises: the output is bounded, no Tangible credential
+/// prefix survives, a name the caller gave never appears in the output, and
+/// scrubbing scrubbed text changes nothing.
+pub fn report_scrub(data: &[u8]) {
+    let Ok(input) = std::str::from_utf8(data) else {
+        return;
+    };
+    let (name, text) = input.split_once('\0').unwrap_or(("", input));
+    let label = "component 1";
+    let context = ScrubContext::new().name(name, label);
+    let scrubbed = report::scrub(text, &context);
+
+    assert!(
+        scrubbed.text.len() <= report::MAX_OUTPUT_BYTES,
+        "{} bytes, past the output bound",
+        scrubbed.text.len()
+    );
+    for prefix in report::CREDENTIAL_PREFIXES {
+        assert!(
+            !scrubbed.text.contains(prefix),
+            "{prefix} survived in {:?}",
+            scrubbed.text
+        );
+    }
+
+    // Only a name made of letters, digits and inner spaces can be checked
+    // this way: the scrubber's own placeholders are made of punctuation and
+    // a few words, so such a name cannot be assembled from them, unless it
+    // is one of those words.
+    let checkable = name.trim() == name
+        && name.chars().count() >= report::MIN_NAME_CHARS
+        && name.chars().all(|c| c.is_alphanumeric() || c == ' ')
+        && !report::PLACEHOLDERS
+            .iter()
+            .chain(["<component-1>"].iter())
+            .any(|placeholder| placeholder.contains(name));
+    if checkable {
+        assert!(
+            !scrubbed.text.contains(name),
+            "{name:?} survived in {:?}",
+            scrubbed.text
+        );
+    }
+
+    let plain = report::scrub(text, &ScrubContext::new());
+    if !plain.truncated {
+        let again = report::scrub(&plain.text, &ScrubContext::new());
+        assert_eq!(
+            again.text, plain.text,
+            "scrubbing scrubbed text changed it, from {text:?}"
+        );
+    }
 }
