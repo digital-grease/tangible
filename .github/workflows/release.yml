@@ -119,6 +119,11 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          # Named, so a new cosign cannot change the signature format under a
+          # release; cosign 3 writes Sigstore bundles, which verifying needs
+          # cosign 3 or later to find (deploy/README.md says so).
+          cosign-release: v3.0.6
 
       - name: Sign the image
         env:
@@ -179,8 +184,8 @@ jobs:
 
           Digest: \`$IMAGE@$DIGEST\`
 
-          Pin the digest in your Compose file, and verify it before use; see
-          "Verifying a release" in deploy/README.md.
+          Pin the digest in your Compose file, and verify it before use, with
+          cosign 3.0 or later; see "Verifying a release" in deploy/README.md.
 
           \`\`\`bash
           cosign verify "$IMAGE@$DIGEST" \\

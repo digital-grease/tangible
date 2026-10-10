@@ -223,7 +223,10 @@ digest. Use the digest, not the tag, in `compose.yaml`; a tag can be moved,
 a digest cannot.
 
 With [cosign](https://docs.sigstore.dev/cosign/system_config/installation/)
-installed from your distribution or its release page:
+3.0 or later, from your distribution or its release page. Releases are signed
+with cosign 3, which stores the signature in the newer Sigstore bundle format;
+cosign 2 does not look for it there and reports "no signatures found" for a
+correctly signed image. `cosign version` says which you have.
 
 ```bash
 IMAGE=ghcr.io/digital-grease/tangible@sha256:<digest from the release page>
