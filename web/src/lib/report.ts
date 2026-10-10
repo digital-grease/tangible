@@ -22,6 +22,35 @@ export function loadReportSettings(
   return apiCall(fetcher, '/api/v1/report-settings');
 }
 
+export type IssueReport = components['schemas']['IssueReport'];
+
+/** Which report a burn attempt becomes: a problem, or hardware that worked. */
+export type BurnReportKind = 'problem' | 'worked';
+
+/** A burn attempt, prepared by the server as a report, scrubbed. */
+export function loadBurnReport(
+  attemptId: string,
+  kind: BurnReportKind,
+  fetcher: typeof fetch = apiFetch,
+): Promise<Result<IssueReport>> {
+  return apiCall(
+    fetcher,
+    `/api/v1/burn-attempts/${encodeURIComponent(attemptId)}/report?kind=${kind}`,
+  );
+}
+
+/** The server's report as the review dialog takes it. */
+export function draftFromReport(report: IssueReport): ReportDraft {
+  return {
+    template: report.template,
+    title: report.title ?? undefined,
+    fields: report.fields.map((field) => ({ ...field })),
+    longField: report.long_field ?? undefined,
+    removed: { ...report.removed },
+    truncated: report.truncated,
+  };
+}
+
 /** One field of an issue form, as it will be filled in. */
 export interface ReportField {
   /** The template's field id, which the prefilled link names. */

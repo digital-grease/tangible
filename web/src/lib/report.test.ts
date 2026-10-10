@@ -5,8 +5,10 @@ import {
   MAX_ISSUE_URL_LENGTH,
   SHORTENED_MARKER,
   copyText,
+  draftFromReport,
   issueHost,
   issueLink,
+  loadBurnReport,
   loadReportSettings,
   removedSummary,
   reportMarkdown,
@@ -180,5 +182,49 @@ describe('copyText', () => {
 
   it('reports failure when nothing can copy', async () => {
     expect(await copyText('hello', { isSecureContext: false })).toBe(false);
+  });
+});
+
+describe('burn reports from the server', () => {
+  it('asks for the kind of report wanted', async () => {
+    const fetcher = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({}),
+    })) as unknown as typeof fetch;
+    await loadBurnReport('a1', 'worked', fetcher);
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/v1/burn-attempts/a1/report?kind=worked',
+      expect.anything(),
+    );
+  });
+
+  it('becomes the draft the review dialog takes', () => {
+    const draft = draftFromReport({
+      template: 'burn_report.yml',
+      title: 'Burn: write failed',
+      fields: [{ id: 'version', label: 'Tangible version', value: 'v0.1.0 (76fa515)' }],
+      long_field: 'worker_log',
+      removed: { path: 2 },
+      truncated: false,
+    });
+    expect(draft).toEqual({
+      template: 'burn_report.yml',
+      title: 'Burn: write failed',
+      fields: [{ id: 'version', label: 'Tangible version', value: 'v0.1.0 (76fa515)' }],
+      longField: 'worker_log',
+      removed: { path: 2 },
+      truncated: false,
+    });
+    const bare = draftFromReport({
+      template: 'hardware_report.yml',
+      title: null,
+      fields: [],
+      long_field: null,
+      removed: {},
+      truncated: false,
+    });
+    expect(bare.title).toBeUndefined();
+    expect(bare.longField).toBeUndefined();
   });
 });

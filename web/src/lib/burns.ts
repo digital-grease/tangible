@@ -395,3 +395,56 @@ export function progressSentence(job: BurnJobView): string {
   const stage = stageLabel(job.progress.stage);
   return percent === null ? `${state}: ${stage}` : `${state}: ${stage}, ${percent}%`;
 }
+
+export type BurnAttemptDetail = components['schemas']['BurnAttemptDetail'];
+export type MediumView = components['schemas']['MediumView'];
+
+/** One attempt with its reports and what preflight found in the tray. */
+export async function loadAttempt(
+  attemptId: string,
+  fetcher: typeof fetch = apiFetch,
+): Promise<LoadState<BurnAttemptDetail>> {
+  const result = await request<BurnAttemptDetail>(
+    fetcher,
+    `/api/v1/burn-attempts/${encodeURIComponent(attemptId)}`,
+  );
+  if (isProblem(result)) return { kind: 'error', problem: result };
+  return { kind: 'ready', data: result };
+}
+
+/** What an event said, when the worker gave it words. */
+export function eventMessage(event: Pick<BurnEventView, 'data'>): string | null {
+  const data = event.data as { message?: unknown } | null | undefined;
+  return typeof data?.message === 'string' && data.message ? data.message : null;
+}
+
+/** The disc preflight found, in one line: "CD-R, CMC Magnetics Corporation, blank". */
+export function mediumLabel(medium: MediumView): string {
+  const parts = [medium.profile];
+  if (medium.manufacturer) parts.push(medium.manufacturer);
+  parts.push(medium.blank ? 'blank' : 'not blank');
+  return parts.join(', ');
+}
+
+/** The reports an attempt can be turned into. */
+export interface ReportOptions {
+  /** Something went wrong, or the disc does not work where it is used. */
+  problem: boolean;
+  /** The disc burned and checked on a real drive. */
+  worked: boolean;
+}
+
+/**
+ * Which reports to offer for an attempt. A problem report fits any attempt.
+ * "Worked" fits only a disc that was written or verified on a real engine;
+ * the fake engine proves nothing about hardware. The server decides the
+ * same and refuses otherwise; this only keeps a button from being offered
+ * that would be refused.
+ */
+export function reportOptions(attempt: Pick<BurnAttemptView, 'state' | 'engine'>): ReportOptions {
+  return {
+    problem: true,
+    worked:
+      (attempt.state === 'verified' || attempt.state === 'written') && attempt.engine !== 'fake',
+  };
+}

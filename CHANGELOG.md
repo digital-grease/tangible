@@ -23,6 +23,9 @@ may change between minor versions, and the release notes say how.
   `GET /api/v1/burn-attempts/{id}/report` fills in the burn form for a
   problem, or a new "Drive and media that worked" form for a disc that
   burned and checked, scrubbed and ready to review.
+- A burn's page offers both reports, and shows everything before the issue
+  form opens in a new tab. It also now shows what the worker said when an
+  attempt failed, each event's message, and the disc preflight found.
 
 ## 0.1.0 (2026-10-07)
 

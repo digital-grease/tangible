@@ -8,23 +8,33 @@
     canCancel,
     canRetry,
     cancelBurnJob,
+    eventMessage,
     isLive,
     jobStateLabel,
     jobStateMark,
+    loadAttempt,
     loadAttemptEvents,
     loadBurnJob,
+    mediumLabel,
     progressPercent,
     progressSentence,
     resolveAttention,
     retryBurnJob,
     stageLabel,
+    type BurnAttemptDetail,
     type BurnEventView,
     type BurnJobDetail,
   } from '$lib/burns';
+  import BurnReport from '$lib/components/BurnReport.svelte';
   import type { LoadState, Problem } from '$lib/library';
+  import { loadReportSettings, type ReportSettings } from '$lib/report';
 
   let view = $state<LoadState<BurnJobDetail>>({ kind: 'loading' });
   let events = $state<BurnEventView[]>([]);
+  /** The latest attempt in full: what preflight found in the tray. */
+  let latestDetail = $state<BurnAttemptDetail | null>(null);
+  /** Whether this server offers issue reports; null until known, or if not. */
+  let reportSettings = $state<ReportSettings | null>(null);
   /** A refused command, kept beside the button that was pressed. */
   let refusal = $state<Problem | null>(null);
   let working = $state(false);
@@ -46,8 +56,12 @@
 
     const attempt = next.kind === 'ready' ? next.data.attempts.at(-1) : undefined;
     if (attempt) {
-      const timeline = await loadAttemptEvents(attempt.id);
+      const [timeline, detail] = await Promise.all([
+        loadAttemptEvents(attempt.id),
+        loadAttempt(attempt.id),
+      ]);
       if (timeline.kind === 'ready') events = timeline.data.items;
+      if (detail.kind === 'ready') latestDetail = detail.data;
     }
 
     if (next.kind === 'ready' && !isLive(next.data.state) && timer) {
@@ -60,6 +74,10 @@
   onMount(async () => {
     await refresh();
     timer = setInterval(refresh, RECONCILE_MS);
+    // Once: whether to offer reports does not change while a page is open,
+    // and a server that cannot say simply offers none.
+    const settings = await loadReportSettings();
+    if (settings.kind === 'ok') reportSettings = settings.data;
   });
 
   onDestroy(() => {
@@ -231,6 +249,10 @@
         <dd>{job.eject_policy.replace(/_/g, ' ')}</dd>
         <dt>Media requested</dt>
         <dd>{job.requested_media_profile ?? 'Any the drive can write'}</dd>
+        {#if latestDetail?.medium}
+          <dt>Disc found</dt>
+          <dd>{mediumLabel(latestDetail.medium)}</dd>
+        {/if}
         <dt>Priority</dt>
         <dd>{job.priority}</dd>
         <dt>Queued</dt>
@@ -275,6 +297,12 @@
                   {#if attempt.error_code}
                     <br /><small><code>{attempt.error_code}</code></small>
                   {/if}
+                  {#if attempt.error_detail}
+                    <details>
+                      <summary>What the worker said</summary>
+                      <pre>{attempt.error_detail}</pre>
+                    </details>
+                  {/if}
                 </td>
                 <td>
                   {#if attempt.consumed_media}
@@ -310,12 +338,17 @@
                 {#if progressPercent(event.fraction) !== null}
                   — {progressPercent(event.fraction)}%
                 {/if}
+                {#if eventMessage(event)}
+                  <span class="message">{eventMessage(event)}</span>
+                {/if}
                 <small>{new Date(event.observed_at).toLocaleTimeString()}</small>
               </li>
             {/each}
           </ol>
         {/if}
       </section>
+
+      <BurnReport attempt={latestAttempt} settings={reportSettings} />
     {/if}
   {/if}
 </div>
@@ -369,6 +402,17 @@
   }
   .timeline li {
     margin-bottom: 0.25rem;
+  }
+  .message {
+    display: block;
+    font-family: monospace;
+    font-size: 0.9em;
+    overflow-wrap: anywhere;
+  }
+  pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    margin: 0.25rem 0 0;
   }
   .visually-hidden {
     position: absolute;

@@ -8,19 +8,24 @@ import {
   canRetry,
   cancelBurnJob,
   createBurnJob,
+  eventMessage,
   isLive,
   isSettled,
   jobStateLabel,
   jobStateMark,
+  loadAttempt,
   loadBurnJob,
   loadBurnQueue,
+  mediumLabel,
   newIdempotencyKey,
   progressPercent,
   progressSentence,
+  reportOptions,
   resolveAttention,
   retryBurnJob,
   stageLabel,
   type BurnJobView,
+  type MediumView,
 } from './burns';
 
 interface Recorded {
@@ -372,5 +377,56 @@ describe('settled and live', () => {
     for (const state of ['queued', 'leased', 'writing', 'verifying']) {
       expect(isLive(state)).toBe(true);
     }
+  });
+});
+
+describe('an attempt in detail', () => {
+  it('asks for the attempt by its identifier', async () => {
+    const recorded: Recorded[] = [];
+    const result = await loadAttempt(
+      'attempt 1',
+      stubFetch(
+        { '/api/v1/burn-attempts/attempt%201': { status: 200, body: { id: 'attempt 1' } } },
+        recorded,
+      ),
+    );
+    expect(result.kind).toBe('ready');
+    expect(recorded[0]?.path).toBe('/api/v1/burn-attempts/attempt%201');
+  });
+
+  it('shows what an event said only when it said something', () => {
+    expect(eventMessage({ data: { message: 'FAILURE: the drive stopped' } })).toBe(
+      'FAILURE: the drive stopped',
+    );
+    expect(eventMessage({ data: { message: '' } })).toBeNull();
+    expect(eventMessage({ data: { message: 42 } })).toBeNull();
+    expect(eventMessage({ data: {} })).toBeNull();
+    expect(eventMessage({ data: null })).toBeNull();
+  });
+
+  it('describes the disc preflight found in one line', () => {
+    const medium = {
+      profile: 'CD-R',
+      manufacturer: 'CMC Magnetics Corporation',
+      blank: true,
+    } as MediumView;
+    expect(mediumLabel(medium)).toBe('CD-R, CMC Magnetics Corporation, blank');
+    expect(mediumLabel({ ...medium, manufacturer: null, blank: false })).toBe('CD-R, not blank');
+  });
+});
+
+describe('which reports an attempt offers', () => {
+  it('offers a problem report for any attempt', () => {
+    for (const state of ['write_failed', 'verified', 'staging', 'canceled']) {
+      expect(reportOptions({ state, engine: 'auto' }).problem).toBe(true);
+    }
+  });
+
+  it('offers "worked" only for a disc a real engine wrote or verified', () => {
+    expect(reportOptions({ state: 'verified', engine: 'xorriso' }).worked).toBe(true);
+    expect(reportOptions({ state: 'written', engine: 'cdrdao' }).worked).toBe(true);
+    expect(reportOptions({ state: 'verified', engine: 'fake' }).worked).toBe(false);
+    expect(reportOptions({ state: 'write_failed', engine: 'auto' }).worked).toBe(false);
+    expect(reportOptions({ state: 'verification_failed', engine: 'auto' }).worked).toBe(false);
   });
 });

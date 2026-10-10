@@ -223,6 +223,11 @@ operator reads all of it, and only then does their own browser open the
 issue form. Nothing is sent by the server, and nothing at all without that
 click.
 
+On a burn's page, an operator can "Report a problem with this burn", or,
+for a disc that burned and checked on a real drive, "Report this drive and
+disc as working". The second grows the tested hardware table above, so it
+is worth doing for any drive or disc type not yet in it.
+
 Two settings in `.env`:
 
 - `TANGIBLE_REPORT_ISSUES_URL`: the issue form reports open. Set it empty to
