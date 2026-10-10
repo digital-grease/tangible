@@ -1,0 +1,93 @@
+name: Drive and media that worked
+description: A disc burned and checked on your drive. These reports grow the list of tested hardware.
+title: "Worked: "
+labels: ["hardware-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks. Every drive and disc that works is worth knowing about: the list of tested hardware in deploy/README.md grows from reports like this one. Tangible fills this in from the burn when you use "Worked on my drive" on a burn's page.
+
+  - type: input
+    id: version
+    attributes:
+      label: Tangible version
+      placeholder: v0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: drive
+    attributes:
+      label: Drive
+      description: Model and firmware. Leave out the serial number.
+      placeholder: Slimtype DVD A DS8A8SH, firmware KS21
+    validations:
+      required: true
+
+  - type: dropdown
+    id: connection
+    attributes:
+      label: Connection
+      options:
+        - USB
+        - SATA
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: media
+    attributes:
+      label: Media
+      description: The disc type and its maker.
+      placeholder: CD-R, CMC Magnetics Corporation
+    validations:
+      required: true
+
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Burn engine
+      options:
+        - auto
+        - xorriso
+        - cdrdao
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: format
+    attributes:
+      label: Image format
+      options:
+        - ISO
+        - CUE/BIN
+        - TOC/BIN
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: result
+    attributes:
+      label: What Tangible checked
+      options:
+        - Verified, every track compared byte for byte
+        - Verified in part, audio tracks measured but not compared
+        - Written, not read back
+    validations:
+      required: true
+
+  - type: textarea
+    id: medium
+    attributes:
+      label: What the drive reported about the disc
+      render: text
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: Where the disc was played or used afterwards, if you tried it.

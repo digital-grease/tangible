@@ -230,6 +230,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/burn-attempts/{attempt_id}/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A burn attempt, prepared as an issue report for the operator to review.
+         * @description # Errors
+         *
+         *     `CONFLICT` when reports are turned off, or when a burn that produced no
+         *     disc, or ran on the fake engine, is asked for as `worked`;
+         *     `NOT_FOUND` for an unknown attempt; `INVALID_PARAMETER` for an unknown
+         *     kind.
+         */
+        get: operations["burn_attempt_report"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/burn-jobs": {
         parameters: {
             query?: never;
@@ -2281,6 +2306,42 @@ export interface components {
              */
             expires_in_minutes: number | null;
         };
+        /**
+         * @description An issue report, prepared for the operator to read and send.
+         *
+         *     Nothing in it has been sent anywhere. Every value is already in the
+         *     exact form the template expects, and free text has been scrubbed of
+         *     credentials, paths, serial numbers, library names and (by default)
+         *     addresses.
+         */
+        IssueReport: {
+            /** @description The form's fields, in order. */
+            fields: components["schemas"]["IssueReportField"][];
+            /** @description The field that may be shortened to fit a link: the log, if any. */
+            long_field?: string | null;
+            /**
+             * @description What the scrubber replaced, by kind (`path`, `credential`, `name`,
+             *     `serial`, `address`, `host`, `header_value`, `url_credentials`).
+             */
+            removed: {
+                [key: string]: number;
+            };
+            /** @description The issue template's file name, such as `burn_report.yml`. */
+            template: string;
+            /** @description A title to suggest. */
+            title?: string | null;
+            /** @description Whether some text was too long and was cut short. */
+            truncated: boolean;
+        };
+        /** @description One field of an issue form, filled in. */
+        IssueReportField: {
+            /** @description The form's field id, which the prefilled link names. */
+            id: string;
+            /** @description What the form calls the field. */
+            label: string;
+            /** @description Its text, already scrubbed. Empty means left for the person. */
+            value: string;
+        };
         /** @description A newly issued enrollment token. */
         IssuedEnrollment: {
             /** @description The enrollment's identifier, for the audit log and for revoking it. */
@@ -3280,6 +3341,54 @@ export interface operations {
             };
             /** @description No renewable attempt */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    burn_attempt_report: {
+        parameters: {
+            query?: {
+                /**
+                 * @description `problem` (the default) fills in the burn form for any attempt;
+                 *     `worked` fills in the hardware form for a disc that was written or
+                 *     verified.
+                 */
+                kind?: string | null;
+            };
+            header?: never;
+            path: {
+                /** @description Burn attempt identifier */
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The report, scrubbed, for review */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssueReport"];
+                };
+            };
+            /** @description No such attempt */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Reports are off, or that kind does not fit this attempt */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

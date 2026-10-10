@@ -9,6 +9,7 @@
 //! generate.
 
 pub mod auth;
+pub mod burn_report;
 pub mod catalog;
 pub mod derivation;
 pub mod health;
@@ -106,6 +107,7 @@ pub const API_BASE: &str = "/api/v1";
         routes::derivations::get_derivation_job_route,
         routes::derivations::cancel_derivation_job_route,
         routes::reports::report_settings,
+        routes::reports::burn_attempt_report,
         routes::romm::romm_settings,
         routes::romm::get_edition_romm,
         routes::romm::set_edition_romm_route,
@@ -182,6 +184,8 @@ pub const API_BASE: &str = "/api/v1";
         routes::derivations::RequestDerivation,
         routes::derivations::DerivationRequestView,
         routes::reports::ReportSettingsView,
+        report::IssueReport,
+        report::IssueReportField,
         routes::romm::PlatformView,
         routes::romm::RommSettings,
         routes::romm::EditionRommView,

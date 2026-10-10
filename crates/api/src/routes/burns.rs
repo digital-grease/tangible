@@ -288,14 +288,20 @@ pub struct BurnAttemptDetail {
 /// The event's data is the worker's, so anything that does not read as a
 /// medium is left out rather than trusted or refused.
 async fn inspected_medium(state: &ApiState, id: BurnAttemptId) -> Option<MediumView> {
+    inspected_medium_info(state, id).await.map(MediumView::from)
+}
+
+/// [`inspected_medium`], as the worker described it.
+pub(crate) async fn inspected_medium_info(
+    state: &ApiState,
+    id: BurnAttemptId,
+) -> Option<MediumInfo> {
     let data = latest_burn_event_data(state.database().pool(), id, MEDIUM_INSPECTED)
         .await
         .map_err(|error| tracing::warn!(error = ?error, "could not read the inspected medium"))
         .ok()??;
     let medium = data.get("medium")?.clone();
-    serde_json::from_value::<MediumInfo>(medium)
-        .map(MediumView::from)
-        .ok()
+    serde_json::from_value::<MediumInfo>(medium).ok()
 }
 
 /// A burn job with its attempts.

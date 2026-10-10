@@ -10,7 +10,11 @@
 //! server is configured with for that: the address issues go to, whether to
 //! scrub addresses, and the build a report should name.
 
+use std::collections::BTreeMap;
+
+use serde::Serialize;
 use tangible_domain::report::ScrubContext;
+use utoipa::ToSchema;
 
 /// Where issues go unless configured otherwise: this project's tracker.
 pub const DEFAULT_ISSUES_URL: &str = "https://github.com/digital-grease/tangible/issues/new";
@@ -81,6 +85,40 @@ fn build_field(value: Option<&str>, placeholder: &str) -> Option<String> {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '+'));
     plain.then(|| value.to_owned())
+}
+
+/// One field of an issue form, filled in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct IssueReportField {
+    /// The form's field id, which the prefilled link names.
+    pub id: String,
+    /// What the form calls the field.
+    pub label: String,
+    /// Its text, already scrubbed. Empty means left for the person.
+    pub value: String,
+}
+
+/// An issue report, prepared for the operator to read and send.
+///
+/// Nothing in it has been sent anywhere. Every value is already in the
+/// exact form the template expects, and free text has been scrubbed of
+/// credentials, paths, serial numbers, library names and (by default)
+/// addresses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct IssueReport {
+    /// The issue template's file name, such as `burn_report.yml`.
+    pub template: String,
+    /// A title to suggest.
+    pub title: Option<String>,
+    /// The form's fields, in order.
+    pub fields: Vec<IssueReportField>,
+    /// The field that may be shortened to fit a link: the log, if any.
+    pub long_field: Option<String>,
+    /// What the scrubber replaced, by kind (`path`, `credential`, `name`,
+    /// `serial`, `address`, `host`, `header_value`, `url_credentials`).
+    pub removed: BTreeMap<String, usize>,
+    /// Whether some text was too long and was cut short.
+    pub truncated: bool,
 }
 
 /// Why an issue address was refused.

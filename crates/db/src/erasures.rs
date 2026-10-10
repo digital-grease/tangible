@@ -165,43 +165,61 @@ async fn erasure_in(
     row.as_ref().map(erasure_from_row).transpose()
 }
 
+const DRIVE_COLUMNS: &str = "d.id, d.configured_name, d.device_alias, d.vendor, d.model,
+     d.firmware, d.connection, d.status, d.last_seen_at, w.id AS worker_id,
+     w.name AS worker_name, w.status AS worker_status,
+     w.last_seen_at AS worker_last_seen_at";
+
+fn drive_from_row(row: &sqlx::postgres::PgRow) -> Result<DriveRecord, DbError> {
+    let get = DbError::Query;
+    Ok(DriveRecord {
+        id: DriveId::from_uuid(row.try_get("id").map_err(get)?),
+        configured_name: row.try_get("configured_name").map_err(get)?,
+        device_alias: row.try_get("device_alias").map_err(get)?,
+        vendor: row.try_get("vendor").map_err(get)?,
+        model: row.try_get("model").map_err(get)?,
+        firmware: row.try_get("firmware").map_err(get)?,
+        connection: row.try_get("connection").map_err(get)?,
+        status: row.try_get("status").map_err(get)?,
+        last_seen_at: row.try_get("last_seen_at").map_err(get)?,
+        worker_id: WorkerId::from_uuid(row.try_get("worker_id").map_err(get)?),
+        worker_name: row.try_get("worker_name").map_err(get)?,
+        worker_status: row.try_get("worker_status").map_err(get)?,
+        worker_last_seen_at: row.try_get("worker_last_seen_at").map_err(get)?,
+    })
+}
+
 /// Every drive, with its worker, by worker name then drive name.
 ///
 /// # Errors
 ///
 /// [`DbError::Query`] on a database failure.
 pub async fn list_drives(pool: &PgPool) -> Result<Vec<DriveRecord>, DbError> {
-    let rows = sqlx::query(
-        "SELECT d.id, d.configured_name, d.device_alias, d.vendor, d.model, d.firmware,
-                d.connection, d.status,
-                d.last_seen_at, w.id AS worker_id, w.name AS worker_name,
-                w.status AS worker_status, w.last_seen_at AS worker_last_seen_at
-         FROM drives d JOIN workers w ON w.id = d.worker_id
-         ORDER BY w.name, d.configured_name, d.id",
-    )
+    let rows = sqlx::query(&format!(
+        "SELECT {DRIVE_COLUMNS} FROM drives d JOIN workers w ON w.id = d.worker_id
+         ORDER BY w.name, d.configured_name, d.id"
+    ))
     .fetch_all(pool)
     .await
     .map_err(DbError::Query)?;
-    rows.iter()
-        .map(|row| {
-            let get = |e| DbError::Query(e);
-            Ok(DriveRecord {
-                id: DriveId::from_uuid(row.try_get("id").map_err(get)?),
-                configured_name: row.try_get("configured_name").map_err(get)?,
-                device_alias: row.try_get("device_alias").map_err(get)?,
-                vendor: row.try_get("vendor").map_err(get)?,
-                model: row.try_get("model").map_err(get)?,
-                firmware: row.try_get("firmware").map_err(get)?,
-                connection: row.try_get("connection").map_err(get)?,
-                status: row.try_get("status").map_err(get)?,
-                last_seen_at: row.try_get("last_seen_at").map_err(get)?,
-                worker_id: WorkerId::from_uuid(row.try_get("worker_id").map_err(get)?),
-                worker_name: row.try_get("worker_name").map_err(get)?,
-                worker_status: row.try_get("worker_status").map_err(get)?,
-                worker_last_seen_at: row.try_get("worker_last_seen_at").map_err(get)?,
-            })
-        })
-        .collect()
+    rows.iter().map(drive_from_row).collect()
+}
+
+/// One drive, with its worker.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn get_drive(pool: &PgPool, id: DriveId) -> Result<Option<DriveRecord>, DbError> {
+    let row = sqlx::query(&format!(
+        "SELECT {DRIVE_COLUMNS} FROM drives d JOIN workers w ON w.id = d.worker_id
+         WHERE d.id = $1"
+    ))
+    .bind(id.as_uuid())
+    .fetch_optional(pool)
+    .await
+    .map_err(DbError::Query)?;
+    row.as_ref().map(drive_from_row).transpose()
 }
 
 /// Ask for the disc in a drive to be erased.

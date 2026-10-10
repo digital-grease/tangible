@@ -18,6 +18,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use serde_json::json;
 use sqlx::PgPool;
+use tangible_api::report::{BuildIdentity, DEFAULT_ISSUES_URL, ReportSettings};
 use tangible_api::{ApiState, router};
 use tangible_db::{Database, DbConfig};
 use tower::ServiceExt as _;
@@ -70,9 +71,20 @@ async fn harness() -> Harness {
     let pool = database.pool().clone();
 
     let session = support::administrator(&pool).await;
+    // Reports on, as the official image has them, so the report route can be
+    // exercised here among the burns it reports on.
+    let reports = ReportSettings::new(
+        DEFAULT_ISSUES_URL,
+        true,
+        BuildIdentity::current(
+            Some("v0.1.0"),
+            Some("76fa5157aea012aae85461e694082d553071a606"),
+        ),
+    )
+    .expect("report settings");
     Harness {
         session,
-        router: router(ApiState::new(database)),
+        router: router(ApiState::new(database).with_reports(reports)),
         pool,
         _queue: queue,
     }
@@ -1058,6 +1070,258 @@ async fn report_medium(
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+/// The value of one field of a prepared report.
+fn report_field<'a>(report: &'a serde_json::Value, id: &str) -> &'a str {
+    report["fields"]
+        .as_array()
+        .expect("fields")
+        .iter()
+        .find(|field| field["id"] == id)
+        .and_then(|field| field["value"].as_str())
+        .unwrap_or_else(|| panic!("no field {id} in {report}"))
+}
+
+/// Complete `attempt` as a worker would, with `write_state`, a verification
+/// state if one ran, and a failure code if it failed.
+async fn complete(
+    harness: &Harness,
+    credential: &str,
+    attempt: &str,
+    lease: &str,
+    write_state: &str,
+    verification: Option<&str>,
+    failure: Option<(&str, &str)>,
+) {
+    let (status, body) = harness
+        .post_with(
+            &format!("/api/v1/burn-attempts/{attempt}/complete"),
+            json!({
+                "lease_token": lease,
+                "last_sequence": 2,
+                "write_report": {
+                    "state": write_state,
+                    "engine": "fake",
+                    "engine_version": "0.1.0",
+                    "started_at": "2026-01-01T00:00:00Z",
+                    "completed_at": "2026-01-01T00:10:00Z",
+                },
+                "verification_report": verification.map(|state| json!({
+                    "policy": "full_sector_readback",
+                    "state": state,
+                    "bytes_read": 10,
+                    "expected_sha256": "a".repeat(64),
+                    "observed_sha256": "a".repeat(64),
+                })),
+                "physical_medium": { "profile": "CD-R" },
+                "failure": failure.map(|(code, detail)| json!({ "code": code, "detail": detail })),
+            }),
+            Some(("authorization", &format!("Bearer {credential}"))),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_failed_burn_becomes_a_scrubbed_burn_report() {
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let world = seed(&harness.pool).await;
+    let job = queue_claimable(&harness, &world).await;
+    let (worker_id, credential, drive) = worker(&harness).await;
+    sqlx::query(
+        "UPDATE drives SET vendor = 'Slimtype', model = 'DVD A DS8A8SH', firmware = 'KS21',
+                connection = 'usb' WHERE id = $1::uuid",
+    )
+    .bind(&drive)
+    .execute(&harness.pool)
+    .await
+    .expect("describe the drive");
+    let (attempt, lease) = claim(&harness, &worker_id, &credential, &drive, &job).await;
+    report_medium(
+        &harness,
+        &credential,
+        &attempt,
+        1,
+        json!({ "medium": {
+            "profile": "CD-R", "blank": true, "writable": true, "rewritable": false,
+            "capacity_blocks": 359_844, "free_blocks": 359_844, "block_size": 2048,
+            "manufacturer_id": "CMC Magnetics Corporation", "sessions": 0,
+            "erasable": false, "status_warnings": [],
+        }}),
+    )
+    .await;
+    complete(
+        &harness,
+        &credential,
+        &attempt,
+        &lease,
+        "failed",
+        None,
+        Some((
+            "ENGINE_FAILED",
+            "xorriso stopped reading /var/lib/tangible-worker/stage/0198/disc.iso at 192.168.1.13",
+        )),
+    )
+    .await;
+
+    let (status, report) = harness
+        .get(&format!("/api/v1/burn-attempts/{attempt}/report"))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    assert_eq!(report["template"], "burn_report.yml");
+    assert_eq!(report["long_field"], "worker_log");
+    assert_eq!(report_field(&report, "version"), "v0.1.0 (76fa515)");
+    assert_eq!(
+        report_field(&report, "drive"),
+        "Slimtype DVD A DS8A8SH, firmware KS21"
+    );
+    assert_eq!(report_field(&report, "connection"), "USB");
+    assert_eq!(
+        report_field(&report, "media"),
+        "CD-R, CMC Magnetics Corporation"
+    );
+    assert_eq!(report_field(&report, "engine"), "fake");
+    assert_eq!(report_field(&report, "outcome"), "Write failed");
+    let log = report_field(&report, "worker_log");
+    assert!(log.contains("error: ENGINE_FAILED"), "{log}");
+    assert!(!log.contains("tangible-worker"), "{log}");
+    assert!(!log.contains("192.168.1.13"), "{log}");
+    assert!(
+        report["removed"]["path"].as_u64().unwrap_or(0) >= 1,
+        "{report}"
+    );
+    assert!(
+        report["removed"]["address"].as_u64().unwrap_or(0) >= 1,
+        "{report}"
+    );
+
+    // It produced no disc, so it cannot be reported as working.
+    let (status, refused) = harness
+        .get(&format!(
+            "/api/v1/burn-attempts/{attempt}/report?kind=worked"
+        ))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    let (status, _) = harness
+        .get(&format!(
+            "/api/v1/burn-attempts/{attempt}/report?kind=sideways"
+        ))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_verified_burn_on_the_fake_engine_is_not_hardware_evidence() {
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let world = seed(&harness.pool).await;
+    let job = queue_claimable(&harness, &world).await;
+    let (worker_id, credential, drive) = worker(&harness).await;
+    let (attempt, lease) = claim(&harness, &worker_id, &credential, &drive, &job).await;
+    complete(
+        &harness,
+        &credential,
+        &attempt,
+        &lease,
+        "success",
+        Some("match"),
+        None,
+    )
+    .await;
+
+    // A verified disc can still be a problem where it is played.
+    let (status, problem) = harness
+        .get(&format!("/api/v1/burn-attempts/{attempt}/report"))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{problem}");
+    assert_eq!(
+        report_field(&problem, "outcome"),
+        "Verified, but the disc does not work where I use it"
+    );
+    // But the fake engine says nothing about hardware that worked.
+    let (status, worked) = harness
+        .get(&format!(
+            "/api/v1/burn-attempts/{attempt}/report?kind=worked"
+        ))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{worked}");
+    assert!(
+        worked["detail"].as_str().unwrap_or("").contains("fake"),
+        "{worked}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_verified_burn_on_a_real_engine_becomes_a_hardware_report() {
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let world = seed(&harness.pool).await;
+    let job = queue_claimable(&harness, &world).await;
+    let (worker_id, credential, drive) = worker(&harness).await;
+    let (attempt, lease) = claim(&harness, &worker_id, &credential, &drive, &job).await;
+    complete(
+        &harness,
+        &credential,
+        &attempt,
+        &lease,
+        "success",
+        Some("match"),
+        None,
+    )
+    .await;
+    // As if xorriso had written it: the engine is what the claim recorded.
+    sqlx::query("UPDATE burn_attempts SET engine = 'xorriso' WHERE id = $1::uuid")
+        .bind(&attempt)
+        .execute(&harness.pool)
+        .await
+        .expect("set the engine");
+
+    let (status, report) = harness
+        .get(&format!(
+            "/api/v1/burn-attempts/{attempt}/report?kind=worked"
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    assert_eq!(report["template"], "hardware_report.yml");
+    assert_eq!(report_field(&report, "engine"), "xorriso");
+    assert_eq!(
+        report_field(&report, "result"),
+        "Verified, every track compared byte for byte"
+    );
+    // The drive said nothing about itself, so those are left to the person.
+    assert_eq!(report_field(&report, "drive"), "");
+    assert_eq!(report_field(&report, "connection"), "");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_viewer_cannot_read_a_burn_report_and_a_server_with_reports_off_offers_none() {
+    let harness = harness().await;
+    let viewer = support::sign_in(&harness.pool, tangible_domain::Role::Viewer).await;
+    let missing = uuid::Uuid::now_v7();
+    let mut request = Request::get(format!("/api/v1/burn-attempts/{missing}/report"))
+        .body(Body::empty())
+        .expect("request");
+    viewer.apply(&mut request);
+    let (status, body) = harness.send(request).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    let database = support::database().await;
+    let off = support::signed_in(router(ApiState::new(database)), harness.session.clone());
+    let response = off
+        .oneshot(
+            Request::get(format!("/api/v1/burn-attempts/{missing}/report"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("route");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
 }
 
 #[tokio::test]

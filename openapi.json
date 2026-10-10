@@ -745,6 +745,76 @@
         ]
       }
     },
+    "/api/v1/burn-attempts/{attempt_id}/report": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "A burn attempt, prepared as an issue report for the operator to review.",
+        "description": "# Errors\n\n`CONFLICT` when reports are turned off, or when a burn that produced no\ndisc, or ran on the fake engine, is asked for as `worked`;\n`NOT_FOUND` for an unknown attempt; `INVALID_PARAMETER` for an unknown\nkind.",
+        "operationId": "burn_attempt_report",
+        "parameters": [
+          {
+            "name": "attempt_id",
+            "in": "path",
+            "description": "Burn attempt identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "`problem` (the default) fills in the burn form for any attempt;\n`worked` fills in the hardware form for a disc that was written or\nverified.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The report, scrubbed, for review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueReport"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such attempt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Reports are off, or that kind does not fit this attempt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/burn-jobs": {
       "get": {
         "tags": [
@@ -6357,6 +6427,81 @@
           }
         },
         "additionalProperties": false
+      },
+      "IssueReport": {
+        "type": "object",
+        "description": "An issue report, prepared for the operator to read and send.\n\nNothing in it has been sent anywhere. Every value is already in the\nexact form the template expects, and free text has been scrubbed of\ncredentials, paths, serial numbers, library names and (by default)\naddresses.",
+        "required": [
+          "template",
+          "fields",
+          "removed",
+          "truncated"
+        ],
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IssueReportField"
+            },
+            "description": "The form's fields, in order."
+          },
+          "long_field": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The field that may be shortened to fit a link: the log, if any."
+          },
+          "removed": {
+            "type": "object",
+            "description": "What the scrubber replaced, by kind (`path`, `credential`, `name`,\n`serial`, `address`, `host`, `header_value`, `url_credentials`).",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "template": {
+            "type": "string",
+            "description": "The issue template's file name, such as `burn_report.yml`."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A title to suggest."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Whether some text was too long and was cut short."
+          }
+        }
+      },
+      "IssueReportField": {
+        "type": "object",
+        "description": "One field of an issue form, filled in.",
+        "required": [
+          "id",
+          "label",
+          "value"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The form's field id, which the prefilled link names."
+          },
+          "label": {
+            "type": "string",
+            "description": "What the form calls the field."
+          },
+          "value": {
+            "type": "string",
+            "description": "Its text, already scrubbed. Empty means left for the person."
+          }
+        }
       },
       "IssuedEnrollment": {
         "type": "object",
