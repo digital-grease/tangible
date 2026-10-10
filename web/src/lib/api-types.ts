@@ -1296,6 +1296,7 @@ export interface components {
         };
         /** @description One attempt with the reports it produced. */
         BurnAttemptDetail: components["schemas"]["BurnAttemptView"] & {
+            medium?: null | components["schemas"]["MediumView"];
             /** @description The read-back comparison, when one ran. */
             verify_report?: unknown;
             /** @description The engine's account of the write, once there is one. */
@@ -2321,6 +2322,46 @@ export interface components {
             status: string;
             /** @description Server version, from the crate version at build time. */
             version: string;
+        };
+        /** @description What the drive found in the tray when preflight last looked. */
+        MediumView: {
+            /** @description Whether it held nothing yet. */
+            blank: boolean;
+            /**
+             * Format: int32
+             * @description Bytes per block.
+             */
+            block_size: number;
+            /**
+             * Format: int64
+             * @description Its capacity, in blocks.
+             */
+            capacity_blocks: number;
+            /** @description Whether it could be erased. */
+            erasable: boolean;
+            /**
+             * Format: int64
+             * @description Blocks still free.
+             */
+            free_blocks: number;
+            /**
+             * @description The disc's maker, as the drive read it, such as `CMC Magnetics
+             *     Corporation`.
+             */
+            manufacturer?: string | null;
+            /** @description The media profile, such as `CD-R` or `DVD-RW sequential recording`. */
+            profile: string;
+            /** @description Whether it can be erased and written again. */
+            rewritable: boolean;
+            /**
+             * Format: int32
+             * @description Sessions already on it.
+             */
+            sessions: number;
+            /** @description Anything the drive flagged about it. */
+            warnings: string[];
+            /** @description Whether it could be written. */
+            writable: boolean;
         };
         /** @description A disc with its check history. */
         PhysicalCopyDetail: components["schemas"]["PhysicalCopyView"] & {

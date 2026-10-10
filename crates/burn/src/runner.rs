@@ -1068,6 +1068,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         let deadline = tokio::time::Instant::now() + self.settings.media_wait;
         let mut announced = false;
         let job_named_a_profile = !plan.accepted_profiles.is_empty();
+        let mut last_medium: Option<MediumInfo> = None;
 
         loop {
             if !job_named_a_profile {
@@ -1086,6 +1087,15 @@ impl<E: BurnEngine> WorkerRuntime<E> {
                 tracing::error!(error = ?error, "preflight could not run");
                 RunnerError::NeedsAttention
             })?;
+            // What was in the tray, each time it is a different disc: a burn
+            // report describes the media from this, and an event is durable
+            // even if the worker stops before completing the attempt.
+            if let Some(medium) = &report.medium
+                && last_medium.as_ref() != Some(medium)
+            {
+                record_medium(buffer, medium);
+                last_medium = Some(medium.clone());
+            }
 
             if report.passed() || !waiting_on_media(&report.failures) {
                 return Ok(report);
@@ -1115,6 +1125,26 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             // only safe answer.
             RunnerError::NeedsAttention
         })
+    }
+}
+
+/// The event code a worker records what it found in the tray under.
+pub const MEDIUM_INSPECTED: &str = "MEDIUM_INSPECTED";
+
+/// Record what preflight found in the tray, as `{"medium": MediumInfo}`.
+fn record_medium(buffer: &Arc<std::sync::Mutex<EventBuffer>>, medium: &MediumInfo) {
+    let Ok(data) = serde_json::to_value(medium) else {
+        return;
+    };
+    if let Ok(mut buffer) = buffer.lock() {
+        let _ = buffer.record(
+            "medium_inspected",
+            WorkerStage::Preflighting,
+            MEDIUM_INSPECTED,
+            None,
+            serde_json::json!({ "medium": data }),
+            OffsetDateTime::now_utc(),
+        );
     }
 }
 

@@ -518,6 +518,22 @@ async fn a_worker_enrolls_claims_burns_and_reports_without_help() {
         );
     }
 
+    // What preflight found in the tray is on the attempt, recorded once
+    // although preflight may look more than once at the same disc.
+    let inspected = events["items"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .filter(|event| event["code"] == "MEDIUM_INSPECTED")
+        .count();
+    assert_eq!(inspected, 1, "{events}");
+    let detail = server
+        .get(&format!("/api/v1/burn-attempts/{attempt}"))
+        .await;
+    assert_eq!(detail["medium"]["profile"], "CD-R", "{detail}");
+    assert_eq!(detail["medium"]["blank"], true, "{detail}");
+    assert!(detail["medium"]["capacity_blocks"].as_u64().unwrap_or(0) > 0);
+
     server.stop().await;
 }
 
@@ -694,6 +710,18 @@ async fn a_worker_reports_its_drive_before_asking_for_work() {
         capabilities["write_profiles"].is_array(),
         "the probe's findings are recorded: {capabilities}"
     );
+    // What the drive says it is, and how it is attached, travel from the
+    // engine's probe through the real worker to the drives table. The fake
+    // drive is a file, so its connection is honestly unknown.
+    let (vendor, model, connection): (Option<String>, Option<String>, String) =
+        sqlx::query_as("SELECT vendor, model, connection FROM drives WHERE id = $1::uuid")
+            .bind(drive.as_uuid())
+            .fetch_one(&server.pool)
+            .await
+            .expect("the drive");
+    assert_eq!(vendor.as_deref(), Some("Tangible"));
+    assert_eq!(model.as_deref(), Some("Fake drive"));
+    assert_eq!(connection, "unknown");
 
     // Reported again on the next start, and it is the same drive.
     let again = runtime

@@ -1835,6 +1835,29 @@ pub async fn list_burn_events(
         .collect()
 }
 
+/// The data of the latest event with `message_code` for an attempt, if any.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn latest_burn_event_data(
+    pool: &PgPool,
+    attempt_id: BurnAttemptId,
+    message_code: &str,
+) -> Result<Option<serde_json::Value>, DbError> {
+    sqlx::query_scalar(
+        "SELECT data_json FROM burn_events
+         WHERE attempt_id = $1 AND message_code = $2
+         ORDER BY sequence DESC
+         LIMIT 1",
+    )
+    .bind(attempt_id.as_uuid())
+    .bind(message_code)
+    .fetch_optional(pool)
+    .await
+    .map_err(DbError::Query)
+}
+
 // --- artifacts, as burning sees them --------------------------------------------
 
 /// What the catalog knows about an artifact, for deciding whether to burn it.

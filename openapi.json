@@ -4140,6 +4140,17 @@
           {
             "type": "object",
             "properties": {
+              "medium": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MediumView",
+                    "description": "What preflight last found in the tray; absent until it looked, and\nfor attempts by workers older than this field."
+                  }
+                ]
+              },
               "verify_report": {
                 "description": "The read-back comparison, when one ran."
               },
@@ -6455,6 +6466,82 @@
           "version": {
             "type": "string",
             "description": "Server version, from the crate version at build time."
+          }
+        }
+      },
+      "MediumView": {
+        "type": "object",
+        "description": "What the drive found in the tray when preflight last looked.",
+        "required": [
+          "profile",
+          "blank",
+          "writable",
+          "rewritable",
+          "erasable",
+          "capacity_blocks",
+          "free_blocks",
+          "block_size",
+          "sessions",
+          "warnings"
+        ],
+        "properties": {
+          "blank": {
+            "type": "boolean",
+            "description": "Whether it held nothing yet."
+          },
+          "block_size": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Bytes per block.",
+            "minimum": 0
+          },
+          "capacity_blocks": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its capacity, in blocks.",
+            "minimum": 0
+          },
+          "erasable": {
+            "type": "boolean",
+            "description": "Whether it could be erased."
+          },
+          "free_blocks": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Blocks still free.",
+            "minimum": 0
+          },
+          "manufacturer": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The disc's maker, as the drive read it, such as `CMC Magnetics\nCorporation`."
+          },
+          "profile": {
+            "type": "string",
+            "description": "The media profile, such as `CD-R` or `DVD-RW sequential recording`."
+          },
+          "rewritable": {
+            "type": "boolean",
+            "description": "Whether it can be erased and written again."
+          },
+          "sessions": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Sessions already on it.",
+            "minimum": 0
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Anything the drive flagged about it."
+          },
+          "writable": {
+            "type": "boolean",
+            "description": "Whether it could be written."
           }
         }
       },

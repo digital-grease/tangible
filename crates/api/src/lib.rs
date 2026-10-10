@@ -172,6 +172,7 @@ pub const API_BASE: &str = "/api/v1";
         routes::burns::BurnProgress,
         routes::burns::BurnAttemptView,
         routes::burns::BurnAttemptDetail,
+        routes::burns::MediumView,
         routes::burns::BurnEventPage,
         routes::burns::BurnEventView,
         routes::burns::CreateBurnJobRequest,

@@ -16,6 +16,9 @@ may change between minor versions, and the release notes say how.
 - Drives are recorded with their vendor, model and firmware, from what the
   drive itself reports, and with how they are attached (USB or SATA), read
   from the host's device tree. The Workers page shows both.
+- A burn attempt records what preflight found in the tray: the media
+  profile, whether it was blank, its capacity and the disc's maker
+  (`medium` on `GET /api/v1/burn-attempts/{id}`).
 
 ## 0.1.0 (2026-10-07)
 

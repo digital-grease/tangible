@@ -34,11 +34,14 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use tangible_burn::MediumInfo;
+use tangible_burn::runner::MEDIUM_INSPECTED;
 use tangible_db::repositories::{
     ArtifactBurnFacts, BurnAttemptRecord, BurnEventRecord, BurnJobFilter, BurnJobRecord,
     CancelOutcome, CreateJobOutcome, NewBurnJob, RetryOutcome, artifact_burn_facts,
-    cancel_burn_job, create_burn_job, get_burn_attempt, get_burn_job, list_burn_attempts,
-    list_burn_events, list_burn_jobs, resolve_burn_job_attention, retry_burn_job,
+    cancel_burn_job, create_burn_job, get_burn_attempt, get_burn_job, latest_burn_event_data,
+    list_burn_attempts, list_burn_events, list_burn_jobs, resolve_burn_job_attention,
+    retry_burn_job,
 };
 use tangible_domain::{
     ArtifactId, BurnAttemptId, BurnJobId, BurnJobState, DiscId, EjectPolicy, VerificationStep,
@@ -216,6 +219,55 @@ impl From<BurnAttemptRecord> for BurnAttemptView {
     }
 }
 
+/// What the drive found in the tray when preflight last looked.
+// As on MediumInfo, which this mirrors: independent observed properties of a
+// disc, not states of one machine.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct MediumView {
+    /// The media profile, such as `CD-R` or `DVD-RW sequential recording`.
+    pub profile: String,
+    /// Whether it held nothing yet.
+    pub blank: bool,
+    /// Whether it could be written.
+    pub writable: bool,
+    /// Whether it can be erased and written again.
+    pub rewritable: bool,
+    /// Whether it could be erased.
+    pub erasable: bool,
+    /// Its capacity, in blocks.
+    pub capacity_blocks: u64,
+    /// Blocks still free.
+    pub free_blocks: u64,
+    /// Bytes per block.
+    pub block_size: u32,
+    /// Sessions already on it.
+    pub sessions: u32,
+    /// The disc's maker, as the drive read it, such as `CMC Magnetics
+    /// Corporation`.
+    pub manufacturer: Option<String>,
+    /// Anything the drive flagged about it.
+    pub warnings: Vec<String>,
+}
+
+impl From<MediumInfo> for MediumView {
+    fn from(medium: MediumInfo) -> Self {
+        Self {
+            profile: medium.profile,
+            blank: medium.blank,
+            writable: medium.writable,
+            rewritable: medium.rewritable,
+            erasable: medium.erasable,
+            capacity_blocks: medium.capacity_blocks,
+            free_blocks: medium.free_blocks,
+            block_size: medium.block_size,
+            sessions: medium.sessions,
+            manufacturer: medium.manufacturer_id,
+            warnings: medium.status_warnings,
+        }
+    }
+}
+
 /// One attempt with the reports it produced.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct BurnAttemptDetail {
@@ -226,6 +278,24 @@ pub struct BurnAttemptDetail {
     pub write_report: Option<serde_json::Value>,
     /// The read-back comparison, when one ran.
     pub verify_report: Option<serde_json::Value>,
+    /// What preflight last found in the tray; absent until it looked, and
+    /// for attempts by workers older than this field.
+    pub medium: Option<MediumView>,
+}
+
+/// The medium a worker reported in its latest `MEDIUM_INSPECTED` event.
+///
+/// The event's data is the worker's, so anything that does not read as a
+/// medium is left out rather than trusted or refused.
+async fn inspected_medium(state: &ApiState, id: BurnAttemptId) -> Option<MediumView> {
+    let data = latest_burn_event_data(state.database().pool(), id, MEDIUM_INSPECTED)
+        .await
+        .map_err(|error| tracing::warn!(error = ?error, "could not read the inspected medium"))
+        .ok()??;
+    let medium = data.get("medium")?.clone();
+    serde_json::from_value::<MediumInfo>(medium)
+        .map(MediumView::from)
+        .ok()
 }
 
 /// A burn job with its attempts.
@@ -1038,10 +1108,12 @@ pub async fn get_attempt(
 
     let write_report = record.write_report.clone();
     let verify_report = record.verify_report.clone();
+    let medium = inspected_medium(&state, id).await;
     Ok(Json(BurnAttemptDetail {
         attempt: record.into(),
         write_report,
         verify_report,
+        medium,
     }))
 }
 

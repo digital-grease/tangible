@@ -1032,6 +1032,83 @@ async fn events_for_an_unknown_attempt_are_not_an_empty_timeline() {
     assert_eq!(body["code"], "NOT_FOUND");
 }
 
+/// Submit one `MEDIUM_INSPECTED` event as a worker, with `data` as given.
+async fn report_medium(
+    harness: &Harness,
+    credential: &str,
+    attempt: &str,
+    sequence: i64,
+    data: serde_json::Value,
+) {
+    let (status, body) = harness
+        .post_with(
+            &format!("/api/v1/burn-attempts/{attempt}/events"),
+            json!({
+                "events": [{
+                    "sequence": sequence,
+                    "event_type": "medium_inspected",
+                    "stage": "preflighting",
+                    "code": "MEDIUM_INSPECTED",
+                    "progress": null,
+                    "data": data,
+                    "worker_time": "2026-01-01T00:00:00Z",
+                }]
+            }),
+            Some(("authorization", &format!("Bearer {credential}"))),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_attempt_shows_the_latest_disc_preflight_found_and_ignores_nonsense() {
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let world = seed(&harness.pool).await;
+    let job = queue_claimable(&harness, &world).await;
+    let (worker_id, credential, drive) = worker(&harness).await;
+    let (attempt, _lease) = claim(&harness, &worker_id, &credential, &drive, &job).await;
+    let path = format!("/api/v1/burn-attempts/{attempt}");
+
+    let (_, before) = harness.get(&path).await;
+    assert!(
+        before["medium"].is_null(),
+        "nothing inspected yet: {before}"
+    );
+
+    let medium = |profile: &str| {
+        json!({ "medium": {
+            "profile": profile, "blank": true, "writable": true, "rewritable": false,
+            "capacity_blocks": 359_844, "free_blocks": 359_844, "block_size": 2048,
+            "manufacturer_id": "CMC Magnetics Corporation", "sessions": 0,
+            "erasable": false, "status_warnings": [],
+        }})
+    };
+    // The operator swapped discs while the worker waited: the later one wins.
+    report_medium(&harness, &credential, &attempt, 1, medium("DVD-R")).await;
+    report_medium(&harness, &credential, &attempt, 2, medium("CD-R")).await;
+    let (_, detail) = harness.get(&path).await;
+    assert_eq!(detail["medium"]["profile"], "CD-R", "{detail}");
+    assert_eq!(
+        detail["medium"]["manufacturer"],
+        "CMC Magnetics Corporation"
+    );
+
+    // Worker data that is not a medium is left out, not trusted or fatal.
+    report_medium(
+        &harness,
+        &credential,
+        &attempt,
+        3,
+        json!({ "medium": "a cake" }),
+    )
+    .await;
+    let (status, detail) = harness.get(&path).await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert!(detail["medium"].is_null(), "{detail}");
+}
+
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
 async fn a_completed_attempt_carries_its_reports_and_its_disc() {
