@@ -6924,6 +6924,13 @@
             ],
             "description": "The request path, when known."
           },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The identifier of the request this answered, as in the `X-Request-Id`\nheader and the server's log, so a report can be matched to the log\nline that says why. Filled in when the response is written."
+          },
           "status": {
             "type": "integer",
             "format": "int32",

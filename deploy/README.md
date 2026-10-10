@@ -301,6 +301,19 @@ high or critical vulnerability with a fix available stops the release. The
 image applies Debian's security updates when it is built, so a rebuild picks
 up fixes published after the base image.
 
+## Finding an error in the logs
+
+Every error the web UI or the API shows carries a request id, such as
+`01a126e9-2507-7133-8bfa-b724fc014c1f`, and every log line the server wrote
+while handling that request carries the same id. To see what happened:
+
+```bash
+docker compose -f deploy/compose.yaml logs server | grep 01a126e9-2507-7133-8bfa-b724fc014c1f
+```
+
+Request start and finish lines are logged at debug level; set
+`TANGIBLE_LOG=tangible=info,tower_http=debug` to see them as well as errors.
+
 ## Backups
 
 Three volumes hold everything that cannot be rebuilt:

@@ -2511,6 +2511,12 @@ export interface components {
             /** @description The request path, when known. */
             instance?: string | null;
             /**
+             * @description The identifier of the request this answered, as in the `X-Request-Id`
+             *     header and the server's log, so a report can be matched to the log
+             *     line that says why. Filled in when the response is written.
+             */
+            request_id?: string | null;
+            /**
              * Format: int32
              * @description HTTP status code, repeated in the body as the RFC allows.
              */

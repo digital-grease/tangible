@@ -18,6 +18,7 @@ pub mod import_runner;
 pub mod pagination;
 pub mod problem;
 pub mod report;
+pub mod request_id;
 pub mod romm_export;
 pub mod routes;
 pub mod state;
@@ -419,8 +420,27 @@ fn mark_sensitive(headers: &mut axum::http::HeaderMap) {
 fn traced<S: Clone + Send + Sync + 'static>(router: Router<S>) -> Router<S> {
     router
         .layer(axum::middleware::from_fn(mark_sensitive_headers))
-        .layer(TraceLayer::new_for_http())
+        .layer(TraceLayer::new_for_http().make_span_with(request_span))
         .layer(axum::middleware::from_fn(mark_sensitive_headers))
+        // Outermost, so the span above and everything inside it carry the
+        // request's identifier.
+        .layer(axum::middleware::from_fn(request_id::assign))
+}
+
+/// The span every log line about a request sits in: its method, its path
+/// without the query (which can carry tokens), and its identifier.
+fn request_span<B>(request: &axum::http::Request<B>) -> tracing::Span {
+    let id = request
+        .headers()
+        .get(request_id::REQUEST_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    tracing::info_span!(
+        "request",
+        method = %request.method(),
+        path = %request.uri().path(),
+        request_id = %id,
+    )
 }
 
 #[cfg(test)]

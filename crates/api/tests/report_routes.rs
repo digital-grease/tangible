@@ -76,4 +76,11 @@ async fn nobody_signed_out_can_read_them() {
     let (status, body) = get(router(ApiState::new(database)), None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
     assert_eq!(body["code"], "UNAUTHENTICATED");
+    // Refused in the middleware, before any handler, and still named, so the
+    // refusal can be found in the log.
+    let id = body["request_id"].as_str().expect("a request id");
+    assert_eq!(
+        uuid::Uuid::parse_str(id).expect("a UUID").get_version_num(),
+        7
+    );
 }

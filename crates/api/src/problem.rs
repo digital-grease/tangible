@@ -184,6 +184,11 @@ pub struct Problem {
     /// The request path, when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance: Option<String>,
+    /// The identifier of the request this answered, as in the `X-Request-Id`
+    /// header and the server's log, so a report can be matched to the log
+    /// line that says why. Filled in when the response is written.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
 }
 
 impl Problem {
@@ -197,6 +202,7 @@ impl Problem {
             code: code.as_str().to_owned(),
             detail: detail.into(),
             instance: None,
+            request_id: None,
         }
     }
 
@@ -215,7 +221,10 @@ impl Problem {
 }
 
 impl IntoResponse for Problem {
-    fn into_response(self) -> Response {
+    fn into_response(mut self) -> Response {
+        if self.request_id.is_none() {
+            self.request_id = crate::request_id::current();
+        }
         let status = self.status_code();
         let mut response = (status, Json(&self)).into_response();
         // The RFC media type, so a client can distinguish a problem document
