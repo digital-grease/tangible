@@ -4,6 +4,16 @@ Notable changes to Tangible, newest first. Versions follow semantic
 versioning; during 0.x the API, the manifest schema and the database schema
 may change between minor versions, and the release notes say how.
 
+## Unreleased
+
+### Added
+
+- Groundwork for issue reports: text is scrubbed of credentials, paths,
+  serial numbers, library file names and LAN addresses before anyone can
+  send it, and two settings say where reports go
+  (`TANGIBLE_REPORT_ISSUES_URL`, empty to turn them off) and whether
+  addresses are scrubbed. The server names its release and commit in them.
+
 ## 0.1.0 (2026-10-07)
 
 The first release.

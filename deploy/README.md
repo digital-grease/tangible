@@ -213,6 +213,25 @@ A conversion needs room in the staging volume for a copy of the original and
 the CHD, briefly. Set `TANGIBLE_DERIVATION_ENGINE=none` to turn conversions
 off.
 
+## Issue reports
+
+Tangible can turn a problem into a prefilled issue on its tracker. The
+server only prepares the text: credentials, tokens, paths on the host, drive
+serial numbers, the library's file names and, by default, LAN addresses and
+local host names are replaced with placeholders such as `<path>.bin`. The
+operator reads all of it, and only then does their own browser open the
+issue form. Nothing is sent by the server, and nothing at all without that
+click.
+
+Two settings in `.env`:
+
+- `TANGIBLE_REPORT_ISSUES_URL`: the issue form reports open. Set it empty to
+  stop offering reports, for example on a network without internet access or
+  where staff should not open public issues. If you run a modified Tangible,
+  point it at your own tracker.
+- `TANGIBLE_REPORT_SCRUB_ADDRESSES`: `false` keeps IP addresses and host
+  names in reports; everything else is always replaced.
+
 ## Verifying a release
 
 Each release is built by `.github/workflows/release.yml` from its tag, and

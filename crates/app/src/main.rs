@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use tangible_api::report::{BuildIdentity, ReportSettings};
 use tangible_api::{
     ApiState, AuthSettings, DerivationPipeline, DerivationRunner, DerivationRunnerSettings,
     Derivations, ImportContext, ImportPipeline, ImportRunner, ImportRunnerSettings, RommExport,
@@ -131,6 +132,9 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
     let pipeline = ImportPipeline::new(staging.clone(), objects.clone(), manifests.clone());
     let auth = AuthSettings::for_public_url(&serve.public_url);
     warn_if_plain_http(auth, &serve.public_url);
+    // Before anything waits on the database, so a mistyped address fails at
+    // once rather than after a connection timeout.
+    let reports = report_settings(common, serve)?;
     warn_if_setup_needed(&database, &serve.public_url).await;
 
     let state = ApiState::with_manifests(database.clone(), manifests.clone())
@@ -139,7 +143,8 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
             roots: roots.clone(),
             max_upload_bytes: serve.max_upload_bytes,
         })
-        .with_auth(auth);
+        .with_auth(auth)
+        .with_reports(reports);
     let state = attach_web_ui(state, serve.web_root.as_deref()).await?;
     let (state, romm) = start_romm_export(
         state,
@@ -388,6 +393,31 @@ async fn warn_if_setup_needed(database: &Database, public_url: &str) {
     }
 }
 
+/// Where issue reports go, and the build they name. A malformed address
+/// stops the server: a typo would otherwise send operators somewhere else.
+fn report_settings(common: &CommonConfig, serve: &ServeConfig) -> Result<ReportSettings> {
+    let build = BuildIdentity::current(
+        common.build_version.as_deref(),
+        common.build_revision.as_deref(),
+    );
+    let settings = ReportSettings::new(
+        &serve.report_issues_url,
+        serve.report_scrub_addresses,
+        build,
+    )
+    .context("TANGIBLE_REPORT_ISSUES_URL")?;
+    if let Some(url) = settings.issues_url() {
+        tracing::info!(
+            issues_url = url,
+            build = %settings.build().describe(),
+            "issue reports offered; operators review and send them from their own browser"
+        );
+    } else {
+        tracing::info!("issue reports turned off (TANGIBLE_REPORT_ISSUES_URL is empty)");
+    }
+    Ok(settings)
+}
+
 async fn migrate_command(common: &CommonConfig) -> Result<()> {
     // Eager connection: there is nothing useful to do without a database.
     let database = Database::connect(&DbConfig::new(common.database_url.expose()))
@@ -591,6 +621,8 @@ mod tests {
     const PUBLIC_ENV: &[&str] = &[
         "TANGIBLE_BIND",
         "TANGIBLE_BLOCK_DEVICE",
+        "TANGIBLE_BUILD_REVISION",
+        "TANGIBLE_BUILD_VERSION",
         "TANGIBLE_BURN_ENGINE",
         "TANGIBLE_DERIVATION_ENGINE",
         "TANGIBLE_LOG",
@@ -598,6 +630,8 @@ mod tests {
         "TANGIBLE_MAX_UPLOAD_BYTES",
         "TANGIBLE_MIGRATE_ON_START",
         "TANGIBLE_PUBLIC_URL",
+        "TANGIBLE_REPORT_ISSUES_URL",
+        "TANGIBLE_REPORT_SCRUB_ADDRESSES",
         "TANGIBLE_ROMM_EXPORT_ROOT",
         "TANGIBLE_SERVER_URL",
         "TANGIBLE_STAGING_ROOT",
@@ -656,6 +690,50 @@ mod tests {
             cli.common.database_url.expose(),
             "postgres://user:placeholder-password@db/tangible"
         );
+    }
+
+    fn serve_config(args: &[&str]) -> ServeConfig {
+        let cli = Cli::try_parse_from(["tangible", "serve"].iter().chain(args)).expect("parse");
+        match cli.command {
+            Command::Serve(serve) => *serve,
+            other => panic!("parsed {other:?}"),
+        }
+    }
+
+    #[test]
+    fn issue_reports_go_to_the_project_by_default_and_scrub_addresses() {
+        let serve = serve_config(&[]);
+        assert_eq!(
+            serve.report_issues_url,
+            tangible_api::report::DEFAULT_ISSUES_URL
+        );
+        assert!(serve.report_scrub_addresses);
+    }
+
+    #[test]
+    fn issue_reports_can_be_turned_off_and_address_scrubbing_too() {
+        let serve = serve_config(&[
+            "--report-issues-url",
+            "",
+            "--report-scrub-addresses",
+            "false",
+        ]);
+        let common = Cli::try_parse_from(["tangible", "doctor"])
+            .expect("parse")
+            .common;
+        let settings = report_settings(&common, &serve).expect("settings");
+        assert!(!settings.enabled());
+        assert!(!serve.report_scrub_addresses);
+    }
+
+    #[test]
+    fn a_malformed_issue_address_stops_the_server() {
+        let serve = serve_config(&["--report-issues-url", "http://github.com/x/y/issues/new"]);
+        let common = Cli::try_parse_from(["tangible", "doctor"])
+            .expect("parse")
+            .common;
+        let error = report_settings(&common, &serve).expect_err("refused");
+        assert!(format!("{error:#}").contains("https://"), "{error:#}");
     }
 
     #[test]

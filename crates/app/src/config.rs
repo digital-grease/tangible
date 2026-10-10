@@ -78,6 +78,15 @@ pub struct CommonConfig {
     /// Emit logs as JSON rather than human-readable text.
     #[arg(long, env = "TANGIBLE_LOG_JSON", default_value_t = false)]
     pub log_json: bool,
+
+    /// The release tag the image was built from. Set by the image, not by
+    /// an operator; issue reports and diagnostics name it.
+    #[arg(long, env = "TANGIBLE_BUILD_VERSION", hide = true)]
+    pub build_version: Option<String>,
+
+    /// The commit the image was built from. Set by the image.
+    #[arg(long, env = "TANGIBLE_BUILD_REVISION", hide = true)]
+    pub build_revision: Option<String>,
 }
 
 /// Settings for the HTTP server.
@@ -171,6 +180,31 @@ pub struct ServeConfig {
         default_value_t = DerivationEngineKind::Chdman
     )]
     pub derivation_engine: DerivationEngineKind,
+
+    /// The issue form operators' reports open, such as a GitHub repository's
+    /// `…/issues/new`.
+    ///
+    /// The server never sends a report: it prepares scrubbed text, and the
+    /// operator reads it and opens the form from their own browser. Set it
+    /// empty to stop offering reports, or point it at your own tracker if
+    /// you run a modified Tangible. Must be `https://`, with no query.
+    #[arg(
+        long,
+        env = "TANGIBLE_REPORT_ISSUES_URL",
+        default_value = tangible_api::report::DEFAULT_ISSUES_URL
+    )]
+    pub report_issues_url: String,
+
+    /// Replace IP addresses and private host names (`.lan`, `.local` and
+    /// the like) in issue reports, as well as credentials, paths, serial
+    /// numbers and library file names, which are always replaced.
+    #[arg(
+        long,
+        env = "TANGIBLE_REPORT_SCRUB_ADDRESSES",
+        default_value_t = true,
+        action = clap::ArgAction::Set
+    )]
+    pub report_scrub_addresses: bool,
 }
 
 /// Settings for a burn worker.

@@ -2903,6 +2903,32 @@
         ]
       }
     },
+    "/api/v1/report-settings": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "Whether this server offers issue reports, and where they go.",
+        "operationId": "report_settings",
+        "responses": {
+          "200": {
+            "description": "How issue reports are configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportSettingsView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/romm": {
       "get": {
         "tags": [
@@ -6814,6 +6840,50 @@
           }
         }
       },
+      "ReportSettingsView": {
+        "type": "object",
+        "description": "Whether this server offers issue reports, and where they go.",
+        "required": [
+          "enabled",
+          "version",
+          "build"
+        ],
+        "properties": {
+          "build": {
+            "type": "string",
+            "description": "How a report names this build, such as `v0.1.0 (76fa515)`."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether to offer reports at all. Off when the operator has set no\nissue address."
+          },
+          "issues_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The issue form's address, such as\n`https://github.com/digital-grease/tangible/issues/new`; absent when\nreports are off. A report adds `?template=…` and its fields."
+          },
+          "release": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The release tag the image was built from, absent for a local build."
+          },
+          "revision": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The commit the image was built from, absent for a local build."
+          },
+          "version": {
+            "type": "string",
+            "description": "The version compiled into the server, such as `0.1.0`."
+          }
+        }
+      },
       "RequestDerivation": {
         "type": "object",
         "description": "A request for a derivative.",
@@ -7404,6 +7474,10 @@
     {
       "name": "workers",
       "description": "The burn-worker protocol"
+    },
+    {
+      "name": "reports",
+      "description": "Issue reports, prepared for the operator to review and send"
     }
   ]
 }

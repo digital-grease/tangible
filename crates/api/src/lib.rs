@@ -16,6 +16,7 @@ pub mod import;
 pub mod import_runner;
 pub mod pagination;
 pub mod problem;
+pub mod report;
 pub mod romm_export;
 pub mod routes;
 pub mod state;
@@ -104,6 +105,7 @@ pub const API_BASE: &str = "/api/v1";
         routes::derivations::artifact_lineage,
         routes::derivations::get_derivation_job_route,
         routes::derivations::cancel_derivation_job_route,
+        routes::reports::report_settings,
         routes::romm::romm_settings,
         routes::romm::get_edition_romm,
         routes::romm::set_edition_romm_route,
@@ -178,6 +180,7 @@ pub const API_BASE: &str = "/api/v1";
         routes::derivations::LineageView,
         routes::derivations::RequestDerivation,
         routes::derivations::DerivationRequestView,
+        routes::reports::ReportSettingsView,
         routes::romm::PlatformView,
         routes::romm::RommSettings,
         routes::romm::EditionRommView,
@@ -228,6 +231,7 @@ pub const API_BASE: &str = "/api/v1";
         (name = "burns", description = "Burn jobs, attempts, and their events"),
         (name = "physical-copies", description = "The discs that actually exist"),
         (name = "workers", description = "The burn-worker protocol"),
+        (name = "reports", description = "Issue reports, prepared for the operator to review and send"),
     ),
 )]
 pub struct ApiDoc;
@@ -350,6 +354,7 @@ pub fn router(state: ApiState) -> Router {
         .nest(API_BASE, routes::workers::router())
         .nest(API_BASE, routes::erasures::router())
         .nest(API_BASE, routes::romm::router())
+        .nest(API_BASE, routes::reports::router())
         .nest(API_BASE, routes::derivations::router())
         // Applied per route, after routing, so the rule is looked up by the
         // matched pattern rather than by a raw path a caller could disguise.
@@ -508,6 +513,7 @@ mod tests {
             include_str!("routes/imports.rs"),
             include_str!("routes/physical_copies.rs"),
             include_str!("routes/romm.rs"),
+            include_str!("routes/reports.rs"),
             include_str!("routes/derivations.rs"),
             include_str!("routes/workers.rs"),
             include_str!("health.rs"),

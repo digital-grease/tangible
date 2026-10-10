@@ -105,6 +105,11 @@ ARG VERSION=dev
 ARG REVISION=unknown
 ARG CREATED=unknown
 
+# The same, for the program itself: issue reports and diagnostics name the
+# build they come from. `dev` and `unknown` read as a local build.
+ENV TANGIBLE_BUILD_VERSION=${VERSION} \
+    TANGIBLE_BUILD_REVISION=${REVISION}
+
 # Where the Corresponding Source is: this image conveys object code for every
 # GPL program in it, and for Tangible itself under the AGPL. SOURCES.md, with
 # each release, lists the Debian source package of everything installed.

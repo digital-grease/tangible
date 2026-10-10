@@ -867,6 +867,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/report-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Whether this server offers issue reports, and where they go. */
+        get: operations["report_settings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/romm": {
         parameters: {
             query?: never;
@@ -2448,6 +2465,28 @@ export interface components {
         RenewResponse: {
             /** @description The new expiry. */
             lease_expires_at: string;
+        };
+        /** @description Whether this server offers issue reports, and where they go. */
+        ReportSettingsView: {
+            /** @description How a report names this build, such as `v0.1.0 (76fa515)`. */
+            build: string;
+            /**
+             * @description Whether to offer reports at all. Off when the operator has set no
+             *     issue address.
+             */
+            enabled: boolean;
+            /**
+             * @description The issue form's address, such as
+             *     `https://github.com/digital-grease/tangible/issues/new`; absent when
+             *     reports are off. A report adds `?template=…` and its fields.
+             */
+            issues_url?: string | null;
+            /** @description The release tag the image was built from, absent for a local build. */
+            release?: string | null;
+            /** @description The commit the image was built from, absent for a local build. */
+            revision?: string | null;
+            /** @description The version compiled into the server, such as `0.1.0`. */
+            version: string;
         };
         /** @description A request for a derivative. */
         RequestDerivation: {
@@ -4590,6 +4629,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    report_settings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description How issue reports are configured */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportSettingsView"];
                 };
             };
         };

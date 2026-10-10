@@ -313,6 +313,7 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
         Signed(Import),
     ),
     // RomM export settings belong to the catalog.
+    ("GET", "/api/v1/report-settings", Signed(Read)),
     ("GET", "/api/v1/romm", Signed(Read)),
     ("GET", "/api/v1/editions/{edition_id}/romm", Signed(Read)),
     ("PUT", "/api/v1/editions/{edition_id}/romm", Signed(Catalog)),

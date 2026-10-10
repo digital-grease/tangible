@@ -11,6 +11,7 @@ use tangible_storage::{ManifestStore, WatchRoots};
 use crate::auth::{AuthSettings, LoginLimiter};
 use crate::derivation::Derivations;
 use crate::import::ImportPipeline;
+use crate::report::ReportSettings;
 use crate::romm_export::RommExport;
 use crate::web::WebUi;
 
@@ -43,6 +44,8 @@ struct Inner {
     romm: Option<RommExport>,
     /// Derivations, when a derivation engine is configured.
     derivations: Option<Derivations>,
+    /// Where issue reports go, if anywhere, and the build they name.
+    reports: ReportSettings,
 }
 
 /// What the import routes need beyond the database.
@@ -73,6 +76,7 @@ impl ApiState {
                 web: None,
                 romm: None,
                 derivations: None,
+                reports: ReportSettings::default(),
             }),
         }
     }
@@ -90,6 +94,7 @@ impl ApiState {
                 web: None,
                 romm: None,
                 derivations: None,
+                reports: ReportSettings::default(),
             }),
         }
     }
@@ -142,6 +147,22 @@ impl ApiState {
         Self {
             inner: Arc::new(inner),
         }
+    }
+
+    /// Offer issue reports as `reports` says. The default offers none.
+    #[must_use]
+    pub fn with_reports(self, reports: ReportSettings) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.reports = reports;
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// How issue reports are configured.
+    #[must_use]
+    pub fn reports(&self) -> &ReportSettings {
+        &self.inner.reports
     }
 
     /// Derivations, when an engine is configured.

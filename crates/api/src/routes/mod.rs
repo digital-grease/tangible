@@ -11,5 +11,6 @@ pub mod derivations;
 pub mod erasures;
 pub mod imports;
 pub mod physical_copies;
+pub mod reports;
 pub mod romm;
 pub mod workers;

@@ -36,6 +36,12 @@ services:
       # What makes derivatives (CHDs of disc images), each one only when asked
       # for: chdman, which the image carries, or none.
       TANGIBLE_DERIVATION_ENGINE: ${TANGIBLE_DERIVATION_ENGINE:-chdman}
+      # Where operators' issue reports open. The server never sends one; it
+      # prepares scrubbed text the operator reads and opens from their own
+      # browser. Set it empty in .env to stop offering reports (no colon in
+      # the default below, so empty stays empty).
+      TANGIBLE_REPORT_ISSUES_URL: ${TANGIBLE_REPORT_ISSUES_URL-https://github.com/digital-grease/tangible/issues/new}
+      TANGIBLE_REPORT_SCRUB_ADDRESSES: ${TANGIBLE_REPORT_SCRUB_ADDRESSES:-true}
       # RomM's roms directory, to show chosen games in RomM (deploy/README.md,
       # "Showing games in RomM"). Off unless set: uncomment this and the
       # matching volume below. Tangible writes only folders it marks as its
