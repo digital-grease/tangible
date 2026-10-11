@@ -12,6 +12,7 @@ pub mod auth;
 pub mod burn_report;
 pub mod catalog;
 pub mod derivation;
+pub mod error_report;
 pub mod health;
 pub mod import;
 pub mod import_runner;
@@ -109,6 +110,7 @@ pub const API_BASE: &str = "/api/v1";
         routes::derivations::cancel_derivation_job_route,
         routes::reports::report_settings,
         routes::reports::burn_attempt_report,
+        routes::reports::prepare_error_report,
         routes::romm::romm_settings,
         routes::romm::get_edition_romm,
         routes::romm::set_edition_romm_route,
@@ -187,6 +189,7 @@ pub const API_BASE: &str = "/api/v1";
         routes::reports::ReportSettingsView,
         report::IssueReport,
         report::IssueReportField,
+        routes::reports::ErrorReportRequest,
         routes::romm::PlatformView,
         routes::romm::RommSettings,
         routes::romm::EditionRommView,

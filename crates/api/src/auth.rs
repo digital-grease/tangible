@@ -314,6 +314,9 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
     ),
     // RomM export settings belong to the catalog.
     ("GET", "/api/v1/report-settings", Signed(Read)),
+    // Anyone signed in may report an error they were shown; it changes
+    // nothing, and the text is theirs and scrubbed.
+    ("POST", "/api/v1/error-reports", Signed(Read)),
     // Operators: a burn report carries the worker log and drive details.
     (
         "GET",
@@ -1045,11 +1048,17 @@ mod tests {
 
     #[test]
     fn mutations_need_more_than_read() {
+        // The exceptions change nothing a viewer should not: signing oneself
+        // out, and asking for an error one was shown to be written up as a
+        // report, which only prepares text.
+        let exceptions = [
+            ("DELETE", "/api/v1/session"),
+            ("POST", "/api/v1/error-reports"),
+        ];
         for (method, path, access) in ACCESS_RULES {
             if *method != "GET" && *access == Signed(Read) {
-                assert_eq!(
-                    (*method, *path),
-                    ("DELETE", "/api/v1/session"),
+                assert!(
+                    exceptions.contains(&(*method, *path)),
                     "{method} {path} lets a viewer change something"
                 );
             }

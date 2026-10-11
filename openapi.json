@@ -2209,6 +2209,63 @@
         ]
       }
     },
+    "/api/v1/error-reports": {
+      "post": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "An error the web UI showed, prepared as a bug report for review.",
+        "description": "# Errors\n\n`CONFLICT` when reports are turned off; `VALIDATION_FAILED` for a field\nthat is not shaped like a problem document's.",
+        "operationId": "prepare_error_report",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The report, scrubbed, for review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueReport"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Reports are off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A field is not shaped like a problem document's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/import-sources": {
       "get": {
         "tags": [
@@ -6145,6 +6202,60 @@
             "description": "Whether the disc may have been changed: true once an erase has run,\nwhatever it achieved."
           }
         }
+      },
+      "ErrorReportRequest": {
+        "type": "object",
+        "description": "An error the web UI showed, sent to be written up as a bug report.",
+        "required": [
+          "code",
+          "title",
+          "detail"
+        ],
+        "properties": {
+          "area": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The part of the UI: `import`, `library`, `catalog`, `romm`, `web`,\n`api`, `deployment` or `other`. Anything else is left for the person."
+          },
+          "code": {
+            "type": "string",
+            "description": "The problem's code, such as `INTERNAL`."
+          },
+          "detail": {
+            "type": "string",
+            "description": "The problem's detail."
+          },
+          "endpoint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The API call that failed, such as `GET /api/v1/burn-jobs/{id}`."
+          },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The problem's `request_id`."
+          },
+          "status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The HTTP status, absent when there was no response at all.",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string",
+            "description": "The problem's title."
+          }
+        },
+        "additionalProperties": false
       },
       "EventAck": {
         "type": "object",

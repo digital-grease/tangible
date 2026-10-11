@@ -684,6 +684,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/error-reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * An error the web UI showed, prepared as a bug report for review.
+         * @description # Errors
+         *
+         *     `CONFLICT` when reports are turned off; `VALIDATION_FAILED` for a field
+         *     that is not shaped like a problem document's.
+         */
+        post: operations["prepare_error_report"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/import-sources": {
         parameters: {
             query?: never;
@@ -2164,6 +2187,29 @@ export interface components {
              *     whatever it achieved.
              */
             touched_the_disc: boolean;
+        };
+        /** @description An error the web UI showed, sent to be written up as a bug report. */
+        ErrorReportRequest: {
+            /**
+             * @description The part of the UI: `import`, `library`, `catalog`, `romm`, `web`,
+             *     `api`, `deployment` or `other`. Anything else is left for the person.
+             */
+            area?: string | null;
+            /** @description The problem's code, such as `INTERNAL`. */
+            code: string;
+            /** @description The problem's detail. */
+            detail: string;
+            /** @description The API call that failed, such as `GET /api/v1/burn-jobs/{id}`. */
+            endpoint?: string | null;
+            /** @description The problem's `request_id`. */
+            request_id?: string | null;
+            /**
+             * Format: int32
+             * @description The HTTP status, absent when there was no response at all.
+             */
+            status?: number | null;
+            /** @description The problem's title. */
+            title: string;
         };
         /** @description What the server has persisted. */
         EventAck: {
@@ -4303,6 +4349,48 @@ export interface operations {
                 };
             };
             /** @description An outcome or field that will not do */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    prepare_error_report: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ErrorReportRequest"];
+            };
+        };
+        responses: {
+            /** @description The report, scrubbed, for review */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssueReport"];
+                };
+            };
+            /** @description Reports are off */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A field is not shaped like a problem document's */
             422: {
                 headers: {
                     [name: string]: unknown;

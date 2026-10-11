@@ -15,14 +15,12 @@
 //! labels as names to replace; generated values (the build, the engine, the
 //! format, the outcome) need none.
 
-use std::collections::BTreeMap;
-
 use tangible_burn::MediumInfo;
-use tangible_domain::report::{Removed, ScrubContext, scrub};
+use tangible_domain::report::ScrubContext;
 use tangible_domain::{BurnAttemptState, DriveConnection};
 use time::OffsetDateTime;
 
-use crate::report::{IssueReport, IssueReportField};
+use crate::report::{IssueReport, Writer};
 
 /// The burn form's file name.
 pub const BURN_TEMPLATE: &str = "burn_report.yml";
@@ -203,77 +201,7 @@ pub fn burn_report(
     }
 }
 
-/// Collects fields, scrubbing the ones that need it and keeping count.
-struct Writer {
-    context: ScrubContext,
-    fields: Vec<IssueReportField>,
-    removed: BTreeMap<Removed, usize>,
-    truncated: bool,
-}
-
-impl Writer {
-    fn new(context: ScrubContext) -> Self {
-        Self {
-            context,
-            fields: Vec::new(),
-            removed: BTreeMap::new(),
-            truncated: false,
-        }
-    }
-
-    fn plain(&mut self, id: &str, label: &str, value: &str) {
-        self.fields.push(IssueReportField {
-            id: id.to_owned(),
-            label: label.to_owned(),
-            value: value.to_owned(),
-        });
-    }
-
-    fn scrubbed(&mut self, id: &str, label: &str, text: &str) {
-        let scrubbed = scrub(text, &self.context);
-        for (kind, count) in scrubbed.removed {
-            *self.removed.entry(kind).or_insert(0) += count;
-        }
-        self.truncated |= scrubbed.truncated;
-        self.plain(id, label, &scrubbed.text);
-    }
-
-    fn finish(
-        self,
-        template: &str,
-        title: Option<String>,
-        long_field: Option<&str>,
-    ) -> IssueReport {
-        IssueReport {
-            template: template.to_owned(),
-            title,
-            fields: self.fields,
-            long_field: long_field.map(str::to_owned),
-            removed: self
-                .removed
-                .into_iter()
-                .map(|(kind, count)| (removed_name(kind).to_owned(), count))
-                .collect(),
-            truncated: self.truncated,
-        }
-    }
-}
-
-/// A kind of removal as the API names it, matching its serialised form.
-fn removed_name(kind: Removed) -> &'static str {
-    match kind {
-        Removed::Credential => "credential",
-        Removed::HeaderValue => "header_value",
-        Removed::UrlCredentials => "url_credentials",
-        Removed::Path => "path",
-        Removed::Name => "name",
-        Removed::Serial => "serial",
-        Removed::Address => "address",
-        Removed::Host => "host",
-    }
-}
-
-fn lowercase_first(text: &str) -> String {
+pub(crate) fn lowercase_first(text: &str) -> String {
     let mut chars = text.chars();
     chars.next().map_or_else(String::new, |first| {
         first.to_lowercase().chain(chars).collect()
@@ -480,72 +408,8 @@ fn medium_text(medium: Option<&MediumInfo>) -> String {
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use super::*;
-
-    /// A form's field ids, and each dropdown's options, read from its YAML
-    /// closely enough for these files: `id:` lines, and the `- ` items under
-    /// an `options:` line.
-    fn template(yaml: &str) -> BTreeMap<String, Option<Vec<String>>> {
-        let mut fields = BTreeMap::new();
-        let mut current: Option<String> = None;
-        let mut in_options = false;
-        for line in yaml.lines() {
-            let trimmed = line.trim();
-            if let Some(id) = trimmed.strip_prefix("id: ") {
-                current = Some(id.trim().to_owned());
-                fields.insert(id.trim().to_owned(), None);
-                in_options = false;
-            } else if trimmed == "options:" {
-                in_options = true;
-                if let Some(id) = &current {
-                    fields.insert(id.clone(), Some(Vec::new()));
-                }
-            } else if in_options && let Some(option) = trimmed.strip_prefix("- ") {
-                if let Some(Some(options)) = current.as_ref().and_then(|id| fields.get_mut(id)) {
-                    options.push(option.trim().to_owned());
-                }
-            } else if !trimmed.is_empty() {
-                in_options = false;
-            }
-        }
-        fields
-    }
-
-    fn burn_form() -> BTreeMap<String, Option<Vec<String>>> {
-        template(include_str!(
-            "../../../.github/ISSUE_TEMPLATE/burn_report.yml"
-        ))
-    }
-
-    fn hardware_form() -> BTreeMap<String, Option<Vec<String>>> {
-        template(include_str!(
-            "../../../.github/ISSUE_TEMPLATE/hardware_report.yml"
-        ))
-    }
-
-    /// Every field the report fills is on the form, and every dropdown value
-    /// is one of that dropdown's options or empty, exactly: GitHub ignores a
-    /// prefilled value it does not recognise.
-    fn assert_fits(report: &IssueReport, form: &BTreeMap<String, Option<Vec<String>>>) {
-        for field in &report.fields {
-            let Some(options) = form.get(&field.id) else {
-                panic!("{} is not a field of {}", field.id, report.template);
-            };
-            if let Some(options) = options
-                && !field.value.is_empty()
-            {
-                assert!(
-                    options.contains(&field.value),
-                    "{:?} is not an option of {} in {}: {options:?}",
-                    field.value,
-                    field.id,
-                    report.template
-                );
-            }
-        }
-    }
+    use crate::report::forms::{assert_fits, burn as burn_form, hardware as hardware_form};
 
     fn medium() -> MediumInfo {
         MediumInfo {

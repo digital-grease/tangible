@@ -14,7 +14,7 @@
 //! server never sends a report anywhere.
 
 use axum::extract::{Path, Query, State};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tangible_db::erasures::get_drive;
@@ -28,6 +28,7 @@ use utoipa::{IntoParams, ToSchema};
 use crate::burn_report::{
     BurnFacts, BurnReportKind, BurnReportRefusal, DriveFacts, EventLine, burn_report,
 };
+use crate::error_report::{ErrorFacts, error_report};
 use crate::problem::{ErrorCode, Problem};
 use crate::report::IssueReport;
 use crate::routes::burns::inspected_medium_info;
@@ -144,6 +145,110 @@ pub async fn burn_attempt_report(
         |refusal: BurnReportRefusal| Problem::new(ErrorCode::Conflict, refusal.to_string()),
     )?;
     Ok(Json(report))
+}
+
+/// An error the web UI showed, sent to be written up as a bug report.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ErrorReportRequest {
+    /// The problem's code, such as `INTERNAL`.
+    pub code: String,
+    /// The problem's title.
+    pub title: String,
+    /// The problem's detail.
+    pub detail: String,
+    /// The HTTP status, absent when there was no response at all.
+    #[serde(default)]
+    pub status: Option<u16>,
+    /// The problem's `request_id`.
+    #[serde(default)]
+    pub request_id: Option<String>,
+    /// The API call that failed, such as `GET /api/v1/burn-jobs/{id}`.
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    /// The part of the UI: `import`, `library`, `catalog`, `romm`, `web`,
+    /// `api`, `deployment` or `other`. Anything else is left for the person.
+    #[serde(default)]
+    pub area: Option<String>,
+}
+
+/// Bounds on what the browser sends: a problem document is short, and none
+/// of this is trusted.
+fn check_error_report(request: &ErrorReportRequest) -> Result<(), Problem> {
+    let bounded = |name: &'static str, value: &str, max: usize| {
+        if value.chars().count() > max || value.chars().any(|c| c == '\0') {
+            Err(Problem::new(
+                ErrorCode::ValidationFailed,
+                format!("{name} must be at most {max} characters"),
+            ))
+        } else {
+            Ok(())
+        }
+    };
+    let code_shaped = !request.code.is_empty()
+        && request.code.len() <= 64
+        && request
+            .code
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+    if !code_shaped {
+        return Err(Problem::new(
+            ErrorCode::ValidationFailed,
+            "code must be an error code, such as INTERNAL",
+        ));
+    }
+    bounded("title", &request.title, 200)?;
+    bounded("detail", &request.detail, 4_000)?;
+    bounded("endpoint", request.endpoint.as_deref().unwrap_or(""), 300)?;
+    bounded("area", request.area.as_deref().unwrap_or(""), 32)?;
+    Ok(())
+}
+
+/// An error the web UI showed, prepared as a bug report for review.
+///
+/// # Errors
+///
+/// `CONFLICT` when reports are turned off; `VALIDATION_FAILED` for a field
+/// that is not shaped like a problem document's.
+#[utoipa::path(
+    post,
+    path = "/api/v1/error-reports",
+    tag = "reports",
+    request_body = ErrorReportRequest,
+    responses(
+        (status = 200, description = "The report, scrubbed, for review", body = IssueReport),
+        (status = 409, description = "Reports are off", body = Problem),
+        (status = 422, description = "A field is not shaped like a problem document's", body = Problem),
+    ),
+)]
+pub async fn prepare_error_report(
+    State(state): State<ApiState>,
+    Json(request): Json<ErrorReportRequest>,
+) -> Result<Json<IssueReport>, Problem> {
+    let reports = state.reports();
+    if !reports.enabled() {
+        return Err(Problem::new(
+            ErrorCode::Conflict,
+            "issue reports are turned off on this server (TANGIBLE_REPORT_ISSUES_URL is empty)",
+        ));
+    }
+    check_error_report(&request)?;
+    // Only a real identifier is repeated; anything else could be text the
+    // browser was asked to smuggle into a report.
+    let request_id = request
+        .request_id
+        .filter(|id| uuid::Uuid::parse_str(id).is_ok());
+    let facts = ErrorFacts {
+        build: reports.build().clone(),
+        code: request.code,
+        title: request.title,
+        detail: request.detail,
+        status: request.status,
+        request_id,
+        endpoint: request.endpoint,
+        area: request.area,
+    };
+    Ok(Json(error_report(&facts, reports.scrub_context())))
 }
 
 /// Everything a burn report is written from, read from the database and
@@ -271,6 +376,7 @@ fn library_names(manifest: &ArtifactManifest) -> Vec<(String, String)> {
 pub fn router() -> Router<ApiState> {
     Router::new()
         .route("/report-settings", get(report_settings))
+        .route("/error-reports", post(prepare_error_report))
         .route(
             "/burn-attempts/{attempt_id}/report",
             get(burn_attempt_report),

@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 
 use serde::Serialize;
-use tangible_domain::report::ScrubContext;
+use tangible_domain::report::{Removed, ScrubContext, scrub};
 use utoipa::ToSchema;
 
 /// Where issues go unless configured otherwise: this project's tracker.
@@ -119,6 +119,159 @@ pub struct IssueReport {
     pub removed: BTreeMap<String, usize>,
     /// Whether some text was too long and was cut short.
     pub truncated: bool,
+}
+
+/// Collects a report's fields, scrubbing the ones that need it and keeping
+/// count of what was replaced. Generated values (a build, a dropdown option)
+/// go in plain; anything that came from a log, a tool or a person is
+/// scrubbed.
+pub(crate) struct Writer {
+    context: ScrubContext,
+    fields: Vec<IssueReportField>,
+    removed: BTreeMap<Removed, usize>,
+    truncated: bool,
+}
+
+impl Writer {
+    pub(crate) fn new(context: ScrubContext) -> Self {
+        Self {
+            context,
+            fields: Vec::new(),
+            removed: BTreeMap::new(),
+            truncated: false,
+        }
+    }
+
+    pub(crate) fn plain(&mut self, id: &str, label: &str, value: &str) {
+        self.fields.push(IssueReportField {
+            id: id.to_owned(),
+            label: label.to_owned(),
+            value: value.to_owned(),
+        });
+    }
+
+    pub(crate) fn scrubbed(&mut self, id: &str, label: &str, text: &str) {
+        let scrubbed = scrub(text, &self.context);
+        for (kind, count) in scrubbed.removed {
+            *self.removed.entry(kind).or_insert(0) += count;
+        }
+        self.truncated |= scrubbed.truncated;
+        self.plain(id, label, &scrubbed.text);
+    }
+
+    pub(crate) fn finish(
+        self,
+        template: &str,
+        title: Option<String>,
+        long_field: Option<&str>,
+    ) -> IssueReport {
+        IssueReport {
+            template: template.to_owned(),
+            title,
+            fields: self.fields,
+            long_field: long_field.map(str::to_owned),
+            removed: self
+                .removed
+                .into_iter()
+                .map(|(kind, count)| (removed_name(kind).to_owned(), count))
+                .collect(),
+            truncated: self.truncated,
+        }
+    }
+}
+
+/// A kind of removal as the API names it.
+fn removed_name(kind: Removed) -> &'static str {
+    match kind {
+        Removed::Credential => "credential",
+        Removed::HeaderValue => "header_value",
+        Removed::UrlCredentials => "url_credentials",
+        Removed::Path => "path",
+        Removed::Name => "name",
+        Removed::Serial => "serial",
+        Removed::Address => "address",
+        Removed::Host => "host",
+    }
+}
+
+/// The issue forms, read for the tests that check a report fits its form.
+#[cfg(test)]
+#[allow(clippy::panic)]
+pub(crate) mod forms {
+    use std::collections::BTreeMap;
+
+    use super::IssueReport;
+
+    /// A form's field ids, and each dropdown's options.
+    pub(crate) type Form = BTreeMap<String, Option<Vec<String>>>;
+
+    /// A form read from its YAML closely enough for these files: `id:` lines,
+    /// and the `- ` items under an `options:` line.
+    pub(crate) fn template(yaml: &str) -> Form {
+        let mut fields = BTreeMap::new();
+        let mut current: Option<String> = None;
+        let mut in_options = false;
+        for line in yaml.lines() {
+            let trimmed = line.trim();
+            if let Some(id) = trimmed.strip_prefix("id: ") {
+                current = Some(id.trim().to_owned());
+                fields.insert(id.trim().to_owned(), None);
+                in_options = false;
+            } else if trimmed == "options:" {
+                in_options = true;
+                if let Some(id) = &current {
+                    fields.insert(id.clone(), Some(Vec::new()));
+                }
+            } else if in_options && let Some(option) = trimmed.strip_prefix("- ") {
+                if let Some(Some(options)) = current.as_ref().and_then(|id| fields.get_mut(id)) {
+                    options.push(option.trim().to_owned());
+                }
+            } else if !trimmed.is_empty() {
+                in_options = false;
+            }
+        }
+        fields
+    }
+
+    pub(crate) fn burn() -> Form {
+        template(include_str!(
+            "../../../.github/ISSUE_TEMPLATE/burn_report.yml"
+        ))
+    }
+
+    pub(crate) fn hardware() -> Form {
+        template(include_str!(
+            "../../../.github/ISSUE_TEMPLATE/hardware_report.yml"
+        ))
+    }
+
+    pub(crate) fn bug() -> Form {
+        template(include_str!(
+            "../../../.github/ISSUE_TEMPLATE/bug_report.yml"
+        ))
+    }
+
+    /// Every field the report fills is on the form, and every dropdown value
+    /// is one of that dropdown's options or empty, exactly: GitHub ignores a
+    /// prefilled value it does not recognise.
+    pub(crate) fn assert_fits(report: &IssueReport, form: &Form) {
+        for field in &report.fields {
+            let Some(options) = form.get(&field.id) else {
+                panic!("{} is not a field of {}", field.id, report.template);
+            };
+            if let Some(options) = options
+                && !field.value.is_empty()
+            {
+                assert!(
+                    options.contains(&field.value),
+                    "{:?} is not an option of {} in {}: {options:?}",
+                    field.value,
+                    field.id,
+                    report.template
+                );
+            }
+        }
+    }
 }
 
 /// Why an issue address was refused.
