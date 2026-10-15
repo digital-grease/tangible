@@ -23,7 +23,7 @@ RUN pnpm install --frozen-lockfile
 COPY web ./
 RUN pnpm build
 
-FROM rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS build
+FROM rust:1.98-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS build
 WORKDIR /src
 
 # Cache dependencies separately from source.
