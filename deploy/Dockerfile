@@ -54,8 +54,10 @@ FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595
 #   ffmpeg --enable-nonfree                  makes the whole image
 #                                            unredistributable
 #   unrar                                    binds RARLAB source; non-free
-#   libdvdcss / libaacs / libbdplus          circumvention; also excluded by
-#                                            the product boundary
+#   libdvdcss / libaacs / libbdplus          never in the published image;
+#                                            an operator who wants to rip
+#                                            encrypted discs builds them into
+#                                            a worker image of their own
 # Adding any of these breaks distribution of the entire image, not just the
 # one package. Adding to this list is a licence decision, not a build tweak.
 #

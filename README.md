@@ -103,7 +103,7 @@ The normal deployment is Linux and Docker Compose. The server container does not
 7. Separate write success from verification.
 8. Keep installation inspectable and reproducible.
 9. Do not use remote-code shell pipelines.
-10. Do not bundle content indexers or circumvention features.
+10. Do not bundle content indexers, decryption keys, or decryption code.
 
 ## Where the design lives
 
@@ -161,7 +161,9 @@ or a real drive, and fuzzing.
 
 ## Legal and content boundary
 
-Tangible is neutral infrastructure for content the operator is authorized to acquire, preserve, transform, and reproduce. The core project will not bundle release indexers, decryption keys, DRM-removal logic, or instructions for defeating access controls.
+Tangible is neutral infrastructure for content the operator is authorized to acquire, preserve, transform, and reproduce. The project will not bundle release indexers or decryption keys, and will not fetch or derive keys.
+
+Ripping discs in a worker's drive is planned, including encrypted DVDs and Blu-rays. It will follow the arrangement VideoLAN and the Linux distributions use: the published images contain no decryption code. An operator who wants to rip encrypted discs builds a worker image locally that includes VideoLAN's libdvdcss, libaacs and libbdplus, and supplies any key files themselves. Decryption stays off until an administrator enables it. Whether ripping a particular disc is lawful where you are is yours to determine.
 
 ## License
 
