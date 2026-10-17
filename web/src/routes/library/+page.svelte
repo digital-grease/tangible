@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import { apiFetch } from '$lib/session';
   import { onMount } from 'svelte';
   import {
@@ -58,15 +59,12 @@
     </section>
   {:else if view.kind === 'error'}
     <section>
-      <h2>Could not load the library</h2>
-      <p>{view.problem.title}.</p>
-      <!-- Plain language first; the exact detail is available but not in the
-           way. -->
-      <details>
-        <summary>Technical detail</summary>
-        <p>{view.problem.detail}</p>
-        <p>Error code: <code>{view.problem.code}</code></p>
-      </details>
+      <ErrorPanel
+        problem={view.problem}
+        area="library"
+        endpoint="GET /api/v1/artifacts"
+        heading="Could not load the library"
+      />
     </section>
   {:else}
     <p>{view.data.items.length} artifact{view.data.items.length === 1 ? '' : 's'}.</p>

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import type { components } from './api-types';
-import { apiFetch } from './session';
+import { apiFetch, transportProblem } from './session';
 import type { CommandResult } from './burns';
 import type { LoadState, Problem } from './library';
 
@@ -15,16 +15,6 @@ export type ImportView = components['schemas']['ImportView'];
 export type ImportPage = components['schemas']['ImportPage'];
 export type ImportSources = components['schemas']['ImportSources'];
 export type CreateImportRequest = components['schemas']['CreateImportRequest'];
-
-function transportProblem(detail: string): Problem {
-  return {
-    type: 'about:blank',
-    title: 'Could not reach the server',
-    status: 0,
-    code: 'TRANSPORT_FAILURE',
-    detail,
-  };
-}
 
 function isProblem(value: unknown): value is Problem {
   return typeof value === 'object' && value !== null && 'code' in value && 'detail' in value;

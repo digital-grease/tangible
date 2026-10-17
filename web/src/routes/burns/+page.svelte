@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import { apiFetch } from '$lib/session';
   import { onDestroy, onMount } from 'svelte';
   import {
@@ -86,13 +87,12 @@
     </section>
   {:else if view.kind === 'error'}
     <section>
-      <h2>Could not load the burn queue</h2>
-      <p>{view.problem.title}.</p>
-      <details>
-        <summary>Technical detail</summary>
-        <p>{view.problem.detail}</p>
-        <p>Error code: <code>{view.problem.code}</code></p>
-      </details>
+      <ErrorPanel
+        problem={view.problem}
+        area="other"
+        endpoint="GET /api/v1/burn-jobs"
+        heading="Could not load the burn queue"
+      />
     </section>
   {:else}
     {#if waiting.length > 0}

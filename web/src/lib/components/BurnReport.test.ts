@@ -3,7 +3,7 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { ReportSettings } from '$lib/report';
+import { forgetReportSettings, type ReportSettings } from '$lib/report';
 import BurnReport from './BurnReport.svelte';
 
 // jsdom has no modal dialogs; see ReportPreview.test.ts.
@@ -20,6 +20,7 @@ beforeAll(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  forgetReportSettings();
 });
 
 const ON: ReportSettings = {
@@ -122,9 +123,9 @@ describe('BurnReport', () => {
     await fireEvent.click(
       screen.getByRole('button', { name: 'Report this drive and disc as working…' }),
     );
-    const alert = await screen.findByRole('alert');
-    expect(alert.textContent).toContain('says nothing about real hardware');
-    expect(alert.textContent).toContain('CONFLICT');
+    const refusal = await screen.findByRole('region', { name: 'The report could not be prepared' });
+    expect(refusal.textContent).toContain('says nothing about real hardware');
+    expect(refusal.textContent).toContain('CONFLICT');
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 });

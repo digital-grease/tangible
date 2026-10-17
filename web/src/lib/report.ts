@@ -11,7 +11,7 @@
 // link themselves.
 
 import type { components } from './api-types';
-import { apiCall, apiFetch, type Result } from './session';
+import { apiCall, apiFetch, type Problem, type Result } from './session';
 
 export type ReportSettings = components['schemas']['ReportSettingsView'];
 
@@ -20,6 +20,128 @@ export function loadReportSettings(
   fetcher: typeof fetch = apiFetch,
 ): Promise<Result<ReportSettings>> {
   return apiCall(fetcher, '/api/v1/report-settings');
+}
+
+let settingsOnce: Promise<ReportSettings | null> | null = null;
+
+/**
+ * The report settings, asked for once per page load and shared by every
+ * error panel on it. `null` when they could not be loaded, which offers no
+ * reports; a failure is not remembered, so a later panel asks again.
+ */
+export function reportSettingsOnce(
+  fetcher: typeof fetch = apiFetch,
+): Promise<ReportSettings | null> {
+  if (settingsOnce === null) {
+    const asking = loadReportSettings(fetcher).then((result) =>
+      result.kind === 'ok' ? result.data : null,
+    );
+    settingsOnce = asking;
+    void asking.then((settings) => {
+      if (settings === null && settingsOnce === asking) settingsOnce = null;
+    });
+  }
+  return settingsOnce;
+}
+
+/** Forget the shared settings. For tests. */
+export function forgetReportSettings(): void {
+  settingsOnce = null;
+}
+
+/**
+ * Codes that say the request was refused for a reason of its own, not that
+ * the software went wrong. Reporting one of these as a bug would only waste
+ * the reader's time.
+ */
+const NOT_DEFECTS = new Set([
+  'VALIDATION_FAILED',
+  'INVALID_PARAMETER',
+  'INVALID_CURSOR',
+  'NOT_FOUND',
+  'REFERENCE_NOT_FOUND',
+  'FORBIDDEN',
+  'UNAUTHENTICATED',
+  'CSRF_TOKEN_INVALID',
+  'RATE_LIMITED',
+  'CONFLICT',
+  'IDEMPOTENCY_CONFLICT',
+  'WRITE_IN_PROGRESS',
+  'NOT_RETRYABLE',
+  'TRANSPORT_FAILURE',
+]);
+
+/** Codes that say the software itself went wrong. */
+const DEFECTS = new Set([
+  'INTERNAL',
+  'STORAGE_UNAVAILABLE',
+  'MANIFEST_INVALID',
+  'UNSUPPORTED_PROTOCOL',
+]);
+
+/**
+ * Whether an error with this code is worth offering as a bug report: one of
+ * the codes that mean the software went wrong, or a failure code such as
+ * `IMPORT_STORAGE_FAILED`. Anything about the request itself is not.
+ */
+export function suggestsDefect(code: string): boolean {
+  if (NOT_DEFECTS.has(code)) return false;
+  return DEFECTS.has(code) || code.endsWith('_FAILED');
+}
+
+/** The bug form's Area options. */
+export type ReportArea =
+  'import' | 'library' | 'catalog' | 'romm' | 'web' | 'api' | 'deployment' | 'other';
+
+const UUID_SEGMENT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A request path as its route, with identifiers replaced by `{id}` and the
+ * query dropped: `/api/v1/burn-jobs/0190…/retry?x=1` is
+ * `/api/v1/burn-jobs/{id}/retry`. The identifiers say nothing to a reader
+ * and are the operator's own.
+ */
+export function routeTemplate(path: string): string {
+  const bare = path.split(/[?#]/, 1)[0] ?? '';
+  return bare
+    .split('/')
+    .map((segment) => (UUID_SEGMENT.test(segment) ? '{id}' : segment))
+    .join('/');
+}
+
+export type ErrorReportRequest = components['schemas']['ErrorReportRequest'];
+
+/** What an error panel sends: the problem as shown, where, and in which part. */
+export function errorReportRequest(
+  problem: Problem,
+  area: ReportArea,
+  endpoint?: string,
+): ErrorReportRequest {
+  const route = endpoint ?? (problem.instance ? routeTemplate(problem.instance) : undefined);
+  // Within the server's limits, so a long detail still makes a report.
+  return {
+    code: problem.code,
+    title: clip(problem.title, 200),
+    detail: clip(problem.detail, 4000),
+    status: problem.status > 0 ? problem.status : null,
+    request_id: problem.request_id ?? null,
+    endpoint: route ? clip(route, 300) : null,
+    area,
+  };
+}
+
+/** At most `max` characters, counted as the server counts them. */
+function clip(text: string, max: number): string {
+  const chars = Array.from(text);
+  return chars.length <= max ? text : chars.slice(0, max).join('');
+}
+
+/** An error the page showed, prepared by the server as a bug report, scrubbed. */
+export function prepareErrorReport(
+  request: ErrorReportRequest,
+  fetcher: typeof fetch = apiFetch,
+): Promise<Result<IssueReport>> {
+  return apiCall(fetcher, '/api/v1/error-reports', 'POST', request);
 }
 
 export type IssueReport = components['schemas']['IssueReport'];

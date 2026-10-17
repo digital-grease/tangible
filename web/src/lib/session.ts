@@ -101,7 +101,8 @@ export function roleLabel(role: string): string {
 export type Result<T> =
   { kind: 'ok'; data: T } | { kind: 'error'; problem: Problem; retryAfter: number | null };
 
-function transportProblem(detail: string): Problem {
+/** A problem for a call that got no usable answer from the server. */
+export function transportProblem(detail: string): Problem {
   return {
     type: 'about:blank',
     title: 'Could not reach the server',

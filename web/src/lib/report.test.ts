@@ -1,17 +1,23 @@
 // SPDX-FileCopyrightText: 2026 digitalgrease
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   MAX_ISSUE_URL_LENGTH,
   SHORTENED_MARKER,
   copyText,
   draftFromReport,
+  errorReportRequest,
+  forgetReportSettings,
   issueHost,
   issueLink,
   loadBurnReport,
   loadReportSettings,
+  prepareErrorReport,
   removedSummary,
   reportMarkdown,
+  reportSettingsOnce,
+  routeTemplate,
+  suggestsDefect,
   type ReportDraft,
 } from './report';
 
@@ -226,5 +232,141 @@ describe('burn reports from the server', () => {
     });
     expect(bare.title).toBeUndefined();
     expect(bare.longField).toBeUndefined();
+  });
+});
+
+describe('suggestsDefect', () => {
+  it('offers a report for codes that mean the software went wrong', () => {
+    for (const code of [
+      'INTERNAL',
+      'STORAGE_UNAVAILABLE',
+      'MANIFEST_INVALID',
+      'UNSUPPORTED_PROTOCOL',
+    ]) {
+      expect(suggestsDefect(code)).toBe(true);
+    }
+  });
+
+  it('offers a report for a failure code', () => {
+    expect(suggestsDefect('IMPORT_STORAGE_FAILED')).toBe(true);
+    expect(suggestsDefect('ENGINE_FAILED')).toBe(true);
+  });
+
+  it('offers none for a request that was refused for its own reasons', () => {
+    for (const code of [
+      'VALIDATION_FAILED',
+      'FORBIDDEN',
+      'NOT_FOUND',
+      'RATE_LIMITED',
+      'CSRF_TOKEN_INVALID',
+      'CONFLICT',
+      'UNAUTHENTICATED',
+      'TRANSPORT_FAILURE',
+      'WRITE_IN_PROGRESS',
+      'SOMETHING_NEW',
+    ]) {
+      expect(suggestsDefect(code)).toBe(false);
+    }
+  });
+});
+
+describe('routeTemplate', () => {
+  it('replaces identifiers and drops the query', () => {
+    expect(
+      routeTemplate('/api/v1/burn-jobs/0190f5a2-7c1e-7b3d-9a4f-1c2d3e4f5a6b/retry?force=1#x'),
+    ).toBe('/api/v1/burn-jobs/{id}/retry');
+    expect(routeTemplate('/api/v1/artifacts')).toBe('/api/v1/artifacts');
+  });
+});
+
+const PROBLEM = {
+  type: 'about:blank',
+  title: 'Internal server error',
+  status: 500,
+  code: 'INTERNAL',
+  detail: 'the catalogue could not be read',
+  instance: '/api/v1/artifacts/0190f5a2-7c1e-7b3d-9a4f-1c2d3e4f5a6b',
+  request_id: '0190f5a2-7c1e-7b3d-9a4f-000000000001',
+};
+
+describe('errorReportRequest', () => {
+  it('sends what the page showed, with the route in place of the path', () => {
+    expect(errorReportRequest(PROBLEM, 'library')).toEqual({
+      code: 'INTERNAL',
+      title: 'Internal server error',
+      detail: 'the catalogue could not be read',
+      status: 500,
+      request_id: '0190f5a2-7c1e-7b3d-9a4f-000000000001',
+      endpoint: '/api/v1/artifacts/{id}',
+      area: 'library',
+    });
+  });
+
+  it('prefers the endpoint the page names, and leaves out a status of 0', () => {
+    const request = errorReportRequest(
+      { ...PROBLEM, status: 0, request_id: null },
+      'library',
+      'GET /api/v1/artifacts/{id}',
+    );
+    expect(request.endpoint).toBe('GET /api/v1/artifacts/{id}');
+    expect(request.status).toBeNull();
+    expect(request.request_id).toBeNull();
+  });
+
+  it('keeps a long detail within what the server accepts', () => {
+    const request = errorReportRequest({ ...PROBLEM, detail: '\u{1F4BF}'.repeat(5000) }, 'other');
+    expect(Array.from(request.detail)).toHaveLength(4000);
+  });
+});
+
+describe('prepareErrorReport', () => {
+  it('posts to the error report route', async () => {
+    const fetcher = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ template: 'bug_report.yml', fields: [], removed: {}, truncated: false }),
+    })) as unknown as typeof fetch;
+    const result = await prepareErrorReport(errorReportRequest(PROBLEM, 'library'), fetcher);
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/v1/error-reports',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(result.kind).toBe('ok');
+  });
+});
+
+describe('reportSettingsOnce', () => {
+  afterEach(() => forgetReportSettings());
+
+  const settings = { enabled: true, version: '0.1.0', build: '0.1.0, built locally' };
+
+  it('asks once and shares the answer', async () => {
+    const fetcher = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => settings,
+    })) as unknown as typeof fetch;
+    const [first, second] = await Promise.all([
+      reportSettingsOnce(fetcher),
+      reportSettingsOnce(fetcher),
+    ]);
+    expect(first).toEqual(settings);
+    expect(second).toEqual(settings);
+    expect(await reportSettingsOnce(fetcher)).toEqual(settings);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not remember a failure', async () => {
+    const failing = vi.fn(async () => {
+      throw new Error('offline');
+    }) as unknown as typeof fetch;
+    expect(await reportSettingsOnce(failing)).toBeNull();
+    await Promise.resolve();
+    const working = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => settings,
+    })) as unknown as typeof fetch;
+    expect(await reportSettingsOnce(working)).toEqual(settings);
   });
 });

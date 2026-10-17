@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import { onDestroy, onMount } from 'svelte';
   import {
     canCancel,
@@ -125,11 +126,7 @@
 </p>
 
 {#if problem}
-  <section class="refusal" aria-live="assertive" aria-labelledby="refusal-heading">
-    <h2 id="refusal-heading">{problem.title}</h2>
-    <p>{problem.detail}</p>
-    <p>Error code: <code>{problem.code}</code></p>
-  </section>
+  <ErrorPanel {problem} area="import" refusal />
 {/if}
 
 <section aria-labelledby="upload-heading">
@@ -197,12 +194,7 @@
     {:else if view.kind === 'empty'}
       <p>Nothing has been imported yet.</p>
     {:else if view.kind === 'error'}
-      <p>{view.problem.title}.</p>
-      <details>
-        <summary>Technical detail</summary>
-        <p>{view.problem.detail}</p>
-        <p>Error code: <code>{view.problem.code}</code></p>
-      </details>
+      <ErrorPanel problem={view.problem} area="import" endpoint="GET /api/v1/imports" />
     {:else}
       <table>
         <caption class="visually-hidden">Imports, newest first</caption>
@@ -298,10 +290,6 @@
   button {
     padding: 0.4rem 0.8rem;
     margin-right: 0.25rem;
-  }
-  .refusal {
-    border: 2px solid currentColor;
-    padding: 0.75rem 1rem;
   }
   .visually-hidden {
     position: absolute;

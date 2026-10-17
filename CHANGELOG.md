@@ -26,6 +26,10 @@ may change between minor versions, and the release notes say how.
 - A burn's page offers both reports, and shows everything before the issue
   form opens in a new tab. It also now shows what the worker said when an
   attempt failed, each event's message, and the disc preflight found.
+- Every error the web UI shows now carries its request id, so it can be
+  found in the server's log. An error that means Tangible itself went wrong
+  offers "Report this…", which prepares it as a scrubbed bug report for
+  review (`POST /api/v1/error-reports`).
 
 ## 0.1.0 (2026-10-07)
 

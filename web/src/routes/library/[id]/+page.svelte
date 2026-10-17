@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import { onMount } from 'svelte';
   import Lineage from '$lib/components/Lineage.svelte';
   import { page } from '$app/state';
@@ -40,13 +41,13 @@
   {#if view.kind === 'loading'}
     <p>Loading artifact…</p>
   {:else if view.kind === 'error'}
-    <h1>Could not load this artifact</h1>
-    <p>{view.problem.title}.</p>
-    <details>
-      <summary>Technical detail</summary>
-      <p>{view.problem.detail}</p>
-      <p>Error code: <code>{view.problem.code}</code></p>
-    </details>
+    <ErrorPanel
+      problem={view.problem}
+      area="library"
+      endpoint="GET /api/v1/artifacts/{'{id}'}"
+      heading="Could not load this artifact"
+      level={1}
+    />
   {:else if view.kind === 'ready'}
     <h1>{view.data.source_filename ?? 'Artifact'}</h1>
 

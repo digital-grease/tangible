@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import { onMount } from 'svelte';
   import { page } from '$app/state';
   import { createBurnJob, newIdempotencyKey, type BurnJobCreated } from '$lib/burns';
@@ -186,11 +187,7 @@
       </ul>
 
       {#if problem}
-        <div class="refusal" aria-live="assertive">
-          <h3>{problem.title}</h3>
-          <p>{problem.detail}</p>
-          <p>Error code: <code>{problem.code}</code></p>
-        </div>
+        <ErrorPanel {problem} area="other" endpoint="POST /api/v1/burn-jobs" level={3} refusal />
       {/if}
 
       <button type="submit" disabled={submitting}>
@@ -228,8 +225,7 @@
   button {
     padding: 0.5rem 1rem;
   }
-  .queued,
-  .refusal {
+  .queued {
     border: 1px solid currentColor;
     padding: 0.75rem 1rem;
   }

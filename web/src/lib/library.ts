@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import type { components } from './api-types';
-import { apiFetch } from './session';
+import { apiFetch, transportProblem } from './session';
 
 /**
  * Wire types come from the generated OpenAPI client, never hand-written.
@@ -34,16 +34,6 @@ export type LoadState<T> =
  * A transport failure has no document, but the view still needs something with
  * the same shape so error rendering has a single path.
  */
-function transportProblem(detail: string): Problem {
-  return {
-    type: 'about:blank',
-    title: 'Could not reach the server',
-    status: 0,
-    code: 'TRANSPORT_FAILURE',
-    detail,
-  };
-}
-
 async function request<T>(fetcher: typeof fetch, path: string): Promise<T | Problem> {
   let response: Response;
   try {

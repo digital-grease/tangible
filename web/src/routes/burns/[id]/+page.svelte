@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import { onDestroy, onMount } from 'svelte';
   import { page } from '$app/state';
   import {
@@ -134,13 +135,13 @@
   {#if view.kind === 'loading'}
     <p>Loading burn…</p>
   {:else if view.kind === 'error'}
-    <h1>Could not load this burn</h1>
-    <p>{view.problem.title}.</p>
-    <details>
-      <summary>Technical detail</summary>
-      <p>{view.problem.detail}</p>
-      <p>Error code: <code>{view.problem.code}</code></p>
-    </details>
+    <ErrorPanel
+      problem={view.problem}
+      area="other"
+      endpoint="GET /api/v1/burn-jobs/{'{id}'}"
+      heading="Could not load this burn"
+      level={1}
+    />
   {:else if job}
     <h1>Burn <code>{job.id.slice(0, 8)}</code></h1>
 
@@ -188,11 +189,7 @@
     </section>
 
     {#if refusal}
-      <section class="refusal" aria-live="assertive" aria-labelledby="refusal-heading">
-        <h2 id="refusal-heading">{refusal.title}</h2>
-        <p>{refusal.detail}</p>
-        <p>Error code: <code>{refusal.code}</code></p>
-      </section>
+      <ErrorPanel problem={refusal} area="other" refusal />
     {/if}
 
     <section aria-labelledby="actions-heading">
@@ -377,10 +374,6 @@
   }
   .status {
     border: 1px solid currentColor;
-    padding: 0.75rem 1rem;
-  }
-  .refusal {
-    border: 2px solid currentColor;
     padding: 0.75rem 1rem;
   }
   .instruction {

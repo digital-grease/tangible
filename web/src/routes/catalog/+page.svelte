@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import { apiFetch } from '$lib/session';
   import RommExport from '$lib/components/RommExport.svelte';
   import { onMount } from 'svelte';
@@ -176,11 +177,7 @@
 </p>
 
 {#if problem}
-  <section class="refusal" aria-live="assertive" aria-labelledby="refusal-heading">
-    <h2 id="refusal-heading">{problem.title}</h2>
-    <p>{problem.detail}</p>
-    <p>Error code: <code>{problem.code}</code></p>
-  </section>
+  <ErrorPanel {problem} area="catalog" refusal />
 {/if}
 
 <section aria-labelledby="titles-heading">
@@ -426,10 +423,6 @@
   }
   button[type='submit'] {
     padding: 0.35rem 0.75rem;
-  }
-  .refusal {
-    border: 2px solid currentColor;
-    padding: 0.75rem 1rem;
   }
   .visually-hidden {
     position: absolute;

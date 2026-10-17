@@ -14,6 +14,7 @@
     type ReportSettings,
   } from '$lib/report';
   import type { Problem } from '$lib/session';
+  import ErrorPanel from './ErrorPanel.svelte';
   import ReportPreview from './ReportPreview.svelte';
 
   let {
@@ -68,10 +69,14 @@
       {/if}
     </div>
     {#if problem}
-      <div role="alert">
-        <p>The report could not be prepared: {problem.detail}</p>
-        <p>Error code: <code>{problem.code}</code></p>
-      </div>
+      <ErrorPanel
+        {problem}
+        area="other"
+        endpoint="GET /api/v1/burn-attempts/{'{id}'}/report"
+        heading="The report could not be prepared"
+        level={3}
+        refusal
+      />
     {/if}
   </section>
 
