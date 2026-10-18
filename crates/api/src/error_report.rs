@@ -30,7 +30,7 @@ pub const AREAS: [&str; 8] = [
 ];
 
 /// The bug form's Deployment option for an official release image.
-const RELEASE_IMAGE: &str = "Release image with the Compose files";
+pub(crate) const RELEASE_IMAGE: &str = "Release image with the Compose files";
 
 /// What the browser was shown, and where.
 #[derive(Debug, Clone)]

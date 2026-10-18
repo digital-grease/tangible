@@ -8,6 +8,7 @@ pub mod artifacts;
 pub mod burns;
 pub mod catalog;
 pub mod derivations;
+pub mod diagnostics;
 pub mod erasures;
 pub mod imports;
 pub mod physical_copies;

@@ -350,6 +350,12 @@ impl ReportSettings {
         self.issues_url.is_some()
     }
 
+    /// Whether addresses and private host names are scrubbed too.
+    #[must_use]
+    pub fn scrub_addresses(&self) -> bool {
+        self.scrub_addresses
+    }
+
     /// The build a report names.
     #[must_use]
     pub fn build(&self) -> &BuildIdentity {

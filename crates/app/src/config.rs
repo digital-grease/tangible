@@ -207,6 +207,27 @@ pub struct ServeConfig {
     pub report_scrub_addresses: bool,
 }
 
+/// Settings for `tangible doctor`.
+///
+/// Plain `doctor` is the container healthcheck and stays fast: the database
+/// answers and its schema is current. `--report` looks at everything
+/// diagnostics covers, which is why the server's own settings are read too.
+#[derive(Debug, Clone, Args)]
+pub struct DoctorConfig {
+    /// Print the full diagnostics report as Markdown, followed by a link to
+    /// the issue form when reports are on. Exits non-zero when any check is
+    /// a problem.
+    #[arg(long)]
+    pub report: bool,
+
+    /// With `--report`, print the report as JSON instead.
+    #[arg(long, requires = "report")]
+    pub json: bool,
+
+    #[command(flatten)]
+    pub serve: ServeConfig,
+}
+
 /// Settings for a burn worker.
 ///
 /// One worker process drives one optical drive. Everything here has a

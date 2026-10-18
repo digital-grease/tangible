@@ -10,6 +10,7 @@ use tangible_storage::{ManifestStore, WatchRoots};
 
 use crate::auth::{AuthSettings, LoginLimiter};
 use crate::derivation::Derivations;
+use crate::diagnostics::DiagnosticsSettings;
 use crate::import::ImportPipeline;
 use crate::report::ReportSettings;
 use crate::romm_export::RommExport;
@@ -46,6 +47,8 @@ struct Inner {
     derivations: Option<Derivations>,
     /// Where issue reports go, if anywhere, and the build they name.
     reports: ReportSettings,
+    /// What diagnostics looks at, when this server offers them.
+    diagnostics: Option<DiagnosticsSettings>,
 }
 
 /// What the import routes need beyond the database.
@@ -77,6 +80,7 @@ impl ApiState {
                 romm: None,
                 derivations: None,
                 reports: ReportSettings::default(),
+                diagnostics: None,
             }),
         }
     }
@@ -95,6 +99,7 @@ impl ApiState {
                 romm: None,
                 derivations: None,
                 reports: ReportSettings::default(),
+                diagnostics: None,
             }),
         }
     }
@@ -157,6 +162,22 @@ impl ApiState {
         Self {
             inner: Arc::new(inner),
         }
+    }
+
+    /// Offer diagnostics, looking at what `settings` names.
+    #[must_use]
+    pub fn with_diagnostics(self, settings: DiagnosticsSettings) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.diagnostics = Some(settings);
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// What diagnostics looks at, when this server offers them.
+    #[must_use]
+    pub fn diagnostics(&self) -> Option<&DiagnosticsSettings> {
+        self.inner.diagnostics.as_ref()
     }
 
     /// How issue reports are configured.

@@ -10,10 +10,12 @@
 mod config;
 mod telemetry;
 
+use std::io::Write as _;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use tangible_api::diagnostics::{self, DerivationStatus, DiagnosticsSettings};
 use tangible_api::report::{BuildIdentity, ReportSettings};
 use tangible_api::{
     ApiState, AuthSettings, DerivationPipeline, DerivationRunner, DerivationRunnerSettings,
@@ -24,7 +26,7 @@ use tangible_db::{Database, DbConfig};
 use tangible_storage::{FilesystemStore, ManifestStore, StagingManager, WatchRoots};
 
 use crate::config::{
-    BurnEngineKind, CommonConfig, DerivationEngineKind, ServeConfig, WorkerConfig,
+    BurnEngineKind, CommonConfig, DerivationEngineKind, DoctorConfig, ServeConfig, WorkerConfig,
 };
 
 /// Self-hosted disc-image preservation, management, and burning.
@@ -45,7 +47,7 @@ enum Command {
     /// Run a burn worker bound to one optical drive.
     BurnWorker(Box<WorkerConfig>),
     /// Check the environment and report configuration problems.
-    Doctor,
+    Doctor(Box<DoctorConfig>),
     /// Inspect and validate artifact manifests.
     Manifest,
     /// Apply pending database migrations.
@@ -63,7 +65,7 @@ async fn main() -> Result<()> {
         Command::Serve(serve) => serve_command(&cli.common, &serve).await,
         Command::Migrate => migrate_command(&cli.common).await,
         Command::Openapi => openapi_command(),
-        Command::Doctor => doctor_command(&cli.common).await,
+        Command::Doctor(doctor) => doctor_command(&cli.common, &doctor).await,
         Command::BurnWorker(worker) => burn_worker_command(&worker).await,
         Command::Manifest => {
             anyhow::bail!("`manifest` is not implemented yet; it arrives with epic E3")
@@ -88,37 +90,7 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         warn_if_schema_behind(&database).await;
     }
 
-    // Open the library so the read API has something to serve. A storage
-    // failure is fatal here rather than degraded: unlike the database, which
-    // /readyz reports on and which may still be starting, an unopenable
-    // library root is a configuration mistake the operator must see
-    // immediately rather than discover from empty listings.
-    let objects = FilesystemStore::open(&serve.storage_root)
-        .await
-        .with_context(|| {
-            format!(
-                "opening the library root at {}",
-                serve.storage_root.display()
-            )
-        })?;
-    let manifests = ManifestStore::open(objects.clone())
-        .await
-        .context("opening manifest storage")?;
-
-    tracing::info!(
-        storage_root = %serve.storage_root.display(),
-        staging_root = %serve.staging_root.display(),
-        "library opened"
-    );
-
-    let staging = StagingManager::open(&serve.staging_root)
-        .await
-        .with_context(|| {
-            format!(
-                "opening the staging root at {}",
-                serve.staging_root.display()
-            )
-        })?;
+    let (objects, manifests, staging) = open_library(serve).await?;
 
     let roots = WatchRoots::parse(&serve.watch_roots);
     if roots.is_empty() {
@@ -137,6 +109,14 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
     let reports = report_settings(common, serve)?;
     warn_if_setup_needed(&database, &serve.public_url).await;
 
+    let engine = derivation_engine(serve.derivation_engine).await;
+    let diagnostics = diagnostics_settings(
+        common,
+        serve,
+        reports.clone(),
+        derivation_status(serve.derivation_engine, engine.as_deref()),
+    );
+
     let state = ApiState::with_manifests(database.clone(), manifests.clone())
         .with_imports(ImportContext {
             pipeline: pipeline.clone(),
@@ -144,7 +124,8 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
             max_upload_bytes: serve.max_upload_bytes,
         })
         .with_auth(auth)
-        .with_reports(reports);
+        .with_reports(reports)
+        .with_diagnostics(diagnostics);
     let state = attach_web_ui(state, serve.web_root.as_deref()).await?;
     let (state, romm) = start_romm_export(
         state,
@@ -161,9 +142,8 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
             objects,
             manifests: manifests.clone(),
         },
-        serve.derivation_engine,
-    )
-    .await;
+        engine,
+    );
 
     let imports = start_import_runner(database, pipeline, roots);
 
@@ -194,6 +174,44 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
     }
 
     served
+}
+
+/// Open the library, its manifests and the staging area.
+///
+/// A storage failure is fatal rather than degraded: unlike the database,
+/// which /readyz reports on and which may still be starting, an unopenable
+/// library root is a configuration mistake the operator must see
+/// immediately rather than discover from empty listings.
+async fn open_library(
+    serve: &ServeConfig,
+) -> Result<(FilesystemStore, ManifestStore, StagingManager)> {
+    let objects = FilesystemStore::open(&serve.storage_root)
+        .await
+        .with_context(|| {
+            format!(
+                "opening the library root at {}",
+                serve.storage_root.display()
+            )
+        })?;
+    let manifests = ManifestStore::open(objects.clone())
+        .await
+        .context("opening manifest storage")?;
+
+    tracing::info!(
+        storage_root = %serve.storage_root.display(),
+        staging_root = %serve.staging_root.display(),
+        "library opened"
+    );
+
+    let staging = StagingManager::open(&serve.staging_root)
+        .await
+        .with_context(|| {
+            format!(
+                "opening the staging root at {}",
+                serve.staging_root.display()
+            )
+        })?;
+    Ok((objects, manifests, staging))
 }
 
 /// Start the import runner.
@@ -228,32 +246,15 @@ struct DerivationPipelineParts {
     manifests: ManifestStore,
 }
 
-/// Start the derivation runner when an engine is configured.
-async fn start_derivations(
+/// Start the derivation runner when an engine could be set up.
+fn start_derivations(
     state: ApiState,
     database: &Database,
     parts: DerivationPipelineParts,
-    kind: DerivationEngineKind,
+    engine: Option<Arc<dyn tangible_image::derive::DerivationEngine>>,
 ) -> (ApiState, Option<Stoppable>) {
-    let engine: Arc<dyn tangible_image::derive::DerivationEngine> = match kind {
-        DerivationEngineKind::None => {
-            tracing::info!(
-                "no derivation engine configured (TANGIBLE_DERIVATION_ENGINE); derivatives cannot be asked for"
-            );
-            return (state, None);
-        }
-        DerivationEngineKind::Fake => Arc::new(tangible_image::derive::FakeDeriver::default()),
-        DerivationEngineKind::Chdman => {
-            match tangible_image::chdman::Chdman::probe(tangible_image::chdman::CHDMAN).await {
-                Ok(chdman) => Arc::new(chdman),
-                Err(error) => {
-                    // Not fatal: everything else works without derivatives,
-                    // and the derivative route says why it refuses.
-                    tracing::warn!(error = %error, "chdman cannot be run, so derivatives are disabled");
-                    return (state, None);
-                }
-            }
-        }
+    let Some(engine) = engine else {
+        return (state, None);
     };
     tracing::info!(
         tool = engine.tool_name(),
@@ -279,6 +280,76 @@ async fn start_derivations(
         let _ = stopped.await;
     }));
     (state.with_derivations(derivations), Some((stop, task)))
+}
+
+/// The configured derivation engine, if it can be run.
+async fn derivation_engine(
+    kind: DerivationEngineKind,
+) -> Option<Arc<dyn tangible_image::derive::DerivationEngine>> {
+    match kind {
+        DerivationEngineKind::None => {
+            tracing::info!(
+                "no derivation engine configured (TANGIBLE_DERIVATION_ENGINE); derivatives cannot be asked for"
+            );
+            None
+        }
+        DerivationEngineKind::Fake => {
+            Some(Arc::new(tangible_image::derive::FakeDeriver::default()))
+        }
+        DerivationEngineKind::Chdman => {
+            match tangible_image::chdman::Chdman::probe(tangible_image::chdman::CHDMAN).await {
+                Ok(chdman) => Some(Arc::new(chdman)),
+                Err(error) => {
+                    // Not fatal: everything else works without derivatives,
+                    // and the derivative route says why it refuses.
+                    tracing::warn!(error = %error, "chdman cannot be run, so derivatives are disabled");
+                    None
+                }
+            }
+        }
+    }
+}
+
+/// How diagnostics describes the derivation engine. The reason a tool could
+/// not be run stays in the log, which may name its path.
+fn derivation_status(
+    kind: DerivationEngineKind,
+    engine: Option<&dyn tangible_image::derive::DerivationEngine>,
+) -> DerivationStatus {
+    match (kind, engine) {
+        (DerivationEngineKind::None, _) => DerivationStatus::Off,
+        (DerivationEngineKind::Fake, _) => DerivationStatus::Fake,
+        (DerivationEngineKind::Chdman, Some(engine)) => DerivationStatus::Tool {
+            name: engine.tool_name().to_owned(),
+            version: engine.tool_version(),
+        },
+        (DerivationEngineKind::Chdman, None) => DerivationStatus::Unavailable {
+            name: "chdman".to_owned(),
+            reason: "it could not be started; the server's log at start says why".to_owned(),
+        },
+    }
+}
+
+/// What diagnostics needs to know about this server.
+fn diagnostics_settings(
+    common: &CommonConfig,
+    serve: &ServeConfig,
+    reports: ReportSettings,
+    derivation: DerivationStatus,
+) -> DiagnosticsSettings {
+    DiagnosticsSettings {
+        build: BuildIdentity::current(
+            common.build_version.as_deref(),
+            common.build_revision.as_deref(),
+        ),
+        storage_root: serve.storage_root.clone(),
+        staging_root: serve.staging_root.clone(),
+        romm_export_root: serve.romm_export_root.clone(),
+        derivation,
+        public_url_https: AuthSettings::for_public_url(&serve.public_url).secure_cookie,
+        migrate_on_start: serve.migrate_on_start,
+        reports,
+    }
 }
 
 /// Say loudly at start when the database schema is behind this build.
@@ -434,7 +505,10 @@ fn openapi_command() -> Result<()> {
     Ok(())
 }
 
-async fn doctor_command(common: &CommonConfig) -> Result<()> {
+async fn doctor_command(common: &CommonConfig, doctor: &DoctorConfig) -> Result<()> {
+    if doctor.report {
+        return doctor_report(common, doctor).await;
+    }
     let mut problems = 0_u32;
 
     match Database::connect(&DbConfig::new(common.database_url.expose())).await {
@@ -475,6 +549,52 @@ async fn doctor_command(common: &CommonConfig) -> Result<()> {
     } else {
         anyhow::bail!("doctor found {problems} problem(s)")
     }
+}
+
+/// `tangible doctor --report`: the full diagnostics report on stdout.
+///
+/// Works without the web UI and without a running server, which is when it
+/// is most needed: `docker compose run --rm server doctor --report`.
+async fn doctor_report(common: &CommonConfig, doctor: &DoctorConfig) -> Result<()> {
+    // Lazy, so a database that does not answer is a line in the report
+    // rather than the end of it.
+    let database = Database::connect_lazy(&DbConfig::new(common.database_url.expose()))
+        .context("configuring the database pool")?;
+    let reports = report_settings(common, &doctor.serve)?;
+    let engine = derivation_engine(doctor.serve.derivation_engine).await;
+    let settings = diagnostics_settings(
+        common,
+        &doctor.serve,
+        reports.clone(),
+        derivation_status(doctor.serve.derivation_engine, engine.as_deref()),
+    );
+    let report = diagnostics::run(&database, &settings).await;
+
+    // The report is this command's output, so it goes to stdout, where logs
+    // never go.
+    let mut out = std::io::stdout().lock();
+    if doctor.json {
+        serde_json::to_writer_pretty(&mut out, &report).context("writing the report")?;
+        writeln!(out)?;
+    } else {
+        write!(out, "{}", diagnostics::markdown(&report))?;
+        if let Some(issues_url) = reports.issues_url() {
+            let issue =
+                diagnostics::issue_report(&report, &settings.build, reports.scrub_context());
+            writeln!(
+                out,
+                "\nTo report a problem, open this link and paste the report above into Logs \
+                 (read it first; nothing is sent until you submit the form):\n\n{}",
+                diagnostics::form_link(issues_url, &issue)
+            )?;
+        }
+    }
+    out.flush()?;
+
+    if report.status == diagnostics::CheckStatus::Problem {
+        anyhow::bail!("diagnostics found a problem")
+    }
+    Ok(())
 }
 
 /// Run one burn worker until it is asked to stop.
@@ -734,6 +854,54 @@ mod tests {
             .common;
         let error = report_settings(&common, &serve).expect_err("refused");
         assert!(format!("{error:#}").contains("https://"), "{error:#}");
+    }
+
+    #[test]
+    fn doctor_is_the_healthcheck_unless_asked_for_a_report() {
+        let doctor =
+            |args: &[&str]| match Cli::try_parse_from(["tangible", "doctor"].iter().chain(args))
+                .expect("parse")
+                .command
+            {
+                Command::Doctor(doctor) => *doctor,
+                other => panic!("parsed {other:?}"),
+            };
+        let plain = doctor(&[]);
+        assert!(!plain.report && !plain.json);
+        let report = doctor(&["--report"]);
+        assert!(report.report && !report.json);
+        let json = doctor(&["--report", "--json"]);
+        assert!(json.report && json.json);
+        assert!(
+            Cli::try_parse_from(["tangible", "doctor", "--json"]).is_err(),
+            "--json means nothing without --report"
+        );
+    }
+
+    #[test]
+    fn diagnostics_settings_hold_the_scheme_not_the_address() {
+        let serve = serve_config(&["--public-url", "https://tangible.example.lan"]);
+        let common = Cli::try_parse_from(["tangible", "doctor"])
+            .expect("parse")
+            .common;
+        let settings = diagnostics_settings(
+            &common,
+            &serve,
+            ReportSettings::disabled(BuildIdentity::current(None, None)),
+            derivation_status(DerivationEngineKind::Chdman, None),
+        );
+        assert!(settings.public_url_https);
+        assert_eq!(
+            settings.derivation,
+            DerivationStatus::Unavailable {
+                name: "chdman".to_owned(),
+                reason: "it could not be started; the server's log at start says why".to_owned(),
+            }
+        );
+        assert_eq!(
+            derivation_status(DerivationEngineKind::None, None),
+            DerivationStatus::Off
+        );
     }
 
     #[test]

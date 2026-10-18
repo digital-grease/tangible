@@ -17,6 +17,7 @@
 pub mod filesystem;
 pub mod manifest_store;
 pub mod object_key;
+pub mod space;
 pub mod staging;
 pub mod watch_roots;
 

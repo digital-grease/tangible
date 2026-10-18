@@ -30,6 +30,14 @@ may change between minor versions, and the release notes say how.
   found in the server's log. An error that means Tangible itself went wrong
   offers "Report this…", which prepares it as a scrubbed bug report for
   review (`POST /api/v1/error-reports`).
+- `tangible doctor --report` prints a diagnostics checklist safe to share:
+  database and schema, storage room and writability, tools, workers and
+  drives, recent failure codes and the settings that matter for support,
+  with a link to a prefilled bug report. `--json` for scripts. Plain
+  `doctor` is still the quick healthcheck.
+- Administrators have a Diagnostics page with the same checklist, to copy,
+  download, or prepare as an issue (`GET /api/v1/diagnostics` and
+  `/diagnostics/report`, new permission `diagnose`).
 
 ## 0.1.0 (2026-10-07)
 

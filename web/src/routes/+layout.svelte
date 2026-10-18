@@ -126,6 +126,13 @@
               >Accounts</a
             >
           </li>
+          <li>
+            <a
+              href="/diagnostics"
+              aria-current={page.url.pathname === '/diagnostics' ? 'page' : undefined}
+              >Diagnostics</a
+            >
+          </li>
         {/if}
       </ul>
       <div class="who">

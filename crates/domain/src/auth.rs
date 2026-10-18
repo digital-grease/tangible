@@ -35,6 +35,12 @@ pub enum Permission {
     ManageWorkers,
     /// Create, list and change accounts.
     ManageUsers,
+    /// See the deployment's diagnostics: storage room, workers and drives,
+    /// recent failure codes and settings.
+    ///
+    /// Administrators only: none of it is secret, but it describes the
+    /// machine and its configuration rather than the library.
+    Diagnose,
 }
 
 impl Permission {
@@ -49,6 +55,7 @@ impl Permission {
             Self::Erase => "erase",
             Self::ManageWorkers => "manage_workers",
             Self::ManageUsers => "manage_users",
+            Self::Diagnose => "diagnose",
         }
     }
 
@@ -58,7 +65,9 @@ impl Permission {
         match self {
             Self::Read => Role::Viewer,
             Self::Import | Self::Catalog | Self::Burn => Role::Operator,
-            Self::Erase | Self::ManageWorkers | Self::ManageUsers => Role::Administrator,
+            Self::Erase | Self::ManageWorkers | Self::ManageUsers | Self::Diagnose => {
+                Role::Administrator
+            }
         }
     }
 }
@@ -149,6 +158,7 @@ mod tests {
             Permission::Burn,
             Permission::ManageWorkers,
             Permission::ManageUsers,
+            Permission::Diagnose,
         ] {
             assert!(!Role::Viewer.allows(permission), "{permission:?}");
         }
@@ -166,6 +176,7 @@ mod tests {
         }
         assert!(!Role::Operator.allows(Permission::ManageWorkers));
         assert!(!Role::Operator.allows(Permission::ManageUsers));
+        assert!(!Role::Operator.allows(Permission::Diagnose));
     }
 
     #[test]
@@ -177,6 +188,7 @@ mod tests {
             Permission::Burn,
             Permission::ManageWorkers,
             Permission::ManageUsers,
+            Permission::Diagnose,
         ] {
             assert!(Role::Administrator.allows(permission), "{permission:?}");
         }

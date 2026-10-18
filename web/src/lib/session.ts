@@ -28,9 +28,21 @@ let csrfToken: string | null = null;
 /** Called when the server says nobody is signed in. */
 let onSignedOut: (() => void) | null = null;
 
+/** The signed-in account's role, for showing links; the server decides. */
+let currentRole: string | null = null;
+
 /** Remember the session the server returned, or forget it. */
 export function rememberSession(session: SessionView | null): void {
   csrfToken = session?.csrf_token ?? null;
+  currentRole = session?.role ?? null;
+}
+
+/**
+ * The signed-in account's role, or `null`. Only for deciding which links to
+ * show: the server refuses whatever the role does not allow.
+ */
+export function sessionRole(): string | null {
+  return currentRole;
 }
 
 /** Register what to do when a request comes back 401. */

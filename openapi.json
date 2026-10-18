@@ -1373,6 +1373,90 @@
         ]
       }
     },
+    "/api/v1/diagnostics": {
+      "get": {
+        "tags": [
+          "diagnostics"
+        ],
+        "summary": "The deployment's diagnostics, collected now.",
+        "description": "Diagnostics, collected when asked: database and schema, storage room and writability, tools, workers and drives, recent failure codes, and settings. Carries no paths, library file names, or worker and drive names. Administrators only.",
+        "operationId": "get_diagnostics",
+        "responses": {
+          "200": {
+            "description": "The checklist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosticsView"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Diagnostics are not available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/diagnostics/report": {
+      "get": {
+        "tags": [
+          "diagnostics"
+        ],
+        "summary": "The diagnostics, prepared as a bug report about the deployment for the\noperator to review.",
+        "description": "# Errors\n\n`CONFLICT` when reports are turned off; `STORAGE_UNAVAILABLE` on a server\nstarted without diagnostics.",
+        "operationId": "diagnostics_report",
+        "responses": {
+          "200": {
+            "description": "The report, scrubbed, for review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueReport"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Reports are off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Diagnostics are not available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/disc-sets/{disc_set_id}/discs": {
       "get": {
         "tags": [
@@ -4705,6 +4789,15 @@
           }
         }
       },
+      "CheckStatus": {
+        "type": "string",
+        "description": "How a check came out.",
+        "enum": [
+          "ok",
+          "warn",
+          "problem"
+        ]
+      },
       "CheckView": {
         "type": "object",
         "description": "One check performed on a disc.",
@@ -5446,6 +5539,86 @@
           "transformation": {
             "type": "string",
             "description": "What was done."
+          }
+        }
+      },
+      "DiagnosticCheck": {
+        "type": "object",
+        "description": "One line of the checklist.",
+        "required": [
+          "name",
+          "status",
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string",
+            "description": "What was found, in words."
+          },
+          "name": {
+            "type": "string",
+            "description": "What was checked, such as `Schema` or `worker 1`."
+          },
+          "status": {
+            "$ref": "#/components/schemas/CheckStatus",
+            "description": "How it came out."
+          }
+        }
+      },
+      "DiagnosticSection": {
+        "type": "object",
+        "description": "A group of checks.",
+        "required": [
+          "title",
+          "checks"
+        ],
+        "properties": {
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticCheck"
+            },
+            "description": "Its checks, in a stable order."
+          },
+          "title": {
+            "type": "string",
+            "description": "Such as `Database` or `Storage`."
+          }
+        }
+      },
+      "DiagnosticsView": {
+        "type": "object",
+        "description": "The checklist, and the same as Markdown for copying.",
+        "required": [
+          "generated_at",
+          "build",
+          "status",
+          "sections",
+          "markdown"
+        ],
+        "properties": {
+          "build": {
+            "type": "string",
+            "description": "The build, as reports name it: `v0.1.0 (76fa515)`."
+          },
+          "generated_at": {
+            "type": "string",
+            "description": "When it was collected, RFC 3339."
+          },
+          "markdown": {
+            "type": "string",
+            "description": "The whole report as Markdown, exactly as `doctor --report` prints it."
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticSection"
+            },
+            "description": "The checks, by section."
+          },
+          "status": {
+            "$ref": "#/components/schemas/CheckStatus",
+            "description": "The worst status of any check."
           }
         }
       },
@@ -7847,6 +8020,10 @@
     {
       "name": "reports",
       "description": "Issue reports, prepared for the operator to review and send"
+    },
+    {
+      "name": "diagnostics",
+      "description": "The deployment's state as a checklist, for administrators"
     }
   ]
 }

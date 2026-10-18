@@ -2495,6 +2495,7 @@ name = "tangible-storage"
 version = "0.1.0"
 dependencies = [
  "hex",
+ "rustix",
  "serde_json",
  "sha2 0.11.0",
  "tangible-domain",

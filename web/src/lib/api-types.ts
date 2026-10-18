@@ -424,6 +424,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The deployment's diagnostics, collected now.
+         * @description Diagnostics, collected when asked: database and schema, storage room and writability, tools, workers and drives, recent failure codes, and settings. Carries no paths, library file names, or worker and drive names. Administrators only.
+         */
+        get: operations["get_diagnostics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/diagnostics/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The diagnostics, prepared as a bug report about the deployment for the
+         *     operator to review.
+         * @description # Errors
+         *
+         *     `CONFLICT` when reports are turned off; `STORAGE_UNAVAILABLE` on a server
+         *     started without diagnostics.
+         */
+        get: operations["diagnostics_report"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/disc-sets/{disc_set_id}/discs": {
         parameters: {
             query?: never;
@@ -1537,6 +1581,11 @@ export interface components {
              */
             drive_id: string;
         };
+        /**
+         * @description How a check came out.
+         * @enum {string}
+         */
+        CheckStatus: "ok" | "warn" | "problem";
         /** @description One check performed on a disc. */
         CheckView: {
             /**
@@ -1853,6 +1902,35 @@ export interface components {
             tool_version: string;
             /** @description What was done. */
             transformation: string;
+        };
+        /** @description One line of the checklist. */
+        DiagnosticCheck: {
+            /** @description What was found, in words. */
+            detail: string;
+            /** @description What was checked, such as `Schema` or `worker 1`. */
+            name: string;
+            /** @description How it came out. */
+            status: components["schemas"]["CheckStatus"];
+        };
+        /** @description A group of checks. */
+        DiagnosticSection: {
+            /** @description Its checks, in a stable order. */
+            checks: components["schemas"]["DiagnosticCheck"][];
+            /** @description Such as `Database` or `Storage`. */
+            title: string;
+        };
+        /** @description The checklist, and the same as Markdown for copying. */
+        DiagnosticsView: {
+            /** @description The build, as reports name it: `v0.1.0 (76fa515)`. */
+            build: string;
+            /** @description When it was collected, RFC 3339. */
+            generated_at: string;
+            /** @description The whole report as Markdown, exactly as `doctor --report` prints it. */
+            markdown: string;
+            /** @description The checks, by section. */
+            sections: components["schemas"]["DiagnosticSection"][];
+            /** @description The worst status of any check. */
+            status: components["schemas"]["CheckStatus"];
         };
         /** @description An artifact linked to a disc. */
         DiscArtifactView: {
@@ -3795,6 +3873,73 @@ export interface operations {
             };
             /** @description Running or finished */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_diagnostics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The checklist */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiagnosticsView"];
+                };
+            };
+            /** @description Diagnostics are not available */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    diagnostics_report: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The report, scrubbed, for review */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssueReport"];
+                };
+            };
+            /** @description Reports are off */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Diagnostics are not available */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

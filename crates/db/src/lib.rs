@@ -9,6 +9,7 @@
 
 pub mod accounts;
 pub mod derivations;
+pub mod diagnostics;
 pub mod erasures;
 pub mod repositories;
 pub mod romm;

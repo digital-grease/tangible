@@ -148,7 +148,7 @@ pub enum Access {
 }
 
 use Access::{Public, Signed, SignedOrLeaseholder, Worker};
-use Permission::{Burn, Catalog, Erase, Import, ManageUsers, ManageWorkers, Read};
+use Permission::{Burn, Catalog, Diagnose, Erase, Import, ManageUsers, ManageWorkers, Read};
 
 /// Every operation the server answers, and what it requires.
 ///
@@ -323,6 +323,9 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
         "/api/v1/burn-attempts/{attempt_id}/report",
         Signed(Burn),
     ),
+    // Diagnostics describe the machine and its configuration.
+    ("GET", "/api/v1/diagnostics", Signed(Diagnose)),
+    ("GET", "/api/v1/diagnostics/report", Signed(Diagnose)),
     ("GET", "/api/v1/romm", Signed(Read)),
     ("GET", "/api/v1/editions/{edition_id}/romm", Signed(Read)),
     ("PUT", "/api/v1/editions/{edition_id}/romm", Signed(Catalog)),

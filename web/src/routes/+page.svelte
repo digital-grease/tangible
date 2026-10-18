@@ -3,6 +3,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { loadHealth, type HealthState } from '$lib/health';
+  import { sessionRole } from '$lib/session';
 
   let state = $state<HealthState>({ kind: 'loading' });
 
@@ -54,6 +55,13 @@
     {/if}
   {/if}
 </section>
+
+{#if sessionRole() === 'administrator'}
+  <p>
+    This is the quick view. <a href="/diagnostics">Diagnostics</a> checks storage, tools, workers, drives
+    and recent failures as well.
+  </p>
+{/if}
 
 <p><a href="/library">Browse the library</a></p>
 

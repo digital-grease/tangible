@@ -226,7 +226,9 @@ click.
 On a burn's page, an operator can "Report a problem with this burn", or,
 for a disc that burned and checked on a real drive, "Report this drive and
 disc as working". The second grows the tested hardware table above, so it
-is worth doing for any drive or disc type not yet in it.
+is worth doing for any drive or disc type not yet in it. An error that means
+Tangible itself went wrong offers "Report this…" beside it, and the
+diagnostics report below can be sent the same way.
 
 Two settings in `.env`:
 
@@ -300,6 +302,36 @@ Before an image is signed, the release workflow scans it with Grype, and a
 high or critical vulnerability with a fix available stops the release. The
 image applies Debian's security updates when it is built, so a rebuild picks
 up fixes published after the base image.
+
+## Diagnostics
+
+When something is wrong and the cause is not obvious, ask for the whole
+picture:
+
+```bash
+docker compose -f deploy/compose.yaml run --rm server doctor --report
+```
+
+It works when the web UI does not, and prints a checklist: the database and
+its schema, whether the library and staging directories are there, writable
+and have room, the derivation tool, the RomM export, every worker (version,
+protocol, when it was last heard from, its engines), every drive (vendor,
+model, firmware, connection, status), the codes of the last 20 failures, and
+the settings that matter for support. Each line is OK, Warning or Problem,
+and the command exits non-zero when any is a Problem. `--report --json`
+gives the same as JSON for scripts.
+
+The report is written to be shared. It names no paths, no file names from
+the library, and no worker or drive names: they are numbered. Failures are
+codes and times, not their details. When issue reports are on, it ends with
+a link to a bug report filled in with everything but the report itself,
+which you paste into its Logs field.
+
+Administrators see the same checklist in the web UI under Diagnostics, with
+buttons to copy it, download it, or prepare it as an issue.
+
+Plain `doctor`, without `--report`, is the container healthcheck: it only
+checks that the database answers and its schema is current.
 
 ## Finding an error in the logs
 

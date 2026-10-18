@@ -12,6 +12,7 @@ pub mod auth;
 pub mod burn_report;
 pub mod catalog;
 pub mod derivation;
+pub mod diagnostics;
 pub mod error_report;
 pub mod health;
 pub mod import;
@@ -111,6 +112,8 @@ pub const API_BASE: &str = "/api/v1";
         routes::reports::report_settings,
         routes::reports::burn_attempt_report,
         routes::reports::prepare_error_report,
+        routes::diagnostics::get_diagnostics,
+        routes::diagnostics::diagnostics_report,
         routes::romm::romm_settings,
         routes::romm::get_edition_romm,
         routes::romm::set_edition_romm_route,
@@ -190,6 +193,10 @@ pub const API_BASE: &str = "/api/v1";
         report::IssueReport,
         report::IssueReportField,
         routes::reports::ErrorReportRequest,
+        routes::diagnostics::DiagnosticsView,
+        diagnostics::DiagnosticSection,
+        diagnostics::DiagnosticCheck,
+        diagnostics::CheckStatus,
         routes::romm::PlatformView,
         routes::romm::RommSettings,
         routes::romm::EditionRommView,
@@ -241,6 +248,7 @@ pub const API_BASE: &str = "/api/v1";
         (name = "physical-copies", description = "The discs that actually exist"),
         (name = "workers", description = "The burn-worker protocol"),
         (name = "reports", description = "Issue reports, prepared for the operator to review and send"),
+        (name = "diagnostics", description = "The deployment's state as a checklist, for administrators"),
     ),
 )]
 pub struct ApiDoc;
@@ -364,6 +372,7 @@ pub fn router(state: ApiState) -> Router {
         .nest(API_BASE, routes::erasures::router())
         .nest(API_BASE, routes::romm::router())
         .nest(API_BASE, routes::reports::router())
+        .nest(API_BASE, routes::diagnostics::router())
         .nest(API_BASE, routes::derivations::router())
         // Applied per route, after routing, so the rule is looked up by the
         // matched pattern rather than by a raw path a caller could disguise.
