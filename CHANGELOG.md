@@ -58,6 +58,13 @@ may change between minor versions, and the release notes say how.
   read its video at all without authentication. A disc the system has not
   caught up with since a burn is refused with a request to reload it.
   Blu-rays are still refused.
+- An opt-in worker image for ripping encrypted discs, built by the operator
+  and never published (`deploy/decryption/Dockerfile`, with
+  `deploy/compose.decryption.yaml` to run a worker from it): VideoLAN's
+  libdvdcss from its source release, pinned by checksum, and Debian's
+  `dvdbackup`, `libaacs0` and `libbdplus0`. The worker does not use it yet.
+  The release now checks its image contains none of these before signing
+  it (`deploy/check-no-decryption.sh`).
 - A CD burn that the drive refused while setting up, before writing
   anything, is tried once more if the disc is still blank; a drive on the
   bench did this once and burned on the next run.

@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: 2026 digitalgrease
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# OPT-IN DECRYPTION OVERRIDE, on top of compose.hardware.yaml. Runs the burn
+# worker from an image you built yourself from deploy/decryption/Dockerfile,
+# so it can rip encrypted discs (ADR 0013). Read deploy/README.md, "Ripping
+# encrypted discs", first.
+#
+#   docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml \
+#     -f deploy/compose.decryption.yaml config
+#
+# Only the image changes. The worker keeps exactly the confinement
+# compose.hardware.yaml gives it: its drive's block device, the drive's group,
+# no capabilities and a read-only root. Decrypting needs nothing more; it was
+# tried on the first real drive that way.
+
+services:
+  burner-sr0:
+    # A local tag, never pulled: Compose fails here rather than fetch an
+    # image nobody built.
+    image: ${TANGIBLE_DECRYPTION_IMAGE:?build deploy/decryption/Dockerfile and set TANGIBLE_DECRYPTION_IMAGE to its tag}
+    pull_policy: never

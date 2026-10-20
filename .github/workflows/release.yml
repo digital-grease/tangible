@@ -95,6 +95,16 @@ jobs:
           sbom: true
           provenance: mode=max
 
+      # Before anything is signed: the published image never carries
+      # decryption code (ADR 0013); operators who want it build
+      # deploy/decryption/Dockerfile themselves.
+      - name: No decryption code in the image
+        env:
+          REF: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
+        run: |
+          docker pull --quiet "$REF"
+          deploy/check-no-decryption.sh "$REF"
+
       # Before anything is signed: an image with a known high or critical
       # vulnerability that already has a fix is rebuilt on newer bases, not
       # released. Unfixed ones are reported but do not block, since nothing

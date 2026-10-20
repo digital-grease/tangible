@@ -237,6 +237,7 @@ compose-config:
     docker compose -f deploy/compose.yaml -f deploy/compose.dev.yaml --env-file deploy/.env.example config >/dev/null
     TANGIBLE_WORKER_NAME=validate TANGIBLE_OPTICAL_GID=990 docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml --env-file deploy/.env.example config >/dev/null
     TANGIBLE_WORKER_NAME=validate TANGIBLE_OPTICAL_GID=990 TANGIBLE_SCSI_DEVICE=/dev/sg4 docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml -f deploy/compose.hardware-sg.yaml --env-file deploy/.env.example config >/dev/null
+    TANGIBLE_WORKER_NAME=validate TANGIBLE_OPTICAL_GID=990 TANGIBLE_DECRYPTION_IMAGE=tangible-decryption:validate docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml -f deploy/compose.decryption.yaml --env-file deploy/.env.example config >/dev/null
     @echo "all compose combinations render"
     just compose-hardening
 
@@ -247,6 +248,12 @@ compose-hardening:
     docker compose -f deploy/compose.yaml -f deploy/compose.dev.yaml --env-file deploy/.env.example config --format json | deploy/check-hardening.sh --allow-writable server
     TANGIBLE_WORKER_NAME=validate TANGIBLE_OPTICAL_GID=990 docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml --env-file deploy/.env.example config --format json | deploy/check-hardening.sh
     TANGIBLE_WORKER_NAME=validate TANGIBLE_OPTICAL_GID=990 TANGIBLE_SCSI_DEVICE=/dev/sg4 docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml -f deploy/compose.hardware-sg.yaml --env-file deploy/.env.example config --format json | deploy/check-hardening.sh
+    TANGIBLE_WORKER_NAME=validate TANGIBLE_OPTICAL_GID=990 TANGIBLE_DECRYPTION_IMAGE=tangible-decryption:validate docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml -f deploy/compose.decryption.yaml --env-file deploy/.env.example config --format json | deploy/check-hardening.sh
+
+# Fail if an image carries decryption code, as the release does before
+# signing (ADR 0013). Run it on a locally built image before relying on it.
+check-no-decryption image:
+    deploy/check-no-decryption.sh {{image}}
 
 # Assert that no default stack can reach an optical drive.
 verify-no-devices:

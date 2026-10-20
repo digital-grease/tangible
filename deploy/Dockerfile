@@ -55,9 +55,11 @@ FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595
 #                                            unredistributable
 #   unrar                                    binds RARLAB source; non-free
 #   libdvdcss / libaacs / libbdplus          never in the published image;
-#                                            an operator who wants to rip
-#                                            encrypted discs builds them into
-#                                            a worker image of their own
+#   dvdbackup                                an operator who wants to rip
+#                                            encrypted discs builds
+#                                            deploy/decryption/Dockerfile,
+#                                            and the release refuses an
+#                                            image holding any of them
 # Adding any of these breaks distribution of the entire image, not just the
 # one package. Adding to this list is a licence decision, not a build tweak.
 #

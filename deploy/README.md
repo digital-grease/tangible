@@ -324,6 +324,48 @@ it back") rather than reading a fragment; reloading the disc fixes it.
 Ripped audio CDs are not read-offset corrected, so their audio will not
 match AccurateRip or Redump databases. Data tracks are unaffected.
 
+### Ripping encrypted discs
+
+The image Tangible publishes contains no decryption code, and the release
+checks that before it signs one. Like VLC, which leaves libdvdcss and the
+AACS libraries to whoever wants them, Tangible leaves them to you: a worker
+that rips encrypted discs runs an image you build yourself, on top of the
+release you run. Whether ripping a disc is lawful where you are is yours to
+determine.
+
+Not yet in use: the image below builds and works on a drive, but the worker
+does not use it yet, and encrypted DVDs are still refused.
+
+Read [`decryption/Dockerfile`](decryption/Dockerfile) first; it is short. It
+fetches libdvdcss from VideoLAN's source release, checks it against the
+SHA-256 written there, and builds it; and it installs Debian's `dvdbackup`,
+`libaacs0` and `libbdplus0`. Then build it from the release you run, and
+check it carries what you expect:
+
+```bash
+docker build -f deploy/decryption/Dockerfile \
+  --build-arg TANGIBLE_IMAGE=ghcr.io/digital-grease/tangible:v0.1.0 \
+  -t tangible-decryption:v0.1.0 deploy/decryption
+docker run --rm --entrypoint cat tangible-decryption:v0.1.0 /usr/share/tangible/decryption.json
+```
+
+Run the drive's worker from it with one more override, which changes only
+the image:
+
+```bash
+TANGIBLE_DECRYPTION_IMAGE=tangible-decryption:v0.1.0 docker compose \
+  -f deploy/compose.yaml -f deploy/compose.hardware.yaml \
+  -f deploy/compose.decryption.yaml up -d
+```
+
+The worker keeps the same confinement: its drive's block device and group,
+no capabilities, a read-only root. On the first drive tried, libdvdcss
+authenticated and found every title key with nothing more.
+
+That image is yours, not a Tangible release: it is outside the release's
+signature, SBOM, provenance and vulnerability scan. Rebuild it each time you
+upgrade, so it carries the new release and Debian's latest fixes.
+
 ## Diagnostics
 
 When something is wrong and the cause is not obvious, ask for the whole
