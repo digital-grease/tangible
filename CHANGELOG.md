@@ -47,7 +47,8 @@ may change between minor versions, and the release notes say how.
   contents and data, and they are imported as a TOC/BIN artifact whose
   origin says it was dumped from a disc. A rip can be withdrawn until its
   import starts. DVDs, Blu-rays and blank discs are refused for now. A
-  drive now does one thing at a time across burns, erasures and rips.
+  drive now does one thing at a time across burns, erasures and rips. The
+  web UI's Rips page asks for a rip and follows it to the library.
 - Administrators have a Diagnostics page with the same checklist, to copy,
   download, or prepare as an issue (`GET /api/v1/diagnostics` and
   `/diagnostics/report`, new permission `diagnose`).

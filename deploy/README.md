@@ -306,6 +306,18 @@ high or critical vulnerability with a fix available stops the release. The
 image applies Debian's security updates when it is built, so a rebuild picks
 up fixes published after the base image.
 
+## Ripping a disc
+
+Put a CD you own in a drive, open Rips in the web UI, and choose "Rip the
+disc in" that drive. The drive's worker reads it with `cdrdao read-cd`
+when the drive is free, sends the table of contents and data to the
+server, and they are imported as a TOC/BIN artifact, kept exactly as read.
+Reading changes nothing on the disc, so a rip can be withdrawn while it
+reads. Blank discs, DVDs and Blu-rays are refused for now.
+
+Ripped audio CDs are not read-offset corrected, so their audio will not
+match AccurateRip or Redump databases. Data tracks are unaffected.
+
 ## Diagnostics
 
 When something is wrong and the cause is not obvious, ask for the whole

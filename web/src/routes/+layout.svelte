@@ -22,6 +22,7 @@
     { href: '/catalog', label: 'Catalog' },
     { href: '/burns', label: 'Burns' },
     { href: '/discs', label: 'Discs' },
+    { href: '/rips', label: 'Rips' },
   ];
 
   /** Pages anyone may see: the way in. */
