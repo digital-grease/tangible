@@ -14,6 +14,7 @@ pub mod catalog;
 pub mod derivation;
 pub mod diagnostics;
 pub mod error_report;
+pub mod format_report;
 pub mod health;
 pub mod import;
 pub mod import_runner;
@@ -112,6 +113,7 @@ pub const API_BASE: &str = "/api/v1";
         routes::reports::report_settings,
         routes::reports::burn_attempt_report,
         routes::reports::prepare_error_report,
+        routes::reports::artifact_format_report,
         routes::diagnostics::get_diagnostics,
         routes::diagnostics::diagnostics_report,
         routes::romm::romm_settings,

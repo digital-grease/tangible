@@ -245,6 +245,12 @@ pub(crate) mod forms {
         ))
     }
 
+    pub(crate) fn format() -> Form {
+        template(include_str!(
+            "../../../.github/ISSUE_TEMPLATE/format_support.yml"
+        ))
+    }
+
     pub(crate) fn bug() -> Form {
         template(include_str!(
             "../../../.github/ISSUE_TEMPLATE/bug_report.yml"

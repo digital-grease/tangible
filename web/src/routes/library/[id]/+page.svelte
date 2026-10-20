@@ -2,6 +2,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
+  import FormatReport from '$lib/components/FormatReport.svelte';
   import { onMount } from 'svelte';
   import Lineage from '$lib/components/Lineage.svelte';
   import { page } from '$app/state';
@@ -99,6 +100,8 @@
         </ul>
       </section>
     {/if}
+
+    <FormatReport artifact={view.data} />
 
     <section aria-labelledby="components-heading">
       <h2 id="components-heading">Components</h2>

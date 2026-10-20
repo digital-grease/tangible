@@ -104,6 +104,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/artifacts/{artifact_id}/format-report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * An image Tangible did not recognise, or read with doubts or warnings,
+         *     prepared as a format support request for the operator to review.
+         * @description Describes structure only: detection's evidence and warnings, each
+         *     component by extension, size and digest prefix, the first bytes of each
+         *     binary file and the signatures found at known offsets. Names from the
+         *     manifest, and every file a descriptor declares, are scrubbed.
+         *
+         *     # Errors
+         *
+         *     `CONFLICT` when reports are turned off, or when the image was recognised
+         *     without doubts or warnings; `NOT_FOUND` for an unknown artifact;
+         *     `INVALID_PARAMETER` for a malformed identifier.
+         */
+        get: operations["artifact_format_report"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/artifacts/{artifact_id}/lineage": {
         parameters: {
             query?: never;
@@ -3232,6 +3262,47 @@ export interface operations {
             };
             /** @description Nothing applies, or the options are refused */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    artifact_format_report: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Artifact identifier */
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The report, scrubbed, for review */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssueReport"];
+                };
+            };
+            /** @description No such artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Reports are off, or the image was recognised without doubts */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

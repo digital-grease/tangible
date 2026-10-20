@@ -228,7 +228,10 @@ for a disc that burned and checked on a real drive, "Report this drive and
 disc as working". The second grows the tested hardware table above, so it
 is worth doing for any drive or disc type not yet in it. An error that means
 Tangible itself went wrong offers "Report this…" beside it, and the
-diagnostics report below can be sent the same way.
+diagnostics report below can be sent the same way. An image Tangible did
+not recognise, or read with doubts, offers "Ask for support…" on its page:
+that describes the image's structure (sizes, extensions, the first bytes of
+binary files, known signatures), never its contents or names.
 
 Two settings in `.env`:
 

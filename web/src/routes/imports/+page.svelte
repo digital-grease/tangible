@@ -19,11 +19,13 @@
     type ImportSources,
   } from '$lib/imports';
   import { formatBytes, type LoadState, type Problem } from '$lib/library';
+  import { reportSettingsOnce } from '$lib/report';
 
   let view = $state<LoadState<ImportPage>>({ kind: 'loading' });
   let sources = $state<ImportSources | null>(null);
   let problem = $state<Problem | null>(null);
   let busy = $state(false);
+  let reportsOn = $state(false);
 
   let files = $state<FileList | null>(null);
   let pathId = $state('');
@@ -48,6 +50,9 @@
   }
 
   onMount(async () => {
+    void reportSettingsOnce().then((settings) => {
+      reportsOn = settings?.enabled === true && !!settings.issues_url;
+    });
     const found = await loadImportSources();
     if (found.kind === 'ready') {
       sources = found.data;
@@ -244,6 +249,13 @@
                         <li>{warning}</li>
                       {/each}
                     </ul>
+                    {#if job.artifact_id && reportsOn}
+                      <!-- The artifact's page offers a format report when
+                           reports are on; the row does not know the format. -->
+                      <a href={`/library/${job.artifact_id}#format-report-heading`}
+                        >Ask about these findings</a
+                      >
+                    {/if}
                   </details>
                 {/if}
               </td>

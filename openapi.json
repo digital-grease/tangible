@@ -359,6 +359,64 @@
         ]
       }
     },
+    "/api/v1/artifacts/{artifact_id}/format-report": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "An image Tangible did not recognise, or read with doubts or warnings,\nprepared as a format support request for the operator to review.",
+        "description": "Describes structure only: detection's evidence and warnings, each\ncomponent by extension, size and digest prefix, the first bytes of each\nbinary file and the signatures found at known offsets. Names from the\nmanifest, and every file a descriptor declares, are scrubbed.\n\n# Errors\n\n`CONFLICT` when reports are turned off, or when the image was recognised\nwithout doubts or warnings; `NOT_FOUND` for an unknown artifact;\n`INVALID_PARAMETER` for a malformed identifier.",
+        "operationId": "artifact_format_report",
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "description": "Artifact identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The report, scrubbed, for review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueReport"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Reports are off, or the image was recognised without doubts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/artifacts/{artifact_id}/lineage": {
       "get": {
         "tags": [

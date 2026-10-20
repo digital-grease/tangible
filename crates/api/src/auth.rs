@@ -317,6 +317,13 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
     // Anyone signed in may report an error they were shown; it changes
     // nothing, and the text is theirs and scrubbed.
     ("POST", "/api/v1/error-reports", Signed(Read)),
+    // Operators, as importing is theirs: a format report describes how an
+    // import was read.
+    (
+        "GET",
+        "/api/v1/artifacts/{artifact_id}/format-report",
+        Signed(Import),
+    ),
     // Operators: a burn report carries the worker log and drive details.
     (
         "GET",

@@ -1,0 +1,51 @@
+name: Image format support
+description: An image Tangible did not recognise, or read with doubts. Describes its structure, never its contents.
+title: "Format: "
+labels: ["format-support"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks. Tangible fills this in when you use "Ask for support" on an artifact's page: what detection saw, the components by extension and size, and the first bytes of each binary file, with names and paths replaced.
+
+        This form is about formats only. Do not attach the image, its files, or any part of a commercial disc, and never attach decryption keys or key databases. If a developer needs a sample, they will ask for a generated or freely licensed one.
+
+  - type: input
+    id: version
+    attributes:
+      label: Tangible version
+      placeholder: v0.1.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: format
+    attributes:
+      label: Format
+      description: What you believe the image is. Tangible suggests one when the bytes say so.
+      options:
+        - CCD/IMG/SUB
+        - MDS/MDF
+        - CHD
+        - BDMV
+        - VIDEO_TS
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: structure
+    attributes:
+      label: Structure
+      description: What Tangible found. Read it before submitting; names and paths are replaced, but you know your files best.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Where the image came from in general terms (for example "dumped with redumper", "made by an old version of a burning tool"), and anything else that might help.
+    validations:
+      required: false

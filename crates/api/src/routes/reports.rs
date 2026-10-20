@@ -21,14 +21,20 @@ use tangible_db::erasures::get_drive;
 use tangible_db::repositories::{
     artifact_burn_facts, get_burn_attempt, get_burn_job, list_burn_events,
 };
+use tangible_domain::ComponentRole;
 use tangible_domain::manifest::{ArtifactManifest, Topology};
 use tangible_domain::{ArtifactId, BurnAttemptId};
+use tokio::io::AsyncReadExt as _;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::burn_report::{
     BurnFacts, BurnReportKind, BurnReportRefusal, DriveFacts, EventLine, burn_report,
 };
 use crate::error_report::{ErrorFacts, error_report};
+use crate::format_report::{
+    ComponentFacts, FormatFacts, HEAD_BYTES, directories_in, format_report, plain_extension,
+    worth_reporting,
+};
 use crate::problem::{ErrorCode, Problem};
 use crate::report::IssueReport;
 use crate::routes::burns::inspected_medium_info;
@@ -372,11 +378,182 @@ fn library_names(manifest: &ArtifactManifest) -> Vec<(String, String)> {
     names
 }
 
+/// An image Tangible did not recognise, or read with doubts or warnings,
+/// prepared as a format support request for the operator to review.
+///
+/// Describes structure only: detection's evidence and warnings, each
+/// component by extension, size and digest prefix, the first bytes of each
+/// binary file and the signatures found at known offsets. Names from the
+/// manifest, and every file a descriptor declares, are scrubbed.
+///
+/// # Errors
+///
+/// `CONFLICT` when reports are turned off, or when the image was recognised
+/// without doubts or warnings; `NOT_FOUND` for an unknown artifact;
+/// `INVALID_PARAMETER` for a malformed identifier.
+#[utoipa::path(
+    get,
+    path = "/api/v1/artifacts/{artifact_id}/format-report",
+    tag = "reports",
+    params(("artifact_id" = String, Path, description = "Artifact identifier")),
+    responses(
+        (status = 200, description = "The report, scrubbed, for review", body = IssueReport),
+        (status = 404, description = "No such artifact", body = Problem),
+        (status = 409, description = "Reports are off, or the image was recognised without doubts", body = Problem),
+    ),
+)]
+pub async fn artifact_format_report(
+    State(state): State<ApiState>,
+    Path(artifact_id): Path<String>,
+) -> Result<Json<IssueReport>, Problem> {
+    let reports = state.reports();
+    if !reports.enabled() {
+        return Err(Problem::new(
+            ErrorCode::Conflict,
+            "issue reports are turned off on this server (TANGIBLE_REPORT_ISSUES_URL is empty)",
+        ));
+    }
+    let id = artifact_id
+        .parse::<ArtifactId>()
+        .map_err(|_| Problem::invalid_parameter("artifact_id", "not a valid identifier"))?;
+    let manifest = crate::routes::artifacts::load(&state, id).await?;
+    let format = manifest.classification.format.as_str();
+    let validation = manifest.validation.state.as_str();
+    if !worth_reporting(
+        format,
+        manifest.classification.format_confidence,
+        validation,
+    ) {
+        return Err(Problem::new(
+            ErrorCode::Conflict,
+            "this image was recognised without doubts or warnings, so there is nothing to ask about",
+        ));
+    }
+    let Some(objects) = state
+        .manifests()
+        .map(tangible_storage::ManifestStore::objects)
+    else {
+        return Err(Problem::storage_unavailable());
+    };
+
+    let mut context = reports.scrub_context();
+    for (name, label) in library_names(&manifest) {
+        context = context.name(name, &label);
+    }
+    let mut components = Vec::with_capacity(manifest.components.len());
+    for component in &manifest.components {
+        let head = read_head(objects, component).await;
+        if component.role == ComponentRole::Descriptor
+            && let Some(declared) = read_declared(objects, component).await
+        {
+            for (index, name) in declared.into_iter().enumerate() {
+                context = context.name(name, &format!("declared file {}", index + 1));
+            }
+        }
+        components.push(ComponentFacts {
+            ordinal: component.ordinal,
+            role: component.role.to_string(),
+            extension: plain_extension(component.logical_path.file_name()),
+            length_bytes: component.length_bytes,
+            sha256_prefix: component.content.sha256.to_hex().chars().take(8).collect(),
+            head,
+        });
+    }
+
+    let facts = FormatFacts {
+        build: reports.build().clone(),
+        format: format.to_owned(),
+        confidence: manifest.classification.format_confidence,
+        validation_state: validation.to_owned(),
+        evidence: manifest
+            .classification
+            .detectors
+            .iter()
+            .flat_map(|detector| detector.evidence.iter().cloned())
+            .collect(),
+        warnings: manifest
+            .validation
+            .validators
+            .iter()
+            .filter(|validator| validator.result == "warning")
+            .filter_map(|validator| {
+                validator
+                    .details
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .collect(),
+        directories: directories_in(
+            manifest
+                .components
+                .iter()
+                .map(|component| component.logical_path.as_str()),
+        ),
+        components,
+    };
+    Ok(Json(format_report(&facts, context)))
+}
+
+/// The first [`HEAD_BYTES`] of a component, or `None` if they could not be
+/// read.
+async fn read_head(
+    objects: &tangible_storage::FilesystemStore,
+    component: &tangible_domain::manifest::Component,
+) -> Option<Vec<u8>> {
+    let length = component.length_bytes.min(HEAD_BYTES as u64);
+    read_start(objects, component, length).await
+}
+
+/// The file names a CUE sheet or cdrdao TOC declares, read from the stored
+/// descriptor. `None` for a descriptor that is neither, or too large to be
+/// one.
+async fn read_declared(
+    objects: &tangible_storage::FilesystemStore,
+    component: &tangible_domain::manifest::Component,
+) -> Option<Vec<String>> {
+    let limit = tangible_image::cue::MAX_CUE_BYTES.max(tangible_image::toc::MAX_TOC_BYTES) as u64;
+    if component.length_bytes > limit {
+        return None;
+    }
+    let bytes = read_start(objects, component, component.length_bytes).await?;
+    if let Ok(sheet) = tangible_image::cue::parse(&bytes) {
+        return Some(sheet.files.into_iter().map(|file| file.name).collect());
+    }
+    tangible_image::toc::parse(&bytes)
+        .ok()
+        .map(|document| document.files)
+}
+
+async fn read_start(
+    objects: &tangible_storage::FilesystemStore,
+    component: &tangible_domain::manifest::Component,
+    length: u64,
+) -> Option<Vec<u8>> {
+    let mut reader = match objects
+        .open_range(&component.content.sha256, 0, length)
+        .await
+    {
+        Ok(reader) => reader,
+        Err(error) => {
+            tracing::warn!(error = ?error, "a format report could not read a component");
+            return None;
+        }
+    };
+    let mut bytes = Vec::with_capacity(usize::try_from(length).unwrap_or(0));
+    reader.read_to_end(&mut bytes).await.ok()?;
+    Some(bytes)
+}
+
 /// The report routes.
 pub fn router() -> Router<ApiState> {
     Router::new()
         .route("/report-settings", get(report_settings))
         .route("/error-reports", post(prepare_error_report))
+        .route(
+            "/artifacts/{artifact_id}/format-report",
+            get(artifact_format_report),
+        )
         .route(
             "/burn-attempts/{attempt_id}/report",
             get(burn_attempt_report),

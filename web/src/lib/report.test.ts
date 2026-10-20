@@ -8,9 +8,11 @@ import {
   draftFromReport,
   errorReportRequest,
   forgetReportSettings,
+  formatReportOffered,
   issueHost,
   issueLink,
   loadBurnReport,
+  loadFormatReport,
   loadReportSettings,
   prepareErrorReport,
   removedSummary,
@@ -368,5 +370,28 @@ describe('reportSettingsOnce', () => {
       json: async () => settings,
     })) as unknown as typeof fetch;
     expect(await reportSettingsOnce(working)).toEqual(settings);
+  });
+});
+
+describe('format reports', () => {
+  it('are offered for an image not recognised, doubtful, or warned', () => {
+    const clean = { format: 'iso', format_confidence: 0.99, validation_state: 'valid' };
+    expect(formatReportOffered(clean)).toBe(false);
+    expect(formatReportOffered({ ...clean, format: 'unknown' })).toBe(true);
+    expect(formatReportOffered({ ...clean, format_confidence: 0.5 })).toBe(true);
+    expect(formatReportOffered({ ...clean, validation_state: 'valid_with_warnings' })).toBe(true);
+  });
+
+  it('ask the artifact format report route', async () => {
+    const fetcher = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ template: 'format_support.yml', fields: [], removed: {} }),
+    })) as unknown as typeof fetch;
+    await loadFormatReport('a/1', fetcher);
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/v1/artifacts/a%2F1/format-report',
+      expect.anything(),
+    );
   });
 });

@@ -35,6 +35,12 @@ may change between minor versions, and the release notes say how.
   drives, recent failure codes and the settings that matter for support,
   with a link to a prefilled bug report. `--json` for scripts. Plain
   `doctor` is still the quick healthcheck.
+- An image Tangible did not recognise, or read with doubts or warnings,
+  offers "Ask for support…" on its page: a format support request that
+  describes its structure (component sizes and extensions, the first bytes
+  of binary files, known signatures at known offsets) with every name
+  replaced (`GET /api/v1/artifacts/{id}/format-report`, new issue form
+  `format_support.yml`).
 - Administrators have a Diagnostics page with the same checklist, to copy,
   download, or prepare as an issue (`GET /api/v1/diagnostics` and
   `/diagnostics/report`, new permission `diagnose`).

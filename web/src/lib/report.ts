@@ -161,6 +161,33 @@ export function loadBurnReport(
   );
 }
 
+/**
+ * Below this detection confidence an image counts as read with doubts. The
+ * server applies the same rule and refuses a format report otherwise.
+ */
+export const DOUBTFUL_CONFIDENCE = 0.9;
+
+/** Whether to offer a format report: not recognised, doubtful, or warned. */
+export function formatReportOffered(artifact: {
+  format: string;
+  format_confidence: number;
+  validation_state: string;
+}): boolean {
+  return (
+    artifact.format === 'unknown' ||
+    artifact.format_confidence < DOUBTFUL_CONFIDENCE ||
+    artifact.validation_state !== 'valid'
+  );
+}
+
+/** An artifact's structure, prepared by the server as a format support request. */
+export function loadFormatReport(
+  artifactId: string,
+  fetcher: typeof fetch = apiFetch,
+): Promise<Result<IssueReport>> {
+  return apiCall(fetcher, `/api/v1/artifacts/${encodeURIComponent(artifactId)}/format-report`);
+}
+
 /** The server's report as the review dialog takes it. */
 export function draftFromReport(report: IssueReport): ReportDraft {
   return {
