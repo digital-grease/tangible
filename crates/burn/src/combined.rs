@@ -25,7 +25,7 @@ use async_trait::async_trait;
 use crate::engine::{BurnEngine, EngineError, EventSink};
 use crate::plan::{
     BlankReport, BlankRequest, BurnPlan, DriveCapabilities, DriveRef, MediumInfo, PreflightReport,
-    VerifyReport, WriteMode, WriteReport,
+    RipReport, RipRequest, VerifyReport, WriteMode, WriteReport,
 };
 
 /// An engine that hands each plan to the engine its shape needs.
@@ -136,6 +136,20 @@ impl<D: BurnEngine, T: BurnEngine> BurnEngine for CombinedEngine<D, T> {
 
     async fn eject(&self, drive: &DriveRef) -> Result<(), EngineError> {
         self.data.eject(drive).await
+    }
+
+    /// The table-of-contents engine's: reading a CD into a table of contents
+    /// and its data is what cdrdao does.
+    fn rips_cds(&self) -> bool {
+        self.toc.rips_cds()
+    }
+
+    async fn rip_cd(
+        &self,
+        request: &RipRequest,
+        sink: &dyn EventSink,
+    ) -> Result<RipReport, EngineError> {
+        self.toc.rip_cd(request, sink).await
     }
 }
 

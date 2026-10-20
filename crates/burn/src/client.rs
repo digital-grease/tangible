@@ -117,6 +117,24 @@ impl ClientError {
     }
 }
 
+/// A file's SHA-256, in lowercase hex, and its length, read in chunks.
+async fn hash_and_length(path: &Path) -> Result<(String, u64), std::io::Error> {
+    use sha2::Digest as _;
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut hasher = sha2::Sha256::new();
+    let mut buffer = vec![0_u8; 256 * 1024];
+    let mut length = 0_u64;
+    loop {
+        let read = file.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        length += read as u64;
+    }
+    Ok((hex::encode(hasher.finalize()), length))
+}
+
 /// A problem document, as the server sends it.
 #[derive(Debug, Deserialize)]
 struct ProblemBody {
@@ -340,6 +358,85 @@ pub struct Capabilities {
     pub drive: DriveDescription,
     /// Free bytes in its staging cache.
     pub cache_free_bytes: Option<i64>,
+    /// What it can rip with, if anything (ADR 0013). Absent when its engine
+    /// cannot, and the server then never offers its drive for a rip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rip: Option<RipCapabilityBody>,
+}
+
+/// What a worker can rip with.
+#[derive(Debug, Clone, Serialize)]
+pub struct RipCapabilityBody {
+    /// The engines that read discs.
+    pub engines: Vec<EngineDescription>,
+}
+
+/// A rip a worker has taken.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RipClaim {
+    /// The rip.
+    pub rip_id: String,
+    /// The only file names the server accepts for it.
+    #[serde(default)]
+    pub outputs: Vec<String>,
+    /// The largest file the server accepts.
+    pub max_file_bytes: u64,
+}
+
+/// Sectors that gave trouble during a rip.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReadErrorsBody {
+    /// Sectors that could not be read.
+    pub unreadable_sectors: u64,
+    /// Sectors that read only after retrying.
+    pub retried_sectors: u64,
+}
+
+/// How a rip ended.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RipCompletion {
+    /// `read`, `refused` or `failed`.
+    pub outcome: String,
+    /// The tool that read the disc.
+    pub engine: Option<String>,
+    /// Its version.
+    pub engine_version: Option<String>,
+    /// What was in the drive.
+    pub medium: Option<crate::plan::MediumInfo>,
+    /// Sectors that gave trouble.
+    pub read_errors: Option<ReadErrorsBody>,
+    /// The files sent, for a read.
+    pub outputs: Vec<String>,
+    /// Why, for a refusal or a failure.
+    pub error_code: Option<String>,
+    /// More about that.
+    pub error_detail: Option<String>,
+}
+
+/// Something a worker says while ripping.
+#[derive(Debug, Clone, Serialize)]
+pub struct RipEventBody {
+    /// Monotonic within the rip.
+    pub sequence: i64,
+    /// Such as `progress`.
+    pub event_type: String,
+    /// Its stable code.
+    pub code: String,
+    /// How far along, 0 to 1.
+    pub progress: Option<f32>,
+    /// Structured detail, such as `{"message": "..."}`.
+    pub data: serde_json::Value,
+    /// When the worker saw it.
+    pub worker_time: String,
+}
+
+/// What a rip's state turned out to be when the worker reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RipStanding {
+    /// Still the worker's to finish.
+    Going,
+    /// Withdrawn, or ended: stop.
+    Stop,
 }
 
 /// One engine a worker can run.
@@ -630,6 +727,135 @@ impl WorkerClient {
             .authorised(
                 self.http
                     .post(self.url(&format!("/api/v1/erasures/{erasure_id}/complete"))),
+            )
+            .json(completion)
+            .send()
+            .await
+            .map_err(ClientError::Transport)?;
+        if !response.status().is_success() {
+            return Err(Self::refusal(response).await);
+        }
+        Ok(())
+    }
+
+    /// Ask for a rip queued for this worker's drive. `None` when there is
+    /// none.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Refused`] or [`ClientError::Transport`].
+    pub async fn claim_rip(
+        &self,
+        worker_id: &str,
+        drive_id: &str,
+    ) -> Result<Option<RipClaim>, ClientError> {
+        let response = self
+            .authorised(
+                self.http
+                    .post(self.url(&format!("/api/v1/workers/{worker_id}/rip-claims"))),
+            )
+            .json(&serde_json::json!({ "drive_id": drive_id }))
+            .send()
+            .await
+            .map_err(ClientError::Transport)?;
+        if response.status() == reqwest::StatusCode::NO_CONTENT {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(Self::refusal(response).await);
+        }
+        response
+            .json()
+            .await
+            .map(Some)
+            .map_err(ClientError::Transport)
+    }
+
+    /// Report what is happening in a rip. A 409 means it was withdrawn or
+    /// has ended, and the worker should stop.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Refused`] for anything but a conflict, or
+    /// [`ClientError::Transport`].
+    pub async fn rip_events(
+        &self,
+        rip_id: &str,
+        events: &[RipEventBody],
+    ) -> Result<RipStanding, ClientError> {
+        let response = self
+            .authorised(
+                self.http
+                    .post(self.url(&format!("/api/v1/rips/{rip_id}/events"))),
+            )
+            .json(&serde_json::json!({ "events": events }))
+            .send()
+            .await
+            .map_err(ClientError::Transport)?;
+        if response.status() == reqwest::StatusCode::CONFLICT {
+            return Ok(RipStanding::Stop);
+        }
+        if !response.status().is_success() {
+            return Err(Self::refusal(response).await);
+        }
+        Ok(RipStanding::Going)
+    }
+
+    /// Send one file a rip read, streamed from disk, with its length and
+    /// SHA-256 for the server to check. Answers whether the rip is still
+    /// going: a 409 means it was withdrawn.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Io`] if the file cannot be read, [`ClientError::Refused`]
+    /// for anything but a conflict, or [`ClientError::Transport`].
+    pub async fn upload_rip_file(
+        &self,
+        rip_id: &str,
+        name: &str,
+        path: &Path,
+    ) -> Result<RipStanding, ClientError> {
+        let io = |source| ClientError::Io {
+            operation: "reading a ripped file",
+            path: path.to_path_buf(),
+            source,
+        };
+        let (digest, length) = hash_and_length(path).await.map_err(io)?;
+        let file = tokio::fs::File::open(path).await.map_err(io)?;
+        let response = self
+            .authorised(
+                self.http
+                    .put(self.url(&format!("/api/v1/rips/{rip_id}/files/{name}"))),
+            )
+            .header(reqwest::header::CONTENT_LENGTH, length)
+            .header("x-content-sha256", digest)
+            .body(reqwest::Body::from(file))
+            .send()
+            .await
+            .map_err(ClientError::Transport)?;
+        if response.status() == reqwest::StatusCode::CONFLICT {
+            return Ok(RipStanding::Stop);
+        }
+        if !response.status().is_success() {
+            return Err(Self::refusal(response).await);
+        }
+        Ok(RipStanding::Going)
+    }
+
+    /// Report how a rip ended.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Refused`] or [`ClientError::Transport`].
+    pub async fn complete_rip(
+        &self,
+        rip_id: &str,
+        completion: &RipCompletion,
+    ) -> Result<(), ClientError> {
+        let response = self
+            .authorised(
+                self.http
+                    .post(self.url(&format!("/api/v1/rips/{rip_id}/complete"))),
             )
             .json(completion)
             .send()

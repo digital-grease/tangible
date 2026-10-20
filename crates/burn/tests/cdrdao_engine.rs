@@ -308,6 +308,25 @@ async fn the_tool_names_its_version() {
 }
 
 #[tokio::test]
+async fn a_rip_of_a_drive_that_is_not_there_is_unavailable() {
+    let Some(program) = binary() else { return };
+    let fixture = Fixture::new(&program);
+    let request = tangible_burn::RipRequest {
+        drive: mixed_mode(&fixture).drive,
+        output_dir: fixture.dir.path().join("rip"),
+        cancel: tangible_burn::CancelToken::new(),
+    };
+    let result = fixture
+        .engine
+        .rip_cd(&request, &CollectingSink::new())
+        .await;
+    assert!(
+        matches!(result, Err(EngineError::DriveUnavailable { .. })),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_drive_that_is_not_there_is_unavailable_rather_than_empty() {
     // A device mapping fault and an empty tray have different remedies, and
     // the operator is told which.

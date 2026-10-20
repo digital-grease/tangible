@@ -144,6 +144,27 @@ pub fn read_cd(drive: &DriveRef, datafile: &Path, toc: &Path) -> Result<Vec<Stri
     ])
 }
 
+/// Arguments that rip the disc: its table of contents into `disc.toc` and
+/// every track's data into `disc.bin`, both in the directory cdrdao is run in.
+///
+/// The names are relative on purpose and fixed here rather than passed in:
+/// cdrdao writes the data file's name into the table of contents exactly as
+/// given, and a rip's table of contents must name `disc.bin` for the import
+/// to find it without guessing. Neither name can be read as an option.
+#[must_use]
+pub fn rip_cd(drive: &DriveRef) -> Vec<String> {
+    vec![
+        "read-cd".to_owned(),
+        "--device".to_owned(),
+        drive.device_alias.clone(),
+        "-v".to_owned(),
+        "2".to_owned(),
+        "--datafile".to_owned(),
+        crate::plan::RIP_DATA.to_owned(),
+        crate::plan::RIP_TOC.to_owned(),
+    ]
+}
+
 /// Arguments that open the tray.
 ///
 /// cdrdao has no eject command. `unlock --eject` is the nearest: it releases
@@ -353,6 +374,23 @@ mod tests {
             ]
         );
         assert!(read_cd(&drive(), Path::new("rel.bin"), Path::new("/a.toc")).is_err());
+    }
+
+    #[test]
+    fn a_rip_is_exactly_these_arguments() {
+        assert_eq!(
+            rip_cd(&drive()),
+            vec![
+                "read-cd",
+                "--device",
+                "/dev/disc-block",
+                "-v",
+                "2",
+                "--datafile",
+                "disc.bin",
+                "disc.toc",
+            ]
+        );
     }
 
     #[test]

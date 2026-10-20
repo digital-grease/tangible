@@ -29,8 +29,22 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::engine::{BurnEngine, BurnEvent, EngineError, EventSink};
 use crate::plan::{
     BlankReport, BlankRequest, BurnPlan, DriveCapabilities, DriveIdentity, DriveRef, MediumInfo,
-    PreflightFailure, PreflightReport, VerifyReport, WriteMode, WriteReport,
+    PreflightFailure, PreflightReport, RIP_DATA, RIP_TOC, RipReport, RipRequest, VerifyReport,
+    WriteMode, WriteReport,
 };
+
+/// The table of contents a simulated rip writes: a data track and an audio
+/// track in one file, as cdrdao writes for a mixed-mode disc.
+pub const FAKE_RIP_TOC: &str = "CD_ROM\n\
+TRACK MODE1\n\
+DATAFILE \"disc.bin\" 00:01:00 // length in bytes: 153600\n\
+TRACK AUDIO\n\
+SILENCE 00:00:02\n\
+FILE \"disc.bin\" #153600 0 00:00:25\n\
+START 00:00:02\n";
+
+/// The data a simulated rip writes: 75 data sectors and 25 audio sectors.
+pub const FAKE_RIP_DATA_BYTES: usize = 75 * 2048 + 25 * 2352;
 
 /// How the fake engine should misbehave.
 ///
@@ -61,6 +75,11 @@ pub struct FakeBehaviour {
     pub medium_sessions: u32,
     /// Media profile to report.
     pub medium_profile: Option<String>,
+    /// Fail a rip as a disc that does not read.
+    pub rip_fails: bool,
+    /// Take this many short steps over a rip, checking for cancellation
+    /// between them, so a test can withdraw one mid-read.
+    pub rip_steps: u32,
 }
 
 /// State shared with whoever wants to cancel.
@@ -603,6 +622,81 @@ impl BurnEngine for FakeEngine {
             });
         }
         Ok(())
+    }
+
+    fn rips_cds(&self) -> bool {
+        true
+    }
+
+    async fn rip_cd(
+        &self,
+        request: &RipRequest,
+        sink: &dyn EventSink,
+    ) -> Result<RipReport, EngineError> {
+        if self.behaviour.drive_unavailable {
+            return Err(EngineError::DriveUnavailable {
+                alias: request.drive.device_alias.clone(),
+            });
+        }
+        if self.behaviour.no_medium {
+            return Err(EngineError::NoMedium {
+                alias: request.drive.device_alias.clone(),
+            });
+        }
+        let io = |operation: &'static str| {
+            move |source: std::io::Error| EngineError::Io { operation, source }
+        };
+        fs::create_dir_all(&request.output_dir)
+            .await
+            .map_err(io("creating the rip directory"))?;
+        sink.emit(BurnEvent::new(
+            "ripping",
+            "RIP_STARTED",
+            "reading the simulated disc",
+        ));
+        let steps = self.behaviour.rip_steps.max(1);
+        for step in 1..=steps {
+            if request.cancel.is_cancelled() {
+                for name in [RIP_TOC, RIP_DATA] {
+                    let _ = fs::remove_file(request.output_dir.join(name)).await;
+                }
+                return Err(EngineError::Cancelled);
+            }
+            sink.emit(BurnEvent::progress(
+                "ripping",
+                "RIP_PROGRESS",
+                // Steps are few: a test's count, at most a few hundred.
+                #[allow(clippy::cast_precision_loss)]
+                {
+                    step as f32 / steps as f32
+                },
+                format!("read {step} of {steps}"),
+            ));
+            if self.behaviour.rip_steps > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        }
+        if self.behaviour.rip_fails {
+            return Err(EngineError::Unsupported {
+                what: "the simulated disc did not read".to_owned(),
+            });
+        }
+        fs::write(request.output_dir.join(RIP_TOC), FAKE_RIP_TOC)
+            .await
+            .map_err(io("writing the simulated table of contents"))?;
+        fs::write(
+            request.output_dir.join(RIP_DATA),
+            vec![0_u8; FAKE_RIP_DATA_BYTES],
+        )
+        .await
+        .map_err(io("writing the simulated data"))?;
+        Ok(RipReport {
+            engine: "fake".to_owned(),
+            engine_version: self.version(),
+            unreadable_sectors: 0,
+            retried_sectors: 0,
+            data_bytes: FAKE_RIP_DATA_BYTES as u64,
+        })
     }
 }
 

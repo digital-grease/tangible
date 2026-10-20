@@ -21,6 +21,7 @@ pub mod engine;
 pub mod erasing;
 pub mod fake;
 pub mod plan;
+pub mod ripping;
 pub mod runner;
 pub mod worker;
 pub mod xorriso;
@@ -37,7 +38,8 @@ pub use engine::{BurnEngine, BurnEvent, CollectingSink, EngineError, EventSink, 
 pub use fake::{CancelToken, FakeBehaviour, FakeEngine};
 pub use plan::{
     BlankReport, BlankRequest, BurnPlan, DriveCapabilities, DriveRef, MediumInfo, PlannedInput,
-    PreflightFailure, PreflightReport, VerifyReport, WriteMode, WriteReport,
+    PreflightFailure, PreflightReport, RIP_DATA, RIP_TOC, RipReport, RipRequest, VerifyReport,
+    WriteMode, WriteReport,
 };
 pub use runner::{RunnerError, WorkerRuntime, WorkerSettings};
 pub use worker::{

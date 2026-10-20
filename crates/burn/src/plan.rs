@@ -840,6 +840,40 @@ pub struct BlankReport {
     pub diagnostics: Vec<String>,
 }
 
+/// The table of contents a CD rip writes, in its output directory.
+pub const RIP_TOC: &str = "disc.toc";
+
+/// The data file a CD rip writes beside it, and the name the table of
+/// contents gives it, so the import finds it without guessing.
+pub const RIP_DATA: &str = "disc.bin";
+
+/// A request to read the CD in a drive.
+#[derive(Debug, Clone)]
+pub struct RipRequest {
+    /// The drive.
+    pub drive: DriveRef,
+    /// An absolute, empty directory the engine writes [`RIP_TOC`] and
+    /// [`RIP_DATA`] into, and nothing else.
+    pub output_dir: PathBuf,
+    /// Set when the rip should stop. Reading is harmless to stop.
+    pub cancel: crate::fake::CancelToken,
+}
+
+/// How a rip read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RipReport {
+    /// The tool that read the disc.
+    pub engine: String,
+    /// Its version.
+    pub engine_version: String,
+    /// Sectors that could not be read at all.
+    pub unreadable_sectors: u64,
+    /// Sectors that read only after retrying.
+    pub retried_sectors: u64,
+    /// Bytes written to the data file.
+    pub data_bytes: u64,
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {

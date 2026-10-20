@@ -32,16 +32,19 @@ use time::OffsetDateTime;
 
 use crate::client::{
     Capabilities, ClientError, Completion, DriveDescription, EngineDescription, ErasureClaim,
-    FailureBody, Leased, PhysicalMediumBody, VerificationReportBody, WorkerClient, WorkerIdentity,
-    WriteReportBody, identity_path, rfc3339,
+    FailureBody, Leased, PhysicalMediumBody, RipCapabilityBody, RipClaim, RipEventBody,
+    RipStanding, VerificationReportBody, WorkerClient, WorkerIdentity, WriteReportBody,
+    identity_path, rfc3339,
 };
 use crate::device_lock::{DeviceLock, DeviceLockError};
 use crate::engine::{BurnEngine, BurnEvent, EngineError, EventSink, NullSink};
 use crate::erasing::erase_disc;
+use crate::fake::CancelToken;
 use crate::plan::{
     BurnPlan, DriveCapabilities, DriveRef, MediumInfo, PlannedInput, PreflightFailure,
     VerifyReport, WriteMode, WriteReport,
 };
+use crate::ripping::{RipOutcome, rip_disc};
 use crate::worker::{EventBuffer, RecoveryRecord, RecoveryStore, WorkerStage, plan_for};
 
 /// How a worker is configured.
@@ -211,6 +214,13 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         self.settings.state_dir.join("staging")
     }
 
+    /// Where rips are read to before they are sent. Emptied at start: a rip
+    /// a restart interrupted is closed by the server, and its files are not
+    /// this run's.
+    fn rips_root(&self) -> PathBuf {
+        self.settings.state_dir.join("rips")
+    }
+
     /// Load a stored credential, or enroll with the token supplied.
     ///
     /// # Errors
@@ -290,6 +300,12 @@ impl<E: BurnEngine> WorkerRuntime<E> {
                     .unwrap_or_else(|_| serde_json::json!({})),
             },
             cache_free_bytes: None,
+            rip: self.engine.rips_cds().then(|| RipCapabilityBody {
+                engines: vec![EngineDescription {
+                    name: self.engine.name().to_owned(),
+                    version: self.engine.version(),
+                }],
+            }),
         };
 
         let drive_id = self
@@ -446,6 +462,11 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         let mut identity = self.identify().await?;
         let drive_id = self.announce(&mut identity).await?;
         self.reconcile(&identity).await?;
+        if let Err(error) = tokio::fs::remove_dir_all(self.rips_root()).await
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(error = ?error, "could not clear rips a previous run left");
+        }
 
         let mut shutdown = Box::pin(shutdown);
         loop {
@@ -512,6 +533,18 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             .await?
         {
             self.erase(identity, drive_id, &erasure).await?;
+            return Ok(true);
+        }
+
+        // A rip next: somebody wants the disc in this drive read, and a burn
+        // would wait for the drive anyway.
+        if self.engine.rips_cds()
+            && let Some(rip) = self
+                .client
+                .claim_rip(&identity.worker_id, &drive_id.to_string())
+                .await?
+        {
+            self.rip(identity, drive_id, &rip).await?;
             return Ok(true);
         }
 
@@ -582,6 +615,173 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         self.client
             .complete_erasure(&erasure.erasure_id, &completion)
             .await?;
+        Ok(())
+    }
+}
+
+/// Events from a rip, waiting to be sent, numbered as they arrive.
+#[derive(Debug, Default)]
+struct RipEvents {
+    next: i64,
+    pending: Vec<RipEventBody>,
+}
+
+/// Turns engine events into rip events.
+struct RipSink {
+    events: Arc<std::sync::Mutex<RipEvents>>,
+}
+
+impl EventSink for RipSink {
+    fn emit(&self, event: BurnEvent) {
+        if let Ok(mut events) = self.events.lock() {
+            let sequence = events.next;
+            events.next += 1;
+            events.pending.push(RipEventBody {
+                sequence,
+                event_type: if event.progress.is_some() {
+                    "progress"
+                } else {
+                    "stage"
+                }
+                .to_owned(),
+                code: event.code.to_owned(),
+                progress: event.progress,
+                data: serde_json::json!({ "message": event.message }),
+                worker_time: rfc3339(OffsetDateTime::now_utc()),
+            });
+        }
+    }
+}
+
+/// Send what a rip has said so far. Answers whether to stop; a send that
+/// failed keeps its events for the next try.
+async fn flush_rip_events(
+    client: &WorkerClient,
+    rip_id: &str,
+    events: &std::sync::Mutex<RipEvents>,
+) -> RipStanding {
+    let batch: Vec<RipEventBody> = match events.lock() {
+        Ok(mut events) => std::mem::take(&mut events.pending),
+        Err(_) => return RipStanding::Going,
+    };
+    match client.rip_events(rip_id, &batch).await {
+        Ok(standing) => standing,
+        Err(error) => {
+            tracing::warn!(error = ?error, "could not report a rip's events; will retry");
+            if let Ok(mut events) = events.lock() {
+                let later = std::mem::take(&mut events.pending);
+                events.pending = batch;
+                events.pending.extend(later);
+            }
+            RipStanding::Going
+        }
+    }
+}
+
+/// While a rip reads: report in and send its events every `interval`, and
+/// cancel it when the server says it was withdrawn.
+async fn rip_reporter(
+    client: WorkerClient,
+    worker_id: String,
+    rip_id: String,
+    events: Arc<std::sync::Mutex<RipEvents>>,
+    cancel: CancelToken,
+    stop: Arc<AtomicBool>,
+    interval: Duration,
+) {
+    while !stop.load(Ordering::SeqCst) {
+        tokio::time::sleep(interval).await;
+        if stop.load(Ordering::SeqCst) {
+            break;
+        }
+        if let Err(error) = client.heartbeat(&worker_id).await {
+            tracing::warn!(error = ?error, "heartbeat failed while ripping");
+        }
+        if flush_rip_events(&client, &rip_id, &events).await == RipStanding::Stop {
+            tracing::info!(%rip_id, "the rip was withdrawn; stopping");
+            cancel.cancel();
+            break;
+        }
+    }
+}
+
+impl<E: BurnEngine> WorkerRuntime<E> {
+    /// Rip the disc in the drive, send what was read, and report how it
+    /// ended.
+    async fn rip(
+        &self,
+        identity: &WorkerIdentity,
+        drive_id: DriveId,
+        rip: &RipClaim,
+    ) -> Result<(), RunnerError> {
+        tracing::info!(rip_id = %rip.rip_id, "ripping the disc in the drive, as requested");
+        let dir = self.rips_root().join(&rip.rip_id);
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+
+        let events = Arc::new(std::sync::Mutex::new(RipEvents::default()));
+        let cancel = CancelToken::new();
+        let stop = Arc::new(AtomicBool::new(false));
+        let reporter = tokio::spawn(rip_reporter(
+            self.client.clone(),
+            identity.worker_id.clone(),
+            rip.rip_id.clone(),
+            Arc::clone(&events),
+            cancel.clone(),
+            Arc::clone(&stop),
+            self.settings.report_interval,
+        ));
+        let sink = RipSink {
+            events: Arc::clone(&events),
+        };
+        let outcome = rip_disc(
+            &self.engine,
+            &self.drive_ref(identity, drive_id),
+            &dir,
+            &cancel,
+            &sink,
+        )
+        .await;
+        stop.store(true, Ordering::SeqCst);
+        let _ = reporter.await;
+
+        let result = self.finish_rip(rip, &dir, &events, outcome).await;
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        result
+    }
+
+    /// Send what a rip read and report how it ended.
+    async fn finish_rip(
+        &self,
+        rip: &RipClaim,
+        dir: &std::path::Path,
+        events: &std::sync::Mutex<RipEvents>,
+        outcome: RipOutcome,
+    ) -> Result<(), RunnerError> {
+        let RipOutcome::Ended(completion) = outcome else {
+            tracing::info!(rip_id = %rip.rip_id, "rip withdrawn; nothing to send");
+            return Ok(());
+        };
+        if flush_rip_events(&self.client, &rip.rip_id, events).await == RipStanding::Stop {
+            tracing::info!(rip_id = %rip.rip_id, "rip withdrawn before it could be sent");
+            return Ok(());
+        }
+        for name in &completion.outputs {
+            let standing = self
+                .client
+                .upload_rip_file(&rip.rip_id, name, &dir.join(name))
+                .await?;
+            if standing == RipStanding::Stop {
+                tracing::info!(rip_id = %rip.rip_id, "rip withdrawn while sending");
+                return Ok(());
+            }
+        }
+        tracing::info!(
+            rip_id = %rip.rip_id,
+            outcome = %completion.outcome,
+            error_code = ?completion.error_code,
+            "rip finished"
+        );
+        self.client.complete_rip(&rip.rip_id, &completion).await?;
         Ok(())
     }
 }

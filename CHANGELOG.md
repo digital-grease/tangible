@@ -41,6 +41,13 @@ may change between minor versions, and the release notes say how.
   of binary files, known signatures at known offsets) with every name
   replaced (`GET /api/v1/artifacts/{id}/format-report`, new issue form
   `format_support.yml`).
+- CDs can be ripped into the library (ADR 0013, first part): an operator
+  asks for a rip of a drive's disc (`POST /api/v1/drives/{id}/rips`), the
+  drive's worker reads it with `cdrdao read-cd`, sends the table of
+  contents and data, and they are imported as a TOC/BIN artifact whose
+  origin says it was dumped from a disc. A rip can be withdrawn until its
+  import starts. DVDs, Blu-rays and blank discs are refused for now. A
+  drive now does one thing at a time across burns, erasures and rips.
 - Administrators have a Diagnostics page with the same checklist, to copy,
   download, or prepare as an issue (`GET /api/v1/diagnostics` and
   `/diagnostics/report`, new permission `diagnose`).

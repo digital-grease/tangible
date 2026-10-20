@@ -19,7 +19,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use sqlx::PgPool;
-use tangible_api::{ApiState, ImportCheckpoint, ImportPipeline, ImportRequest, catalog, router};
+use tangible_api::{
+    ApiState, ImportCheckpoint, ImportContext, ImportPipeline, ImportRequest, ImportRunner,
+    ImportRunnerSettings, catalog, router,
+};
 use tangible_burn::plan::{
     BlankReport, BlankRequest, BurnPlan, DriveCapabilities, DriveRef, MediumInfo, PreflightReport,
     VerifyReport, WriteMode, WriteReport,
@@ -28,7 +31,7 @@ use tangible_burn::runner::{WorkerRuntime, WorkerSettings};
 use tangible_burn::{BurnEngine, EngineError, EventSink, FakeBehaviour, FakeEngine};
 use tangible_db::{Database, DbConfig};
 use tangible_domain::{ImportJobId, LogicalPath};
-use tangible_storage::{FilesystemStore, IngestLimits, ManifestStore, StagingManager};
+use tangible_storage::{FilesystemStore, IngestLimits, ManifestStore, StagingManager, WatchRoots};
 use tempfile::TempDir;
 
 mod support;
@@ -112,7 +115,11 @@ async fn server() -> Server {
     let address = listener.local_addr().expect("local address");
 
     let (shutdown, stopped) = tokio::sync::oneshot::channel();
-    let state = ApiState::with_manifests(database.clone(), manifests);
+    let state = ApiState::with_manifests(database.clone(), manifests).with_imports(ImportContext {
+        pipeline: pipeline.clone(),
+        roots: WatchRoots::new(std::collections::BTreeMap::new()),
+        max_upload_bytes: 64 * 1024 * 1024,
+    });
     let handle = tokio::spawn(async move {
         let _ = axum::serve(listener, router(state))
             .with_graceful_shutdown(async {
@@ -926,6 +933,186 @@ async fn a_worker_erases_the_disc_it_is_asked_to_and_only_that() {
         "DVD-RW sequential recording"
     );
     assert_eq!(record["medium_before"]["sessions"], 1);
+
+    server.stop().await;
+}
+
+/// A CD with something on it, as the fake engine presents one.
+fn pressed_cd() -> FakeBehaviour {
+    FakeBehaviour {
+        medium_profile: Some("CD-ROM".to_owned()),
+        medium_sessions: 1,
+        ..FakeBehaviour::default()
+    }
+}
+
+impl Server {
+    /// Poll a rip until `done` says it has got far enough.
+    async fn rip_until(
+        &self,
+        rip: &str,
+        done: impl Fn(&serde_json::Value) -> bool,
+    ) -> serde_json::Value {
+        let mut record = serde_json::Value::Null;
+        for _ in 0..200 {
+            record = self.get(&format!("/api/v1/rips/{rip}")).await;
+            if done(&record) {
+                return record;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("the rip never got there: {record}");
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_worker_rips_the_disc_it_is_asked_to_into_the_library() {
+    // The whole rip path over HTTP: the worker says it can rip, an operator
+    // asks, the drive's worker reads the disc, sends both files, and the
+    // import turns them into an artifact.
+    let _queue = exclusive_queue().await;
+    let mut server = server().await;
+    server.drain_queue().await;
+
+    let worker_dir = TempDir::new().expect("temp dir");
+    let token = server.enrollment_token().await;
+    let settings = settings(&server, worker_dir.path().to_path_buf(), token);
+    let engine = || FakeEngine::new(settings.state_dir.join("media")).with_behaviour(pressed_cd());
+    let drive = {
+        let mut runtime = WorkerRuntime::new(settings.clone(), engine()).expect("runtime");
+        let mut identity = runtime.identify().await.expect("enroll");
+        runtime.announce(&mut identity).await.expect("announce")
+    };
+
+    let (status, requested) = server
+        .post(
+            &format!("/api/v1/drives/{drive}/rips"),
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, 201, "the worker said it can rip: {requested}");
+    let rip = requested["id"].as_str().expect("a rip").to_owned();
+
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let engine = engine();
+    let worker = tokio::spawn(async move {
+        let mut runtime = WorkerRuntime::new(settings, engine).expect("runtime");
+        runtime
+            .run(async {
+                let _ = stopped.await;
+            })
+            .await
+    });
+    let sent = server
+        .rip_until(&rip, |record| {
+            record["state"] != "queued" && record["can_cancel"] == false
+        })
+        .await;
+    let _ = stop.send(());
+    let _ = worker.await.expect("the worker task");
+    assert_eq!(sent["state"], "registering", "{sent}");
+    assert_eq!(sent["engine"], "fake");
+    assert_eq!(sent["medium"]["profile"], "CD-ROM");
+    assert_eq!(sent["files"].as_array().unwrap().len(), 2);
+
+    let runner = ImportRunner::new(
+        server.database.clone(),
+        server.pipeline.clone(),
+        ImportRunnerSettings {
+            owner: format!("test-{}", uuid::Uuid::now_v7()),
+            ..ImportRunnerSettings::default()
+        },
+    );
+    for _ in 0..10 {
+        if !runner.step().await.expect("queue") {
+            break;
+        }
+    }
+    let done = server.get(&format!("/api/v1/rips/{rip}")).await;
+    assert_eq!(done["state"], "complete", "{done}");
+    let artifact = done["artifact_id"].as_str().expect("an artifact");
+    let detail = server.get(&format!("/api/v1/artifacts/{artifact}")).await;
+    assert_eq!(detail["format"], "toc_bin", "{detail}");
+    assert_eq!(detail["disc"]["tracks"].as_array().unwrap().len(), 2);
+    let events = server.get(&format!("/api/v1/rips/{rip}/events")).await;
+    assert!(
+        events["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["code"] == "RIP_STARTED"),
+        "{events}"
+    );
+
+    server.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_withdrawn_rip_stops_the_worker_reading_and_nothing_is_sent() {
+    let _queue = exclusive_queue().await;
+    let mut server = server().await;
+    server.drain_queue().await;
+
+    let worker_dir = TempDir::new().expect("temp dir");
+    let token = server.enrollment_token().await;
+    let settings = settings(&server, worker_dir.path().to_path_buf(), token);
+    let engine = || {
+        FakeEngine::new(settings.state_dir.join("media")).with_behaviour(FakeBehaviour {
+            // Long enough to be withdrawn partway: 100 steps of 50 ms.
+            rip_steps: 100,
+            ..pressed_cd()
+        })
+    };
+    let drive = {
+        let mut runtime = WorkerRuntime::new(settings.clone(), engine()).expect("runtime");
+        let mut identity = runtime.identify().await.expect("enroll");
+        runtime.announce(&mut identity).await.expect("announce")
+    };
+    let (_, requested) = server
+        .post(
+            &format!("/api/v1/drives/{drive}/rips"),
+            serde_json::json!({}),
+        )
+        .await;
+    let rip = requested["id"].as_str().expect("a rip").to_owned();
+
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let engine = engine();
+    let state_dir = settings.state_dir.clone();
+    let worker = tokio::spawn(async move {
+        let mut runtime = WorkerRuntime::new(settings, engine).expect("runtime");
+        runtime
+            .run(async {
+                let _ = stopped.await;
+            })
+            .await
+    });
+    server
+        .rip_until(&rip, |record| record["state"] == "reading")
+        .await;
+    let (status, canceled) = server
+        .post(&format!("/api/v1/rips/{rip}/cancel"), serde_json::json!({}))
+        .await;
+    assert_eq!(status, 200, "{canceled}");
+
+    // The worker hears of it at its next report, stops reading, and tidies
+    // up: nothing of the rip is left on its disk.
+    let rip_dir = state_dir.join("rips").join(&rip);
+    for _ in 0..100 {
+        if !rip_dir.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(!rip_dir.exists(), "the worker removed what it had read");
+    let _ = stop.send(());
+    let _ = worker.await.expect("the worker task");
+
+    let record = server.get(&format!("/api/v1/rips/{rip}")).await;
+    assert_eq!(record["state"], "canceled");
+    assert_eq!(record["bytes_received"], 0, "nothing was sent");
 
     server.stop().await;
 }

@@ -63,8 +63,8 @@ use crate::engine::{BurnEngine, BurnEvent, EngineError, EventSink};
 use crate::fake::CancelToken;
 use crate::plan::{
     BlankReport, BlankRequest, BurnPlan, DriveCapabilities, DriveRef, MediumInfo, PreflightFailure,
-    PreflightReport, TrackCheck, TrackOutcome, TrackVerification, VerifyReport, WriteMode,
-    WriteReport,
+    PreflightReport, RIP_DATA, RIP_TOC, RipReport, RipRequest, TrackCheck, TrackOutcome,
+    TrackVerification, VerifyReport, WriteMode, WriteReport,
 };
 
 /// How long inspecting or probing a drive may take.
@@ -239,9 +239,20 @@ impl CdrdaoEngine {
 
     /// Run the tool to completion and collect what it said.
     async fn run(&self, arguments: &[String], timeout: Duration) -> Result<Run, EngineError> {
+        self.run_in(arguments, timeout, &self.working_directory())
+            .await
+    }
+
+    /// Run the tool in `directory` to completion and collect what it said.
+    async fn run_in(
+        &self,
+        arguments: &[String],
+        timeout: Duration,
+        directory: &Path,
+    ) -> Result<Run, EngineError> {
         let mut child = Command::new(&self.program)
             .args(arguments)
-            .current_dir(self.working_directory())
+            .current_dir(directory)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -444,6 +455,113 @@ impl CdrdaoEngine {
             parse::toc_listing(&shown.text()),
             parse::readback_tracks(&toc_text),
         ))
+    }
+}
+
+/// How long ripping a whole CD may take: the same as reading one back.
+const RIP_TIMEOUT: Duration = READBACK_TIMEOUT;
+
+/// How often a rip looks to see whether it was withdrawn.
+const RIP_CANCEL_POLL: Duration = Duration::from_millis(500);
+
+impl CdrdaoEngine {
+    /// Read the whole CD into the request's directory.
+    async fn rip(
+        &self,
+        request: &RipRequest,
+        sink: &dyn EventSink,
+    ) -> Result<RipReport, EngineError> {
+        if !request.output_dir.is_absolute() {
+            return Err(EngineError::Unsupported {
+                what: "a rip's output directory must be absolute".to_owned(),
+            });
+        }
+        let io = |operation: &'static str| {
+            move |source: std::io::Error| EngineError::Io { operation, source }
+        };
+        tokio::fs::create_dir_all(&request.output_dir)
+            .await
+            .map_err(io("creating the rip directory"))?;
+        // read-cd refuses to overwrite, and a stale pair is not this disc.
+        for name in [RIP_TOC, RIP_DATA] {
+            let _ = tokio::fs::remove_file(request.output_dir.join(name)).await;
+        }
+
+        sink.emit(BurnEvent::new(
+            "ripping",
+            "RIP_STARTED",
+            "reading every track of the disc",
+        ));
+        let arguments = command::rip_cd(&request.drive);
+        let run = self.run_in(&arguments, RIP_TIMEOUT, &request.output_dir);
+        // Dropping the run kills cdrdao (kill_on_drop), which is what a
+        // withdrawn rip wants: reading is harmless to stop.
+        let text = tokio::select! {
+            run = run => run?.text(),
+            () = wait_until_cancelled(&request.cancel) => {
+                for name in [RIP_TOC, RIP_DATA] {
+                    let _ = tokio::fs::remove_file(request.output_dir.join(name)).await;
+                }
+                sink.emit(BurnEvent::new("ripping", "RIP_CANCELLED", "the rip was withdrawn"));
+                return Err(EngineError::Cancelled);
+            }
+        };
+        if parse::device_unavailable(&text) {
+            return Err(EngineError::DriveUnavailable {
+                alias: request.drive.device_alias.clone(),
+            });
+        }
+        if parse::no_disc(&text) {
+            return Err(EngineError::NoMedium {
+                alias: request.drive.device_alias.clone(),
+            });
+        }
+        if !parse::read_completed(&text) {
+            let failures: Vec<String> = parse::messages(&text)
+                .iter()
+                .filter(|message| message.severity.is_failure())
+                .map(|message| message.text.clone())
+                .take(MAX_DIAGNOSTICS)
+                .collect();
+            return Err(EngineError::Unsupported {
+                what: if failures.is_empty() {
+                    "cdrdao did not finish reading the disc".to_owned()
+                } else {
+                    format!(
+                        "cdrdao did not finish reading the disc: {}",
+                        failures.join("; ")
+                    )
+                },
+            });
+        }
+        let data_bytes = tokio::fs::metadata(request.output_dir.join(RIP_DATA))
+            .await
+            .map_err(io("reading the ripped data file"))?
+            .len();
+        tokio::fs::metadata(request.output_dir.join(RIP_TOC))
+            .await
+            .map_err(io("reading the ripped table of contents"))?;
+        sink.emit(BurnEvent::new(
+            "ripping",
+            "RIP_READ",
+            format!("read {data_bytes} bytes"),
+        ));
+        Ok(RipReport {
+            engine: "cdrdao".to_owned(),
+            engine_version: self.version.clone(),
+            // cdrdao stops at a sector it cannot read rather than skipping
+            // it, so a rip that finished read every sector.
+            unreadable_sectors: 0,
+            retried_sectors: 0,
+            data_bytes,
+        })
+    }
+}
+
+/// Resolve once `cancel` is set.
+async fn wait_until_cancelled(cancel: &CancelToken) {
+    while !cancel.is_cancelled() {
+        tokio::time::sleep(RIP_CANCEL_POLL).await;
     }
 }
 
@@ -945,6 +1063,18 @@ impl BurnEngine for CdrdaoEngine {
     /// for it.
     fn supports_mode(&self, mode: WriteMode) -> bool {
         matches!(mode, WriteMode::TocDiscAtOnce)
+    }
+
+    fn rips_cds(&self) -> bool {
+        true
+    }
+
+    async fn rip_cd(
+        &self,
+        request: &RipRequest,
+        sink: &dyn EventSink,
+    ) -> Result<RipReport, EngineError> {
+        self.rip(request, sink).await
     }
 
     async fn probe_drive(&self, drive: &DriveRef) -> Result<DriveCapabilities, EngineError> {

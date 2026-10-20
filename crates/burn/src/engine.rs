@@ -16,7 +16,7 @@ use async_trait::async_trait;
 
 use crate::plan::{
     BlankReport, BlankRequest, BurnPlan, DriveCapabilities, DriveRef, MediumInfo, PreflightReport,
-    VerifyReport, WriteMode, WriteReport,
+    RipReport, RipRequest, VerifyReport, WriteMode, WriteReport,
 };
 
 /// Something an engine reports while working.
@@ -302,6 +302,37 @@ pub trait BurnEngine: Send + Sync {
     ///
     /// [`EngineError::DriveUnavailable`] if the drive cannot be reached.
     async fn eject(&self, drive: &DriveRef) -> Result<(), EngineError>;
+
+    /// Whether this engine can read a CD into a table of contents and its
+    /// data (ADR 0013). Defaulted to no, unlike the burn questions: an engine
+    /// that cannot rip saying so is the safe answer, and the worker then
+    /// never tells the server it can.
+    fn rips_cds(&self) -> bool {
+        false
+    }
+
+    /// Read the whole CD in the drive into `request.output_dir`, as
+    /// [`crate::plan::RIP_TOC`] and [`crate::plan::RIP_DATA`].
+    ///
+    /// The caller has already looked at the medium. Stops, removing what it
+    /// wrote, when `request.cancel` is set.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::Unsupported`] from an engine that cannot rip,
+    /// [`EngineError::NoMedium`], [`EngineError::DriveUnavailable`],
+    /// [`EngineError::Cancelled`], or [`EngineError::Unsupported`] with what
+    /// went wrong when the disc did not read.
+    async fn rip_cd(
+        &self,
+        request: &RipRequest,
+        sink: &dyn EventSink,
+    ) -> Result<RipReport, EngineError> {
+        let _ = (request, sink);
+        Err(EngineError::Unsupported {
+            what: format!("the {} engine does not rip discs", self.name()),
+        })
+    }
 }
 
 #[cfg(test)]

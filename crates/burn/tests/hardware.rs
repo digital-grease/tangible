@@ -429,3 +429,42 @@ async fn a_rewritable_disc_is_refused_when_used_erased_on_request_and_burned_aga
 
     burn_and_read_back(&engine, &second).await;
 }
+
+#[tokio::test]
+async fn the_cd_in_the_drive_is_ripped_into_a_table_of_contents_and_its_data() {
+    // Read-only, so under the question-asking gate. Needs a CD with something
+    // on it in the drive; anything else is refused, which is printed.
+    let Some(device) = device() else { return };
+    let dir = TempDir::new().expect("temp dir");
+    let engine = engine(dir.path()).await;
+    let out = dir.path().join("rip");
+    let outcome = tangible_burn::ripping::rip_disc(
+        &engine,
+        &drive(&device),
+        &out,
+        &tangible_burn::CancelToken::new(),
+        &Print,
+    )
+    .await;
+    let tangible_burn::ripping::RipOutcome::Ended(done) = outcome else {
+        panic!("nothing withdrew this rip");
+    };
+    println!("  rip: {done:?}");
+    if done.outcome != "read" {
+        eprintln!(
+            "not ripped ({:?}); put a CD with data or audio in the drive",
+            done.error_code
+        );
+        return;
+    }
+    let toc = std::fs::read_to_string(out.join("disc.toc")).expect("a table of contents");
+    assert!(
+        toc.contains("\"disc.bin\""),
+        "the TOC names the data file as the import will: {toc}"
+    );
+    // Data and audio sectors differ in size, so only that something was read.
+    let bytes = std::fs::metadata(out.join("disc.bin"))
+        .expect("the data")
+        .len();
+    assert!(bytes > 0);
+}
