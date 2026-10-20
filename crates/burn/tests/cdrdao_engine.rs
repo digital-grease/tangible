@@ -315,6 +315,7 @@ async fn a_rip_of_a_drive_that_is_not_there_is_unavailable() {
         drive: mixed_mode(&fixture).drive,
         output_dir: fixture.dir.path().join("rip"),
         cancel: tangible_burn::CancelToken::new(),
+        expected_bytes: None,
     };
     let result = fixture
         .engine

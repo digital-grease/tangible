@@ -1116,3 +1116,107 @@ async fn a_withdrawn_rip_stops_the_worker_reading_and_nothing_is_sent() {
 
     server.stop().await;
 }
+
+/// Run a worker with `behaviour` until the rip it is asked for has ended or
+/// been sent, and answer the rip as the server last saw it.
+async fn rip_with(server: &Server, behaviour: FakeBehaviour) -> serde_json::Value {
+    let worker_dir = TempDir::new().expect("temp dir");
+    let token = server.enrollment_token().await;
+    let settings = settings(server, worker_dir.path().to_path_buf(), token);
+    let engine =
+        || FakeEngine::new(settings.state_dir.join("media")).with_behaviour(behaviour.clone());
+    let drive = {
+        let mut runtime = WorkerRuntime::new(settings.clone(), engine()).expect("runtime");
+        let mut identity = runtime.identify().await.expect("enroll");
+        runtime.announce(&mut identity).await.expect("announce")
+    };
+    let (status, requested) = server
+        .post(
+            &format!("/api/v1/drives/{drive}/rips"),
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, 201, "{requested}");
+    let rip = requested["id"].as_str().expect("a rip").to_owned();
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let engine = engine();
+    let worker = tokio::spawn(async move {
+        let mut runtime = WorkerRuntime::new(settings, engine).expect("runtime");
+        runtime
+            .run(async {
+                let _ = stopped.await;
+            })
+            .await
+    });
+    let record = server
+        .rip_until(&rip, |record| {
+            record["state"] != "queued" && record["can_cancel"] == false
+        })
+        .await;
+    let _ = stop.send(());
+    let _ = worker.await.expect("the worker task");
+    record
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_worker_rips_a_dvd_into_one_image() {
+    let _queue = exclusive_queue().await;
+    let mut server = server().await;
+    server.drain_queue().await;
+    let sent = rip_with(
+        &server,
+        FakeBehaviour {
+            medium_profile: Some("DVD-ROM".to_owned()),
+            medium_sessions: 1,
+            ..FakeBehaviour::default()
+        },
+    )
+    .await;
+    assert_eq!(sent["state"], "registering", "{sent}");
+    assert_eq!(sent["files"][0]["name"], "disc.iso");
+
+    let runner = ImportRunner::new(
+        server.database.clone(),
+        server.pipeline.clone(),
+        ImportRunnerSettings {
+            owner: format!("test-{}", uuid::Uuid::now_v7()),
+            ..ImportRunnerSettings::default()
+        },
+    );
+    for _ in 0..10 {
+        if !runner.step().await.expect("queue") {
+            break;
+        }
+    }
+    let rip = sent["id"].as_str().unwrap();
+    let done = server.get(&format!("/api/v1/rips/{rip}")).await;
+    assert_eq!(done["state"], "complete", "{done}");
+    let artifact = done["artifact_id"].as_str().expect("an artifact");
+    let detail = server.get(&format!("/api/v1/artifacts/{artifact}")).await;
+    assert_eq!(detail["format"], "iso", "{detail}");
+    server.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_encrypted_dvd_is_refused_and_nothing_is_sent() {
+    let _queue = exclusive_queue().await;
+    let mut server = server().await;
+    server.drain_queue().await;
+    let ended = rip_with(
+        &server,
+        FakeBehaviour {
+            medium_profile: Some("DVD-ROM".to_owned()),
+            medium_sessions: 1,
+            rip_encrypted: true,
+            ..FakeBehaviour::default()
+        },
+    )
+    .await;
+    assert_eq!(ended["state"], "refused", "{ended}");
+    assert_eq!(ended["error_code"], "ENCRYPTED");
+    assert_eq!(ended["bytes_received"], 0);
+    assert_eq!(ended["medium"]["profile"], "DVD-ROM");
+    server.stop().await;
+}

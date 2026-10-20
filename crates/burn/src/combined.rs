@@ -151,6 +151,19 @@ impl<D: BurnEngine, T: BurnEngine> BurnEngine for CombinedEngine<D, T> {
     ) -> Result<RipReport, EngineError> {
         self.toc.rip_cd(request, sink).await
     }
+
+    /// The data engine's: a disc image is its shape.
+    fn rips_images(&self) -> bool {
+        self.data.rips_images()
+    }
+
+    async fn rip_image(
+        &self,
+        request: &RipRequest,
+        sink: &dyn EventSink,
+    ) -> Result<RipReport, EngineError> {
+        self.data.rip_image(request, sink).await
+    }
 }
 
 #[cfg(test)]

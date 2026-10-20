@@ -50,6 +50,13 @@ may change between minor versions, and the release notes say how.
   drive now does one thing at a time across burns, erasures and rips. The
   web UI's Rips page asks for a rip and follows it to the library, with
   progress as the disc reads.
+- DVD data discs can be ripped too (ADR 0013, second part): the worker
+  reads the disc sector by sector from the drive itself into an image,
+  retrying a sector that fails and stopping at one that will not read, and
+  it is imported as an ISO. An encrypted (CSS) DVD is recognised while it
+  reads and refused, keeping nothing. A disc the system has not caught up
+  with since a burn is refused with a request to reload it. Blu-rays are
+  still refused.
 - A CD burn that the drive refused while setting up, before writing
   anything, is tried once more if the disc is still blank; a drive on the
   bench did this once and burned on the next run.

@@ -1,0 +1,446 @@
+// SPDX-FileCopyrightText: 2026 digitalgrease
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+//! Reading a DVD or Blu-ray data disc into an image, sector by sector
+//! (ADR 0013, phase R2).
+//!
+//! No tool: the worker already holds the drive's block device, and the
+//! kernel returns the disc's 2048-byte sectors in order. The device's size
+//! is where its readable area ends. A chunk that fails is read again a
+//! sector at a time, each sector a few times; one that still fails stops
+//! the read, because an image with a hole in it is not the disc.
+//!
+//! Every sector is also checked for CSS scrambling, the flag in a DVD-Video
+//! sector's MPEG header. A scrambled sector stops the read: until
+//! decryption is built (R3), an encrypted disc is refused, never kept as
+//! scrambled bytes that look like content.
+
+use std::io::SeekFrom;
+use std::path::Path;
+
+use tokio::fs;
+use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _, AsyncWriteExt as _};
+
+use crate::engine::{BurnEvent, EngineError, EventSink};
+use crate::fake::CancelToken;
+
+/// Bytes in a DVD or Blu-ray sector.
+pub const SECTOR_BYTES: usize = 2048;
+
+/// Sectors read at a time while nothing goes wrong: 1 MiB.
+const CHUNK_SECTORS: usize = 512;
+
+/// Times one sector is tried before the read gives up on it.
+const SECTOR_TRIES: u32 = 4;
+
+/// How an image read went.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImageRead {
+    /// Bytes written to the image.
+    pub bytes: u64,
+    /// Sectors that read only after retrying.
+    pub retried_sectors: u64,
+}
+
+/// Whether a sector is CSS-scrambled DVD-Video.
+///
+/// A VOB sector is an MPEG-2 program stream pack: `00 00 01 BA`, a pack
+/// header whose last byte says how much stuffing follows, then a PES packet
+/// (`00 00 01`, a stream id, two length bytes) whose next byte carries the
+/// two `PES_scrambling_control` bits. Non-zero means scrambled. Anything
+/// that is not shaped like that is not a scrambled VOB sector.
+#[must_use]
+pub fn css_scrambled(sector: &[u8]) -> bool {
+    if sector.len() < 32 || sector[..4] != [0x00, 0x00, 0x01, 0xBA] {
+        return false;
+    }
+    // MPEG-2 packs start their fifth byte with the bits 01.
+    if sector[4] & 0xC0 != 0x40 {
+        return false;
+    }
+    let pes = 14 + usize::from(sector[13] & 0x07);
+    let Some(header) = sector.get(pes..pes + 7) else {
+        return false;
+    };
+    if header[..3] != [0x00, 0x00, 0x01] {
+        return false;
+    }
+    let stream = header[3];
+    // Video, MPEG audio, and private stream 1 (AC-3, DTS, LPCM, subpictures):
+    // the streams CSS scrambles. Navigation packs (private stream 2) are not.
+    let scrambleable = matches!(stream, 0xE0..=0xEF | 0xC0..=0xDF | 0xBD);
+    scrambleable && header[6] & 0x30 != 0
+}
+
+/// Read `device` into `output`, which must not exist yet.
+///
+/// # Errors
+///
+/// [`EngineError::NoMedium`] when the device has nothing readable,
+/// [`EngineError::Encrypted`] at the first scrambled sector,
+/// [`EngineError::Unsupported`] naming the first sector that would not read,
+/// [`EngineError::Cancelled`], or [`EngineError::Io`]. On any of these the
+/// partial image is removed.
+pub async fn read_image(
+    device: &Path,
+    output: &Path,
+    expected_bytes: Option<u64>,
+    cancel: &CancelToken,
+    sink: &dyn EventSink,
+) -> Result<ImageRead, EngineError> {
+    // Refused before anything is opened, so the clean-up below only ever
+    // removes an image this read began.
+    if fs::try_exists(output).await.unwrap_or(true) {
+        return Err(EngineError::Io {
+            operation: "creating the image",
+            source: std::io::Error::from(std::io::ErrorKind::AlreadyExists),
+        });
+    }
+    let result = read_into(device, output, expected_bytes, cancel, sink).await;
+    if result.is_err() {
+        let _ = fs::remove_file(output).await;
+    }
+    result
+}
+
+async fn read_into(
+    device: &Path,
+    output: &Path,
+    expected_bytes: Option<u64>,
+    cancel: &CancelToken,
+    sink: &dyn EventSink,
+) -> Result<ImageRead, EngineError> {
+    let io = |operation: &'static str| move |source| EngineError::Io { operation, source };
+    let mut disc = fs::File::open(device)
+        .await
+        .map_err(io("opening the drive"))?;
+    // A block device's end is where its readable area ends.
+    let size = disc
+        .seek(SeekFrom::End(0))
+        .await
+        .map_err(io("finding the end of the disc"))?;
+    if size == 0 {
+        return Err(EngineError::NoMedium {
+            alias: device.display().to_string(),
+        });
+    }
+    // The kernel learns a disc's size when the disc is put in, not when a
+    // drive finishes burning one, and reads stop at the size it knows. Found
+    // on the bench: straight after a burn it still said 2048 bytes, and an
+    // image of that would have been a fragment called a disc.
+    if let Some(expected) = expected_bytes
+        && size < expected
+    {
+        return Err(EngineError::UnsuitableMedium {
+            reason: format!(
+                "the system still reports {size} bytes for a disc the drive says holds \
+                 {expected}; take the disc out and put it back, then ask again"
+            ),
+        });
+    }
+    disc.seek(SeekFrom::Start(0))
+        .await
+        .map_err(io("returning to the start of the disc"))?;
+    let mut image = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output)
+        .await
+        .map_err(io("creating the image"))?;
+
+    sink.emit(BurnEvent::new(
+        "ripping",
+        "RIP_STARTED",
+        format!("reading {size} bytes from the disc"),
+    ));
+    let mut buffer = vec![0_u8; CHUNK_SECTORS * SECTOR_BYTES];
+    let mut offset = 0_u64;
+    let mut retried = 0_u64;
+    let mut last_percent = None;
+    while offset < size {
+        if cancel.is_cancelled() {
+            sink.emit(BurnEvent::new(
+                "ripping",
+                "RIP_CANCELLED",
+                "the rip was withdrawn",
+            ));
+            return Err(EngineError::Cancelled);
+        }
+        let want =
+            usize::try_from((size - offset).min(buffer.len() as u64)).unwrap_or(buffer.len());
+        let chunk = &mut buffer[..want];
+        if read_at(&mut disc, offset, chunk).await.is_err() {
+            retried += read_sectors_slowly(&mut disc, offset, chunk).await?;
+        }
+        if let Some(index) = chunk.chunks(SECTOR_BYTES).position(css_scrambled) {
+            sink.emit(BurnEvent::new(
+                "ripping",
+                "RIP_ENCRYPTED",
+                format!(
+                    "sector {} is CSS-scrambled; encrypted discs are not ripped yet",
+                    offset / SECTOR_BYTES as u64 + index as u64
+                ),
+            ));
+            return Err(EngineError::Encrypted { system: "CSS" });
+        }
+        image
+            .write_all(chunk)
+            .await
+            .map_err(io("writing the image"))?;
+        offset += want as u64;
+
+        // A whole percent, rounded down, so 100 is said only at the end.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+        let fraction = (offset as f64 / size as f64) as f32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let percent = (fraction * 100.0) as u32;
+        if last_percent != Some(percent) {
+            last_percent = Some(percent);
+            sink.emit(BurnEvent::progress(
+                "ripping",
+                "RIP_PROGRESS",
+                fraction,
+                format!("{percent}% read"),
+            ));
+        }
+    }
+    image.flush().await.map_err(io("writing the image"))?;
+    image.sync_all().await.map_err(io("writing the image"))?;
+    sink.emit(BurnEvent::new(
+        "ripping",
+        "RIP_READ",
+        format!("read {offset} bytes"),
+    ));
+    Ok(ImageRead {
+        bytes: offset,
+        retried_sectors: retried,
+    })
+}
+
+/// Fill `buffer` from `offset`, or fail.
+async fn read_at(disc: &mut fs::File, offset: u64, buffer: &mut [u8]) -> std::io::Result<()> {
+    disc.seek(SeekFrom::Start(offset)).await?;
+    disc.read_exact(buffer).await.map(|_| ())
+}
+
+/// Read a chunk that failed whole, a sector at a time, trying each a few
+/// times. Answers how many sectors needed more than one try.
+async fn read_sectors_slowly(
+    disc: &mut fs::File,
+    offset: u64,
+    chunk: &mut [u8],
+) -> Result<u64, EngineError> {
+    let mut retried = 0;
+    for (index, sector) in chunk.chunks_mut(SECTOR_BYTES).enumerate() {
+        let at = offset + (index * SECTOR_BYTES) as u64;
+        let mut tries = 0;
+        loop {
+            tries += 1;
+            if read_at(disc, at, sector).await.is_ok() {
+                break;
+            }
+            if tries >= SECTOR_TRIES {
+                return Err(EngineError::Unsupported {
+                    what: format!(
+                        "sector {} could not be read after {SECTOR_TRIES} tries; the disc may be \
+                         damaged, or encrypted in a way the drive will not read without \
+                         authentication",
+                        at / SECTOR_BYTES as u64
+                    ),
+                });
+            }
+        }
+        if tries > 1 {
+            retried += 1;
+        }
+    }
+    Ok(retried)
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::engine::CollectingSink;
+
+    /// A DVD-Video sector: a pack header with `stuffing` bytes, then a PES
+    /// packet for `stream` with the scrambling bits set to `scrambling`.
+    fn vob_sector(stream: u8, scrambling: u8, stuffing: u8) -> Vec<u8> {
+        let mut sector = vec![0_u8; SECTOR_BYTES];
+        sector[..4].copy_from_slice(&[0x00, 0x00, 0x01, 0xBA]);
+        sector[4] = 0x44;
+        sector[13] = 0xF8 | stuffing;
+        let pes = 14 + usize::from(stuffing);
+        sector[pes..pes + 4].copy_from_slice(&[0x00, 0x00, 0x01, stream]);
+        sector[pes + 6] = 0x80 | (scrambling << 4);
+        sector
+    }
+
+    #[test]
+    fn a_scrambled_vob_sector_is_recognised() {
+        for stream in [0xE0, 0xBD, 0xC0] {
+            assert!(css_scrambled(&vob_sector(stream, 1, 0)), "{stream:#x}");
+            assert!(
+                css_scrambled(&vob_sector(stream, 3, 3)),
+                "{stream:#x} with stuffing"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_sectors_are_not_scrambled() {
+        assert!(!css_scrambled(&vob_sector(0xE0, 0, 0)), "clear video");
+        assert!(
+            !css_scrambled(&vob_sector(0xBF, 1, 0)),
+            "navigation is never scrambled"
+        );
+        assert!(!css_scrambled(&vec![0_u8; SECTOR_BYTES]));
+        let mut iso = vec![0_u8; SECTOR_BYTES];
+        iso[1..6].copy_from_slice(b"CD001");
+        assert!(!css_scrambled(&iso));
+        let mut mpeg1 = vob_sector(0xE0, 1, 0);
+        mpeg1[4] = 0x21;
+        assert!(!css_scrambled(&mpeg1), "an MPEG-1 pack is not a DVD sector");
+        assert!(!css_scrambled(&[0, 0, 1, 0xBA]));
+    }
+
+    async fn read(device: &Path, dir: &Path) -> Result<ImageRead, EngineError> {
+        read_image(
+            device,
+            &dir.join("disc.iso"),
+            None,
+            &CancelToken::new(),
+            &CollectingSink::new(),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_size_the_system_has_not_caught_up_with_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let device = dir.path().join("device");
+        std::fs::write(&device, vec![0_u8; SECTOR_BYTES]).unwrap();
+        let result = read_image(
+            &device,
+            &dir.path().join("disc.iso"),
+            Some(2384 * SECTOR_BYTES as u64),
+            &CancelToken::new(),
+            &CollectingSink::new(),
+        )
+        .await;
+        let Err(EngineError::UnsuitableMedium { reason }) = result else {
+            panic!("{result:?}");
+        };
+        assert!(
+            reason.contains("take the disc out and put it back"),
+            "{reason}"
+        );
+        assert!(!dir.path().join("disc.iso").exists());
+        // The system agreeing is fine.
+        assert!(
+            read_image(
+                &device,
+                &dir.path().join("disc.iso"),
+                Some(SECTOR_BYTES as u64),
+                &CancelToken::new(),
+                &CollectingSink::new(),
+            )
+            .await
+            .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_plain_image_is_read_exactly() {
+        let dir = tempfile::tempdir().unwrap();
+        let device = dir.path().join("device");
+        let bytes: Vec<u8> = (0..SECTOR_BYTES * 1300)
+            .map(|i| u8::try_from(i % 251).unwrap_or(0))
+            .collect();
+        std::fs::write(&device, &bytes).unwrap();
+        let sink = CollectingSink::new();
+        let read = read_image(
+            &device,
+            &dir.path().join("disc.iso"),
+            None,
+            &CancelToken::new(),
+            &sink,
+        )
+        .await
+        .unwrap();
+        assert_eq!(read.bytes, bytes.len() as u64);
+        assert_eq!(read.retried_sectors, 0);
+        assert_eq!(std::fs::read(dir.path().join("disc.iso")).unwrap(), bytes);
+        let progress: Vec<String> = sink
+            .events()
+            .iter()
+            .filter(|event| event.code == "RIP_PROGRESS")
+            .map(|event| event.message.clone())
+            .collect();
+        assert_eq!(progress.last().map(String::as_str), Some("100% read"));
+        assert!(progress.len() <= 101);
+    }
+
+    #[tokio::test]
+    async fn an_encrypted_disc_stops_the_read_and_leaves_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let device = dir.path().join("device");
+        let mut bytes = vec![0_u8; SECTOR_BYTES * 600];
+        bytes[SECTOR_BYTES * 550..SECTOR_BYTES * 551].copy_from_slice(&vob_sector(0xE0, 1, 0));
+        std::fs::write(&device, &bytes).unwrap();
+        let result = read(&device, dir.path()).await;
+        assert!(
+            matches!(result, Err(EngineError::Encrypted { system: "CSS" })),
+            "{result:?}"
+        );
+        assert!(!dir.path().join("disc.iso").exists());
+    }
+
+    #[tokio::test]
+    async fn nothing_readable_is_no_medium() {
+        let dir = tempfile::tempdir().unwrap();
+        let device = dir.path().join("device");
+        std::fs::write(&device, b"").unwrap();
+        assert!(matches!(
+            read(&device, dir.path()).await,
+            Err(EngineError::NoMedium { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_withdrawn_read_stops_and_leaves_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let device = dir.path().join("device");
+        std::fs::write(&device, vec![0_u8; SECTOR_BYTES * 2000]).unwrap();
+        let cancel = CancelToken::new();
+        cancel.cancel();
+        let result = read_image(
+            &device,
+            &dir.path().join("disc.iso"),
+            None,
+            &cancel,
+            &CollectingSink::new(),
+        )
+        .await;
+        assert!(matches!(result, Err(EngineError::Cancelled)));
+        assert!(!dir.path().join("disc.iso").exists());
+    }
+
+    #[tokio::test]
+    async fn an_existing_image_is_never_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let device = dir.path().join("device");
+        std::fs::write(&device, vec![1_u8; SECTOR_BYTES]).unwrap();
+        std::fs::write(dir.path().join("disc.iso"), b"kept").unwrap();
+        let result = read_image(
+            &device,
+            &dir.path().join("disc.iso"),
+            None,
+            &CancelToken::new(),
+            &CollectingSink::new(),
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(dir.path().join("disc.iso")).unwrap(), b"kept");
+    }
+}

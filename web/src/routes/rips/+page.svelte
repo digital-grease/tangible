@@ -64,8 +64,8 @@
 
 <p>
   Put a disc you own in a drive and rip it into the library. The drive's worker reads it, sends what
-  it read, and it is imported and kept exactly as read. Reading changes nothing on the disc. CDs
-  only, for now; a CD becomes a table of contents and its data.
+  it read, and it is imported and kept exactly as read. Reading changes nothing on the disc. CDs and
+  DVDs, for now; a CD becomes a table of contents and its data, a DVD an image.
 </p>
 
 {#if refusal}

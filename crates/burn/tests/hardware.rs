@@ -431,9 +431,10 @@ async fn a_rewritable_disc_is_refused_when_used_erased_on_request_and_burned_aga
 }
 
 #[tokio::test]
-async fn the_cd_in_the_drive_is_ripped_into_a_table_of_contents_and_its_data() {
-    // Read-only, so under the question-asking gate. Needs a CD with something
-    // on it in the drive; anything else is refused, which is printed.
+async fn the_disc_in_the_drive_is_ripped() {
+    // Read-only, so under the question-asking gate. Needs a CD or DVD with
+    // something on it in the drive; anything else is refused, which is
+    // printed.
     let Some(device) = device() else { return };
     let dir = TempDir::new().expect("temp dir");
     let engine = engine(dir.path()).await;
@@ -452,9 +453,21 @@ async fn the_cd_in_the_drive_is_ripped_into_a_table_of_contents_and_its_data() {
     println!("  rip: {done:?}");
     if done.outcome != "read" {
         eprintln!(
-            "not ripped ({:?}); put a CD with data or audio in the drive",
+            "not ripped ({:?}); put a CD or DVD with something on it in the drive",
             done.error_code
         );
+        return;
+    }
+    if done.outputs == ["disc.iso"] {
+        // A DVD: an image of its filesystem, sector for sector.
+        let image = std::fs::read(out.join("disc.iso")).expect("an image");
+        assert!(image.len().is_multiple_of(2048), "{} bytes", image.len());
+        let identifier = &image[32769..32774];
+        assert!(
+            identifier == b"CD001" || identifier == b"BEA01",
+            "an ISO 9660 or UDF volume at sector 16"
+        );
+        println!("  read {} bytes", image.len());
         return;
     }
     let toc = std::fs::read_to_string(out.join("disc.toc")).expect("a table of contents");

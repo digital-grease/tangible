@@ -36,10 +36,28 @@ pub struct RipTransitionError {
 
 /// The files a CD rip produces: cdrdao's table of contents and its data.
 ///
-/// The worker may send only these. Fixed names keep a worker from choosing
-/// where in the staging area its bytes land, and say what the import will
-/// find.
+/// The worker may send only these, or [`IMAGE_OUTPUT`]. Fixed names keep a
+/// worker from choosing where in the staging area its bytes land, and say
+/// what the import will find.
 pub const CD_OUTPUTS: [&str; 2] = ["disc.toc", "disc.bin"];
+
+/// The file a DVD or Blu-ray rip produces: the disc's sectors in order, an
+/// image of its filesystem.
+pub const IMAGE_OUTPUT: &str = "disc.iso";
+
+/// Every name a rip may send.
+pub const RIP_OUTPUTS: [&str; 3] = ["disc.toc", "disc.bin", IMAGE_OUTPUT];
+
+/// The largest table of contents a rip may send: cdrdao's are a few
+/// kilobytes.
+pub const MAX_TOC_BYTES: u64 = 1024 * 1024;
+
+/// The largest CD data file: a 99-minute CD of raw 2352-byte sectors is
+/// about 1.05 GB; this leaves room and no more.
+pub const MAX_CD_DATA_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// The largest disc image: a quad-layer BDXL holds 128 GB.
+pub const MAX_IMAGE_BYTES: u64 = 128 * 1000 * 1000 * 1000;
 
 impl RipState {
     /// Whether the rip is still going.
@@ -116,6 +134,33 @@ pub fn is_cd_output(name: &str) -> bool {
     CD_OUTPUTS.contains(&name)
 }
 
+/// Whether `name` is one of the files any rip may send.
+#[must_use]
+pub fn is_rip_output(name: &str) -> bool {
+    RIP_OUTPUTS.contains(&name)
+}
+
+/// The largest a file of this name may be, when it is one a rip may send.
+#[must_use]
+pub fn max_output_bytes(name: &str) -> Option<u64> {
+    match name {
+        "disc.toc" => Some(MAX_TOC_BYTES),
+        "disc.bin" => Some(MAX_CD_DATA_BYTES),
+        IMAGE_OUTPUT => Some(MAX_IMAGE_BYTES),
+        _ => None,
+    }
+}
+
+/// Whether `names` make up one whole rip: a CD's table of contents and data,
+/// or one disc image. Never a mixture, and never a part.
+#[must_use]
+pub fn is_complete_output_set(names: &[String]) -> bool {
+    let mut names: Vec<&str> = names.iter().map(String::as_str).collect();
+    names.sort_unstable();
+    names.dedup();
+    names == ["disc.bin", "disc.toc"] || names == [IMAGE_OUTPUT]
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {
@@ -187,6 +232,29 @@ mod tests {
             );
             assert_eq!(state.accepts_uploads(), state.holds_the_drive());
         }
+    }
+
+    #[test]
+    fn a_rip_is_a_cd_pair_or_one_image() {
+        let set = |names: &[&str]| {
+            is_complete_output_set(&names.iter().map(|n| (*n).to_owned()).collect::<Vec<_>>())
+        };
+        assert!(set(&["disc.toc", "disc.bin"]));
+        assert!(set(&["disc.bin", "disc.toc", "disc.toc"]));
+        assert!(set(&["disc.iso"]));
+        for wrong in [
+            &[][..],
+            &["disc.toc"][..],
+            &["disc.iso", "disc.toc"][..],
+            &["disc.iso", "disc.toc", "disc.bin"][..],
+            &["other.iso"][..],
+        ] {
+            assert!(!set(wrong), "{wrong:?}");
+        }
+        assert_eq!(max_output_bytes("disc.toc"), Some(MAX_TOC_BYTES));
+        assert_eq!(max_output_bytes("disc.iso"), Some(MAX_IMAGE_BYTES));
+        assert_eq!(max_output_bytes("disc.img"), None);
+        assert!(is_rip_output("disc.iso") && !is_cd_output("disc.iso"));
     }
 
     #[test]

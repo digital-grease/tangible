@@ -360,7 +360,10 @@ async fn a_rip_becomes_an_artifact_in_the_library() {
 
     let (status, claim) = harness.claim(&worker).await;
     assert_eq!(status, StatusCode::OK, "{claim}");
-    assert_eq!(claim["outputs"], json!(["disc.toc", "disc.bin"]));
+    assert_eq!(
+        claim["outputs"],
+        json!(["disc.toc", "disc.bin", "disc.iso"])
+    );
     let rip = claim["rip_id"].as_str().unwrap().to_owned();
     assert_eq!(rip, queued["id"]);
 
@@ -442,7 +445,7 @@ async fn the_server_trusts_no_digest_it_did_not_compute() {
     );
 
     for (name, digest) in [
-        ("disc.iso", sha256(TOC)),
+        ("disc.img", sha256(TOC)),
         ("../disc.toc", sha256(TOC)),
         ("disc.toc", "not-hex".to_owned()),
     ] {
@@ -589,4 +592,84 @@ async fn asking_needs_an_operator_a_drive_and_a_worker_that_can_rip() {
     assert_eq!(status, StatusCode::CREATED, "{body}");
     let (status, _) = harness.request(&worker.drive).await;
     assert_eq!(status, StatusCode::CONFLICT, "one at a time");
+}
+
+/// A structurally valid ISO 9660 image of `blocks` 2048-byte blocks.
+fn iso_image(blocks: u32) -> Vec<u8> {
+    let sector = 2048;
+    let mut bytes = vec![0_u8; 16 * sector];
+    let mut pvd = vec![0_u8; sector];
+    pvd[0] = 1;
+    pvd[1..6].copy_from_slice(b"CD001");
+    pvd[6] = 1;
+    for slot in &mut pvd[40..72] {
+        *slot = b' ';
+    }
+    pvd[40..43].copy_from_slice(b"RIP");
+    pvd[80..84].copy_from_slice(&blocks.to_le_bytes());
+    pvd[84..88].copy_from_slice(&blocks.to_be_bytes());
+    pvd[128..130].copy_from_slice(&2048_u16.to_le_bytes());
+    pvd[130..132].copy_from_slice(&2048_u16.to_be_bytes());
+    bytes.extend_from_slice(&pvd);
+    let mut terminator = vec![0_u8; sector];
+    terminator[0] = 255;
+    terminator[1..6].copy_from_slice(b"CD001");
+    terminator[6] = 1;
+    bytes.extend_from_slice(&terminator);
+    bytes.resize(blocks as usize * sector, 0);
+    bytes
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_dvd_rip_is_one_image_and_becomes_an_iso() {
+    let harness = harness().await;
+    let worker = harness.worker(true).await;
+    let rip = harness.taken(&worker).await;
+    let image = iso_image(64);
+    let (status, body) = harness
+        .upload(&worker, &rip, "disc.iso", &image, &sha256(&image))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, done) = harness
+        .complete(
+            &worker,
+            &rip,
+            json!({ "outcome": "read", "engine": "block_reader", "engine_version": "0.1.0",
+                    "outputs": ["disc.iso"] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    harness.drain().await;
+    let (_, finished) = harness.get(&format!("/api/v1/rips/{rip}")).await;
+    assert_eq!(finished["state"], "complete", "{finished}");
+    let artifact = finished["artifact_id"].as_str().expect("an artifact");
+    let (_, detail) = harness.get(&format!("/api/v1/artifacts/{artifact}")).await;
+    assert_eq!(detail["format"], "iso", "{detail}");
+    assert_eq!(detail["source_kind"], "physical_drive");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_rip_is_never_a_mixture_or_a_part() {
+    let harness = harness().await;
+    let worker = harness.worker(true).await;
+    let rip = harness.taken(&worker).await;
+    for (name, bytes) in [("disc.toc", TOC.to_vec()), ("disc.iso", iso_image(32))] {
+        let (status, body) = harness
+            .upload(&worker, &rip, name, &bytes, &sha256(&bytes))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    for outputs in [json!(["disc.toc", "disc.iso"]), json!(["disc.toc"])] {
+        let (status, body) = harness
+            .complete(
+                &worker,
+                &rip,
+                json!({ "outcome": "read", "engine": "x", "engine_version": "1",
+                        "outputs": outputs }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    }
 }

@@ -186,6 +186,15 @@ pub enum EngineError {
     #[error("operation cancelled")]
     Cancelled,
 
+    /// The disc is encrypted and this worker does not decrypt (ADR 0013).
+    /// Found while reading: nothing scrambled is ever kept as if it were
+    /// the disc's content.
+    #[error("the disc is encrypted ({system})")]
+    Encrypted {
+        /// Such as `CSS`.
+        system: &'static str,
+    },
+
     /// An erase was requested without explicit confirmation.
     #[error("refusing to erase without explicit confirmation")]
     DestructiveNotConfirmed,
@@ -333,6 +342,64 @@ pub trait BurnEngine: Send + Sync {
             what: format!("the {} engine does not rip discs", self.name()),
         })
     }
+
+    /// Whether this engine can read a DVD or Blu-ray data disc into an
+    /// image. Defaulted to no, for the same reason as [`Self::rips_cds`].
+    fn rips_images(&self) -> bool {
+        false
+    }
+
+    /// Read the whole DVD or Blu-ray in the drive into
+    /// [`crate::plan::RIP_IMAGE`] in `request.output_dir`, sector for
+    /// sector, refusing a disc that turns out to be encrypted.
+    ///
+    /// # Errors
+    ///
+    /// As [`crate::block_reader::read_image`], or
+    /// [`EngineError::Unsupported`] from an engine that cannot.
+    async fn rip_image(
+        &self,
+        request: &RipRequest,
+        sink: &dyn EventSink,
+    ) -> Result<RipReport, EngineError> {
+        let _ = (request, sink);
+        Err(EngineError::Unsupported {
+            what: format!("the {} engine does not rip discs", self.name()),
+        })
+    }
+}
+
+/// Read a disc image from the drive itself, for an engine that drives real
+/// hardware. No tool is involved: see [`crate::block_reader`].
+///
+/// # Errors
+///
+/// As [`crate::block_reader::read_image`].
+pub async fn rip_image_from_drive(
+    request: &RipRequest,
+    sink: &dyn EventSink,
+) -> Result<RipReport, EngineError> {
+    tokio::fs::create_dir_all(&request.output_dir)
+        .await
+        .map_err(|source| EngineError::Io {
+            operation: "creating the rip directory",
+            source,
+        })?;
+    let read = crate::block_reader::read_image(
+        std::path::Path::new(&request.drive.device_alias),
+        &request.output_dir.join(crate::plan::RIP_IMAGE),
+        request.expected_bytes,
+        &request.cancel,
+        sink,
+    )
+    .await?;
+    Ok(RipReport {
+        engine: "block_reader".to_owned(),
+        engine_version: env!("CARGO_PKG_VERSION").to_owned(),
+        unreadable_sectors: 0,
+        retried_sectors: read.retried_sectors,
+        data_bytes: read.bytes,
+    })
 }
 
 #[cfg(test)]

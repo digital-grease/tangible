@@ -2996,7 +2996,10 @@ export interface components {
              * @description The largest file the server accepts.
              */
             max_file_bytes: number;
-            /** @description The files a CD rip sends, by these names and no others. */
+            /**
+             * @description The names a rip may send its files by, and no others: a CD's
+             *     `disc.toc` and `disc.bin`, or a DVD's or Blu-ray's `disc.iso`.
+             */
             outputs: string[];
             /** @description The rip. */
             rip_id: string;

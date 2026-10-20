@@ -30,7 +30,9 @@ use tangible_db::rips::{
     WorkerOutcome, cancel_rip, check_upload, claim_rip, complete_rip, drive_rip_engines, get_rip,
     list_rip_events, list_rips, record_rip_events, record_upload, request_rip,
 };
-use tangible_domain::rip::{CD_OUTPUTS, is_cd_output};
+use tangible_domain::rip::{
+    MAX_IMAGE_BYTES, RIP_OUTPUTS, is_complete_output_set, is_rip_output, max_output_bytes,
+};
 use tangible_domain::{DriveId, LogicalPath, RipJobId, RipState};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -43,10 +45,6 @@ use crate::routes::burns::MediumView;
 use crate::routes::workers::same_worker;
 use crate::state::ApiState;
 use crate::worker_auth::WorkerIdentity;
-
-/// The largest file a CD rip may send. A 99-minute CD of raw 2352-byte
-/// sectors is about 1.05 GB; this leaves room and no more.
-pub const MAX_CD_RIP_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 /// The header a worker sends a file's SHA-256 in, for the server to check.
 pub const CONTENT_SHA256: &str = "x-content-sha256";
@@ -348,7 +346,8 @@ pub struct RipClaimRequest {
 pub struct RipClaim {
     /// The rip.
     pub rip_id: String,
-    /// The files a CD rip sends, by these names and no others.
+    /// The names a rip may send its files by, and no others: a CD's
+    /// `disc.toc` and `disc.bin`, or a DVD's or Blu-ray's `disc.iso`.
     pub outputs: Vec<String>,
     /// The largest file the server accepts.
     pub max_file_bytes: u64,
@@ -678,8 +677,8 @@ pub async fn claim_drive_rip(
             tracing::info!(rip_id = %record.id, %worker_id, %drive_id, "rip taken");
             Json(RipClaim {
                 rip_id: record.id.to_string(),
-                outputs: CD_OUTPUTS.iter().map(|name| (*name).to_owned()).collect(),
-                max_file_bytes: MAX_CD_RIP_FILE_BYTES,
+                outputs: RIP_OUTPUTS.iter().map(|name| (*name).to_owned()).collect(),
+                max_file_bytes: MAX_IMAGE_BYTES,
             })
             .into_response()
         }
@@ -795,12 +794,12 @@ pub async fn upload_rip_file(
     body: axum::body::Body,
 ) -> Result<Json<RipView>, Problem> {
     let id = parse_rip(&rip_id)?;
-    if !is_cd_output(&name) {
+    let Some(limit) = max_output_bytes(&name) else {
         return Err(Problem::new(
             ErrorCode::ValidationFailed,
-            format!("a CD rip sends only {}", CD_OUTPUTS.join(" and ")),
+            format!("a rip sends only {}", RIP_OUTPUTS.join(", ")),
         ));
-    }
+    };
     let claimed = headers
         .get(CONTENT_SHA256)
         .and_then(|value| value.to_str().ok())
@@ -822,10 +821,10 @@ pub async fn upload_rip_file(
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok())
         .ok_or_else(|| Problem::new(ErrorCode::ValidationFailed, "Content-Length is required"))?;
-    if length > MAX_CD_RIP_FILE_BYTES {
+    if length > limit {
         return Err(Problem::new(
             ErrorCode::ValidationFailed,
-            format!("a CD rip's files are at most {MAX_CD_RIP_FILE_BYTES} bytes"),
+            format!("{name} is at most {limit} bytes"),
         ));
     }
     let Some(imports) = state.imports() else {
@@ -982,10 +981,16 @@ pub async fn complete_drive_rip(
 
     let result = match report.outcome.as_str() {
         "read" => {
-            if let Some(name) = report.outputs.iter().find(|name| !is_cd_output(name)) {
+            if let Some(name) = report.outputs.iter().find(|name| !is_rip_output(name)) {
                 return Err(Problem::new(
                     ErrorCode::ValidationFailed,
-                    format!("{name} is not a file a CD rip sends"),
+                    format!("{name} is not a file a rip sends"),
+                ));
+            }
+            if !is_complete_output_set(&report.outputs) {
+                return Err(Problem::new(
+                    ErrorCode::ValidationFailed,
+                    "a rip is either disc.toc and disc.bin, or disc.iso alone",
                 ));
             }
             RipResult::Read {

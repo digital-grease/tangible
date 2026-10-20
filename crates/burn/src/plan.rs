@@ -847,7 +847,10 @@ pub const RIP_TOC: &str = "disc.toc";
 /// contents gives it, so the import finds it without guessing.
 pub const RIP_DATA: &str = "disc.bin";
 
-/// A request to read the CD in a drive.
+/// The image a DVD or Blu-ray rip writes, in its output directory.
+pub const RIP_IMAGE: &str = "disc.iso";
+
+/// A request to read the disc in a drive.
 #[derive(Debug, Clone)]
 pub struct RipRequest {
     /// The drive.
@@ -857,6 +860,9 @@ pub struct RipRequest {
     pub output_dir: PathBuf,
     /// Set when the rip should stop. Reading is harmless to stop.
     pub cancel: crate::fake::CancelToken,
+    /// How many bytes the drive says the disc holds, when it says. An image
+    /// read checks the system agrees before trusting the device's end.
+    pub expected_bytes: Option<u64>,
 }
 
 /// How a rip read.

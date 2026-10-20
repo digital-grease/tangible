@@ -300,12 +300,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
                     .unwrap_or_else(|_| serde_json::json!({})),
             },
             cache_free_bytes: None,
-            rip: self.engine.rips_cds().then(|| RipCapabilityBody {
-                engines: vec![EngineDescription {
-                    name: self.engine.name().to_owned(),
-                    version: self.engine.version(),
-                }],
-            }),
+            rip: self.rip_capability(),
         };
 
         let drive_id = self
@@ -356,6 +351,25 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             .save(&identity_path(&self.settings.state_dir))
             .await?;
         Ok(drive_id)
+    }
+
+    /// What this worker can rip with, if anything: its engine for CDs, and
+    /// the block reader for DVDs.
+    fn rip_capability(&self) -> Option<RipCapabilityBody> {
+        let mut engines = Vec::new();
+        if self.engine.rips_cds() {
+            engines.push(EngineDescription {
+                name: self.engine.name().to_owned(),
+                version: self.engine.version(),
+            });
+        }
+        if self.engine.rips_images() {
+            engines.push(EngineDescription {
+                name: "block_reader".to_owned(),
+                version: env!("CARGO_PKG_VERSION").to_owned(),
+            });
+        }
+        (!engines.is_empty()).then_some(RipCapabilityBody { engines })
     }
 
     fn drive_ref(&self, identity: &WorkerIdentity, drive_id: DriveId) -> DriveRef {
@@ -538,7 +552,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
 
         // A rip next: somebody wants the disc in this drive read, and a burn
         // would wait for the drive anyway.
-        if self.engine.rips_cds()
+        if (self.engine.rips_cds() || self.engine.rips_images())
             && let Some(rip) = self
                 .client
                 .claim_rip(&identity.worker_id, &drive_id.to_string())

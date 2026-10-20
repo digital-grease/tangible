@@ -12,6 +12,7 @@
 //! real adapters: xorriso for prepared images and cdrdao for discs described
 //! as tracks.
 
+pub mod block_reader;
 pub mod cdrdao;
 pub mod client;
 pub mod combined;

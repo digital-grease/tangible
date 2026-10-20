@@ -308,12 +308,18 @@ up fixes published after the base image.
 
 ## Ripping a disc
 
-Put a CD you own in a drive, open Rips in the web UI, and choose "Rip the
-disc in" that drive. The drive's worker reads it with `cdrdao read-cd`
-when the drive is free, sends the table of contents and data to the
-server, and they are imported as a TOC/BIN artifact, kept exactly as read.
+Put a CD or DVD you own in a drive, open Rips in the web UI, and choose
+"Rip the disc in" that drive. The drive's worker reads it when the drive is
+free: a CD with `cdrdao read-cd` into a table of contents and its data,
+imported as TOC/BIN; a DVD sector by sector from the drive itself into an
+image, imported as an ISO. Either is kept exactly as read, padding and all.
 Reading changes nothing on the disc, so a rip can be withdrawn while it
-reads. Blank discs, DVDs and Blu-rays are refused for now.
+reads. Blank discs, Blu-rays and encrypted DVDs are refused for now; an
+encrypted DVD is recognised while it reads and nothing of it is kept.
+
+Straight after Tangible burns a disc, the system may still think the drive
+holds the old, blank disc. A rip then refuses ("take the disc out and put
+it back") rather than reading a fragment; reloading the disc fixes it.
 
 Ripped audio CDs are not read-offset corrected, so their audio will not
 match AccurateRip or Redump databases. Data tracks are unaffected.

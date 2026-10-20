@@ -6,21 +6,26 @@
 //!
 //! As with an erasure, the request names the drive and only the worker can
 //! see what is in it, so the decision is made here: an empty drive, a blank
-//! disc and anything but a CD are refused, each as what it was. Reading
-//! changes nothing on the disc, so a rip that is withdrawn simply stops.
+//! disc and a Blu-ray are refused, each as what it was. A CD is read by
+//! cdrdao into a table of contents and its data; a DVD is read sector by
+//! sector into an image, and refused if it turns out to be encrypted.
+//! Reading changes nothing on the disc, so a rip that is withdrawn simply
+//! stops.
 
 use std::path::Path;
 
 use crate::client::{ReadErrorsBody, RipCompletion};
 use crate::engine::{BurnEngine, EngineError, EventSink};
 use crate::fake::CancelToken;
-use crate::plan::{DriveRef, MediumInfo, RIP_DATA, RIP_TOC, RipRequest};
+use crate::plan::{DriveRef, MediumInfo, RIP_DATA, RIP_IMAGE, RIP_TOC, RipRequest};
 
 /// What to do with the disc found in the drive.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RipDecision {
-    /// A CD with something on it: read it.
-    Rip,
+    /// A CD with something on it: read it into a table of contents and data.
+    Cd,
+    /// A DVD with something on it: read it into an image.
+    Image,
     /// Nothing to rip, with a stable code and why.
     Refuse {
         /// Such as `BLANK_MEDIUM`.
@@ -32,9 +37,10 @@ pub enum RipDecision {
 
 /// Decide from the drive's report.
 ///
-/// Only CDs, for now: the profile is how the drive names the disc, and every
-/// CD profile starts `CD` (`CD-ROM`, `CD-R`, `CD-RW`). DVDs and Blu-rays need
-/// a reader that is not built yet, and are refused rather than read wrongly.
+/// The profile is how the drive names the disc: every CD profile starts
+/// `CD` (`CD-ROM`, `CD-R`, `CD-RW`) and every DVD profile `DVD`. Blu-rays
+/// wait for encryption detection that covers them (AACS), and are refused
+/// rather than read without it.
 #[must_use]
 pub fn rip_decision(medium: &MediumInfo) -> RipDecision {
     if medium.blank {
@@ -43,16 +49,20 @@ pub fn rip_decision(medium: &MediumInfo) -> RipDecision {
             detail: format!("the {} in the drive is blank", medium.profile),
         };
     }
-    if !medium.profile.to_ascii_uppercase().starts_with("CD") {
-        return RipDecision::Refuse {
-            code: "MEDIUM_UNSUPPORTED",
-            detail: format!(
-                "the disc in the drive is {}; only CDs can be ripped so far",
-                medium.profile
-            ),
-        };
+    let profile = medium.profile.to_ascii_uppercase();
+    if profile.starts_with("CD") {
+        return RipDecision::Cd;
     }
-    RipDecision::Rip
+    if profile.starts_with("DVD") {
+        return RipDecision::Image;
+    }
+    RipDecision::Refuse {
+        code: "MEDIUM_UNSUPPORTED",
+        detail: format!(
+            "the disc in the drive is {}; only CDs and DVDs can be ripped so far",
+            medium.profile
+        ),
+    }
 }
 
 /// How a rip went.
@@ -81,8 +91,8 @@ fn ended(outcome: &str, medium: Option<MediumInfo>, code: &str, detail: String) 
 ///
 /// Never fails: every ending is an outcome, because an operator waiting on a
 /// rip needs to hear how it ended. On a read, the directory holds
-/// [`RIP_TOC`] and [`RIP_DATA`] and the completion names them; the caller
-/// sends them before reporting it.
+/// [`RIP_TOC`] and [`RIP_DATA`], or [`RIP_IMAGE`], and the completion names
+/// them; the caller sends them before reporting it.
 pub async fn rip_disc<E: BurnEngine + ?Sized>(
     engine: &E,
     drive: &DriveRef,
@@ -105,7 +115,8 @@ pub async fn rip_disc<E: BurnEngine + ?Sized>(
         }
         Err(error) => return ended("failed", None, "DRIVE_UNAVAILABLE", error.to_string()),
     };
-    if let RipDecision::Refuse { code, detail } = rip_decision(&medium) {
+    let decision = rip_decision(&medium);
+    if let RipDecision::Refuse { code, detail } = decision {
         return ended("refused", Some(medium), code, detail);
     }
 
@@ -113,8 +124,24 @@ pub async fn rip_disc<E: BurnEngine + ?Sized>(
         drive: drive.clone(),
         output_dir: output_dir.to_path_buf(),
         cancel: cancel.clone(),
+        expected_bytes: (medium.capacity_blocks > 0).then(|| {
+            medium
+                .capacity_blocks
+                .saturating_mul(u64::from(medium.block_size))
+        }),
     };
-    match engine.rip_cd(&request, sink).await {
+    let (read, outputs) = if decision == RipDecision::Image {
+        (
+            engine.rip_image(&request, sink).await,
+            vec![RIP_IMAGE.to_owned()],
+        )
+    } else {
+        (
+            engine.rip_cd(&request, sink).await,
+            vec![RIP_TOC.to_owned(), RIP_DATA.to_owned()],
+        )
+    };
+    match read {
         Ok(report) => RipOutcome::Ended(Box::new(RipCompletion {
             outcome: "read".to_owned(),
             engine: Some(report.engine),
@@ -124,11 +151,23 @@ pub async fn rip_disc<E: BurnEngine + ?Sized>(
                 unreadable_sectors: report.unreadable_sectors,
                 retried_sectors: report.retried_sectors,
             }),
-            outputs: vec![RIP_TOC.to_owned(), RIP_DATA.to_owned()],
+            outputs,
             error_code: None,
             error_detail: None,
         })),
         Err(EngineError::Cancelled) => RipOutcome::Withdrawn,
+        Err(EngineError::UnsuitableMedium { reason }) => {
+            ended("refused", Some(medium), "RELOAD_DISC", reason)
+        }
+        Err(EngineError::Encrypted { system }) => ended(
+            "refused",
+            Some(medium),
+            "ENCRYPTED",
+            format!(
+                "the disc is encrypted ({system}); this worker does not rip encrypted discs, \
+                 and nothing that was read is kept"
+            ),
+        ),
         Err(EngineError::NoMedium { .. }) => ended(
             "refused",
             Some(medium),
@@ -209,7 +248,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_empty_drive_a_blank_disc_and_a_dvd_are_refused() {
+    async fn an_empty_drive_a_blank_disc_a_blu_ray_and_an_encrypted_dvd_are_refused() {
         for (behaviour, code) in [
             (
                 FakeBehaviour {
@@ -221,11 +260,20 @@ mod tests {
             (FakeBehaviour::default(), "BLANK_MEDIUM"),
             (
                 FakeBehaviour {
-                    medium_profile: Some("DVD-ROM".to_owned()),
+                    medium_profile: Some("BD-ROM".to_owned()),
                     medium_sessions: 1,
                     ..FakeBehaviour::default()
                 },
                 "MEDIUM_UNSUPPORTED",
+            ),
+            (
+                FakeBehaviour {
+                    medium_profile: Some("DVD-ROM".to_owned()),
+                    medium_sessions: 1,
+                    rip_encrypted: true,
+                    ..FakeBehaviour::default()
+                },
+                "ENCRYPTED",
             ),
         ] {
             let (dir, engine) = engine(behaviour);
@@ -237,6 +285,23 @@ mod tests {
             assert_eq!(done.error_code.as_deref(), Some(code));
             assert!(!out.join("disc.bin").exists(), "nothing was read");
         }
+    }
+
+    #[tokio::test]
+    async fn a_dvd_is_read_into_one_image() {
+        let (dir, engine) = engine(FakeBehaviour {
+            medium_profile: Some("DVD-RW sequential recording".to_owned()),
+            medium_sessions: 1,
+            ..FakeBehaviour::default()
+        });
+        let out = dir.path().join("rip");
+        let RipOutcome::Ended(done) = rip(&engine, &out).await else {
+            panic!("withdrawn")
+        };
+        assert_eq!(done.outcome, "read", "{done:?}");
+        assert_eq!(done.outputs, ["disc.iso"]);
+        assert!(out.join("disc.iso").is_file());
+        assert!(!out.join("disc.bin").exists());
     }
 
     #[tokio::test]
@@ -274,14 +339,22 @@ mod tests {
     }
 
     #[test]
-    fn only_cds_with_something_on_them_are_ripped() {
+    fn cds_and_dvds_with_something_on_them_are_ripped() {
         let medium = |profile: &str, blank: bool| MediumInfo {
             profile: profile.to_owned(),
             blank,
             ..MediumInfo::default()
         };
         for profile in ["CD-ROM", "CD-R", "CD-RW", "cd-rom"] {
-            assert_eq!(rip_decision(&medium(profile, false)), RipDecision::Rip);
+            assert_eq!(rip_decision(&medium(profile, false)), RipDecision::Cd);
+        }
+        for profile in [
+            "DVD-ROM",
+            "DVD-RW sequential recording",
+            "DVD+R",
+            "DVD-R DL",
+        ] {
+            assert_eq!(rip_decision(&medium(profile, false)), RipDecision::Image);
         }
         assert!(matches!(
             rip_decision(&medium("CD-R", true)),
@@ -290,7 +363,7 @@ mod tests {
                 ..
             }
         ));
-        for profile in ["DVD-ROM", "BD-ROM", "DVD+RW"] {
+        for profile in ["BD-ROM", "BD-R", "HD DVD-ROM"] {
             assert!(matches!(
                 rip_decision(&medium(profile, false)),
                 RipDecision::Refuse {

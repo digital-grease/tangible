@@ -781,6 +781,19 @@ impl BurnEngine for XorrisoEngine {
         ];
         self.run(&arguments, PROBE_TIMEOUT).await.map(|_| ())
     }
+
+    /// Read from the drive's block device; no tool is involved.
+    fn rips_images(&self) -> bool {
+        true
+    }
+
+    async fn rip_image(
+        &self,
+        request: &crate::plan::RipRequest,
+        sink: &dyn EventSink,
+    ) -> Result<crate::plan::RipReport, EngineError> {
+        crate::engine::rip_image_from_drive(request, sink).await
+    }
 }
 
 /// What reading a disc back produced.

@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 digitalgrease
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Ripping the disc in a drive into the library (ADR 0013). The server and
+// Ripping the disc in a drive into the library (ADR 0013): a CD into a table
+// of contents and its data, a DVD into an image. The server and
 // the drive's worker do the work; this asks for it, shows how it is going,
 // and lets a person withdraw it while reading.
 
@@ -76,7 +77,11 @@ export function ripRefusal(code: string | null | undefined): string | null {
     case 'BLANK_MEDIUM':
       return 'The disc in the drive is blank; there is nothing on it to rip.';
     case 'MEDIUM_UNSUPPORTED':
-      return 'Only CDs can be ripped so far. DVDs and Blu-rays come later.';
+      return 'Only CDs and DVDs can be ripped so far. Blu-rays come later.';
+    case 'RELOAD_DISC':
+      return 'The system has not caught up with the disc in the drive (this happens straight after a burn). Take the disc out, put it back, and ask again.';
+    case 'ENCRYPTED':
+      return 'The disc is encrypted. Ripping encrypted discs is not built yet; nothing that was read was kept.';
     case 'WORKER_RESTARTED':
       return 'The worker restarted while ripping. Ask again; reading does not harm the disc.';
     case 'IMPORT_FAILED':

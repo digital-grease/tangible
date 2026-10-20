@@ -29,8 +29,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::engine::{BurnEngine, BurnEvent, EngineError, EventSink};
 use crate::plan::{
     BlankReport, BlankRequest, BurnPlan, DriveCapabilities, DriveIdentity, DriveRef, MediumInfo,
-    PreflightFailure, PreflightReport, RIP_DATA, RIP_TOC, RipReport, RipRequest, VerifyReport,
-    WriteMode, WriteReport,
+    PreflightFailure, PreflightReport, RIP_DATA, RIP_IMAGE, RIP_TOC, RipReport, RipRequest,
+    VerifyReport, WriteMode, WriteReport,
 };
 
 /// The table of contents a simulated rip writes: a data track and an audio
@@ -45,6 +45,37 @@ START 00:00:02\n";
 
 /// The data a simulated rip writes: 75 data sectors and 25 audio sectors.
 pub const FAKE_RIP_DATA_BYTES: usize = 75 * 2048 + 25 * 2352;
+
+/// Blocks in the image a simulated DVD rip writes.
+pub const FAKE_RIP_IMAGE_BLOCKS: u32 = 64;
+
+/// A structurally valid ISO 9660 image: the system area, a primary volume
+/// descriptor for `blocks` 2048-byte blocks, a terminator, then zeros.
+#[must_use]
+pub fn fake_iso_image(blocks: u32) -> Vec<u8> {
+    const SECTOR: usize = 2048;
+    let mut bytes = vec![0_u8; 16 * SECTOR];
+    let mut pvd = vec![0_u8; SECTOR];
+    pvd[0] = 1;
+    pvd[1..6].copy_from_slice(b"CD001");
+    pvd[6] = 1;
+    for slot in &mut pvd[40..72] {
+        *slot = b' ';
+    }
+    pvd[40..44].copy_from_slice(b"FAKE");
+    pvd[80..84].copy_from_slice(&blocks.to_le_bytes());
+    pvd[84..88].copy_from_slice(&blocks.to_be_bytes());
+    pvd[128..130].copy_from_slice(&2048_u16.to_le_bytes());
+    pvd[130..132].copy_from_slice(&2048_u16.to_be_bytes());
+    bytes.extend_from_slice(&pvd);
+    let mut terminator = vec![0_u8; SECTOR];
+    terminator[0] = 255;
+    terminator[1..6].copy_from_slice(b"CD001");
+    terminator[6] = 1;
+    bytes.extend_from_slice(&terminator);
+    bytes.resize(blocks as usize * SECTOR, 0);
+    bytes
+}
 
 /// How the fake engine should misbehave.
 ///
@@ -80,6 +111,8 @@ pub struct FakeBehaviour {
     /// Take this many short steps over a rip, checking for cancellation
     /// between them, so a test can withdraw one mid-read.
     pub rip_steps: u32,
+    /// Present a DVD that turns out to be CSS-encrypted when read.
+    pub rip_encrypted: bool,
 }
 
 /// State shared with whoever wants to cancel.
@@ -622,6 +655,64 @@ impl BurnEngine for FakeEngine {
             });
         }
         Ok(())
+    }
+
+    fn rips_images(&self) -> bool {
+        true
+    }
+
+    async fn rip_image(
+        &self,
+        request: &RipRequest,
+        sink: &dyn EventSink,
+    ) -> Result<RipReport, EngineError> {
+        if self.behaviour.drive_unavailable {
+            return Err(EngineError::DriveUnavailable {
+                alias: request.drive.device_alias.clone(),
+            });
+        }
+        if self.behaviour.no_medium {
+            return Err(EngineError::NoMedium {
+                alias: request.drive.device_alias.clone(),
+            });
+        }
+        if request.cancel.is_cancelled() {
+            return Err(EngineError::Cancelled);
+        }
+        if self.behaviour.rip_encrypted {
+            return Err(EngineError::Encrypted { system: "CSS" });
+        }
+        if self.behaviour.rip_fails {
+            return Err(EngineError::Unsupported {
+                what: "the simulated disc did not read".to_owned(),
+            });
+        }
+        fs::create_dir_all(&request.output_dir)
+            .await
+            .map_err(|source| EngineError::Io {
+                operation: "creating the rip directory",
+                source,
+            })?;
+        let image = fake_iso_image(FAKE_RIP_IMAGE_BLOCKS);
+        fs::write(request.output_dir.join(RIP_IMAGE), &image)
+            .await
+            .map_err(|source| EngineError::Io {
+                operation: "writing the simulated image",
+                source,
+            })?;
+        sink.emit(BurnEvent::progress(
+            "ripping",
+            "RIP_PROGRESS",
+            1.0,
+            "100% read",
+        ));
+        Ok(RipReport {
+            engine: "fake".to_owned(),
+            engine_version: self.version(),
+            unreadable_sectors: 0,
+            retried_sectors: 0,
+            data_bytes: image.len() as u64,
+        })
     }
 
     fn rips_cds(&self) -> bool {

@@ -66,6 +66,8 @@ describe('rips', () => {
     expect(ripRefusal('NO_MEDIUM')).toContain('no disc');
     expect(ripRefusal('BLANK_MEDIUM')).toContain('blank');
     expect(ripRefusal('MEDIUM_UNSUPPORTED')).toContain('Only CDs');
+    expect(ripRefusal('RELOAD_DISC')).toContain('put it back');
+    expect(ripRefusal('ENCRYPTED')).toContain('encrypted');
     expect(ripRefusal('READ_FAILED')).toBeNull();
     expect(ripRefusal(null)).toBeNull();
   });
