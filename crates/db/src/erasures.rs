@@ -360,8 +360,8 @@ pub async fn cancel_erasure(
 
 /// Lock a drive's row, if it belongs to `worker_id`.
 ///
-/// Taken by both an erasure claim and a burn claim, so the two cannot start
-/// on one drive at once.
+/// Taken by the erasure, rip and burn claims alike, so no two of them can
+/// start on one drive at once.
 pub(crate) async fn lock_own_drive(
     tx: &mut Transaction<'_, Postgres>,
     worker_id: WorkerId,
@@ -438,7 +438,9 @@ pub async fn claim_erasure(
         .await?;
     }
 
-    if crate::repositories::drive_has_active_attempt(&mut tx, drive_id).await? {
+    if crate::repositories::drive_has_active_attempt(&mut tx, drive_id).await?
+        || crate::rips::drive_is_ripping(&mut tx, drive_id).await?
+    {
         tx.commit().await.map_err(DbError::Query)?;
         return Ok(Ok(None));
     }

@@ -137,6 +137,10 @@ uuid_id!(
     ErasureId
 );
 uuid_id!(
+    /// Identifies a request to rip the disc in one drive.
+    RipJobId
+);
+uuid_id!(
     /// Identifies a configured outbound integration.
     IntegrationId
 );

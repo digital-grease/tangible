@@ -151,6 +151,7 @@ pub async fn claim_next_burn_job(
     // it first means a busy drive does not lock a job row it cannot use.
     if drive_has_active_attempt(&mut tx, drive_id).await?
         || crate::erasures::drive_is_erasing(&mut tx, drive_id).await?
+        || crate::rips::drive_is_ripping(&mut tx, drive_id).await?
     {
         tx.rollback().await.map_err(DbError::Query)?;
         return Ok(Err(ClaimOutcome::DriveBusy));

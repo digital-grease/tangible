@@ -436,6 +436,31 @@ string_enum! {
     default = Queued
 }
 
+string_enum! {
+    /// Where a request to rip the disc in a drive has got to. Transitions
+    /// are in [`crate::rip`].
+    RipState {
+        /// Asked for, waiting for the drive's worker.
+        Queued => "queued",
+        /// The worker has it and is reading the disc.
+        Reading => "reading",
+        /// The disc has been read; the worker is sending what it read.
+        Uploading => "uploading",
+        /// Everything arrived and checked out; the import is running.
+        Registering => "registering",
+        /// The rip is in the library. Terminal.
+        Complete => "complete",
+        /// Withdrawn by a person. Terminal.
+        Canceled => "canceled",
+        /// The worker would not rip what was in the drive: no disc, one it
+        /// cannot read, or one too large. Terminal.
+        Refused => "refused",
+        /// Reading, sending or importing did not succeed. Terminal.
+        Failed => "failed",
+    }
+    default = Queued
+}
+
 // --- workers and drives -----------------------------------------------------
 
 string_enum! {

@@ -12,6 +12,7 @@ pub mod derivations;
 pub mod diagnostics;
 pub mod erasures;
 pub mod repositories;
+pub mod rips;
 pub mod romm;
 
 use std::time::Duration;
