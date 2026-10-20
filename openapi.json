@@ -1897,6 +1897,74 @@
         ]
       }
     },
+    "/api/v1/drives/{drive_id}/rips": {
+      "post": {
+        "tags": [
+          "rips"
+        ],
+        "summary": "Ask for the disc in a drive to be ripped into the library.",
+        "description": "Rip the disc in a drive into the library. The drive's worker reads it when the drive is free, sends what it read, and the result is imported like an upload. A CD becomes a TOC/BIN image.",
+        "operationId": "request_drive_rip",
+        "parameters": [
+          {
+            "name": "drive_id",
+            "in": "path",
+            "description": "Drive identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestRip"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RipView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such drive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A rip is already reading, or the worker cannot rip",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/editions/{edition_id}/disc-sets": {
       "get": {
         "tags": [
@@ -3198,6 +3266,454 @@
         ]
       }
     },
+    "/api/v1/rips": {
+      "get": {
+        "tags": [
+          "rips"
+        ],
+        "summary": "Rips, newest first.",
+        "description": "# Errors\n\n`INVALID_PARAMETER` for a limit out of range or a malformed cursor.",
+        "operationId": "list_all_rips",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many, at most 200. Defaults to 50.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "The `next_cursor` of the page before.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RipPage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/rips/{rip_id}": {
+      "get": {
+        "tags": [
+          "rips"
+        ],
+        "summary": "One rip.",
+        "description": "# Errors\n\n`NOT_FOUND` for an unknown rip.",
+        "operationId": "get_one_rip",
+        "parameters": [
+          {
+            "name": "rip_id",
+            "in": "path",
+            "description": "Rip identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rip",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RipView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such rip",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/rips/{rip_id}/cancel": {
+      "post": {
+        "tags": [
+          "rips"
+        ],
+        "summary": "Withdraw a rip before its import starts.",
+        "description": "Withdraw a rip. Allowed while it is queued, reading or sending: reading changes nothing on the disc. Anything already sent is discarded.",
+        "operationId": "cancel_one_rip",
+        "parameters": [
+          {
+            "name": "rip_id",
+            "in": "path",
+            "description": "Rip identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Withdrawn",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RipView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such rip",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Its import has started, or it has ended",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/rips/{rip_id}/complete": {
+      "post": {
+        "tags": [
+          "rips"
+        ],
+        "summary": "Report how a rip ended.",
+        "description": "Report how a rip ended: read (every file named must have been sent, and its import is queued), refused or failed. Repeating the same report is accepted.",
+        "operationId": "complete_drive_rip",
+        "parameters": [
+          {
+            "name": "rip_id",
+            "in": "path",
+            "description": "Rip identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RipCompletion"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RipView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not this worker's rip",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not in a state that can end that way",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "An outcome or field that will not do",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "worker_credential": []
+          }
+        ]
+      }
+    },
+    "/api/v1/rips/{rip_id}/events": {
+      "get": {
+        "tags": [
+          "rips"
+        ],
+        "summary": "What the worker said while ripping.",
+        "description": "# Errors\n\n`NOT_FOUND` for an unknown rip.",
+        "operationId": "list_events_of_rip",
+        "parameters": [
+          {
+            "name": "rip_id",
+            "in": "path",
+            "description": "Rip identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Only events after this sequence number.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "In sequence",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RipEventPage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such rip",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "rips"
+        ],
+        "summary": "Report what is happening in a rip.",
+        "description": "Report events. Idempotent by sequence. A 409 means the rip was withdrawn or has ended: stop reading.",
+        "operationId": "submit_rip_events",
+        "parameters": [
+          {
+            "name": "rip_id",
+            "in": "path",
+            "description": "Rip identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RipEventBatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RipEventAck"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not this worker's rip",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Withdrawn or ended",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "worker_credential": []
+          }
+        ]
+      }
+    },
+    "/api/v1/rips/{rip_id}/files/{name}": {
+      "put": {
+        "tags": [
+          "rips"
+        ],
+        "summary": "Send one file a rip read.",
+        "description": "Send one file a rip read, as the request body, with its length in Content-Length and its SHA-256 in X-Content-SHA256. The server hashes every byte and refuses a file that does not match. Sending a file again replaces it.",
+        "operationId": "upload_rip_file",
+        "parameters": [
+          {
+            "name": "rip_id",
+            "in": "path",
+            "description": "Rip identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The file, such as disc.bin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Received and checked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RipView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not this worker's rip",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No longer accepting files",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A name, length or digest that will not do",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "worker_credential": []
+          }
+        ]
+      }
+    },
     "/api/v1/romm": {
       "get": {
         "tags": [
@@ -4213,6 +4729,67 @@
         ]
       }
     },
+    "/api/v1/workers/{worker_id}/rip-claims": {
+      "post": {
+        "tags": [
+          "rips"
+        ],
+        "summary": "Ask for a rip queued for this worker's drive.",
+        "description": "Take the next rip queued for this worker's drive. Answers 204 when there is none, or while a burn or an erasure holds the drive. Asked after erasure claims and before burn claims.",
+        "operationId": "claim_drive_rip",
+        "parameters": [
+          {
+            "name": "worker_id",
+            "in": "path",
+            "description": "Worker identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RipClaimRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RipClaim"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "Nothing to rip"
+          },
+          "404": {
+            "description": "Not this worker, or not its drive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "worker_credential": []
+          }
+        ]
+      }
+    },
     "/livez": {
       "get": {
         "tags": [
@@ -4827,6 +5404,17 @@
               "$ref": "#/components/schemas/EngineReport"
             },
             "description": "Engines it can run."
+          },
+          "rip": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RipCapability",
+                "description": "What it can rip, if anything. Absent from workers older than ripping,\nwhose drives are then not offered for a rip."
+              }
+            ]
           },
           "software_version": {
             "type": "string",
@@ -7289,6 +7877,29 @@
           }
         }
       },
+      "ReadErrors": {
+        "type": "object",
+        "description": "Sectors that gave trouble.",
+        "required": [
+          "unreadable_sectors",
+          "retried_sectors"
+        ],
+        "properties": {
+          "retried_sectors": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sectors that read only after retrying.",
+            "minimum": 0
+          },
+          "unreadable_sectors": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sectors that could not be read at all.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
       "Readiness": {
         "type": "object",
         "description": "Result of a readiness probe.",
@@ -7535,6 +8146,451 @@
           }
         },
         "additionalProperties": false
+      },
+      "RequestRip": {
+        "type": "object",
+        "description": "What an operator sends to rip the disc in a drive. Empty for now: CD\nrips have no options, and decryption arrives later (ADR 0013).",
+        "additionalProperties": false
+      },
+      "RipCapability": {
+        "type": "object",
+        "description": "What a worker can rip with.",
+        "properties": {
+          "engines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EngineReport"
+            },
+            "description": "The engines that read discs, such as `cdrdao`."
+          }
+        }
+      },
+      "RipClaim": {
+        "type": "object",
+        "description": "A rip a worker has taken.",
+        "required": [
+          "rip_id",
+          "outputs",
+          "max_file_bytes"
+        ],
+        "properties": {
+          "max_file_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The largest file the server accepts.",
+            "minimum": 0
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The files a CD rip sends, by these names and no others."
+          },
+          "rip_id": {
+            "type": "string",
+            "description": "The rip."
+          }
+        }
+      },
+      "RipClaimRequest": {
+        "type": "object",
+        "description": "What a worker sends to ask for a rip.",
+        "required": [
+          "drive_id"
+        ],
+        "properties": {
+          "drive_id": {
+            "type": "string",
+            "description": "The worker's drive."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RipCompletion": {
+        "type": "object",
+        "description": "How a rip ended, as the worker reports it.",
+        "required": [
+          "outcome"
+        ],
+        "properties": {
+          "engine": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `read`: the tool that read the disc, such as `cdrdao`."
+          },
+          "engine_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `read`: its version."
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `refused` and `failed`: why, as a stable code such as\n`NO_MEDIUM`."
+          },
+          "error_detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "More about that."
+          },
+          "medium": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "What was in the drive, when there was a disc to look at."
+          },
+          "outcome": {
+            "type": "string",
+            "description": "`read`, `refused` or `failed`."
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "For `read`: the files that make up the image, all already sent."
+          },
+          "read_errors": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ReadErrors",
+                "description": "For `read`: sectors that gave trouble."
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "RipEventAck": {
+        "type": "object",
+        "description": "What the server answers a worker's report with.",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "description": "The rip's state, so a worker reading a rip that was withdrawn stops."
+          }
+        }
+      },
+      "RipEventBatch": {
+        "type": "object",
+        "description": "Events a worker reports.",
+        "required": [
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RipEventSubmission"
+            },
+            "description": "In sequence order."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RipEventPage": {
+        "type": "object",
+        "description": "A rip's events, in sequence.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RipEventView"
+            },
+            "description": "The events."
+          }
+        }
+      },
+      "RipEventSubmission": {
+        "type": "object",
+        "description": "One thing a worker says while ripping.",
+        "required": [
+          "sequence",
+          "event_type",
+          "code",
+          "worker_time"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Its stable code."
+          },
+          "data": {
+            "description": "Structured detail, such as `{\"message\": \"...\"}`."
+          },
+          "event_type": {
+            "type": "string",
+            "description": "What kind of event, such as `progress` or `medium_inspected`."
+          },
+          "progress": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "How far along, 0 to 1."
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Monotonic within the rip."
+          },
+          "worker_time": {
+            "type": "string",
+            "description": "When the worker saw it, RFC 3339."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RipEventView": {
+        "type": "object",
+        "description": "Something the worker said while ripping.",
+        "required": [
+          "sequence",
+          "event_type",
+          "code",
+          "worker_time"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Its stable code."
+          },
+          "event_type": {
+            "type": "string",
+            "description": "What kind of event, such as `progress`."
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it said, when it said something."
+          },
+          "progress": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "How far along, 0 to 1."
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its place in the worker's sequence."
+          },
+          "worker_time": {
+            "type": "string",
+            "description": "When the worker saw it."
+          }
+        }
+      },
+      "RipFileView": {
+        "type": "object",
+        "description": "One file a worker sent, as the server received it.",
+        "required": [
+          "name",
+          "bytes",
+          "sha256"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its length in bytes."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name, such as `disc.bin`."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "Its SHA-256, as the server computed it."
+          }
+        }
+      },
+      "RipPage": {
+        "type": "object",
+        "description": "A page of rips, newest first.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RipView"
+            },
+            "description": "The rips."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `before` for the next page; absent on the last."
+          }
+        }
+      },
+      "RipView": {
+        "type": "object",
+        "description": "A request to rip the disc in a drive, and how it went.",
+        "required": [
+          "id",
+          "drive_id",
+          "drive_name",
+          "state",
+          "is_open",
+          "can_cancel",
+          "requested_by",
+          "files",
+          "bytes_received",
+          "created_at"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The artifact it became, once imported."
+          },
+          "bytes_received": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes received across every file."
+          },
+          "can_cancel": {
+            "type": "boolean",
+            "description": "Whether it can still be withdrawn."
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it ended."
+          },
+          "created_at": {
+            "type": "string",
+            "description": "When it was asked for."
+          },
+          "drive_id": {
+            "type": "string",
+            "description": "The drive."
+          },
+          "drive_name": {
+            "type": "string",
+            "description": "What the drive is called."
+          },
+          "engine": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The tool that read the disc, such as `cdrdao`."
+          },
+          "engine_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its version."
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it did not finish, when it did not."
+          },
+          "error_detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "More about that."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RipFileView"
+            },
+            "description": "What arrived."
+          },
+          "id": {
+            "type": "string",
+            "description": "Opaque identifier."
+          },
+          "import_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The import of what was read, once queued."
+          },
+          "is_open": {
+            "type": "boolean",
+            "description": "Whether it is still going."
+          },
+          "medium": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MediumView",
+                "description": "What the worker found in the drive."
+              }
+            ]
+          },
+          "read_errors": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ReadErrors",
+                "description": "Sectors that gave trouble."
+              }
+            ]
+          },
+          "requested_by": {
+            "type": "string",
+            "description": "Who asked."
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the worker took it."
+          },
+          "state": {
+            "type": "string",
+            "description": "`queued`, `reading`, `uploading`, `registering`, `complete`,\n`canceled`, `refused` or `failed`."
+          }
+        }
       },
       "RommSettings": {
         "type": "object",
@@ -8082,6 +9138,10 @@
     {
       "name": "diagnostics",
       "description": "The deployment's state as a checklist, for administrators"
+    },
+    {
+      "name": "rips",
+      "description": "Ripping the disc in a drive into the library"
     }
   ]
 }

@@ -141,12 +141,27 @@ impl ImportRunner {
         )
         .await?
         else {
+            self.settle_rips().await;
             return Ok(false);
         };
 
         tracing::info!(import_id = %job.id, source = %job.source_kind, "import claimed");
         self.execute(job).await;
+        self.settle_rips().await;
         Ok(true)
+    }
+
+    /// Move rips on whose import has ended. Checked after every import and
+    /// whenever the queue is empty, so a server restarted mid-import still
+    /// catches up.
+    async fn settle_rips(&self) {
+        match tangible_db::rips::settle_rips(self.database.pool()).await {
+            Ok(moved) if !moved.is_empty() => {
+                tracing::info!(rips = ?moved, "rips followed their imports to the end");
+            }
+            Ok(_) => {}
+            Err(error) => tracing::warn!(error = ?error, "could not settle rips"),
+        }
     }
 
     /// Run one import through the pipeline and record what happened.

@@ -797,7 +797,13 @@ impl ImportPipeline {
             artifact_id,
             created_at: OffsetDateTime::now_utc(),
             origin: Origin {
-                kind: ArtifactOrigin::ImportedOriginal,
+                // A rip is a dump of a disc in a drive, not a file somebody
+                // supplied.
+                kind: if request.source_kind == "physical_drive" {
+                    ArtifactOrigin::PhysicalDump
+                } else {
+                    ArtifactOrigin::ImportedOriginal
+                },
                 source_kind: request.source_kind.clone(),
                 source_reference: request.source_reference.clone(),
                 source_filename: request.source_filename.clone(),

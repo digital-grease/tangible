@@ -624,6 +624,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/drives/{drive_id}/rips": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask for the disc in a drive to be ripped into the library.
+         * @description Rip the disc in a drive into the library. The drive's worker reads it when the drive is free, sends what it read, and the result is imported like an upload. A CD becomes a TOC/BIN image.
+         */
+        post: operations["request_drive_rip"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/editions/{edition_id}/disc-sets": {
         parameters: {
             query?: never;
@@ -1006,6 +1026,136 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/rips": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Rips, newest first.
+         * @description # Errors
+         *
+         *     `INVALID_PARAMETER` for a limit out of range or a malformed cursor.
+         */
+        get: operations["list_all_rips"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rips/{rip_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One rip.
+         * @description # Errors
+         *
+         *     `NOT_FOUND` for an unknown rip.
+         */
+        get: operations["get_one_rip"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rips/{rip_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Withdraw a rip before its import starts.
+         * @description Withdraw a rip. Allowed while it is queued, reading or sending: reading changes nothing on the disc. Anything already sent is discarded.
+         */
+        post: operations["cancel_one_rip"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rips/{rip_id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Report how a rip ended.
+         * @description Report how a rip ended: read (every file named must have been sent, and its import is queued), refused or failed. Repeating the same report is accepted.
+         */
+        post: operations["complete_drive_rip"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rips/{rip_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What the worker said while ripping.
+         * @description # Errors
+         *
+         *     `NOT_FOUND` for an unknown rip.
+         */
+        get: operations["list_events_of_rip"];
+        put?: never;
+        /**
+         * Report what is happening in a rip.
+         * @description Report events. Idempotent by sequence. A 409 means the rip was withdrawn or has ended: stop reading.
+         */
+        post: operations["submit_rip_events"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rips/{rip_id}/files/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Send one file a rip read.
+         * @description Send one file a rip read, as the request body, with its length in Content-Length and its SHA-256 in X-Content-SHA256. The server hashes every byte and refuses a file that does not match. Sending a file again replaces it.
+         */
+        put: operations["upload_rip_file"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/romm": {
         parameters: {
             query?: never;
@@ -1313,6 +1463,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workers/{worker_id}/rip-claims": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask for a rip queued for this worker's drive.
+         * @description Take the next rip queued for this worker's drive. Answers 204 when there is none, or while a burn or an erasure holds the drive. Asked after erasure claims and before burn claims.
+         */
+        post: operations["claim_drive_rip"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/livez": {
         parameters: {
             query?: never;
@@ -1597,6 +1767,7 @@ export interface components {
             drive: components["schemas"]["DriveReportBody"];
             /** @description Engines it can run. */
             engines?: components["schemas"]["EngineReport"][];
+            rip?: null | components["schemas"]["RipCapability"];
             /** @description The worker's software version. */
             software_version: string;
         };
@@ -2680,6 +2851,19 @@ export interface components {
             /** @description A URI identifying the problem type. */
             type: string;
         };
+        /** @description Sectors that gave trouble. */
+        ReadErrors: {
+            /**
+             * Format: int64
+             * @description Sectors that read only after retrying.
+             */
+            retried_sectors: number;
+            /**
+             * Format: int64
+             * @description Sectors that could not be read at all.
+             */
+            unreadable_sectors: number;
+        };
         /** @description Result of a readiness probe. */
         Readiness: {
             /** @description Per-dependency detail, so an operator can see *what* is failing. */
@@ -2794,6 +2978,177 @@ export interface components {
              *     or more. Full can take an hour.
              */
             mode: string;
+        };
+        /**
+         * @description What an operator sends to rip the disc in a drive. Empty for now: CD
+         *     rips have no options, and decryption arrives later (ADR 0013).
+         */
+        RequestRip: Record<string, never>;
+        /** @description What a worker can rip with. */
+        RipCapability: {
+            /** @description The engines that read discs, such as `cdrdao`. */
+            engines?: components["schemas"]["EngineReport"][];
+        };
+        /** @description A rip a worker has taken. */
+        RipClaim: {
+            /**
+             * Format: int64
+             * @description The largest file the server accepts.
+             */
+            max_file_bytes: number;
+            /** @description The files a CD rip sends, by these names and no others. */
+            outputs: string[];
+            /** @description The rip. */
+            rip_id: string;
+        };
+        /** @description What a worker sends to ask for a rip. */
+        RipClaimRequest: {
+            /** @description The worker's drive. */
+            drive_id: string;
+        };
+        /** @description How a rip ended, as the worker reports it. */
+        RipCompletion: {
+            /** @description For `read`: the tool that read the disc, such as `cdrdao`. */
+            engine?: string | null;
+            /** @description For `read`: its version. */
+            engine_version?: string | null;
+            /**
+             * @description For `refused` and `failed`: why, as a stable code such as
+             *     `NO_MEDIUM`.
+             */
+            error_code?: string | null;
+            /** @description More about that. */
+            error_detail?: string | null;
+            /** @description What was in the drive, when there was a disc to look at. */
+            medium?: Record<string, never> | null;
+            /** @description `read`, `refused` or `failed`. */
+            outcome: string;
+            /** @description For `read`: the files that make up the image, all already sent. */
+            outputs?: string[];
+            read_errors?: null | components["schemas"]["ReadErrors"];
+        };
+        /** @description What the server answers a worker's report with. */
+        RipEventAck: {
+            /** @description The rip's state, so a worker reading a rip that was withdrawn stops. */
+            state: string;
+        };
+        /** @description Events a worker reports. */
+        RipEventBatch: {
+            /** @description In sequence order. */
+            events: components["schemas"]["RipEventSubmission"][];
+        };
+        /** @description A rip's events, in sequence. */
+        RipEventPage: {
+            /** @description The events. */
+            items: components["schemas"]["RipEventView"][];
+        };
+        /** @description One thing a worker says while ripping. */
+        RipEventSubmission: {
+            /** @description Its stable code. */
+            code: string;
+            /** @description Structured detail, such as `{"message": "..."}`. */
+            data?: unknown;
+            /** @description What kind of event, such as `progress` or `medium_inspected`. */
+            event_type: string;
+            /**
+             * Format: float
+             * @description How far along, 0 to 1.
+             */
+            progress?: number | null;
+            /**
+             * Format: int64
+             * @description Monotonic within the rip.
+             */
+            sequence: number;
+            /** @description When the worker saw it, RFC 3339. */
+            worker_time: string;
+        };
+        /** @description Something the worker said while ripping. */
+        RipEventView: {
+            /** @description Its stable code. */
+            code: string;
+            /** @description What kind of event, such as `progress`. */
+            event_type: string;
+            /** @description What it said, when it said something. */
+            message?: string | null;
+            /**
+             * Format: float
+             * @description How far along, 0 to 1.
+             */
+            progress?: number | null;
+            /**
+             * Format: int64
+             * @description Its place in the worker's sequence.
+             */
+            sequence: number;
+            /** @description When the worker saw it. */
+            worker_time: string;
+        };
+        /** @description One file a worker sent, as the server received it. */
+        RipFileView: {
+            /**
+             * Format: int64
+             * @description Its length in bytes.
+             */
+            bytes: number;
+            /** @description Its name, such as `disc.bin`. */
+            name: string;
+            /** @description Its SHA-256, as the server computed it. */
+            sha256: string;
+        };
+        /** @description A page of rips, newest first. */
+        RipPage: {
+            /** @description The rips. */
+            items: components["schemas"]["RipView"][];
+            /** @description Pass as `before` for the next page; absent on the last. */
+            next_cursor?: string | null;
+        };
+        /** @description A request to rip the disc in a drive, and how it went. */
+        RipView: {
+            /** @description The artifact it became, once imported. */
+            artifact_id?: string | null;
+            /**
+             * Format: int64
+             * @description Bytes received across every file.
+             */
+            bytes_received: number;
+            /** @description Whether it can still be withdrawn. */
+            can_cancel: boolean;
+            /** @description When it ended. */
+            completed_at?: string | null;
+            /** @description When it was asked for. */
+            created_at: string;
+            /** @description The drive. */
+            drive_id: string;
+            /** @description What the drive is called. */
+            drive_name: string;
+            /** @description The tool that read the disc, such as `cdrdao`. */
+            engine?: string | null;
+            /** @description Its version. */
+            engine_version?: string | null;
+            /** @description Why it did not finish, when it did not. */
+            error_code?: string | null;
+            /** @description More about that. */
+            error_detail?: string | null;
+            /** @description What arrived. */
+            files: components["schemas"]["RipFileView"][];
+            /** @description Opaque identifier. */
+            id: string;
+            /** @description The import of what was read, once queued. */
+            import_id?: string | null;
+            /** @description Whether it is still going. */
+            is_open: boolean;
+            medium?: null | components["schemas"]["MediumView"];
+            read_errors?: null | components["schemas"]["ReadErrors"];
+            /** @description Who asked. */
+            requested_by: string;
+            /** @description When the worker took it. */
+            started_at?: string | null;
+            /**
+             * @description `queued`, `reading`, `uploading`, `registering`, `complete`,
+             *     `canceled`, `refused` or `failed`.
+             */
+            state: string;
         };
         /** @description Whether this server exports to RomM, and to which platforms. */
         RommSettings: {
@@ -4271,6 +4626,51 @@ export interface operations {
             };
         };
     };
+    request_drive_rip: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Drive identifier */
+                drive_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestRip"];
+            };
+        };
+        responses: {
+            /** @description Queued */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RipView"];
+                };
+            };
+            /** @description No such drive */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A rip is already reading, or the worker cannot rip */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     list_edition_sets: {
         parameters: {
             query?: never;
@@ -5125,6 +5525,294 @@ export interface operations {
             };
         };
     };
+    list_all_rips: {
+        parameters: {
+            query?: {
+                /** @description How many, at most 200. Defaults to 50. */
+                limit?: number;
+                /** @description The `next_cursor` of the page before. */
+                before?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RipPage"];
+                };
+            };
+        };
+    };
+    get_one_rip: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Rip identifier */
+                rip_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The rip */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RipView"];
+                };
+            };
+            /** @description No such rip */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    cancel_one_rip: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Rip identifier */
+                rip_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Withdrawn */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RipView"];
+                };
+            };
+            /** @description No such rip */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Its import has started, or it has ended */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    complete_drive_rip: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Rip identifier */
+                rip_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RipCompletion"];
+            };
+        };
+        responses: {
+            /** @description Recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RipView"];
+                };
+            };
+            /** @description Not this worker's rip */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not in a state that can end that way */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description An outcome or field that will not do */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_events_of_rip: {
+        parameters: {
+            query?: {
+                /** @description Only events after this sequence number. */
+                after?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Rip identifier */
+                rip_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description In sequence */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RipEventPage"];
+                };
+            };
+            /** @description No such rip */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    submit_rip_events: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Rip identifier */
+                rip_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RipEventBatch"];
+            };
+        };
+        responses: {
+            /** @description Recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RipEventAck"];
+                };
+            };
+            /** @description Not this worker's rip */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Withdrawn or ended */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    upload_rip_file: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Rip identifier */
+                rip_id: string;
+                /** @description The file, such as disc.bin */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": number[];
+            };
+        };
+        responses: {
+            /** @description Received and checked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RipView"];
+                };
+            };
+            /** @description Not this worker's rip */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No longer accepting files */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A name, length or digest that will not do */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     romm_settings: {
         parameters: {
             query?: never;
@@ -5845,6 +6533,49 @@ export interface operations {
                 };
             };
             /** @description Not this worker */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    claim_drive_rip: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Worker identifier */
+                worker_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RipClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description Taken */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RipClaim"];
+                };
+            };
+            /** @description Nothing to rip */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not this worker, or not its drive */
             404: {
                 headers: {
                     [name: string]: unknown;

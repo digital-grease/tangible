@@ -115,6 +115,15 @@ pub const API_BASE: &str = "/api/v1";
         routes::reports::prepare_error_report,
         routes::reports::artifact_format_report,
         routes::diagnostics::get_diagnostics,
+        routes::rips::request_drive_rip,
+        routes::rips::list_all_rips,
+        routes::rips::get_one_rip,
+        routes::rips::list_events_of_rip,
+        routes::rips::cancel_one_rip,
+        routes::rips::claim_drive_rip,
+        routes::rips::submit_rip_events,
+        routes::rips::upload_rip_file,
+        routes::rips::complete_drive_rip,
         routes::diagnostics::diagnostics_report,
         routes::romm::romm_settings,
         routes::romm::get_edition_romm,
@@ -196,6 +205,20 @@ pub const API_BASE: &str = "/api/v1";
         report::IssueReportField,
         routes::reports::ErrorReportRequest,
         routes::diagnostics::DiagnosticsView,
+        routes::rips::RipView,
+        routes::rips::RipFileView,
+        routes::rips::ReadErrors,
+        routes::rips::RipPage,
+        routes::rips::RipEventView,
+        routes::rips::RipEventPage,
+        routes::rips::RequestRip,
+        routes::rips::RipClaimRequest,
+        routes::rips::RipClaim,
+        routes::rips::RipEventSubmission,
+        routes::rips::RipEventBatch,
+        routes::rips::RipEventAck,
+        routes::rips::RipCompletion,
+        routes::workers::RipCapability,
         diagnostics::DiagnosticSection,
         diagnostics::DiagnosticCheck,
         diagnostics::CheckStatus,
@@ -251,6 +274,7 @@ pub const API_BASE: &str = "/api/v1";
         (name = "workers", description = "The burn-worker protocol"),
         (name = "reports", description = "Issue reports, prepared for the operator to review and send"),
         (name = "diagnostics", description = "The deployment's state as a checklist, for administrators"),
+        (name = "rips", description = "Ripping the disc in a drive into the library"),
     ),
 )]
 pub struct ApiDoc;
@@ -375,6 +399,7 @@ pub fn router(state: ApiState) -> Router {
         .nest(API_BASE, routes::romm::router())
         .nest(API_BASE, routes::reports::router())
         .nest(API_BASE, routes::diagnostics::router())
+        .nest(API_BASE, routes::rips::router())
         .nest(API_BASE, routes::derivations::router())
         // Applied per route, after routing, so the rule is looked up by the
         // matched pattern rather than by a raw path a caller could disguise.

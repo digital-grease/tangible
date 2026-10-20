@@ -330,6 +330,17 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
         "/api/v1/burn-attempts/{attempt_id}/report",
         Signed(Burn),
     ),
+    // Rips: asking for one adds to the library, as an import does; the rest
+    // is the worker's side, authenticated by its own credential.
+    ("POST", "/api/v1/drives/{drive_id}/rips", Signed(Import)),
+    ("GET", "/api/v1/rips", Signed(Read)),
+    ("GET", "/api/v1/rips/{rip_id}", Signed(Read)),
+    ("GET", "/api/v1/rips/{rip_id}/events", Signed(Read)),
+    ("POST", "/api/v1/rips/{rip_id}/cancel", Signed(Import)),
+    ("POST", "/api/v1/workers/{worker_id}/rip-claims", Worker),
+    ("POST", "/api/v1/rips/{rip_id}/events", Worker),
+    ("PUT", "/api/v1/rips/{rip_id}/files/{name}", Worker),
+    ("POST", "/api/v1/rips/{rip_id}/complete", Worker),
     // Diagnostics describe the machine and its configuration.
     ("GET", "/api/v1/diagnostics", Signed(Diagnose)),
     ("GET", "/api/v1/diagnostics/report", Signed(Diagnose)),

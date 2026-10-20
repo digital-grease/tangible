@@ -504,6 +504,18 @@ pub struct CapabilityReport {
     /// Free bytes in its staging cache.
     #[serde(default)]
     pub cache_free_bytes: Option<i64>,
+    /// What it can rip, if anything. Absent from workers older than ripping,
+    /// whose drives are then not offered for a rip.
+    #[serde(default)]
+    pub rip: Option<RipCapability>,
+}
+
+/// What a worker can rip with.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct RipCapability {
+    /// The engines that read discs, such as `cdrdao`.
+    #[serde(default)]
+    pub engines: Vec<EngineReport>,
 }
 
 /// What the server assigned.
@@ -534,6 +546,26 @@ const REPORTABLE_DRIVE_STATUSES: &[&str] = &[
 
 /// Longest free-text field accepted, matching the columns.
 const MAX_DRIVE_FIELD: usize = 200;
+
+/// What a worker reported about itself, as stored: its engines, its cache,
+/// and what it can rip.
+fn worker_capabilities(report: &CapabilityReport) -> serde_json::Value {
+    serde_json::json!({
+        "engines": report
+            .engines
+            .iter()
+            .map(|engine| serde_json::json!({ "name": engine.name, "version": engine.version }))
+            .collect::<Vec<_>>(),
+        "cache_free_bytes": report.cache_free_bytes,
+        "rip": report.rip.as_ref().map(|rip| serde_json::json!({
+            "engines": rip
+                .engines
+                .iter()
+                .map(|engine| serde_json::json!({ "name": engine.name, "version": engine.version }))
+                .collect::<Vec<_>>(),
+        })),
+    })
+}
 
 /// Record what a worker and its drive can do.
 ///
@@ -642,14 +674,7 @@ pub async fn report_capabilities(
         return Err(invalid("capabilities must be an object"));
     };
 
-    let worker_capabilities = serde_json::json!({
-        "engines": report
-            .engines
-            .iter()
-            .map(|engine| serde_json::json!({ "name": engine.name, "version": engine.version }))
-            .collect::<Vec<_>>(),
-        "cache_free_bytes": report.cache_free_bytes,
-    });
+    let worker_capabilities = worker_capabilities(&report);
 
     let drive_id = record_capabilities(
         state.database().pool(),
