@@ -251,11 +251,24 @@ impl ImportRunner {
                 }
 
                 match complete_import_job(pool, job.id, *outcome.artifact_id.as_uuid()).await {
-                    Ok(_) => tracing::info!(
-                        import_id = %job.id,
-                        artifact_id = %outcome.artifact_id,
-                        "import complete"
-                    ),
+                    Ok(_) => {
+                        tracing::info!(
+                            import_id = %job.id,
+                            artifact_id = %outcome.artifact_id,
+                            "import complete"
+                        );
+                        // Registered and recorded: the bytes are in the
+                        // library, and the staged copy is disposable. Kept
+                        // until now, and kept on any failure, because it is
+                        // the evidence a bad import leaves.
+                        if let Err(error) = self.pipeline.discard(job.id).await {
+                            tracing::warn!(
+                                import_id = %job.id,
+                                error = ?error,
+                                "the import's staging area could not be removed"
+                            );
+                        }
+                    }
                     Err(error) => tracing::error!(
                         import_id = %job.id,
                         error = ?error,

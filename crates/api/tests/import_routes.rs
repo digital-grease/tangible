@@ -279,6 +279,16 @@ async fn an_uploaded_iso_becomes_an_artifact() {
         .await
         .expect("count");
     assert_eq!(catalogued, 1);
+
+    // The staged copy is gone once the import is recorded: the library holds
+    // the bytes, and keeping both doubled the disk an import used.
+    let staged = harness
+        .dir
+        .path()
+        .join("staging")
+        .join("imports")
+        .join(&import);
+    assert!(!staged.exists(), "{} was left behind", staged.display());
 }
 
 #[tokio::test]

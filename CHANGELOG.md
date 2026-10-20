@@ -54,15 +54,23 @@ may change between minor versions, and the release notes say how.
   reads the disc sector by sector from the drive itself into an image,
   retrying a sector that fails and stopping at one that will not read, and
   it is imported as an ISO. An encrypted (CSS) DVD is recognised while it
-  reads and refused, keeping nothing. A disc the system has not caught up
-  with since a burn is refused with a request to reload it. Blu-rays are
-  still refused.
+  reads and refused, keeping nothing, including on drives that will not
+  read its video at all without authentication. A disc the system has not
+  caught up with since a burn is refused with a request to reload it.
+  Blu-rays are still refused.
 - A CD burn that the drive refused while setting up, before writing
   anything, is tried once more if the disc is still blank; a drive on the
   bench did this once and burned on the next run.
 - Administrators have a Diagnostics page with the same checklist, to copy,
   download, or prepare as an issue (`GET /api/v1/diagnostics` and
   `/diagnostics/report`, new permission `diagnose`).
+
+### Fixed
+
+- A completed import now removes its staging copy. Every import since 0.1.0
+  kept a second full copy of its bytes in the staging directory, doubling
+  the disk it used; those left by earlier versions can be deleted from
+  `staging/imports/` for any import shown as complete.
 
 ## 0.1.0 (2026-10-07)
 
