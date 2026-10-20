@@ -110,6 +110,7 @@ would guess:
 | `write-simulate.txt` | A real simulated write, raw, carriage returns intact. 3561 blocks is both tracks and the generated gap between them. |
 | `disk-info-no-disc.txt` | A real drive with an empty tray: ten retries, then it gives up. |
 | `assembled/write-*.txt` | An underrun, a failure after completion, and two refusals before writing. Failures cannot be captured on purpose without ruining media, so these may stay assembled. |
+| `assembled/write-setup-failed.txt` | The drive refusing the write parameters before anything was written, on the Slimtype DS8A8SH on 2026-10-19: the four ERROR lines and the warning are the engine's own report of that run, verbatim; the banner is from `write-success.txt`. The disc was still blank, and the same run straight after burned it. |
 | `assembled/disk-info-*.txt` | A closed CD-RW and an appendable CD-R. |
 
 ## Refreshing these

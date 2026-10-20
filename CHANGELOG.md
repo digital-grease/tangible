@@ -48,7 +48,11 @@ may change between minor versions, and the release notes say how.
   origin says it was dumped from a disc. A rip can be withdrawn until its
   import starts. DVDs, Blu-rays and blank discs are refused for now. A
   drive now does one thing at a time across burns, erasures and rips. The
-  web UI's Rips page asks for a rip and follows it to the library.
+  web UI's Rips page asks for a rip and follows it to the library, with
+  progress as the disc reads.
+- A CD burn that the drive refused while setting up, before writing
+  anything, is tried once more if the disc is still blank; a drive on the
+  bench did this once and burned on the next run.
 - Administrators have a Diagnostics page with the same checklist, to copy,
   download, or prepare as an issue (`GET /api/v1/diagnostics` and
   `/diagnostics/report`, new permission `diagnose`).

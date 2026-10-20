@@ -264,6 +264,50 @@ fn blocks(text: &str) -> Option<u64> {
 
 // --- read-cd ---------------------------------------------------------------------
 
+/// How far a `read-cd` has got, from its output as it arrives.
+///
+/// cdrdao prints the disc's table first, ending with the lead-out and its
+/// position in blocks, `Leadout AUDIO 0 00:47:36(  3561)`, then, while it
+/// copies, the position it has reached as `MM:SS:FF` on lines of their own,
+/// separated by carriage returns. Position over lead-out is the fraction
+/// read. Nothing is guessed before the lead-out is known.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReadProgress {
+    leadout_blocks: Option<u64>,
+}
+
+impl ReadProgress {
+    /// Take in one line; answers the fraction read when the line says.
+    pub fn observe(&mut self, line: &str) -> Option<f32> {
+        let line = line.trim();
+        if line.starts_with("Leadout") {
+            self.leadout_blocks = blocks(line).filter(|blocks| *blocks > 0);
+            return None;
+        }
+        let total = self.leadout_blocks?;
+        let position = position_blocks(line)?;
+        // Positions and lead-out are both under 100 minutes of 75-frame
+        // seconds, far inside what an f32 holds exactly.
+        #[allow(clippy::cast_precision_loss)]
+        let fraction = position as f32 / total as f32;
+        Some(fraction.clamp(0.0, 1.0))
+    }
+}
+
+/// A progress line's position in blocks: exactly `MM:SS:FF`, two digits
+/// each, so no other line with colons in it is taken for one.
+fn position_blocks(line: &str) -> Option<u64> {
+    let shaped = line.len() == 8
+        && line.bytes().enumerate().all(|(index, byte)| {
+            if index % 3 == 2 {
+                byte == b':'
+            } else {
+                byte.is_ascii_digit()
+            }
+        });
+    shaped.then(|| msf_blocks(line)).flatten()
+}
+
 /// One track of the table of contents `read-cd` writes, and where its data is.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReadbackTrack {
@@ -551,6 +595,35 @@ pub struct WriteOutcome {
     pub last_progress: Option<(u64, u64)>,
     /// Blocks cdrdao said it wrote, when it got that far.
     pub blocks_written: Option<u64>,
+}
+
+/// Whether a write failed while cdrdao was still setting the drive up,
+/// before any track began and with nothing written.
+///
+/// The one failure worth trying again: the drive refused the write
+/// parameters (`Cannot set write parameters mode page`, `Cannot setup write
+/// parameters`), which a USB drive on the bench did once and then accepted
+/// on the very next run. Anything that got as far as a track is never
+/// retried: part of the disc may be written.
+#[must_use]
+pub fn failed_at_setup(outcome: &WriteOutcome) -> bool {
+    let wrote_anything = outcome.reported_complete
+        || outcome.last_progress.is_some()
+        || outcome.blocks_written.is_some()
+        || outcome.events.iter().any(|event| {
+            matches!(
+                event,
+                WriteEvent::TrackStarted { .. }
+                    | WriteEvent::Progress { .. }
+                    | WriteEvent::DataWritten { .. }
+                    | WriteEvent::Completed
+            )
+        });
+    let refused_setup = outcome.failures.iter().any(|failure| {
+        failure.contains("Cannot set write parameters")
+            || failure.contains("Cannot setup write parameters")
+    });
+    !wrote_anything && refused_setup
 }
 
 /// Read one line of write output into an event.
@@ -851,6 +924,48 @@ mod tests {
     }
 
     #[test]
+    fn a_real_read_shows_how_far_it_has_got() {
+        // Lines as LineSplitter hands them over: split on \r and \n.
+        let output = captured("read-cd-mixed.txt");
+        let mut progress = ReadProgress::default();
+        let fractions: Vec<f32> = output
+            .split(['\r', '\n'])
+            .filter_map(|line| progress.observe(line))
+            .collect();
+        // 00:01:00 to 00:14:00 for the data track, 00:17:00 to 00:46:00 for
+        // the audio, against a lead-out of 3561 blocks.
+        assert_eq!(fractions.len(), 14 + 30, "{fractions:?}");
+        assert!((fractions[0] - 75.0 / 3561.0).abs() < 1e-6);
+        assert!((fractions[fractions.len() - 1] - 3450.0 / 3561.0).abs() < 1e-6);
+        assert!(
+            fractions.windows(2).all(|pair| pair[0] <= pair[1]),
+            "only forward"
+        );
+    }
+
+    #[test]
+    fn progress_waits_for_the_leadout_and_ignores_anything_else() {
+        let mut progress = ReadProgress::default();
+        assert_eq!(progress.observe("00:01:00"), None, "no total yet");
+        assert_eq!(
+            progress.observe("Leadout AUDIO   0      00:01:00(    75)"),
+            None
+        );
+        assert_eq!(progress.observe("00:00:30"), Some(0.4));
+        assert_eq!(progress.observe("00:02:00"), Some(1.0), "clamped");
+        for noise in [
+            "Track 2...",
+            "00:61:00",
+            "00:00:75",
+            "1:00:00",
+            "00:00:00:00",
+            "",
+        ] {
+            assert_eq!(progress.observe(noise), None, "{noise:?}");
+        }
+    }
+
+    #[test]
     fn a_real_read_back_finished() {
         let output = captured("read-cd-mixed.txt");
         assert!(read_completed(&output));
@@ -1011,6 +1126,34 @@ mod tests {
             output.contains('\r'),
             "the capture keeps cdrdao's carriage returns"
         );
+    }
+
+    #[test]
+    fn a_drive_refusing_the_write_parameters_failed_at_setup() {
+        let outcome = write_outcome(&assembled("write-setup-failed.txt"));
+        assert!(!outcome.reported_complete);
+        assert!(failed_at_setup(&outcome), "{outcome:?}");
+    }
+
+    #[test]
+    fn nothing_that_got_as_far_as_a_track_failed_at_setup() {
+        // An underrun wrote part of the disc; it must never be tried again.
+        assert!(!failed_at_setup(&write_outcome(&assembled(
+            "write-buffer-underrun.txt"
+        ))));
+        assert!(!failed_at_setup(&write_outcome(&captured(
+            "write-success.txt"
+        ))));
+        // The setup message after a track had started is not a setup failure.
+        let started = format!(
+            "Writing track 01 (mode MODE1/MODE1 )...\n{}",
+            assembled("write-setup-failed.txt")
+        );
+        assert!(!failed_at_setup(&write_outcome(&started)));
+        // Other refusals before writing are not this one.
+        assert!(!failed_at_setup(&write_outcome(&assembled(
+            "write-not-empty.txt"
+        ))));
     }
 
     #[test]

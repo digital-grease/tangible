@@ -493,7 +493,7 @@ impl CdrdaoEngine {
             "reading every track of the disc",
         ));
         let arguments = command::rip_cd(&request.drive);
-        let run = self.run_in(&arguments, RIP_TIMEOUT, &request.output_dir);
+        let run = self.run_following(&arguments, RIP_TIMEOUT, &request.output_dir, sink);
         // Dropping the run kills cdrdao (kill_on_drop), which is what a
         // withdrawn rip wants: reading is harmless to stop.
         let text = tokio::select! {
@@ -555,6 +555,146 @@ impl CdrdaoEngine {
             retried_sectors: 0,
             data_bytes,
         })
+    }
+}
+
+impl CdrdaoEngine {
+    /// Run a read to completion, turning its position lines into progress
+    /// as they arrive. Killed if dropped, which is how a withdrawn rip stops.
+    async fn run_following(
+        &self,
+        arguments: &[String],
+        timeout: Duration,
+        directory: &Path,
+        sink: &dyn EventSink,
+    ) -> Result<Run, EngineError> {
+        let mut child = Command::new(&self.program)
+            .args(arguments)
+            .current_dir(directory)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|source| EngineError::Io {
+                operation: "starting cdrdao",
+                source,
+            })?;
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        let finished = tokio::time::timeout(timeout, async {
+            let (stdout, stderr) = tokio::join!(read_bounded(stdout), follow_read(stderr, sink));
+            (stdout, stderr, child.wait().await)
+        })
+        .await;
+        let Ok((stdout, stderr, status)) = finished else {
+            let _ = child.kill().await;
+            return Err(EngineError::Timeout {
+                operation: "cdrdao",
+                seconds: timeout.as_secs(),
+            });
+        };
+        let status = status.map_err(|source| EngineError::Io {
+            operation: "waiting for cdrdao",
+            source,
+        })?;
+        Ok(Run {
+            stdout,
+            stderr,
+            exit_code: status.code(),
+        })
+    }
+}
+
+/// Read a `read-cd`'s stderr as it arrives: emit how far it has got, once
+/// for each whole percent, and keep the text, bounded, for judging the
+/// result.
+async fn follow_read<R: AsyncRead + Unpin>(pipe: Option<R>, sink: &dyn EventSink) -> String {
+    let mut log = String::new();
+    let Some(mut pipe) = pipe else {
+        return log;
+    };
+    let mut splitter = LineSplitter::default();
+    let mut progress = parse::ReadProgress::default();
+    let mut last_percent = None;
+    let mut on_line = |line: &str| {
+        if let Some(fraction) = progress.observe(line) {
+            // A whole percent, rounded down, so 100 is said only at the end.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let percent = (fraction * 100.0) as u32;
+            if last_percent != Some(percent) {
+                last_percent = Some(percent);
+                sink.emit(BurnEvent::progress(
+                    "ripping",
+                    "RIP_PROGRESS",
+                    fraction,
+                    format!("{percent}% read"),
+                ));
+            }
+        } else if !line.trim().is_empty() {
+            push_bounded(&mut log, line);
+            push_bounded(&mut log, "\n");
+        }
+    };
+    let mut buffer = vec![0_u8; 8192];
+    loop {
+        match pipe.read(&mut buffer).await {
+            Ok(0) | Err(_) => break,
+            Ok(read) => splitter.push(&buffer[..read], &mut on_line),
+        }
+    }
+    splitter.flush(&mut on_line);
+    log
+}
+
+impl CdrdaoEngine {
+    /// Run cdrdao's write once and judge its output as it arrives.
+    async fn write_once(
+        &self,
+        arguments: &[String],
+        sink: &dyn EventSink,
+    ) -> Result<(parse::WriteOutcome, Option<i32>), EngineError> {
+        let mut child = Command::new(&self.program)
+            .args(arguments)
+            .current_dir(self.working_directory())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            // Deliberately not kill_on_drop: a dropped future must not stop a
+            // write. The worker's recovery record accounts for a process that
+            // outlives its caller.
+            .spawn()
+            .map_err(|source| EngineError::Io {
+                operation: "starting cdrdao",
+                source,
+            })?;
+
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        // Everything cdrdao says is on stderr and is judged as it arrives.
+        // stdout is drained alongside so it can never fill and stop the write.
+        let (stdout, (outcome, log)) =
+            tokio::join!(read_bounded(stdout), follow_write(stderr, sink));
+
+        let status = child.wait().await.map_err(|source| EngineError::Io {
+            operation: "waiting for cdrdao",
+            source,
+        })?;
+        let exit_code = status.code();
+        if !stdout.trim().is_empty() {
+            tracing::debug!(stdout = %stdout, "cdrdao printed to stdout during a write");
+        }
+        tracing::debug!(log_bytes = log.len(), exit_code = ?exit_code, "cdrdao write finished");
+        Ok((outcome, exit_code))
+    }
+
+    /// Whether the disc in the drive still reads as blank, with no sessions.
+    /// Anything else, including a drive that does not answer, is no.
+    async fn still_blank(&self, drive: &DriveRef) -> bool {
+        matches!(
+            self.inspect_medium(drive).await,
+            Ok(medium) if medium.blank && medium.sessions == 0
+        )
     }
 }
 
@@ -1228,37 +1368,30 @@ impl BurnEngine for CdrdaoEngine {
         let path = self.store_toc(plan, &document).await?;
         let arguments = command::write(plan, &path).map_err(|error| unusable(&error))?;
 
-        let mut child = Command::new(&self.program)
-            .args(&arguments)
-            .current_dir(self.working_directory())
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            // Deliberately not kill_on_drop: a dropped future must not stop a
-            // write. The worker's recovery record accounts for a process that
-            // outlives its caller.
-            .spawn()
-            .map_err(|source| EngineError::Io {
-                operation: "starting cdrdao",
-                source,
-            })?;
-
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-        // Everything cdrdao says is on stderr and is judged as it arrives.
-        // stdout is drained alongside so it can never fill and stop the write.
-        let (stdout, (outcome, log)) =
-            tokio::join!(read_bounded(stdout), follow_write(stderr, sink));
-
-        let status = child.wait().await.map_err(|source| EngineError::Io {
-            operation: "waiting for cdrdao",
-            source,
-        })?;
-        let exit_code = status.code();
-        if !stdout.trim().is_empty() {
-            tracing::debug!(stdout = %stdout, "cdrdao printed to stdout during a write");
+        let (mut outcome, mut exit_code) = self.write_once(&arguments, sink).await?;
+        // Once, and only when the drive refused the write parameters before a
+        // single track began and the disc still reads as blank. A drive on
+        // the bench did exactly this once and burned on the next run; in
+        // production it would be a failed attempt on a disc nobody touched.
+        let mut retried = false;
+        if parse::failed_at_setup(&outcome)
+            && !self.cancel.is_cancelled()
+            && self.still_blank(&plan.drive).await
+        {
+            tracing::warn!(
+                failures = ?outcome.failures,
+                "the drive refused the write parameters before writing anything; the disc is \
+                 still blank, so trying once more"
+            );
+            sink.emit(BurnEvent::new(
+                "writing",
+                "WRITE_RETRIED",
+                "the drive refused the write setup before writing anything and the disc is \
+                 still blank; trying once more",
+            ));
+            (outcome, exit_code) = self.write_once(&arguments, sink).await?;
+            retried = true;
         }
-        tracing::debug!(log_bytes = log.len(), exit_code = ?exit_code, "cdrdao write finished");
 
         // The tool said it finished and nothing failed before it did. The exit
         // status is not part of this, for the reason the fixtures record:
@@ -1276,6 +1409,14 @@ impl BurnEngine for CdrdaoEngine {
             diagnostics.push(
                 "the write was reported complete but the tool exited non-zero; the disc must be \
                  read back before it is believed"
+                    .to_owned(),
+            );
+        }
+        if retried {
+            diagnostics.insert(
+                0,
+                "the first try failed while setting up the drive with nothing written; the disc \
+                 was still blank, so it was tried once more"
                     .to_owned(),
             );
         }
@@ -1435,6 +1576,105 @@ mod tests {
         );
         std::fs::read_to_string(format!("{path}{name}"))
             .unwrap_or_else(|error| panic!("read {name}: {error}"))
+    }
+
+    /// A stand-in for cdrdao: `write` fails at drive setup the first time and
+    /// succeeds after, `disk-info` prints `disk_info`. Counts its writes.
+    #[cfg(unix)]
+    fn stub_cdrdao(dir: &std::path::Path, disk_info: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(
+            dir.join("fail.txt"),
+            fixture("assembled/write-setup-failed.txt"),
+        )
+        .unwrap();
+        std::fs::write(dir.join("ok.txt"), fixture("write-success.txt")).unwrap();
+        std::fs::write(dir.join("disk.txt"), fixture(disk_info)).unwrap();
+        let script = dir.join("cdrdao");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\n\
+             dir=$(dirname \"$0\")\n\
+             case \"$1\" in\n\
+             write) n=$(cat \"$dir/count\" 2>/dev/null || echo 0); n=$((n+1)); echo $n > \"$dir/count\";\n\
+               if [ \"$n\" = 1 ]; then cat \"$dir/fail.txt\" >&2; exit 1; fi; cat \"$dir/ok.txt\" >&2; exit 0;;\n\
+             disk-info) cat \"$dir/disk.txt\";;\n\
+             esac\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        script
+    }
+
+    #[cfg(unix)]
+    fn writes(dir: &std::path::Path) -> String {
+        std::fs::read_to_string(dir.join("count")).unwrap_or_default()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_write_refused_at_setup_on_a_still_blank_disc_is_tried_once_more() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = CdrdaoEngine::at(
+            stub_cdrdao(dir.path(), "disk-info-blank-cdr.txt"),
+            dir.path().join("toc"),
+        );
+        let sink = CollectingSink::new();
+        let report = engine
+            .write(&plan(vec![track(1, "MODE1/2048", 4000)]), &sink)
+            .await
+            .unwrap();
+        assert_eq!(writes(dir.path()).trim(), "2");
+        assert!(report.engine_reported_success, "{report:?}");
+        assert!(
+            report.diagnostics[0].contains("tried once more"),
+            "{report:?}"
+        );
+        assert!(
+            sink.events()
+                .iter()
+                .any(|event| event.code == "WRITE_RETRIED")
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_disc_no_longer_blank_is_never_written_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = CdrdaoEngine::at(
+            stub_cdrdao(dir.path(), "assembled/disk-info-appendable-cdr.txt"),
+            dir.path().join("toc"),
+        );
+        let sink = CollectingSink::new();
+        let report = engine
+            .write(&plan(vec![track(1, "MODE1/2048", 4000)]), &sink)
+            .await
+            .unwrap();
+        assert_eq!(writes(dir.path()).trim(), "1", "one try only");
+        assert!(!report.engine_reported_success);
+        assert!(
+            !sink
+                .events()
+                .iter()
+                .any(|event| event.code == "WRITE_RETRIED")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_read_reports_its_progress_and_keeps_the_rest() {
+        let output = fixture("read-cd-mixed.txt");
+        let sink = CollectingSink::new();
+        let log = follow_read(Some(output.as_bytes()), &sink).await;
+        let events = sink.events();
+        let percents: Vec<String> = events.iter().map(|event| event.message.clone()).collect();
+        // One event per whole percent reached: 44 positions, all distinct.
+        assert_eq!(events.len(), 44, "{percents:?}");
+        assert!(events.iter().all(|event| event.code == "RIP_PROGRESS"));
+        assert_eq!(percents[0], "2% read");
+        assert_eq!(percents.last().map(String::as_str), Some("96% read"));
+        // The judgement lines are kept; the position lines are not.
+        assert!(parse::read_completed(&log), "{log}");
+        assert!(!log.contains("00:05:00"));
     }
 
     fn track(number: u32, mode: &str, sectors: u64) -> PlannedTrack {

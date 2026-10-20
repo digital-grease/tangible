@@ -1,0 +1,9 @@
+Cdrdao version 1.2.4 - (C) Andreas Mueller <andreas@daneb.de>
+/dev/sr0: Slimtype DVD A DS8A8SH	Rev: KS21
+Using driver: Generic SCSI-3/MMC - Version 2.0 (options 0x0000)
+
+WARNING: No super user permission to setup real time scheduling.
+ERROR: Cannot set write parameters mode page.
+ERROR: Cannot setup write parameters for session-at-once mode.
+ERROR: Please try to use the 'generic-mmc-raw' driver.
+ERROR: Writing failed.
