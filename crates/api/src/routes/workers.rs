@@ -516,6 +516,70 @@ pub struct RipCapability {
     /// The engines that read discs, such as `cdrdao`.
     #[serde(default)]
     pub engines: Vec<EngineReport>,
+    /// What it can decrypt. Present only from a worker image its operator
+    /// built to decrypt (ADR 0013); the published image reports none.
+    #[serde(default)]
+    pub decryption: Option<DecryptionReport>,
+}
+
+/// What a worker can decrypt. Library and tool versions only: a worker never
+/// reports a key, a key file, or where one is.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct DecryptionReport {
+    /// DVD decryption, through libdvdcss and dvdbackup.
+    #[serde(default)]
+    pub css: Option<CssDecryptionReport>,
+}
+
+/// DVD decryption a worker has.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CssDecryptionReport {
+    /// `libdvdcss`.
+    pub library: String,
+    /// Its version.
+    pub version: String,
+    /// `dvdbackup`.
+    pub tool: String,
+    /// Its version.
+    pub tool_version: String,
+}
+
+/// Longest version string kept from a decryption report.
+const MAX_VERSION_CHARS: usize = 64;
+
+/// A short version string of the characters versions use.
+fn plain_version(version: &str) -> bool {
+    !version.is_empty()
+        && version.len() <= MAX_VERSION_CHARS
+        && version
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '-' | '~' | ':'))
+}
+
+/// The decryption a worker reported, as stored, or nothing.
+///
+/// Only the one library and tool the opt-in image installs are recognised.
+/// Anything else is left out, with a warning, rather than refusing the whole
+/// report: the worker can still burn, and leaving it out only means the
+/// server will not hand it a decrypting rip.
+fn accepted_decryption(rip: &RipCapability) -> Option<serde_json::Value> {
+    let css = rip.decryption.as_ref()?.css.as_ref()?;
+    if css.library != "libdvdcss"
+        || css.tool != "dvdbackup"
+        || !plain_version(&css.version)
+        || !plain_version(&css.tool_version)
+    {
+        tracing::warn!("a worker reported DVD decryption this server does not recognise; ignored");
+        return None;
+    }
+    Some(serde_json::json!({
+        "css": {
+            "library": css.library,
+            "version": css.version,
+            "tool": css.tool,
+            "tool_version": css.tool_version,
+        }
+    }))
 }
 
 /// What the server assigned.
@@ -563,6 +627,7 @@ fn worker_capabilities(report: &CapabilityReport) -> serde_json::Value {
                 .iter()
                 .map(|engine| serde_json::json!({ "name": engine.name, "version": engine.version }))
                 .collect::<Vec<_>>(),
+            "decryption": accepted_decryption(rip),
         })),
     })
 }

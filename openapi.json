@@ -5969,6 +5969,51 @@
         },
         "additionalProperties": false
       },
+      "CssDecryptionReport": {
+        "type": "object",
+        "description": "DVD decryption a worker has.",
+        "required": [
+          "library",
+          "version",
+          "tool",
+          "tool_version"
+        ],
+        "properties": {
+          "library": {
+            "type": "string",
+            "description": "`libdvdcss`."
+          },
+          "tool": {
+            "type": "string",
+            "description": "`dvdbackup`."
+          },
+          "tool_version": {
+            "type": "string",
+            "description": "Its version."
+          },
+          "version": {
+            "type": "string",
+            "description": "Its version."
+          }
+        }
+      },
+      "DecryptionReport": {
+        "type": "object",
+        "description": "What a worker can decrypt. Library and tool versions only: a worker never\nreports a key, a key file, or where one is.",
+        "properties": {
+          "css": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CssDecryptionReport",
+                "description": "DVD decryption, through libdvdcss and dvdbackup."
+              }
+            ]
+          }
+        }
+      },
       "DependencyCheck": {
         "type": "object",
         "description": "The state of one dependency.",
@@ -8156,6 +8201,17 @@
         "type": "object",
         "description": "What a worker can rip with.",
         "properties": {
+          "decryption": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DecryptionReport",
+                "description": "What it can decrypt. Present only from a worker image its operator\nbuilt to decrypt (ADR 0013); the published image reports none."
+              }
+            ]
+          },
           "engines": {
             "type": "array",
             "items": {

@@ -17,6 +17,7 @@ pub mod cdrdao;
 pub mod client;
 pub mod combined;
 pub mod connection;
+pub mod decryption;
 pub mod device_lock;
 pub mod engine;
 pub mod erasing;

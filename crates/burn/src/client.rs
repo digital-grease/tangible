@@ -369,6 +369,9 @@ pub struct Capabilities {
 pub struct RipCapabilityBody {
     /// The engines that read discs.
     pub engines: Vec<EngineDescription>,
+    /// What it can decrypt, only when its image was built to (ADR 0013).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decryption: Option<crate::decryption::DecryptionCapability>,
 }
 
 /// A rip a worker has taken.

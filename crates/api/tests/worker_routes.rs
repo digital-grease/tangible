@@ -968,6 +968,79 @@ async fn an_older_or_newer_worker_is_not_refused_over_its_connection() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
+async fn decryption_a_worker_reports_is_kept_only_when_recognised() {
+    let harness = harness().await;
+    let (worker_id, credential) = enroll(&harness).await;
+    let path = format!("/api/v1/workers/{worker_id}/capabilities");
+    let css = serde_json::json!({
+        "library": "libdvdcss", "version": "1.6.0",
+        "tool": "dvdbackup", "tool_version": "0.4.2-4.1",
+    });
+    let stored = || async {
+        let value: Option<serde_json::Value> = sqlx::query_scalar(
+            "SELECT capabilities_json -> 'rip' -> 'decryption' FROM workers WHERE id = $1::uuid",
+        )
+        .bind(&worker_id)
+        .fetch_one(&harness.pool)
+        .await
+        .expect("the worker");
+        value.filter(|value| !value.is_null())
+    };
+    let report = |decryption: serde_json::Value| {
+        let mut body = capability_body("/dev/disc-block");
+        body["rip"] = serde_json::json!({
+            "engines": [{ "name": "block_reader", "version": "0.1.0" }],
+            "decryption": decryption,
+        });
+        body
+    };
+
+    // The published image reports none.
+    let mut plain = capability_body("/dev/disc-block");
+    plain["rip"] =
+        serde_json::json!({ "engines": [{ "name": "block_reader", "version": "0.1.0" }] });
+    let (status, reply) = put(&harness, &path, &credential, plain).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(stored().await, None);
+
+    // The opt-in image's report is kept as it was sent.
+    let (status, reply) = put(
+        &harness,
+        &path,
+        &credential,
+        report(serde_json::json!({ "css": css })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(stored().await, Some(serde_json::json!({ "css": css })));
+
+    // Anything else is left out, without refusing the worker: another
+    // library, another tool, a version that is not one, or a field nobody
+    // asked for such as a key file's path.
+    for odd in [
+        serde_json::json!({ "css": { "library": "/tmp/evil.so", "version": "1", "tool": "dvdbackup", "tool_version": "1" } }),
+        serde_json::json!({ "css": { "library": "libdvdcss", "version": "1", "tool": "sh", "tool_version": "1" } }),
+        serde_json::json!({ "css": { "library": "libdvdcss", "version": "1.6.0 && reboot", "tool": "dvdbackup", "tool_version": "1" } }),
+    ] {
+        let (status, reply) = put(&harness, &path, &credential, report(odd.clone())).await;
+        assert_eq!(status, StatusCode::OK, "{odd}: {reply}");
+        assert_eq!(stored().await, None, "{odd}");
+    }
+    let mut extra =
+        serde_json::json!({ "css": css, "keydb_path": "/home/tangible/.config/aacs/KEYDB.cfg" });
+    extra["css"]["key"] = "00112233445566778899".into();
+    let (status, reply) = put(&harness, &path, &credential, report(extra)).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    let kept = stored().await.expect("css kept");
+    assert_eq!(
+        kept,
+        serde_json::json!({ "css": css }),
+        "only the known fields are stored"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn a_restarting_worker_reports_the_same_drive_rather_than_a_second_one() {
     // Identity is the worker plus the alias. A new row per restart would
     // leave burn history pointing at drives nobody can find.

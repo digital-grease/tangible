@@ -29,8 +29,8 @@
 #   libbdplus0 KEYDB.cfg the operator mounts; for Blu-ray, later.
 #
 # /usr/share/tangible/decryption.json records what was installed, for the
-# worker to report; the worker also checks each library is where the file
-# says before it believes it.
+# worker to report. The worker believes it only when the library and the
+# tool are also at the fixed places it looks for them itself.
 
 # The published image to extend. Required: pin the release you run, or its
 # digest. A locally built image works too, for testing.
@@ -88,8 +88,9 @@ RUN ldconfig
 RUN set -eu; \
     pkg() { dpkg-query --showformat='${Version}' --show "$1"; }; \
     test -e /usr/local/lib/libdvdcss.so.2; \
+    test -x /usr/bin/dvdbackup; \
     mkdir -p /usr/share/tangible; \
-    printf '{"css":{"library":"libdvdcss","version":"%s","path":"/usr/local/lib/libdvdcss.so.2","tool":"dvdbackup","tool_version":"%s","tool_path":"/usr/bin/dvdbackup"},"aacs":{"library":"libaacs","version":"%s","bdplus_version":"%s"}}\n' \
+    printf '{"css":{"library":"libdvdcss","version":"%s","tool":"dvdbackup","tool_version":"%s"},"aacs":{"library":"libaacs","version":"%s","bdplus_version":"%s"}}\n' \
       "${LIBDVDCSS_VERSION}" "$(pkg dvdbackup)" "$(pkg libaacs0)" "$(pkg libbdplus0)" \
       > /usr/share/tangible/decryption.json
 

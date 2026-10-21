@@ -693,6 +693,60 @@ async fn a_restarted_worker_reuses_its_credential() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
+async fn a_worker_reports_decryption_only_when_its_image_has_it() {
+    // The capability travels from the worker's start-up detection through
+    // the real client to what the server stores; the published image's
+    // worker reports none.
+    let mut server = server().await;
+    let css = tangible_burn::decryption::CssDecryption {
+        library: "libdvdcss".to_owned(),
+        version: "1.6.0".to_owned(),
+        tool: "dvdbackup".to_owned(),
+        tool_version: "0.4.2-4.1".to_owned(),
+    };
+    for decryption in [
+        None,
+        Some(tangible_burn::decryption::DecryptionCapability {
+            css: Some(css.clone()),
+        }),
+    ] {
+        let worker_dir = TempDir::new().expect("temp dir");
+        let token = server.enrollment_token().await;
+        let settings = WorkerSettings {
+            decryption: decryption.clone(),
+            ..settings(&server, worker_dir.path().to_path_buf(), token)
+        };
+        let engine = FakeEngine::new(settings.state_dir.join("media"));
+        let mut runtime = WorkerRuntime::new(settings, engine).expect("runtime");
+        let mut identity = runtime.identify().await.expect("enroll");
+        runtime.announce(&mut identity).await.expect("announce");
+
+        let rip: serde_json::Value = sqlx::query_scalar(
+            "SELECT capabilities_json -> 'rip' FROM workers WHERE id = $1::uuid",
+        )
+        .bind(&identity.worker_id)
+        .fetch_one(&server.pool)
+        .await
+        .expect("the worker");
+        assert!(
+            rip["engines"]
+                .as_array()
+                .is_some_and(|engines| engines.iter().any(|e| e["name"] == "block_reader")),
+            "{rip}"
+        );
+        match decryption {
+            None => assert!(rip["decryption"].is_null(), "{rip}"),
+            Some(_) => assert_eq!(
+                rip["decryption"],
+                serde_json::json!({ "css": serde_json::to_value(&css).expect("json") }),
+            ),
+        }
+    }
+    server.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn a_worker_reports_its_drive_before_asking_for_work() {
     // A claim names a drive, and the drive has to exist first. The identifier
     // comes back from the server rather than being chosen locally.

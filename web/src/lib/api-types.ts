@@ -2014,6 +2014,24 @@ export interface components {
             /** @description The username. Case does not matter. */
             username: string;
         };
+        /** @description DVD decryption a worker has. */
+        CssDecryptionReport: {
+            /** @description `libdvdcss`. */
+            library: string;
+            /** @description `dvdbackup`. */
+            tool: string;
+            /** @description Its version. */
+            tool_version: string;
+            /** @description Its version. */
+            version: string;
+        };
+        /**
+         * @description What a worker can decrypt. Library and tool versions only: a worker never
+         *     reports a key, a key file, or where one is.
+         */
+        DecryptionReport: {
+            css?: null | components["schemas"]["CssDecryptionReport"];
+        };
         /** @description The state of one dependency. */
         DependencyCheck: {
             /**
@@ -2986,6 +3004,7 @@ export interface components {
         RequestRip: Record<string, never>;
         /** @description What a worker can rip with. */
         RipCapability: {
+            decryption?: null | components["schemas"]["DecryptionReport"];
             /** @description The engines that read discs, such as `cdrdao`. */
             engines?: components["schemas"]["EngineReport"][];
         };

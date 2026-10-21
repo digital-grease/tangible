@@ -62,7 +62,9 @@ may change between minor versions, and the release notes say how.
   and never published (`deploy/decryption/Dockerfile`, with
   `deploy/compose.decryption.yaml` to run a worker from it): VideoLAN's
   libdvdcss from its source release, pinned by checksum, and Debian's
-  `dvdbackup`, `libaacs0` and `libbdplus0`. The worker does not use it yet.
+  `dvdbackup`, `libaacs0` and `libbdplus0`. A worker started from it says so
+  in its log and reports the library and tool versions to the server; it
+  does not decrypt anything yet.
   The release now checks its image contains none of these before signing
   it (`deploy/check-no-decryption.sh`).
 - A CD burn that the drive refused while setting up, before writing

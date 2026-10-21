@@ -613,8 +613,32 @@ async fn burn_worker_command(worker: &WorkerConfig) -> Result<()> {
     let state_dir = std::path::absolute(&worker.state_dir)
         .with_context(|| format!("resolving {}", worker.state_dir.display()))?;
 
+    // Found once: the image does not change under a running worker. A record
+    // that cannot be believed is said and treated as none, never as a reason
+    // not to burn.
+    let decryption = match tangible_burn::decryption::detect() {
+        Ok(Some(found)) => {
+            if let Some(css) = &found.css {
+                tracing::info!(
+                    library = %css.library,
+                    version = %css.version,
+                    tool = %css.tool,
+                    tool_version = %css.tool_version,
+                    "this worker's image can decrypt DVDs"
+                );
+            }
+            Some(found)
+        }
+        Ok(None) => None,
+        Err(error) => {
+            tracing::warn!(%error, "this worker's image claims decryption, but it is not usable");
+            None
+        }
+    };
+
     let settings = WorkerSettings {
         enrollment_token: worker.enrollment_token.clone(),
+        decryption,
         device_alias: worker.device_alias.to_string_lossy().into_owned(),
         configured_name: worker.worker_name.clone(),
         ..WorkerSettings::new(

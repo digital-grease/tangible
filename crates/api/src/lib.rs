@@ -219,6 +219,8 @@ pub const API_BASE: &str = "/api/v1";
         routes::rips::RipEventAck,
         routes::rips::RipCompletion,
         routes::workers::RipCapability,
+        routes::workers::DecryptionReport,
+        routes::workers::CssDecryptionReport,
         diagnostics::DiagnosticSection,
         diagnostics::DiagnosticCheck,
         diagnostics::CheckStatus,

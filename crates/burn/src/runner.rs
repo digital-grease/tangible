@@ -77,6 +77,9 @@ pub struct WorkerSettings {
     /// How often to send buffered events and renew the lease during an
     /// attempt.
     pub report_interval: Duration,
+    /// What this worker's image can decrypt, found once at start
+    /// ([`crate::decryption::detect`]). `None` in the published image.
+    pub decryption: Option<crate::decryption::DecryptionCapability>,
 }
 
 impl WorkerSettings {
@@ -101,6 +104,7 @@ impl WorkerSettings {
             media_wait: Duration::from_secs(30 * 60),
             media_poll_interval: Duration::from_secs(5),
             report_interval: Duration::from_secs(5),
+            decryption: None,
         }
     }
 }
@@ -369,7 +373,17 @@ impl<E: BurnEngine> WorkerRuntime<E> {
                 version: env!("CARGO_PKG_VERSION").to_owned(),
             });
         }
-        (!engines.is_empty()).then_some(RipCapabilityBody { engines })
+        // Decryption is reported only beside the block reader: a worker that
+        // cannot read a DVD has nothing to decrypt.
+        let decryption = self
+            .engine
+            .rips_images()
+            .then(|| self.settings.decryption.clone())
+            .flatten();
+        (!engines.is_empty()).then_some(RipCapabilityBody {
+            engines,
+            decryption,
+        })
     }
 
     fn drive_ref(&self, identity: &WorkerIdentity, drive_id: DriveId) -> DriveRef {

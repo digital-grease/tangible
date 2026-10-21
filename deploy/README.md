@@ -358,8 +358,11 @@ TANGIBLE_DECRYPTION_IMAGE=tangible-decryption:v0.1.0 docker compose \
   -f deploy/compose.decryption.yaml up -d
 ```
 
-The worker keeps the same confinement: its drive's block device and group,
-no capabilities, a read-only root. On the first drive tried, libdvdcss
+The worker logs "this worker's image can decrypt DVDs" at start, with the
+library and tool versions, and reports them to the server; a warning
+instead means the image is not as the Dockerfile builds it. The worker keeps
+the same confinement: its drive's block device and group, no capabilities, a
+read-only root. On the first drive tried, libdvdcss
 authenticated and found every title key with nothing more.
 
 That image is yours, not a Tangible release: it is outside the release's
