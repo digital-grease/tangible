@@ -87,3 +87,10 @@ path = "fuzz_targets/report_scrub.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "video_ts"
+path = "fuzz_targets/video_ts.rs"
+test = false
+doc = false
+bench = false

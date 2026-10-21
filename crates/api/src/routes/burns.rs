@@ -509,6 +509,20 @@ fn eligibility(facts: &ArtifactBurnFacts) -> Result<Vec<String>, Problem> {
             "this artifact is quarantined and cannot be burned",
         ));
     }
+    // A VIDEO_TS or BDMV tree is a disc's files, not an image of the disc.
+    // Writing one means building a filesystem around it, which would make a
+    // disc that matches no artifact; the engines write images, and would
+    // refuse it only after staging it and waiting for a disc.
+    if matches!(
+        facts.format.as_str(),
+        "video_ts_directory" | "bdmv_directory"
+    ) {
+        return Err(Problem::new(
+            ErrorCode::ValidationFailed,
+            "this artifact is a disc's files, not an image of a disc, and Tangible \
+             burns images",
+        ));
+    }
 
     let mut warnings = Vec::new();
     match facts.validation_state.as_str() {
@@ -1233,6 +1247,19 @@ mod tests {
             format: "iso".to_owned(),
             total_bytes: 10,
         }
+    }
+
+    #[test]
+    fn a_directory_tree_is_not_burned() {
+        for format in ["video_ts_directory", "bdmv_directory"] {
+            let problem = eligibility(&ArtifactBurnFacts {
+                format: format.to_owned(),
+                ..facts()
+            })
+            .expect_err("refused");
+            assert_eq!(problem.code, "VALIDATION_FAILED", "{format}");
+        }
+        assert!(eligibility(&facts()).is_ok());
     }
 
     // --- request validation ------------------------------------------------

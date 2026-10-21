@@ -29,8 +29,9 @@ Existing media managers usually center on playable video files, episodes, songs,
 
 - Imports by upload, or from watched folders an administrator configures; a
   folder holding a disc's files imports as one artifact.
-- Recognises ISO 9660 and UDF images, CUE/BIN and cdrdao TOC/BIN, by their
-  structure rather than their file names, and reports what looks wrong.
+- Recognises ISO 9660 and UDF images, CUE/BIN and cdrdao TOC/BIN, and
+  DVD-Video `VIDEO_TS` folders, by their structure rather than their file
+  names, and reports what looks wrong.
 - Stores every file once, by SHA-256, read-only, never renamed or rewritten,
   with a portable manifest per artifact from which the catalogue can be rebuilt.
 - Catalogues titles, editions, disc sets and discs, and links images to discs.
@@ -67,7 +68,7 @@ Existing media managers usually center on playable video files, episodes, songs,
 ## Not yet
 
 URL and download-client imports, metadata providers, RomM's API, CHDs of DVDs,
-CCD/IMG/SUB, MDS/MDF, BDMV and VIDEO_TS images, S3-compatible storage, and
+CCD/IMG/SUB, MDS/MDF and BDMV images, burning a VIDEO_TS folder, S3-compatible storage, and
 single sign-on. See `CHANGELOG.md` for what each release adds.
 
 ## Architecture

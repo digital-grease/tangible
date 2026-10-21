@@ -21,7 +21,7 @@ use tangible_domain::LogicalPath;
 use tangible_domain::logical_path::{MAX_PATH_BYTES, MAX_SEGMENT_BYTES};
 use tangible_domain::manifest::ArtifactManifest;
 use tangible_domain::report::{self, ScrubContext};
-use tangible_image::{cue, iso, toc};
+use tangible_image::{cue, iso, toc, video_ts};
 use tangible_integrations::romm;
 
 /// One target: what it is called, and what it runs.
@@ -38,6 +38,7 @@ pub const TARGETS: &[Target] = &[
     ("xorriso_output", xorriso_output),
     ("romm_names", romm_names),
     ("report_scrub", report_scrub),
+    ("video_ts", video_ts_tree),
 ];
 
 /// Fixture directories, relative to the repository root, that also seed a
@@ -146,6 +147,71 @@ pub fn toc_file(data: &[u8]) {
     assert_resolution_stays_staged(&cue::resolve_names(&document.files, &staged), &staged);
     for sizes in size_sets(document.files.len()) {
         let _ = toc::layout(&document, &sizes);
+    }
+}
+
+/// A would-be `VIDEO_TS` tree.
+///
+/// Up to the first blank line, one staged path per line; after it, the bytes
+/// the import would have read: the video manager's header, each title set's
+/// header, then sample sectors for each title VOB in turn. Every file the
+/// layout classifies must be one that was staged, each exactly once, and the
+/// paths it says are required must be among them.
+pub fn video_ts_tree(data: &[u8]) {
+    let (paths, rest) = match data.windows(2).position(|pair| pair == b"\n\n") {
+        Some(at) => (&data[..at], &data[at + 2..]),
+        None => (data, &[][..]),
+    };
+    let paths = String::from_utf8_lossy(paths);
+    let staged: Vec<&str> = paths.lines().collect();
+    let Some(layout) = video_ts::locate(&staged) else {
+        return;
+    };
+    let mut seen: Vec<&str> = layout
+        .files
+        .keys()
+        .map(String::as_str)
+        .chain(layout.others.iter().map(String::as_str))
+        .collect();
+    seen.sort_unstable();
+    let mut expected = staged.clone();
+    expected.sort_unstable();
+    expected.dedup();
+    assert_eq!(seen, expected, "every staged path is classified once");
+
+    let mut chunks = rest.chunks(video_ts::HEADER_BYTES);
+    let mut reads = video_ts::Reads {
+        video_manager: chunks.next().unwrap_or_default().to_vec(),
+        ..video_ts::Reads::default()
+    };
+    for set in layout.title_sets() {
+        reads
+            .title_set_headers
+            .insert(set, chunks.next().unwrap_or_default().to_vec());
+    }
+    let remaining: Vec<u8> = chunks.flatten().copied().collect();
+    let mut sectors = remaining.chunks(tangible_domain::dvd::SECTOR_BYTES);
+    for (index, name) in layout.files.keys().enumerate() {
+        reads.sizes.insert(name.clone(), (index as u64) * 1000);
+    }
+    for vob in layout.title_vobs() {
+        let samples: Vec<Vec<u8>> = sectors.by_ref().take(2).map(<[u8]>::to_vec).collect();
+        reads.samples.insert(vob.to_owned(), samples);
+    }
+
+    let Ok(found) = video_ts::inspect(&layout, &reads) else {
+        return;
+    };
+    assert!(
+        (0.0..=1.0).contains(&found.confidence),
+        "confidence {} is not a probability",
+        found.confidence
+    );
+    for required in &found.required_paths {
+        assert!(
+            staged.contains(&required.as_str()),
+            "{required} is required but was not staged"
+        );
     }
 }
 

@@ -42,7 +42,7 @@ use tangible_domain::{
     ArtifactId, ComponentId, ImportJobId, ImportState, ImportTransitionError, LogicalPath,
     Sha256Digest,
 };
-use tangible_image::{cue, iso, toc};
+use tangible_image::{cue, iso, toc, video_ts};
 use tangible_storage::{
     FilesystemStore, IngestLimits, ManifestStore, ManifestStoreError, StagingArea, StagingError,
     StagingKind, StagingManager, StorageError,
@@ -322,7 +322,10 @@ impl ImportPipeline {
             .collect();
 
         match descriptors.as_slice() {
-            [] => self.inspect_iso(area, staged, request).await,
+            [] => match self.inspect_video_ts(area, staged).await? {
+                Some(detection) => Ok(detection),
+                None => self.inspect_iso(area, staged, request).await,
+            },
             [only] if only.extension().as_deref() == Some("toc") => {
                 match self.inspect_toc(area, staged, only, checkpoint).await? {
                     Some(detection) => Ok(detection),
@@ -600,7 +603,98 @@ impl ImportPipeline {
             descriptor: None,
             track_files: Vec::new(),
             layout: None,
+            tree: None,
         })
+    }
+
+    /// Recognise a DVD-Video `VIDEO_TS` tree among the staged files.
+    ///
+    /// Returns `None` when there is no `VIDEO_TS.IFO` to find, or it is not a
+    /// video manager, which leaves the caller to classify the files some
+    /// other way. Reads only each information file's header, every file's
+    /// length, and a few sectors of each title VOB.
+    async fn inspect_video_ts(
+        &self,
+        area: &StagingArea,
+        staged: &[LogicalPath],
+    ) -> Result<Option<Detection>, ImportError> {
+        let names: Vec<&str> = staged.iter().map(LogicalPath::as_str).collect();
+        let Some(layout) = video_ts::locate(&names) else {
+            return Ok(None);
+        };
+        let by_name: BTreeMap<&str, &LogicalPath> =
+            staged.iter().map(|path| (path.as_str(), path)).collect();
+        let resolve = |name: &str| {
+            let path = by_name.get(name).copied();
+            async move {
+                match path {
+                    Some(path) => area.resolve(path).await.map(Some),
+                    None => Ok(None),
+                }
+            }
+        };
+        let read_err = |name: &str| {
+            let path = name.to_owned();
+            move |source| ImportError::ReadStaged { path, source }
+        };
+
+        let mut reads = video_ts::Reads::default();
+        if let Some(name) = layout.path_of(video_ts::DvdFile::VmgIfo)
+            && let Some(file) = resolve(name).await?
+        {
+            reads.video_manager = read_prefix(&file, video_ts::HEADER_BYTES)
+                .await
+                .map_err(read_err(name))?;
+        }
+        for set in layout.title_sets() {
+            if let Some(name) = layout.path_of(video_ts::DvdFile::VtsIfo(set))
+                && let Some(file) = resolve(name).await?
+            {
+                let header = read_prefix(&file, video_ts::HEADER_BYTES)
+                    .await
+                    .map_err(read_err(name))?;
+                reads.title_set_headers.insert(set, header);
+            }
+        }
+        for name in layout.files.keys() {
+            if let Some(file) = resolve(name).await? {
+                let length = tokio::fs::metadata(&file)
+                    .await
+                    .map_err(read_err(name))?
+                    .len();
+                reads.sizes.insert(name.clone(), length);
+            }
+        }
+        for name in layout.title_vobs() {
+            if let Some(file) = resolve(name).await? {
+                let sectors = read_sectors(&file, &video_ts::SAMPLE_SECTORS)
+                    .await
+                    .map_err(read_err(name))?;
+                reads.samples.insert(name.to_owned(), sectors);
+            }
+        }
+
+        let Ok(inspection) = video_ts::inspect(&layout, &reads) else {
+            // Named like DVD-Video and not: imported, not claimed.
+            return Ok(None);
+        };
+        let pick = |names: &[String]| -> Vec<LogicalPath> {
+            names
+                .iter()
+                .filter_map(|name| by_name.get(name.as_str()).map(|path| (*path).clone()))
+                .collect()
+        };
+        let members: Vec<String> = layout.files.keys().cloned().collect();
+        let mut detection =
+            Detection::plain(ArtifactFormat::VideoTsDirectory, inspection.confidence);
+        detection.warnings = inspection.warnings;
+        detection.evidence = inspection.evidence;
+        detection.tree = Some(TreeDetection {
+            root_role: "video_ts",
+            required_paths: pick(&inspection.required_paths),
+            members: pick(&members),
+        });
+        Ok(Some(detection))
     }
 
     /// Turn the recorded promotions into manifest components.
@@ -625,6 +719,13 @@ impl ImportPipeline {
                     ComponentRole::Descriptor
                 } else if detection.track_files.contains(path) {
                     ComponentRole::TrackData
+                } else if detection
+                    .tree
+                    .as_ref()
+                    .is_some_and(|tree| tree.members.contains(path))
+                {
+                    // A file of the disc's own filesystem, kept as a file.
+                    ComponentRole::FilesystemFile
                 } else if staged.len() == 1 {
                     ComponentRole::PrimaryImage
                 } else {
@@ -657,6 +758,17 @@ impl ImportPipeline {
     /// [`Topology::Unknown`] rather than a plausible-looking default, because
     /// a wrong offset here is a wrongly written disc.
     fn build_topology(detection: &Detection, components: &[Component]) -> Topology {
+        if let Some(tree) = &detection.tree {
+            return Topology::DirectoryTree {
+                root_role: tree.root_role.to_owned(),
+                entry_count: components.len() as u64,
+                logical_bytes: components
+                    .iter()
+                    .map(|component| component.length_bytes)
+                    .sum(),
+                required_paths: tree.required_paths.clone(),
+            };
+        }
         if let Some(layout) = &detection.layout
             && let Some(descriptor) = &detection.descriptor
             && let Some(descriptor_component_id) = component_id(components, descriptor)
@@ -758,6 +870,13 @@ impl ImportPipeline {
                 "toc-structural",
                 "TOC_STRUCTURAL_WARNING",
                 Some(MediaFamily::Cd),
+            ),
+            // VIDEO_TS is DVD-Video's own directory; nothing else uses it.
+            ArtifactFormat::VideoTsDirectory => (
+                "video-ts-parser",
+                "video-ts-structural",
+                "VIDEO_TS_STRUCTURAL_WARNING",
+                Some(MediaFamily::Dvd),
             ),
             _ => ("iso9660", "iso-structural", "ISO_STRUCTURAL_WARNING", None),
         };
@@ -896,6 +1015,19 @@ struct Detection {
     track_files: Vec<LogicalPath>,
     /// Track extents, when the descriptor could be laid out.
     layout: Option<cue::CdLayout>,
+    /// A directory tree such as `VIDEO_TS`, when the staged files are one.
+    tree: Option<TreeDetection>,
+}
+
+/// A recognised directory tree.
+#[derive(Debug, Clone)]
+struct TreeDetection {
+    /// What kind, as the manifest's topology names it: `video_ts`.
+    root_role: &'static str,
+    /// The files it cannot be read without.
+    required_paths: Vec<LogicalPath>,
+    /// The files that belong to it; anything else staged has no role.
+    members: Vec<LogicalPath>,
 }
 
 impl Detection {
@@ -913,6 +1045,7 @@ impl Detection {
             descriptor: None,
             track_files: Vec::new(),
             layout: None,
+            tree: None,
         }
     }
 }
@@ -960,6 +1093,27 @@ fn advance_to(checkpoint: &mut ImportCheckpoint, target: ImportState) -> Result<
 }
 
 /// Read at most `limit` bytes from the head of a file.
+/// Read whole 2048-byte sectors at `sectors` from `path`; those past its end
+/// are left out.
+async fn read_sectors(path: &std::path::Path, sectors: &[u64]) -> std::io::Result<Vec<Vec<u8>>> {
+    use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
+    const SECTOR: usize = tangible_domain::dvd::SECTOR_BYTES;
+    let mut file = tokio::fs::File::open(path).await?;
+    let length = file.metadata().await?.len();
+    let mut read = Vec::new();
+    for sector in sectors {
+        let start = sector.saturating_mul(SECTOR as u64);
+        if start.saturating_add(SECTOR as u64) > length {
+            continue;
+        }
+        file.seek(std::io::SeekFrom::Start(start)).await?;
+        let mut buffer = vec![0_u8; SECTOR];
+        file.read_exact(&mut buffer).await?;
+        read.push(buffer);
+    }
+    Ok(read)
+}
+
 async fn read_prefix(path: &std::path::Path, limit: usize) -> std::io::Result<Vec<u8>> {
     use tokio::io::AsyncReadExt as _;
     let mut file = tokio::fs::File::open(path).await?;

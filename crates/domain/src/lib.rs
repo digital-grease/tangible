@@ -18,6 +18,7 @@ pub mod burn;
 pub mod cd;
 pub mod derivation;
 pub mod digest;
+pub mod dvd;
 pub mod enums;
 pub mod erasure;
 pub mod id;

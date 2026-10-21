@@ -666,3 +666,126 @@ async fn a_watched_directory_imports_a_disc_of_tracks_as_one_artifact() {
     assert!(paths.contains(&"disc.toc") && paths.contains(&"disc.bin"));
     assert_eq!(detail["disc"]["tracks"].as_array().unwrap().len(), 2);
 }
+
+/// A DVD-Video tree on disk: a video manager naming one title set, its
+/// information and backups, a menu and two title VOBs of `sectors` sectors
+/// each, the second scrambled when asked.
+fn write_video_ts(dir: &std::path::Path, scrambled: bool) {
+    let header = |signature: &[u8], title_sets: u16| {
+        let mut bytes = vec![0_u8; 4096];
+        bytes[..12].copy_from_slice(signature);
+        bytes[0x3E..0x40].copy_from_slice(&title_sets.to_be_bytes());
+        bytes
+    };
+    let vob = |scrambled: bool| {
+        let mut bytes = Vec::new();
+        for _ in 0..80 {
+            let mut sector = vec![0_u8; 2048];
+            sector[..4].copy_from_slice(&[0, 0, 1, 0xBA]);
+            sector[4] = 0x44;
+            sector[13] = 0xF8;
+            sector[14..18].copy_from_slice(&[0, 0, 1, 0xE0]);
+            sector[20] = if scrambled { 0x90 } else { 0x80 };
+            bytes.extend(sector);
+        }
+        bytes
+    };
+    let video = dir.join("VIDEO_TS");
+    std::fs::create_dir_all(&video).expect("mkdir");
+    std::fs::create_dir_all(dir.join("AUDIO_TS")).expect("mkdir");
+    for (name, bytes) in [
+        ("VIDEO_TS.IFO", header(b"DVDVIDEO-VMG", 1)),
+        ("VIDEO_TS.BUP", header(b"DVDVIDEO-VMG", 1)),
+        ("VIDEO_TS.VOB", vob(false)),
+        ("VTS_01_0.IFO", header(b"DVDVIDEO-VTS", 0)),
+        ("VTS_01_0.BUP", header(b"DVDVIDEO-VTS", 0)),
+        ("VTS_01_1.VOB", vob(false)),
+        ("VTS_01_2.VOB", vob(scrambled)),
+    ] {
+        std::fs::write(video.join(name), bytes).expect("write");
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_watched_video_ts_folder_imports_as_a_dvd_video_tree() {
+    let harness = harness().await;
+    for (folder, scrambled) in [("Clear Movie", false), ("Scrambled Movie", true)] {
+        write_video_ts(&harness.watched.join(folder), scrambled);
+        let (status, queued) = harness
+            .post(
+                "/api/v1/imports",
+                json!({ "path_id": "incoming", "relative_path": folder }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{queued}");
+        let import = queued["id"].as_str().expect("an id").to_owned();
+        let settled = harness.drain_until_settled(&import).await;
+        assert_eq!(settled["state"], "complete", "{settled}");
+
+        let artifact = settled["artifact_id"].as_str().expect("an artifact");
+        let (status, manifest) = harness
+            .get(&format!("/api/v1/artifacts/{artifact}/manifest"))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{manifest}");
+        assert_eq!(
+            manifest["classification"]["format"], "video_ts_directory",
+            "{manifest}"
+        );
+        assert_eq!(manifest["classification"]["media_family"], "dvd");
+        let topology = &manifest["topology"];
+        assert_eq!(topology["kind"], "directory_tree", "{topology}");
+        assert_eq!(topology["root_role"], "video_ts");
+        assert_eq!(topology["entry_count"], 7);
+        assert_eq!(
+            topology["required_paths"],
+            json!(["VIDEO_TS/VIDEO_TS.IFO", "VIDEO_TS/VTS_01_0.IFO"])
+        );
+        for component in manifest["components"].as_array().expect("components") {
+            assert_eq!(component["role"], "filesystem_file", "{component}");
+        }
+        let said = manifest["validation"].to_string();
+        assert_eq!(
+            said.contains("CSS-scrambled"),
+            scrambled,
+            "{folder}: {said}"
+        );
+        assert_eq!(
+            manifest["validation"]["state"],
+            if scrambled {
+                "valid_with_warnings"
+            } else {
+                "valid"
+            },
+            "{said}"
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn files_named_like_dvd_video_and_not_it_are_not_claimed() {
+    let harness = harness().await;
+    let folder = harness.watched.join("Not A Movie");
+    std::fs::create_dir_all(folder.join("VIDEO_TS")).expect("mkdir");
+    std::fs::write(folder.join("VIDEO_TS/VIDEO_TS.IFO"), b"just some text").expect("write");
+    std::fs::write(folder.join("VIDEO_TS/VTS_01_1.VOB"), vec![7_u8; 4096]).expect("write");
+    let (status, queued) = harness
+        .post(
+            "/api/v1/imports",
+            json!({ "path_id": "incoming", "relative_path": "Not A Movie" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{queued}");
+    let import = queued["id"].as_str().expect("an id").to_owned();
+    let settled = harness.drain_until_settled(&import).await;
+    assert_eq!(settled["state"], "complete", "{settled}");
+    let artifact = settled["artifact_id"].as_str().expect("an artifact");
+    let (_, manifest) = harness
+        .get(&format!("/api/v1/artifacts/{artifact}/manifest"))
+        .await;
+    assert_eq!(
+        manifest["classification"]["format"], "unknown",
+        "{manifest}"
+    );
+}

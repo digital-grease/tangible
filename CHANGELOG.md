@@ -76,6 +76,14 @@ may change between minor versions, and the release notes say how.
   shows the setting. Workers do not decrypt yet.
   The release now checks its image contains none of these before signing
   it (`deploy/check-no-decryption.sh`).
+- DVD-Video `VIDEO_TS` folders are recognised: imported from a watched folder
+  (the `VIDEO_TS` folder itself, or the disc's folder holding it), a folder
+  whose `VIDEO_TS.IFO` really is a DVD-Video manager becomes a
+  `video_ts_directory` artifact with a directory-tree topology. Missing title
+  sets, backups or video, files that are not DVD-Video, odd sizes, names
+  that only match ignoring case, and video still CSS-scrambled are reported
+  as warnings. A VIDEO_TS folder cannot be burned, since it is a disc's
+  files rather than an image of one, and a burn of one is refused at once.
 - A CD burn that the drive refused while setting up, before writing
   anything, is tried once more if the disc is still blank; a drive on the
   bench did this once and burned on the next run.

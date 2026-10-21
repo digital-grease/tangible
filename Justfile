@@ -101,7 +101,7 @@ test-fuzz-corpus:
     cargo test --manifest-path fuzz/Cargo.toml --test replay
 
 # Fuzz one parser: cue, toc, iso, manifest, logical_path, cdrdao_output,
-# xorriso_output or romm_names. Needs a nightly toolchain and cargo-fuzz.
+# xorriso_output, romm_names, report_scrub or video_ts. Needs a nightly toolchain and cargo-fuzz.
 # What it learns accumulates in fuzz/corpus/, which is not committed. A crash
 # is written to fuzz/artifacts/; once fixed, copy it into fuzz/regressions/.
 fuzz target seconds="300":

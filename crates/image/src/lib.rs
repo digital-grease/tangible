@@ -7,14 +7,15 @@
 //! rather than filenames, parsers read bytes and never execute them, and no
 //! image is ever mounted.
 //!
-//! In place: ISO 9660 and UDF detection, and CUE sheet and cdrdao TOC
-//! parsing with track layout.
+//! In place: ISO 9660 and UDF detection, CUE sheet and cdrdao TOC parsing
+//! with track layout, and DVD-Video `VIDEO_TS` trees.
 
 pub mod chdman;
 pub mod cue;
 pub mod derive;
 pub mod iso;
 pub mod toc;
+pub mod video_ts;
 
 pub use cue::{
     CdLayout, CueError, CueFile, CueSheet, CueTrack, CueWarning, LayoutError, Msf,
