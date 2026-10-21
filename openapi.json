@@ -1903,7 +1903,7 @@
           "rips"
         ],
         "summary": "Ask for the disc in a drive to be ripped into the library.",
-        "description": "Rip the disc in a drive into the library. The drive's worker reads it when the drive is free, sends what it read, and the result is imported like an upload. A CD becomes a TOC/BIN image.",
+        "description": "Rip the disc in a drive into the library. The drive's worker reads it when the drive is free, sends what it read, and the result is imported like an upload. A CD becomes a TOC/BIN image, a DVD an ISO. `decrypt` asks for an encrypted disc to be decrypted, which needs an administrator to have turned decryption on and the drive's worker to be able to.",
         "operationId": "request_drive_rip",
         "parameters": [
           {
@@ -1948,7 +1948,17 @@
             }
           },
           "409": {
-            "description": "A rip is already reading, or the worker cannot rip",
+            "description": "A rip is already reading, the worker cannot rip, or decryption was asked for and is off (`DECRYPTION_OFF`) or the worker cannot decrypt (`ENCRYPTED_NO_DECRYPTION`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`keep` is not an original this server knows",
             "content": {
               "application/json": {
                 "schema": {
@@ -6574,9 +6584,19 @@
           "status",
           "worker_id",
           "worker_name",
-          "worker_status"
+          "worker_status",
+          "can_rip",
+          "can_decrypt_rips"
         ],
         "properties": {
+          "can_decrypt_rips": {
+            "type": "boolean",
+            "description": "Whether a rip on this drive may decrypt an encrypted disc: this\nserver allows decryption and the drive's worker can (ADR 0013)."
+          },
+          "can_rip": {
+            "type": "boolean",
+            "description": "Whether its worker can rip."
+          },
           "connection": {
             "type": "string",
             "description": "How it is attached: `usb`, `sata` or `unknown`, as the worker read it\nfrom the host's device tree."
@@ -8194,7 +8214,20 @@
       },
       "RequestRip": {
         "type": "object",
-        "description": "What an operator sends to rip the disc in a drive. Empty for now: CD\nrips have no options, and decryption arrives later (ADR 0013).",
+        "description": "What an operator sends to rip the disc in a drive. Both fields are\noptional: `{}` rips without decryption.",
+        "properties": {
+          "decrypt": {
+            "type": "boolean",
+            "description": "Decrypt the disc if it is encrypted (ADR 0013). Needs an\nadministrator to have turned decryption on, and the drive's worker\nto run an image built to decrypt."
+          },
+          "keep": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When decrypting, the original to keep: `encrypted_original` (the\ndefault: the disc as it is, with a decrypted copy beside it) or\n`decrypted_original` (only a decrypted image, not a faithful copy of\nthe disc). Ignored without `decrypt`."
+          }
+        },
         "additionalProperties": false
       },
       "RipCapability": {
@@ -8227,9 +8260,21 @@
         "required": [
           "rip_id",
           "outputs",
-          "max_file_bytes"
+          "max_file_bytes",
+          "decrypt"
         ],
         "properties": {
+          "decrypt": {
+            "type": "boolean",
+            "description": "Decrypt the disc if it is encrypted. Only ever true when this server\nallows it and this worker said it can."
+          },
+          "keep": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When decrypting, the original to keep: `encrypted_original` or\n`decrypted_original`."
+          },
           "max_file_bytes": {
             "type": "integer",
             "format": "int64",
@@ -8519,6 +8564,7 @@
           "is_open",
           "can_cancel",
           "requested_by",
+          "decrypt",
           "files",
           "bytes_received",
           "created_at"
@@ -8550,6 +8596,10 @@
           "created_at": {
             "type": "string",
             "description": "When it was asked for."
+          },
+          "decrypt": {
+            "type": "boolean",
+            "description": "Whether they asked for an encrypted disc to be decrypted."
           },
           "drive_id": {
             "type": "string",
@@ -8608,6 +8658,13 @@
           "is_open": {
             "type": "boolean",
             "description": "Whether it is still going."
+          },
+          "keep": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The original they chose, when decrypting: `encrypted_original` or\n`decrypted_original`."
           },
           "medium": {
             "oneOf": [

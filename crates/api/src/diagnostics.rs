@@ -162,6 +162,8 @@ pub struct DiagnosticsSettings {
     pub migrate_on_start: bool,
     /// Issue report settings.
     pub reports: ReportSettings,
+    /// Whether rips may decrypt (`TANGIBLE_ALLOW_DECRYPTION`).
+    pub decryption_allowed: bool,
 }
 
 /// What the database said, or why it said nothing.
@@ -776,6 +778,15 @@ fn setting_checks(settings: &DiagnosticsSettings) -> Vec<DiagnosticCheck> {
             },
         ),
         check(
+            "Rip decryption",
+            CheckStatus::Ok,
+            if settings.decryption_allowed {
+                "allowed, on workers that can"
+            } else {
+                "off"
+            },
+        ),
+        check(
             "Migrate on start",
             CheckStatus::Ok,
             if settings.migrate_on_start {
@@ -934,6 +945,7 @@ mod tests {
             public_url_https: true,
             migrate_on_start: false,
             reports: ReportSettings::disabled(build()),
+            decryption_allowed: false,
         }
     }
 
@@ -977,6 +989,8 @@ mod tests {
             worker_name: "burner-in-the-den".to_owned(),
             worker_status: worker.status.clone(),
             worker_last_seen_at: worker.last_seen_at,
+            can_rip: true,
+            can_decrypt: false,
         }
     }
 

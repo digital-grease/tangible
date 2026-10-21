@@ -49,6 +49,9 @@ struct Inner {
     reports: ReportSettings,
     /// What diagnostics looks at, when this server offers them.
     diagnostics: Option<DiagnosticsSettings>,
+    /// Whether an administrator has turned decryption on for rips
+    /// (ADR 0013). Off unless they have.
+    decryption_allowed: bool,
 }
 
 /// What the import routes need beyond the database.
@@ -81,6 +84,7 @@ impl ApiState {
                 derivations: None,
                 reports: ReportSettings::default(),
                 diagnostics: None,
+                decryption_allowed: false,
             }),
         }
     }
@@ -100,6 +104,7 @@ impl ApiState {
                 derivations: None,
                 reports: ReportSettings::default(),
                 diagnostics: None,
+                decryption_allowed: false,
             }),
         }
     }
@@ -172,6 +177,23 @@ impl ApiState {
         Self {
             inner: Arc::new(inner),
         }
+    }
+
+    /// Allow rips to decrypt encrypted discs, on workers that can. Off by
+    /// default.
+    #[must_use]
+    pub fn with_decryption_allowed(self, allowed: bool) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.decryption_allowed = allowed;
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Whether rips may decrypt.
+    #[must_use]
+    pub fn decryption_allowed(&self) -> bool {
+        self.inner.decryption_allowed
     }
 
     /// What diagnostics looks at, when this server offers them.

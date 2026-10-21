@@ -205,6 +205,17 @@ pub struct ServeConfig {
         action = clap::ArgAction::Set
     )]
     pub report_scrub_addresses: bool,
+
+    /// Let operators ask a rip to decrypt an encrypted disc (ADR 0013), on
+    /// workers whose image was built to. Off unless set. Whether ripping a
+    /// disc is lawful where you are is yours to determine.
+    #[arg(
+        long,
+        env = "TANGIBLE_ALLOW_DECRYPTION",
+        default_value_t = false,
+        action = clap::ArgAction::Set
+    )]
+    pub allow_decryption: bool,
 }
 
 /// Settings for `tangible doctor`.

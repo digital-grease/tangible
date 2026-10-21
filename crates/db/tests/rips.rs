@@ -13,12 +13,12 @@ use sqlx::{Executor as _, PgPool};
 use tangible_db::erasures::{claim_erasure, request_erasure};
 use tangible_db::repositories::{ClaimOutcome, claim_next_burn_job};
 use tangible_db::rips::{
-    CancelOutcome, ReceivedFile, RequestOutcome, RipEvent, RipResult, WorkerOutcome, cancel_rip,
-    claim_rip, complete_rip, get_rip, list_rip_events, record_rip_events, record_upload,
-    request_rip, settle_rips,
+    CancelOutcome, ReceivedFile, RequestOutcome, RipEvent, RipOptions, RipResult, WorkerOutcome,
+    cancel_rip, claim_rip, complete_rip, get_rip, list_rip_events, record_rip_events,
+    record_upload, request_rip, settle_rips,
 };
 use tangible_db::{Database, DbConfig};
-use tangible_domain::{DriveId, ErasureMode, RipJobId, RipState, WorkerId};
+use tangible_domain::{DriveId, ErasureMode, RipJobId, RipOriginal, RipState, WorkerId};
 use time::OffsetDateTime;
 
 async fn pool() -> PgPool {
@@ -54,8 +54,14 @@ async fn worker_and_drive(pool: &PgPool) -> (WorkerId, DriveId) {
 /// A rip requested and taken, reading.
 async fn reading(pool: &PgPool) -> (WorkerId, DriveId, RipJobId) {
     let (worker, drive) = worker_and_drive(pool).await;
-    let rip = request_rip(pool, drive, "operator").await.unwrap().unwrap();
-    let claimed = claim_rip(pool, worker, drive).await.unwrap().unwrap();
+    let rip = request_rip(pool, drive, "operator", RipOptions::default())
+        .await
+        .unwrap()
+        .unwrap();
+    let claimed = claim_rip(pool, worker, drive, false)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(claimed.map(|r| r.id), Some(rip.id));
     (worker, drive, rip.id)
 }
@@ -91,20 +97,27 @@ fn read_report(outputs: &[String]) -> RipResult<'_> {
 async fn one_rip_at_a_time_per_drive() {
     let pool = pool().await;
     let (_, drive) = worker_and_drive(&pool).await;
-    let first = request_rip(&pool, drive, "operator")
+    let first = request_rip(&pool, drive, "operator", RipOptions::default())
         .await
         .unwrap()
         .unwrap();
     assert_eq!(first.state, RipState::Queued);
     assert_eq!(first.import_job_id, None);
     assert_eq!(
-        request_rip(&pool, drive, "operator").await.unwrap(),
+        request_rip(&pool, drive, "operator", RipOptions::default())
+            .await
+            .unwrap(),
         Err(RequestOutcome::AlreadyOpen)
     );
     assert_eq!(
-        request_rip(&pool, DriveId::generate(), "operator")
-            .await
-            .unwrap(),
+        request_rip(
+            &pool,
+            DriveId::generate(),
+            "operator",
+            RipOptions::default()
+        )
+        .await
+        .unwrap(),
         Err(RequestOutcome::DriveMissing)
     );
 }
@@ -115,12 +128,12 @@ async fn only_the_drives_own_worker_takes_its_rip() {
     let pool = pool().await;
     let (_, drive) = worker_and_drive(&pool).await;
     let (stranger, _) = worker_and_drive(&pool).await;
-    request_rip(&pool, drive, "operator")
+    request_rip(&pool, drive, "operator", RipOptions::default())
         .await
         .unwrap()
         .unwrap();
     assert_eq!(
-        claim_rip(&pool, stranger, drive).await.unwrap(),
+        claim_rip(&pool, stranger, drive, false).await.unwrap(),
         Err(WorkerOutcome::NotYours)
     );
 }
@@ -153,11 +166,14 @@ async fn an_erasing_drive_does_not_rip() {
         .unwrap()
         .unwrap();
     claim_erasure(&pool, worker, drive).await.unwrap().unwrap();
-    request_rip(&pool, drive, "operator")
+    request_rip(&pool, drive, "operator", RipOptions::default())
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(claim_rip(&pool, worker, drive).await.unwrap(), Ok(None));
+    assert_eq!(
+        claim_rip(&pool, worker, drive, false).await.unwrap(),
+        Ok(None)
+    );
 }
 
 #[tokio::test]
@@ -165,7 +181,10 @@ async fn an_erasing_drive_does_not_rip() {
 async fn a_rip_abandoned_by_a_restart_is_closed_when_the_worker_asks_again() {
     let pool = pool().await;
     let (worker, drive, rip) = reading(&pool).await;
-    assert_eq!(claim_rip(&pool, worker, drive).await.unwrap(), Ok(None));
+    assert_eq!(
+        claim_rip(&pool, worker, drive, false).await.unwrap(),
+        Ok(None)
+    );
     let closed = get_rip(&pool, rip).await.unwrap().unwrap();
     assert_eq!(closed.state, RipState::Failed);
     assert_eq!(closed.error_code.as_deref(), Some("WORKER_RESTARTED"));
@@ -273,7 +292,7 @@ async fn a_worker_refuses_what_is_not_there() {
     assert_eq!(refused.error_code.as_deref(), Some("NO_MEDIUM"));
     assert_eq!(refused.medium, Some(medium));
     // The drive is free for the next request.
-    request_rip(&pool, drive, "operator")
+    request_rip(&pool, drive, "operator", RipOptions::default())
         .await
         .unwrap()
         .unwrap();
@@ -422,4 +441,153 @@ async fn a_rip_ends_with_its_import() {
             .unwrap()
             .contains("IMPORT_READ_FAILED")
     );
+}
+
+/// Say the worker can decrypt DVDs, as a worker from the opt-in image does.
+async fn can_decrypt(pool: &PgPool, worker: WorkerId) {
+    sqlx::query(
+        "UPDATE workers SET capabilities_json = jsonb_build_object('rip', jsonb_build_object(
+             'engines', jsonb_build_array(jsonb_build_object('name', 'block_reader', 'version', '0.1.0')),
+             'decryption', jsonb_build_object('css', jsonb_build_object(
+                 'library', 'libdvdcss', 'version', '1.6.0',
+                 'tool', 'dvdbackup', 'tool_version', '0.4.2-4.1'))))
+         WHERE id = $1",
+    )
+    .bind(worker.as_uuid())
+    .execute(pool)
+    .await
+    .expect("set capabilities");
+}
+
+const DECRYPT: RipOptions = RipOptions {
+    decrypt: true,
+    keep: RipOriginal::DecryptedOriginal,
+};
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn the_choice_of_original_is_kept_only_when_decrypting() {
+    let pool = pool().await;
+    let (_, drive) = worker_and_drive(&pool).await;
+    let plain = request_rip(
+        &pool,
+        drive,
+        "operator",
+        RipOptions {
+            decrypt: false,
+            keep: RipOriginal::DecryptedOriginal,
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(!plain.decrypt);
+    assert_eq!(plain.keep, None);
+    cancel_rip(&pool, plain.id, "operator")
+        .await
+        .unwrap()
+        .unwrap();
+
+    let decrypting = request_rip(&pool, drive, "operator", DECRYPT)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(decrypting.decrypt);
+    assert_eq!(decrypting.keep, Some(RipOriginal::DecryptedOriginal));
+
+    // The database holds the same rule.
+    for (decrypt, keep) in [(false, Some("encrypted_original")), (true, None)] {
+        let error = sqlx::query(
+            "INSERT INTO rip_jobs (id, drive_id, requested_by, staging_id, decrypt, keep, state,
+                                   completed_at)
+             VALUES ($1, $2, 'operator', $3, $4, $5, 'canceled', now())",
+        )
+        .bind(uuid::Uuid::now_v7())
+        .bind(drive.as_uuid())
+        .bind(uuid::Uuid::now_v7())
+        .bind(decrypt)
+        .bind(keep)
+        .execute(&pool)
+        .await
+        .expect_err("refused");
+        assert!(
+            error
+                .to_string()
+                .contains("rip_jobs_keep_only_when_decrypting"),
+            "{error}"
+        );
+    }
+    let error = sqlx::query("UPDATE rip_jobs SET keep = 'scrambled' WHERE id = $1")
+        .bind(decrypting.id.as_uuid())
+        .execute(&pool)
+        .await
+        .expect_err("refused");
+    assert!(error.to_string().contains("check"), "{error}");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_decrypting_rip_goes_only_to_a_worker_that_can_on_a_server_that_allows() {
+    let pool = pool().await;
+
+    // The server does not allow it: refused as the worker asks, nothing read.
+    let (worker, drive) = worker_and_drive(&pool).await;
+    can_decrypt(&pool, worker).await;
+    let rip = request_rip(&pool, drive, "operator", DECRYPT)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        claim_rip(&pool, worker, drive, false).await.unwrap(),
+        Ok(None)
+    );
+    let refused = get_rip(&pool, rip.id).await.unwrap().unwrap();
+    assert_eq!(refused.state, RipState::Refused);
+    assert_eq!(refused.error_code.as_deref(), Some("DECRYPTION_OFF"));
+    assert!(refused.started_at.is_none());
+    assert!(refused.completed_at.is_some());
+
+    // The worker cannot: refused too.
+    let (worker, drive) = worker_and_drive(&pool).await;
+    let rip = request_rip(&pool, drive, "operator", DECRYPT)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        claim_rip(&pool, worker, drive, true).await.unwrap(),
+        Ok(None)
+    );
+    let refused = get_rip(&pool, rip.id).await.unwrap().unwrap();
+    assert_eq!(refused.state, RipState::Refused);
+    assert_eq!(
+        refused.error_code.as_deref(),
+        Some("ENCRYPTED_NO_DECRYPTION")
+    );
+    // The drive is free again: the next rip, without decryption, is taken.
+    let plain = request_rip(&pool, drive, "operator", RipOptions::default())
+        .await
+        .unwrap()
+        .unwrap();
+    let taken = claim_rip(&pool, worker, drive, true)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(taken.map(|r| r.id), Some(plain.id));
+
+    // Both: taken, with the choice.
+    let (worker, drive) = worker_and_drive(&pool).await;
+    can_decrypt(&pool, worker).await;
+    let rip = request_rip(&pool, drive, "operator", DECRYPT)
+        .await
+        .unwrap()
+        .unwrap();
+    let taken = claim_rip(&pool, worker, drive, true)
+        .await
+        .unwrap()
+        .unwrap()
+        .expect("taken");
+    assert_eq!(taken.id, rip.id);
+    assert_eq!(taken.state, RipState::Reading);
+    assert!(taken.decrypt);
+    assert_eq!(taken.keep, Some(RipOriginal::DecryptedOriginal));
 }

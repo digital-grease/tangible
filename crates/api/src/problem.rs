@@ -79,6 +79,12 @@ pub enum ErrorCode {
     NotRetryable,
     /// The client and server share no protocol version.
     UnsupportedProtocol,
+    /// A rip asked to decrypt, and this server's administrator has not
+    /// turned decryption on (ADR 0013).
+    DecryptionOff,
+    /// A rip asked to decrypt, and the drive's worker cannot: its image was
+    /// not built to (ADR 0013).
+    EncryptedNoDecryption,
     /// Anything unanticipated.
     Internal,
 }
@@ -104,6 +110,8 @@ impl ErrorCode {
             Self::WriteInProgress => "WRITE_IN_PROGRESS",
             Self::NotRetryable => "NOT_RETRYABLE",
             Self::UnsupportedProtocol => "UNSUPPORTED_PROTOCOL",
+            Self::DecryptionOff => "DECRYPTION_OFF",
+            Self::EncryptedNoDecryption => "ENCRYPTED_NO_DECRYPTION",
             Self::Internal => "INTERNAL",
         }
     }
@@ -137,7 +145,9 @@ impl ErrorCode {
             Self::Conflict
             | Self::IdempotencyConflict
             | Self::WriteInProgress
-            | Self::NotRetryable => StatusCode::CONFLICT,
+            | Self::NotRetryable
+            | Self::DecryptionOff
+            | Self::EncryptedNoDecryption => StatusCode::CONFLICT,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -162,6 +172,8 @@ impl ErrorCode {
             Self::WriteInProgress => "A write is already in progress",
             Self::NotRetryable => "Burn job cannot be retried",
             Self::UnsupportedProtocol => "Unsupported protocol version",
+            Self::DecryptionOff => "Decryption is turned off",
+            Self::EncryptedNoDecryption => "The drive's worker cannot decrypt",
             Self::Internal => "Internal error",
         }
     }
@@ -307,6 +319,8 @@ mod tests {
             ErrorCode::WriteInProgress,
             ErrorCode::NotRetryable,
             ErrorCode::UnsupportedProtocol,
+            ErrorCode::DecryptionOff,
+            ErrorCode::EncryptedNoDecryption,
             ErrorCode::Internal,
         ];
         let mut seen = std::collections::BTreeSet::new();

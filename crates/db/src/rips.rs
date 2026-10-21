@@ -17,7 +17,8 @@
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::str::FromStr;
-use tangible_domain::{DriveId, ImportJobId, RipJobId, RipState, WorkerId};
+use tangible_domain::rip::{DecryptionRefusal, check_decryption};
+use tangible_domain::{DriveId, ImportJobId, RipJobId, RipOriginal, RipState, WorkerId};
 use time::OffsetDateTime;
 
 use crate::DbError;
@@ -35,6 +36,10 @@ pub struct RipRecord {
     pub state: RipState,
     /// Who asked.
     pub requested_by: String,
+    /// Whether they asked for an encrypted disc to be decrypted.
+    pub decrypt: bool,
+    /// The original they chose, when they asked to decrypt.
+    pub keep: Option<RipOriginal>,
     /// The staging area uploads go to, and the import's id once queued.
     pub staging_id: ImportJobId,
     /// The import, once queued.
@@ -176,7 +181,7 @@ pub struct RipEventRecord {
 }
 
 const RIP_COLUMNS: &str = "r.id, r.drive_id, d.configured_name AS drive_name, r.state, \
-     r.requested_by, r.staging_id, r.import_job_id, i.artifact_id, r.medium_json, r.engine, \
+     r.requested_by, r.decrypt, r.keep, r.staging_id, r.import_job_id, i.artifact_id, r.medium_json, r.engine, \
      r.engine_version, r.read_errors_json, r.outputs_json, r.bytes_received, r.error_code, \
      r.error_detail, r.created_at, r.started_at, r.completed_at";
 
@@ -195,6 +200,12 @@ fn rip_from_row(row: &sqlx::postgres::PgRow) -> Result<RipRecord, DbError> {
         drive_name: row.try_get("drive_name").map_err(get)?,
         state: parse("rip_jobs.state", row.try_get("state").map_err(get)?)?,
         requested_by: row.try_get("requested_by").map_err(get)?,
+        decrypt: row.try_get("decrypt").map_err(get)?,
+        keep: row
+            .try_get::<Option<String>, _>("keep")
+            .map_err(get)?
+            .map(|keep| parse("rip_jobs.keep", keep))
+            .transpose()?,
         staging_id: ImportJobId::from_uuid(row.try_get("staging_id").map_err(get)?),
         import_job_id: row
             .try_get::<Option<uuid::Uuid>, _>("import_job_id")
@@ -295,6 +306,34 @@ pub async fn drive_rip_engines(pool: &PgPool, drive_id: DriveId) -> Result<Optio
         .filter(|engines| engines.as_array().is_some_and(|list| !list.is_empty())))
 }
 
+/// Whether a drive's worker reported that its image can decrypt a DVD.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn drive_can_decrypt(pool: &PgPool, drive_id: DriveId) -> Result<bool, DbError> {
+    let can: Option<bool> = sqlx::query_scalar(&format!(
+        "SELECT {CAN_DECRYPT} FROM drives d JOIN workers w ON w.id = d.worker_id WHERE d.id = $1"
+    ))
+    .bind(drive_id.as_uuid())
+    .fetch_optional(pool)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(can.unwrap_or(false))
+}
+
+/// Whether the worker `w` reported DVD decryption, as SQL.
+const CAN_DECRYPT: &str = "COALESCE(jsonb_typeof(w.capabilities_json -> 'rip' -> 'decryption' -> 'css') = 'object', false)";
+
+/// What an operator chose about decryption for one rip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RipOptions {
+    /// Decrypt an encrypted disc.
+    pub decrypt: bool,
+    /// The original to keep, when decrypting. Ignored otherwise.
+    pub keep: RipOriginal,
+}
+
 /// Ask for the disc in a drive to be ripped.
 ///
 /// # Errors
@@ -305,6 +344,7 @@ pub async fn request_rip(
     pool: &PgPool,
     drive_id: DriveId,
     requested_by: &str,
+    options: RipOptions,
 ) -> Result<Result<RipRecord, RequestOutcome>, DbError> {
     let mut tx = pool.begin().await.map_err(DbError::Query)?;
     let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM drives WHERE id = $1)")
@@ -319,14 +359,16 @@ pub async fn request_rip(
 
     let id = RipJobId::generate();
     let inserted = sqlx::query(
-        "INSERT INTO rip_jobs (id, drive_id, requested_by, staging_id)
-         VALUES ($1, $2, $3, $4)
+        "INSERT INTO rip_jobs (id, drive_id, requested_by, staging_id, decrypt, keep)
+         VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (drive_id) WHERE state IN ('queued', 'reading', 'uploading') DO NOTHING",
     )
     .bind(id.as_uuid())
     .bind(drive_id.as_uuid())
     .bind(requested_by)
     .bind(ImportJobId::generate().as_uuid())
+    .bind(options.decrypt)
+    .bind(options.decrypt.then(|| options.keep.as_str()))
     .execute(&mut *tx)
     .await
     .map_err(DbError::Query)?;
@@ -342,7 +384,11 @@ pub async fn request_rip(
         "rip.requested",
         id,
         "success",
-        serde_json::json!({ "drive_id": drive_id.to_string() }),
+        serde_json::json!({
+            "drive_id": drive_id.to_string(),
+            "decrypt": options.decrypt,
+            "keep": options.decrypt.then(|| options.keep.as_str()),
+        }),
     )
     .await?;
     let record = rip_required(&mut tx, id).await?;
@@ -454,6 +500,7 @@ pub async fn claim_rip(
     pool: &PgPool,
     worker_id: WorkerId,
     drive_id: DriveId,
+    decryption_allowed: bool,
 ) -> Result<Result<Option<RipRecord>, WorkerOutcome>, DbError> {
     let mut tx = pool.begin().await.map_err(DbError::Query)?;
     if !crate::erasures::lock_own_drive(&mut tx, worker_id, drive_id).await? {
@@ -493,19 +540,31 @@ pub async fn claim_rip(
         return Ok(Ok(None));
     }
 
-    let next: Option<uuid::Uuid> = sqlx::query_scalar(
-        "SELECT id FROM rip_jobs WHERE drive_id = $1 AND state = 'queued'
-         ORDER BY created_at LIMIT 1 FOR UPDATE",
-    )
+    let next: Option<(uuid::Uuid, bool, bool)> = sqlx::query_as(&format!(
+        "SELECT r.id, r.decrypt, {CAN_DECRYPT}
+         FROM rip_jobs r JOIN drives d ON d.id = r.drive_id JOIN workers w ON w.id = d.worker_id
+         WHERE r.drive_id = $1 AND r.state = 'queued'
+         ORDER BY r.created_at LIMIT 1 FOR UPDATE OF r"
+    ))
     .bind(drive_id.as_uuid())
     .fetch_optional(&mut *tx)
     .await
     .map_err(DbError::Query)?;
-    let Some(next) = next else {
+    let Some((next, decrypt, worker_can)) = next else {
         tx.commit().await.map_err(DbError::Query)?;
         return Ok(Ok(None));
     };
     let id = RipJobId::from_uuid(next);
+
+    // Checked again as the worker takes it: decryption may have been turned
+    // off, or the worker rebuilt without it, since the rip was asked for. A
+    // decrypting rip is never handed to a worker that cannot, or by a server
+    // that does not allow it; it is refused here, before anything is read.
+    if let Err(refusal) = check_decryption(decrypt, decryption_allowed, worker_can) {
+        refuse_for_decryption(&mut tx, worker_id, id, refusal).await?;
+        tx.commit().await.map_err(DbError::Query)?;
+        return Ok(Ok(None));
+    }
 
     sqlx::query("UPDATE rip_jobs SET state = 'reading', started_at = now() WHERE id = $1")
         .bind(next)
@@ -525,6 +584,46 @@ pub async fn claim_rip(
     let record = rip_in(&mut tx, id).await?;
     tx.commit().await.map_err(DbError::Query)?;
     Ok(Ok(record))
+}
+
+/// Close a queued rip that may not decrypt as `refused`.
+async fn refuse_for_decryption(
+    tx: &mut Transaction<'_, Postgres>,
+    worker_id: WorkerId,
+    id: RipJobId,
+    refusal: DecryptionRefusal,
+) -> Result<(), DbError> {
+    let detail = match refusal {
+        DecryptionRefusal::Off => {
+            "decryption was turned off on this server after the rip was asked for; ask again \
+             without decryption, or have an administrator turn it on"
+        }
+        DecryptionRefusal::WorkerCannot => {
+            "this drive's worker no longer reports that it can decrypt; run it from an image \
+             built to decrypt, or ask again without decryption"
+        }
+    };
+    sqlx::query(
+        "UPDATE rip_jobs SET state = 'refused', error_code = $2, error_detail = $3,
+             completed_at = now()
+         WHERE id = $1",
+    )
+    .bind(id.as_uuid())
+    .bind(refusal.code())
+    .bind(detail)
+    .execute(&mut **tx)
+    .await
+    .map_err(DbError::Query)?;
+    audit(
+        tx,
+        "worker",
+        &worker_id.to_string(),
+        "rip.refused",
+        id,
+        "failure",
+        serde_json::json!({ "code": refusal.code() }),
+    )
+    .await
 }
 
 /// A rip, if it is on one of this worker's drives.

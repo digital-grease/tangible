@@ -365,6 +365,12 @@ the same confinement: its drive's block device and group, no capabilities, a
 read-only root. On the first drive tried, libdvdcss
 authenticated and found every title key with nothing more.
 
+The server refuses every request to decrypt until an administrator turns it
+on, with `TANGIBLE_ALLOW_DECRYPTION=true` in `.env` and a restart of the
+server. A rip that asks to decrypt is then accepted only for a drive whose
+worker reported it can; Diagnostics shows whether the setting is on. Turning
+it off again refuses decrypting rips still waiting for their drive.
+
 That image is yours, not a Tangible release: it is outside the release's
 signature, SBOM, provenance and vulnerability scan. Rebuild it each time you
 upgrade, so it carries the new release and Debian's latest fixes.

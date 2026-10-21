@@ -65,6 +65,15 @@ may change between minor versions, and the release notes say how.
   `dvdbackup`, `libaacs0` and `libbdplus0`. A worker started from it says so
   in its log and reports the library and tool versions to the server; it
   does not decrypt anything yet.
+- A rip can ask to decrypt an encrypted disc, and choose its original: the
+  disc as it is with a decrypted copy beside it (the default), or only a
+  decrypted image (`decrypt` and `keep` on `POST /api/v1/drives/{id}/rips`).
+  Off unless an administrator sets `TANGIBLE_ALLOW_DECRYPTION=true`, and
+  only on a drive whose worker can; otherwise the request is refused with
+  `DECRYPTION_OFF` or `ENCRYPTED_NO_DECRYPTION`, and a queued rip that can
+  no longer decrypt when its worker takes it is refused the same way. The
+  drive list says which drives can (`can_decrypt_rips`), and diagnostics
+  shows the setting. Workers do not decrypt yet.
   The release now checks its image contains none of these before signing
   it (`deploy/check-no-decryption.sh`).
 - A CD burn that the drive refused while setting up, before writing

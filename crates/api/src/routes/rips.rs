@@ -26,14 +26,16 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use tangible_burn::MediumInfo;
 use tangible_db::rips::{
-    CancelOutcome, ReceivedFile, RequestOutcome, RipEvent, RipEventRecord, RipRecord, RipResult,
-    WorkerOutcome, cancel_rip, check_upload, claim_rip, complete_rip, drive_rip_engines, get_rip,
-    list_rip_events, list_rips, record_rip_events, record_upload, request_rip,
+    CancelOutcome, ReceivedFile, RequestOutcome, RipEvent, RipEventRecord, RipOptions, RipRecord,
+    RipResult, WorkerOutcome, cancel_rip, check_upload, claim_rip, complete_rip, drive_can_decrypt,
+    drive_rip_engines, get_rip, list_rip_events, list_rips, record_rip_events, record_upload,
+    request_rip,
 };
 use tangible_domain::rip::{
-    MAX_IMAGE_BYTES, RIP_OUTPUTS, is_complete_output_set, is_rip_output, max_output_bytes,
+    DecryptionRefusal, MAX_IMAGE_BYTES, RIP_OUTPUTS, check_decryption, is_complete_output_set,
+    is_rip_output, max_output_bytes,
 };
-use tangible_domain::{DriveId, LogicalPath, RipJobId, RipState};
+use tangible_domain::{DriveId, LogicalPath, RipJobId, RipOriginal, RipState};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tokio::io::AsyncWriteExt as _;
@@ -185,6 +187,12 @@ pub struct RipView {
     pub can_cancel: bool,
     /// Who asked.
     pub requested_by: String,
+    /// Whether they asked for an encrypted disc to be decrypted.
+    pub decrypt: bool,
+    /// The original they chose, when decrypting: `encrypted_original` or
+    /// `decrypted_original`.
+    #[schema(value_type = Option<String>)]
+    pub keep: Option<String>,
     /// What the worker found in the drive.
     pub medium: Option<MediumView>,
     /// The tool that read the disc, such as `cdrdao`.
@@ -235,6 +243,8 @@ impl From<RipRecord> for RipView {
             is_open: record.state.is_open(),
             can_cancel: record.state.can_cancel(),
             requested_by: record.requested_by,
+            decrypt: record.decrypt,
+            keep: record.keep.map(|keep| keep.as_str().to_owned()),
             medium: record
                 .medium
                 .and_then(|value| serde_json::from_value::<MediumInfo>(value).ok())
@@ -309,11 +319,24 @@ pub struct RipEventPage {
 
 // --- requests ----------------------------------------------------------------------
 
-/// What an operator sends to rip the disc in a drive. Empty for now: CD
-/// rips have no options, and decryption arrives later (ADR 0013).
+/// What an operator sends to rip the disc in a drive. Both fields are
+/// optional: `{}` rips without decryption.
 #[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct RequestRip {}
+pub struct RequestRip {
+    /// Decrypt the disc if it is encrypted (ADR 0013). Needs an
+    /// administrator to have turned decryption on, and the drive's worker
+    /// to run an image built to decrypt.
+    #[serde(default)]
+    pub decrypt: bool,
+    /// When decrypting, the original to keep: `encrypted_original` (the
+    /// default: the disc as it is, with a decrypted copy beside it) or
+    /// `decrypted_original` (only a decrypted image, not a faithful copy of
+    /// the disc). Ignored without `decrypt`.
+    #[serde(default)]
+    #[schema(value_type = Option<String>)]
+    pub keep: Option<String>,
+}
 
 /// Paging for the rip list.
 #[derive(Debug, Clone, Deserialize, IntoParams)]
@@ -351,6 +374,13 @@ pub struct RipClaim {
     pub outputs: Vec<String>,
     /// The largest file the server accepts.
     pub max_file_bytes: u64,
+    /// Decrypt the disc if it is encrypted. Only ever true when this server
+    /// allows it and this worker said it can.
+    pub decrypt: bool,
+    /// When decrypting, the original to keep: `encrypted_original` or
+    /// `decrypted_original`.
+    #[schema(value_type = Option<String>)]
+    pub keep: Option<String>,
 }
 
 /// One thing a worker says while ripping.
@@ -414,34 +444,62 @@ pub struct RipCompletion {
 
 // --- for people --------------------------------------------------------------------
 
+/// What a request asks for about decryption, checked.
+fn rip_options(request: &RequestRip) -> Result<RipOptions, Problem> {
+    let keep = match (request.decrypt, request.keep.as_deref()) {
+        // Without decryption there is only one original; a choice sent
+        // anyway is ignored, as the API says.
+        (false, _) | (true, None) => RipOriginal::default(),
+        (true, Some(keep)) => keep.parse::<RipOriginal>().map_err(|_| {
+            Problem::new(
+                ErrorCode::ValidationFailed,
+                "keep must be encrypted_original or decrypted_original",
+            )
+        })?,
+    };
+    Ok(RipOptions {
+        decrypt: request.decrypt,
+        keep,
+    })
+}
+
 /// Ask for the disc in a drive to be ripped into the library.
 ///
 /// # Errors
 ///
 /// `NOT_FOUND` for an unknown drive; `CONFLICT` when the drive already has a
-/// rip reading, or its worker cannot rip.
+/// rip reading, or its worker cannot rip; `DECRYPTION_OFF` or
+/// `ENCRYPTED_NO_DECRYPTION` when decryption is asked for and not possible;
+/// `VALIDATION_FAILED` for an unknown `keep`.
 #[utoipa::path(
     post,
     path = "/api/v1/drives/{drive_id}/rips",
     tag = "rips",
     description = "Rip the disc in a drive into the library. The drive's worker \
                    reads it when the drive is free, sends what it read, and the \
-                   result is imported like an upload. A CD becomes a TOC/BIN image.",
+                   result is imported like an upload. A CD becomes a TOC/BIN image, \
+                   a DVD an ISO. `decrypt` asks for an encrypted disc to be decrypted, \
+                   which needs an administrator to have turned decryption on and the \
+                   drive's worker to be able to.",
     params(("drive_id" = String, Path, description = "Drive identifier")),
     request_body = RequestRip,
     responses(
         (status = 201, description = "Queued", body = RipView),
         (status = 404, description = "No such drive", body = Problem),
-        (status = 409, description = "A rip is already reading, or the worker cannot rip", body = Problem),
+        (status = 409, description = "A rip is already reading, the worker cannot rip, or \
+                                      decryption was asked for and is off (`DECRYPTION_OFF`) \
+                                      or the worker cannot decrypt (`ENCRYPTED_NO_DECRYPTION`)", body = Problem),
+        (status = 422, description = "`keep` is not an original this server knows", body = Problem),
     ),
 )]
 pub async fn request_drive_rip(
     State(state): State<ApiState>,
     SignedIn(user): SignedIn,
     Path(drive_id): Path<String>,
-    Json(_request): Json<RequestRip>,
+    Json(request): Json<RequestRip>,
 ) -> Result<Response, Problem> {
     let drive_id = parse_drive(&drive_id)?;
+    let options = rip_options(&request)?;
     let pool = state.database().pool();
     if state.imports().is_none() {
         return Err(unavailable("importing is not configured on this server"));
@@ -465,7 +523,26 @@ pub async fn request_drive_rip(
             Problem::not_found("drive", &drive_id.to_string())
         });
     }
-    let record = request_rip(pool, drive_id, &user.username)
+    // Refused now rather than queued to be refused later: the person asking
+    // can do something about it, and nothing has been read.
+    let worker_can = drive_can_decrypt(pool, drive_id)
+        .await
+        .map_err(database("the drive could not be read"))?;
+    check_decryption(options.decrypt, state.decryption_allowed(), worker_can).map_err(
+        |refusal| match refusal {
+            DecryptionRefusal::Off => Problem::new(
+                ErrorCode::DecryptionOff,
+                "decryption is turned off on this server; an administrator can turn it on \
+                 with TANGIBLE_ALLOW_DECRYPTION",
+            ),
+            DecryptionRefusal::WorkerCannot => Problem::new(
+                ErrorCode::EncryptedNoDecryption,
+                "this drive's worker cannot decrypt; run it from a worker image built to \
+                 decrypt (deploy/README.md, \"Ripping encrypted discs\")",
+            ),
+        },
+    )?;
+    let record = request_rip(pool, drive_id, &user.username, options)
         .await
         .map_err(database("the rip could not be queued"))?
         .map_err(|outcome| match outcome {
@@ -475,7 +552,14 @@ pub async fn request_drive_rip(
                 "this drive already has a rip that has not finished reading",
             ),
         })?;
-    tracing::info!(rip_id = %record.id, %drive_id, by = %user.username, "rip requested");
+    tracing::info!(
+        rip_id = %record.id,
+        %drive_id,
+        by = %user.username,
+        decrypt = record.decrypt,
+        keep = record.keep.map(|keep| keep.as_str()),
+        "rip requested"
+    );
     Ok((StatusCode::CREATED, Json(RipView::from(record))).into_response())
 }
 
@@ -667,10 +751,15 @@ pub async fn claim_drive_rip(
 ) -> Result<Response, Problem> {
     let worker_id = same_worker(identity, &worker_id)?;
     let drive_id = parse_drive(&request.drive_id)?;
-    let claimed = claim_rip(state.database().pool(), worker_id, drive_id)
-        .await
-        .map_err(database("rips could not be read"))?
-        .map_err(|_| Problem::not_found("drive", &drive_id.to_string()))?;
+    let claimed = claim_rip(
+        state.database().pool(),
+        worker_id,
+        drive_id,
+        state.decryption_allowed(),
+    )
+    .await
+    .map_err(database("rips could not be read"))?
+    .map_err(|_| Problem::not_found("drive", &drive_id.to_string()))?;
     Ok(match claimed {
         None => StatusCode::NO_CONTENT.into_response(),
         Some(record) => {
@@ -679,6 +768,8 @@ pub async fn claim_drive_rip(
                 rip_id: record.id.to_string(),
                 outputs: RIP_OUTPUTS.iter().map(|name| (*name).to_owned()).collect(),
                 max_file_bytes: MAX_IMAGE_BYTES,
+                decrypt: record.decrypt,
+                keep: record.keep.map(|keep| keep.as_str().to_owned()),
             })
             .into_response()
         }

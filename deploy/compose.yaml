@@ -42,6 +42,10 @@ services:
       # the default below, so empty stays empty).
       TANGIBLE_REPORT_ISSUES_URL: ${TANGIBLE_REPORT_ISSUES_URL-https://github.com/digital-grease/tangible/issues/new}
       TANGIBLE_REPORT_SCRUB_ADDRESSES: ${TANGIBLE_REPORT_SCRUB_ADDRESSES:-true}
+      # Whether operators may ask a rip to decrypt an encrypted disc, on a
+      # worker run from an image built to (deploy/README.md, "Ripping
+      # encrypted discs"). Off unless set to true.
+      TANGIBLE_ALLOW_DECRYPTION: ${TANGIBLE_ALLOW_DECRYPTION:-false}
       # RomM's roms directory, to show chosen games in RomM (deploy/README.md,
       # "Showing games in RomM"). Off unless set: uncomment this and the
       # matching volume below. Tangible writes only folders it marks as its

@@ -72,6 +72,11 @@ struct Worker {
 }
 
 async fn harness() -> Harness {
+    harness_with(false).await
+}
+
+/// A harness whose server does or does not allow decryption.
+async fn harness_with(decryption_allowed: bool) -> Harness {
     let queue = QUEUE
         .get_or_init(|| tokio::sync::Mutex::new(()))
         .lock()
@@ -89,11 +94,13 @@ async fn harness() -> Harness {
         .await
         .expect("staging");
     let pipeline = ImportPipeline::new(staging, objects, manifests.clone());
-    let state = ApiState::with_manifests(database.clone(), manifests).with_imports(ImportContext {
-        pipeline: pipeline.clone(),
-        roots: WatchRoots::new(BTreeMap::new()),
-        max_upload_bytes: 64 * 1024 * 1024,
-    });
+    let state = ApiState::with_manifests(database.clone(), manifests)
+        .with_imports(ImportContext {
+            pipeline: pipeline.clone(),
+            roots: WatchRoots::new(BTreeMap::new()),
+            max_upload_bytes: 64 * 1024 * 1024,
+        })
+        .with_decryption_allowed(decryption_allowed);
     let runner = ImportRunner::new(
         database,
         pipeline,
@@ -672,4 +679,159 @@ async fn a_rip_is_never_a_mixture_or_a_part() {
             .await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     }
+}
+
+// --- decryption ------------------------------------------------------------------
+
+impl Harness {
+    /// Say a worker can decrypt DVDs, as one from the opt-in image does.
+    async fn can_decrypt(&self, worker: &Worker) {
+        sqlx::query(
+            "UPDATE workers SET capabilities_json = '{\"rip\": {
+                 \"engines\": [{\"name\": \"block_reader\", \"version\": \"0.1.0\"}],
+                 \"decryption\": {\"css\": {\"library\": \"libdvdcss\", \"version\": \"1.6.0\",
+                                              \"tool\": \"dvdbackup\", \"tool_version\": \"0.4.2-4.1\"}}}}'
+             WHERE id = $1::uuid",
+        )
+        .bind(&worker.id)
+        .execute(&self.pool)
+        .await
+        .unwrap();
+    }
+
+    async fn request_with(&self, drive: &str, body: Value) -> (StatusCode, Value) {
+        self.json(
+            "POST",
+            &format!("/api/v1/drives/{drive}/rips"),
+            &As::Person(&self.operator),
+            body,
+        )
+        .await
+    }
+
+    async fn drive_view(&self, drive: &str) -> Value {
+        let (status, body) = self.get("/api/v1/drives").await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == drive)
+            .cloned()
+            .expect("the drive is listed")
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn decryption_is_refused_while_the_server_does_not_allow_it() {
+    let harness = harness().await;
+    let worker = harness.worker(true).await;
+    harness.can_decrypt(&worker).await;
+
+    let (status, body) = harness
+        .request_with(&worker.drive, json!({ "decrypt": true }))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "DECRYPTION_OFF");
+    let (status, _) = harness.claim(&worker).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "nothing was queued");
+
+    // The drive list says so, so the web UI does not offer it.
+    let view = harness.drive_view(&worker.drive).await;
+    assert_eq!(view["can_rip"], true);
+    assert_eq!(view["can_decrypt_rips"], false);
+
+    // Without decryption, the same drive rips as before; a choice of
+    // original sent anyway is ignored.
+    let (status, body) = harness
+        .request_with(&worker.drive, json!({ "keep": "decrypted_original" }))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["decrypt"], false);
+    assert!(body["keep"].is_null(), "{body}");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn decryption_needs_a_worker_that_can() {
+    let harness = harness_with(true).await;
+    let worker = harness.worker(true).await;
+
+    let (status, body) = harness
+        .request_with(&worker.drive, json!({ "decrypt": true }))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "ENCRYPTED_NO_DECRYPTION");
+    let view = harness.drive_view(&worker.drive).await;
+    assert_eq!(view["can_decrypt_rips"], false);
+
+    // A worker that cannot rip at all is still told that first.
+    let old = harness.worker(false).await;
+    let (status, body) = harness
+        .request_with(&old.drive, json!({ "decrypt": true }))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "CONFLICT");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_decrypting_rip_carries_its_choice_to_the_worker() {
+    let harness = harness_with(true).await;
+    let worker = harness.worker(true).await;
+    harness.can_decrypt(&worker).await;
+    assert_eq!(
+        harness.drive_view(&worker.drive).await["can_decrypt_rips"],
+        true
+    );
+
+    let (status, body) = harness
+        .request_with(
+            &worker.drive,
+            json!({ "decrypt": true, "keep": "sideways" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["code"], "VALIDATION_FAILED");
+
+    // The encrypted original is the default.
+    let (status, body) = harness
+        .request_with(&worker.drive, json!({ "decrypt": true }))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["decrypt"], true);
+    assert_eq!(body["keep"], "encrypted_original");
+
+    let (status, claim) = harness.claim(&worker).await;
+    assert_eq!(status, StatusCode::OK, "{claim}");
+    assert_eq!(claim["rip_id"], body["id"]);
+    assert_eq!(claim["decrypt"], true);
+    assert_eq!(claim["keep"], "encrypted_original");
+
+    // Asking was audited with the choice.
+    let metadata: Value = sqlx::query_scalar(
+        "SELECT metadata FROM audit_events
+         WHERE action = 'rip.requested' AND target_id = $1 ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(body["id"].as_str().unwrap())
+    .fetch_one(&harness.pool)
+    .await
+    .unwrap();
+    assert_eq!(metadata["decrypt"], true);
+    assert_eq!(metadata["keep"], "encrypted_original");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_plain_rip_tells_the_worker_not_to_decrypt() {
+    let harness = harness_with(true).await;
+    let worker = harness.worker(true).await;
+    harness.can_decrypt(&worker).await;
+    let (status, body) = harness.request(&worker.drive).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (status, claim) = harness.claim(&worker).await;
+    assert_eq!(status, StatusCode::OK, "{claim}");
+    assert_eq!(claim["decrypt"], false);
+    assert!(claim["keep"].is_null(), "{claim}");
 }

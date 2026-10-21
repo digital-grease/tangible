@@ -461,6 +461,20 @@ string_enum! {
     default = Queued
 }
 
+string_enum! {
+    /// Which image of an encrypted disc a decrypting rip keeps as the
+    /// original (ADR 0013). The operator chooses it per rip.
+    RipOriginal {
+        /// The disc as it is, still encrypted, as the original; a decrypted
+        /// copy beside it as a derivative.
+        EncryptedOriginal => "encrypted_original",
+        /// Only a decrypted image, marked as decrypted at acquisition. Not a
+        /// faithful copy of the disc.
+        DecryptedOriginal => "decrypted_original",
+    }
+    default = EncryptedOriginal
+}
+
 // --- workers and drives -----------------------------------------------------
 
 string_enum! {

@@ -105,11 +105,31 @@ pub struct DriveView {
     pub worker_status: String,
     /// When the worker last reported in.
     pub worker_last_seen_at: Option<String>,
+    /// Whether its worker can rip.
+    pub can_rip: bool,
+    /// Whether a rip on this drive may decrypt an encrypted disc: this
+    /// server allows decryption and the drive's worker can (ADR 0013).
+    pub can_decrypt_rips: bool,
+}
+
+impl DriveView {
+    /// The view of `drive`, on a server that does or does not allow
+    /// decryption.
+    #[must_use]
+    pub fn new(drive: DriveRecord, decryption_allowed: bool) -> Self {
+        Self {
+            can_decrypt_rips: drive.can_rip && drive.can_decrypt && decryption_allowed,
+            ..Self::from(drive)
+        }
+    }
 }
 
 impl From<DriveRecord> for DriveView {
     fn from(drive: DriveRecord) -> Self {
         Self {
+            can_rip: drive.can_rip,
+            // Decryption is off unless the server says otherwise; see `new`.
+            can_decrypt_rips: false,
             id: drive.id.to_string(),
             name: drive.configured_name,
             device: drive.device_alias,
@@ -294,7 +314,10 @@ pub async fn list_all_drives(State(state): State<ApiState>) -> Result<Json<Drive
             unavailable("drives could not be read")
         })?;
     Ok(Json(DriveList {
-        items: drives.into_iter().map(DriveView::from).collect(),
+        items: drives
+            .into_iter()
+            .map(|drive| DriveView::new(drive, state.decryption_allowed()))
+            .collect(),
     }))
 }
 

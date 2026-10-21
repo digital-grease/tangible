@@ -125,7 +125,13 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         })
         .with_auth(auth)
         .with_reports(reports)
-        .with_diagnostics(diagnostics);
+        .with_diagnostics(diagnostics)
+        .with_decryption_allowed(serve.allow_decryption);
+    if serve.allow_decryption {
+        tracing::info!(
+            "rips may decrypt encrypted discs, on workers that can (TANGIBLE_ALLOW_DECRYPTION)"
+        );
+    }
     let state = attach_web_ui(state, serve.web_root.as_deref()).await?;
     let (state, romm) = start_romm_export(
         state,
@@ -349,6 +355,7 @@ fn diagnostics_settings(
         public_url_https: AuthSettings::for_public_url(&serve.public_url).secure_cookie,
         migrate_on_start: serve.migrate_on_start,
         reports,
+        decryption_allowed: serve.allow_decryption,
     }
 }
 
@@ -763,6 +770,7 @@ mod tests {
 
     /// Every other variable, each one looked at and found not to be secret.
     const PUBLIC_ENV: &[&str] = &[
+        "TANGIBLE_ALLOW_DECRYPTION",
         "TANGIBLE_BIND",
         "TANGIBLE_BLOCK_DEVICE",
         "TANGIBLE_BUILD_REVISION",
@@ -868,6 +876,12 @@ mod tests {
         let settings = report_settings(&common, &serve).expect("settings");
         assert!(!settings.enabled());
         assert!(!serve.report_scrub_addresses);
+    }
+
+    #[test]
+    fn decryption_is_off_unless_an_administrator_turns_it_on() {
+        assert!(!serve_config(&[]).allow_decryption);
+        assert!(serve_config(&["--allow-decryption", "true"]).allow_decryption);
     }
 
     #[test]

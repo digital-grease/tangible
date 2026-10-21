@@ -46,6 +46,11 @@ pub struct DriveRecord {
     pub worker_status: String,
     /// When the worker last reported in.
     pub worker_last_seen_at: Option<OffsetDateTime>,
+    /// Whether its worker reported an engine that rips.
+    pub can_rip: bool,
+    /// Whether its worker reported that its image can decrypt a DVD
+    /// (ADR 0013). Whether the server allows it is a separate question.
+    pub can_decrypt: bool,
 }
 
 /// A request to erase a disc.
@@ -168,7 +173,12 @@ async fn erasure_in(
 const DRIVE_COLUMNS: &str = "d.id, d.configured_name, d.device_alias, d.vendor, d.model,
      d.firmware, d.connection, d.status, d.last_seen_at, w.id AS worker_id,
      w.name AS worker_name, w.status AS worker_status,
-     w.last_seen_at AS worker_last_seen_at";
+     w.last_seen_at AS worker_last_seen_at,
+     COALESCE(jsonb_array_length(
+         CASE WHEN jsonb_typeof(w.capabilities_json -> 'rip' -> 'engines') = 'array'
+              THEN w.capabilities_json -> 'rip' -> 'engines' END) > 0, false) AS can_rip,
+     COALESCE(jsonb_typeof(w.capabilities_json -> 'rip' -> 'decryption' -> 'css') = 'object',
+              false) AS can_decrypt";
 
 fn drive_from_row(row: &sqlx::postgres::PgRow) -> Result<DriveRecord, DbError> {
     let get = DbError::Query;
@@ -186,6 +196,8 @@ fn drive_from_row(row: &sqlx::postgres::PgRow) -> Result<DriveRecord, DbError> {
         worker_name: row.try_get("worker_name").map_err(get)?,
         worker_status: row.try_get("worker_status").map_err(get)?,
         worker_last_seen_at: row.try_get("worker_last_seen_at").map_err(get)?,
+        can_rip: row.try_get("can_rip").map_err(get)?,
+        can_decrypt: row.try_get("can_decrypt").map_err(get)?,
     })
 }
 

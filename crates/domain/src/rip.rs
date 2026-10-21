@@ -161,10 +161,90 @@ pub fn is_complete_output_set(names: &[String]) -> bool {
     names == ["disc.bin", "disc.toc"] || names == [IMAGE_OUTPUT]
 }
 
+/// Why a rip that asks to decrypt may not go ahead.
+///
+/// Checked when it is asked for and again when its worker takes it: an
+/// administrator may turn decryption off, or a worker be rebuilt without it,
+/// in between, and a decrypting rip only ever runs on a worker that can and a
+/// server that allows it (ADR 0013).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum DecryptionRefusal {
+    /// The server's administrator has not turned decryption on.
+    #[error("decryption is turned off on this server")]
+    Off,
+    /// The drive's worker did not report that it can decrypt.
+    #[error("this drive's worker cannot decrypt; its image was not built to")]
+    WorkerCannot,
+}
+
+impl DecryptionRefusal {
+    /// The stable code, for a refusal to a person and a refused rip alike.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::Off => "DECRYPTION_OFF",
+            Self::WorkerCannot => "ENCRYPTED_NO_DECRYPTION",
+        }
+    }
+}
+
+/// Whether a rip may go ahead as far as decryption goes.
+///
+/// A rip that does not ask to decrypt always may: an encrypted disc is then
+/// refused by the worker when it finds one, as before.
+///
+/// # Errors
+///
+/// [`DecryptionRefusal`] when it asks to decrypt and the server does not
+/// allow it, or the worker cannot. The server's setting is checked first,
+/// since it is the one an operator cannot change by rebuilding a worker.
+pub const fn check_decryption(
+    decrypt: bool,
+    server_allows: bool,
+    worker_can: bool,
+) -> Result<(), DecryptionRefusal> {
+    if !decrypt {
+        Ok(())
+    } else if !server_allows {
+        Err(DecryptionRefusal::Off)
+    } else if !worker_can {
+        Err(DecryptionRefusal::WorkerCannot)
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decryption_needs_the_server_and_the_worker() {
+        for server in [false, true] {
+            for worker in [false, true] {
+                assert_eq!(check_decryption(false, server, worker), Ok(()));
+            }
+        }
+        assert_eq!(check_decryption(true, true, true), Ok(()));
+        assert_eq!(
+            check_decryption(true, false, true),
+            Err(DecryptionRefusal::Off)
+        );
+        assert_eq!(
+            check_decryption(true, false, false),
+            Err(DecryptionRefusal::Off)
+        );
+        assert_eq!(
+            check_decryption(true, true, false),
+            Err(DecryptionRefusal::WorkerCannot)
+        );
+        assert_eq!(DecryptionRefusal::Off.code(), "DECRYPTION_OFF");
+        assert_eq!(
+            DecryptionRefusal::WorkerCannot.code(),
+            "ENCRYPTED_NO_DECRYPTION"
+        );
+    }
     use RipState::{Canceled, Complete, Failed, Queued, Reading, Refused, Registering, Uploading};
 
     #[test]

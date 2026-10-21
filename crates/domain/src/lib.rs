@@ -34,8 +34,8 @@ pub use enums::{
     ArtifactFormat, ArtifactKind, ArtifactOrigin, ChdCodec, CompatibilityClaim, ComponentRole,
     DerivationJobState, DiscRelationship, DriveConnection, DriveStatus, EjectPolicy,
     EnumParseError, ErasureMode, ErasureState, HashAlgorithm, IntegrationKind, LossCharacter,
-    MediaFamily, PhysicalCopyStatus, QuarantineState, RipState, Role, SetKind, TitleKind,
-    Transformation, ValidationState, VerificationStep, WorkerStatus,
+    MediaFamily, PhysicalCopyStatus, QuarantineState, RipOriginal, RipState, Role, SetKind,
+    TitleKind, Transformation, ValidationState, VerificationStep, WorkerStatus,
 };
 pub use id::{
     ArtifactId, BurnAttemptId, BurnJobId, ComponentId, DerivationJobId, DiscId, DiscSetId, DriveId,

@@ -635,7 +635,7 @@ export interface paths {
         put?: never;
         /**
          * Ask for the disc in a drive to be ripped into the library.
-         * @description Rip the disc in a drive into the library. The drive's worker reads it when the drive is free, sends what it read, and the result is imported like an upload. A CD becomes a TOC/BIN image.
+         * @description Rip the disc in a drive into the library. The drive's worker reads it when the drive is free, sends what it read, and the result is imported like an upload. A CD becomes a TOC/BIN image, a DVD an ISO. `decrypt` asks for an encrypted disc to be decrypted, which needs an administrator to have turned decryption on and the drive's worker to be able to.
          */
         post: operations["request_drive_rip"];
         delete?: never;
@@ -2284,6 +2284,13 @@ export interface components {
         /** @description A drive, and the worker it belongs to. */
         DriveView: {
             /**
+             * @description Whether a rip on this drive may decrypt an encrypted disc: this
+             *     server allows decryption and the drive's worker can (ADR 0013).
+             */
+            can_decrypt_rips: boolean;
+            /** @description Whether its worker can rip. */
+            can_rip: boolean;
+            /**
              * @description How it is attached: `usb`, `sata` or `unknown`, as the worker read it
              *     from the host's device tree.
              */
@@ -2998,10 +3005,24 @@ export interface components {
             mode: string;
         };
         /**
-         * @description What an operator sends to rip the disc in a drive. Empty for now: CD
-         *     rips have no options, and decryption arrives later (ADR 0013).
+         * @description What an operator sends to rip the disc in a drive. Both fields are
+         *     optional: `{}` rips without decryption.
          */
-        RequestRip: Record<string, never>;
+        RequestRip: {
+            /**
+             * @description Decrypt the disc if it is encrypted (ADR 0013). Needs an
+             *     administrator to have turned decryption on, and the drive's worker
+             *     to run an image built to decrypt.
+             */
+            decrypt?: boolean;
+            /**
+             * @description When decrypting, the original to keep: `encrypted_original` (the
+             *     default: the disc as it is, with a decrypted copy beside it) or
+             *     `decrypted_original` (only a decrypted image, not a faithful copy of
+             *     the disc). Ignored without `decrypt`.
+             */
+            keep?: string | null;
+        };
         /** @description What a worker can rip with. */
         RipCapability: {
             decryption?: null | components["schemas"]["DecryptionReport"];
@@ -3010,6 +3031,16 @@ export interface components {
         };
         /** @description A rip a worker has taken. */
         RipClaim: {
+            /**
+             * @description Decrypt the disc if it is encrypted. Only ever true when this server
+             *     allows it and this worker said it can.
+             */
+            decrypt: boolean;
+            /**
+             * @description When decrypting, the original to keep: `encrypted_original` or
+             *     `decrypted_original`.
+             */
+            keep?: string | null;
             /**
              * Format: int64
              * @description The largest file the server accepts.
@@ -3140,6 +3171,8 @@ export interface components {
             completed_at?: string | null;
             /** @description When it was asked for. */
             created_at: string;
+            /** @description Whether they asked for an encrypted disc to be decrypted. */
+            decrypt: boolean;
             /** @description The drive. */
             drive_id: string;
             /** @description What the drive is called. */
@@ -3160,6 +3193,11 @@ export interface components {
             import_id?: string | null;
             /** @description Whether it is still going. */
             is_open: boolean;
+            /**
+             * @description The original they chose, when decrypting: `encrypted_original` or
+             *     `decrypted_original`.
+             */
+            keep?: string | null;
             medium?: null | components["schemas"]["MediumView"];
             read_errors?: null | components["schemas"]["ReadErrors"];
             /** @description Who asked. */
@@ -4682,8 +4720,17 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description A rip is already reading, or the worker cannot rip */
+            /** @description A rip is already reading, the worker cannot rip, or decryption was asked for and is off (`DECRYPTION_OFF`) or the worker cannot decrypt (`ENCRYPTED_NO_DECRYPTION`) */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description `keep` is not an original this server knows */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

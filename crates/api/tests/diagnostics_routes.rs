@@ -56,6 +56,7 @@ fn settings(root: &Path, reports: ReportSettings) -> DiagnosticsSettings {
         public_url_https: true,
         migrate_on_start: false,
         reports,
+        decryption_allowed: false,
     }
 }
 
