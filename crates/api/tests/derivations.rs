@@ -139,6 +139,8 @@ impl Harness {
                     source_kind: "upload".to_owned(),
                     source_filename: Some(files[0].0.to_owned()),
                     source_reference: None,
+                    physical_dump: None,
+                    lineage: None,
                     limits: IngestLimits {
                         max_bytes: None,
                         fsync: false,

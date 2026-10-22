@@ -81,6 +81,8 @@ fn request(import_id: ImportJobId, filename: &str) -> ImportRequest {
         source_kind: "upload".to_owned(),
         source_filename: Some(filename.to_owned()),
         source_reference: Some("upload:test".to_owned()),
+        physical_dump: None,
+        lineage: None,
         limits: fast(),
     }
 }

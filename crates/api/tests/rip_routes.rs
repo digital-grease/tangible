@@ -835,3 +835,392 @@ async fn a_plain_rip_tells_the_worker_not_to_decrypt() {
     assert_eq!(claim["decrypt"], false);
     assert!(claim["keep"].is_null(), "{claim}");
 }
+
+// --- decrypted outputs -----------------------------------------------------------
+
+/// A decrypted DVD's VIDEO_TS files, as dvdbackup writes them: a video
+/// manager naming one title set, its information, and clear video.
+fn video_ts() -> Vec<(&'static str, Vec<u8>)> {
+    let header = |signature: &[u8], title_sets: u16| {
+        let mut bytes = vec![0_u8; 2048];
+        bytes[..12].copy_from_slice(signature);
+        bytes[0x3E..0x40].copy_from_slice(&title_sets.to_be_bytes());
+        bytes
+    };
+    let mut vob = Vec::new();
+    for _ in 0..70 {
+        let mut sector = vec![0_u8; 2048];
+        sector[..4].copy_from_slice(&[0, 0, 1, 0xBA]);
+        sector[4] = 0x44;
+        sector[13] = 0xF8;
+        sector[14..18].copy_from_slice(&[0, 0, 1, 0xE0]);
+        sector[20] = 0x80;
+        vob.extend(sector);
+    }
+    vec![
+        ("VIDEO_TS/VIDEO_TS.IFO", header(b"DVDVIDEO-VMG", 1)),
+        ("VIDEO_TS/VIDEO_TS.BUP", header(b"DVDVIDEO-VMG", 1)),
+        ("VIDEO_TS/VTS_01_0.IFO", header(b"DVDVIDEO-VTS", 0)),
+        ("VIDEO_TS/VTS_01_0.BUP", header(b"DVDVIDEO-VTS", 0)),
+        ("VIDEO_TS/VTS_01_1.VOB", vob),
+    ]
+}
+
+fn css() -> Value {
+    json!({ "system": "css", "library": "libdvdcss", "library_version": "1.6.0",
+            "tool": "dvdbackup", "tool_version": "0.4.2-4.1" })
+}
+
+impl Harness {
+    /// A decrypting rip requested, keeping `keep`, and taken.
+    async fn taken_decrypting(&self, worker: &Worker, keep: &str) -> String {
+        let (status, body) = self
+            .request_with(&worker.drive, json!({ "decrypt": true, "keep": keep }))
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let (status, claim) = self.claim(worker).await;
+        assert_eq!(status, StatusCode::OK, "{claim}");
+        assert_eq!(claim["decrypt"], true);
+        claim["rip_id"].as_str().unwrap().to_owned()
+    }
+
+    async fn send_all(&self, worker: &Worker, rip: &str, prefix: &str) -> Vec<String> {
+        let mut names = Vec::new();
+        for (name, bytes) in video_ts() {
+            let name = format!("{prefix}{name}");
+            let (status, body) = self
+                .upload(worker, rip, &name, &bytes, &sha256(&bytes))
+                .await;
+            assert_eq!(status, StatusCode::OK, "{name}: {body}");
+            names.push(name);
+        }
+        names
+    }
+
+    async fn cancel_as_operator(&self, rip: &str) {
+        let (status, body) = self
+            .send(
+                "POST",
+                &format!("/api/v1/rips/{rip}/cancel"),
+                &As::Person(&self.operator),
+                Body::empty(),
+                &[],
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+
+    async fn manifest(&self, artifact: &str) -> Value {
+        let (status, manifest) = self
+            .get(&format!("/api/v1/artifacts/{artifact}/manifest"))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{manifest}");
+        manifest
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_decrypted_original_is_a_video_ts_tree_marked_as_decrypted() {
+    let harness = harness_with(true).await;
+    let worker = harness.worker(true).await;
+    harness.can_decrypt(&worker).await;
+    let rip = harness
+        .taken_decrypting(&worker, "decrypted_original")
+        .await;
+    let names = harness.send_all(&worker, &rip, "").await;
+
+    let (status, done) = harness
+        .complete(
+            &worker,
+            &rip,
+            json!({ "outcome": "read", "engine": "dvdbackup", "engine_version": "0.4.2-4.1",
+                    "outputs": names, "encryption": "css", "decryption": css() }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["encryption"], "css");
+    assert_eq!(done["decryption"]["library"], "libdvdcss");
+    assert!(done["copy_import_id"].is_null());
+
+    harness.drain().await;
+    let (_, finished) = harness.get(&format!("/api/v1/rips/{rip}")).await;
+    assert_eq!(finished["state"], "complete", "{finished}");
+    let manifest = harness
+        .manifest(finished["artifact_id"].as_str().expect("an artifact"))
+        .await;
+    assert_eq!(manifest["classification"]["format"], "video_ts_directory");
+    assert_eq!(manifest["origin"]["kind"], "physical_dump");
+    let dump = &manifest["origin"]["physical_dump"];
+    assert_eq!(dump["rip_id"], rip.as_str(), "{dump}");
+    assert_eq!(dump["encryption"], "css");
+    assert_eq!(dump["decrypted_at_acquisition"], true);
+    assert_eq!(dump["decryption"], css());
+    assert_eq!(dump["engine"]["name"], "dvdbackup");
+    assert_eq!(dump["drive"]["connection"], "unknown");
+    assert!(manifest["lineage"].is_null());
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_encrypted_original_keeps_its_decrypted_copy_as_a_derivative() {
+    let harness = harness_with(true).await;
+    let worker = harness.worker(true).await;
+    harness.can_decrypt(&worker).await;
+    let rip = harness
+        .taken_decrypting(&worker, "encrypted_original")
+        .await;
+    let image = iso_image(32);
+    let (status, body) = harness
+        .upload(&worker, &rip, "disc.iso", &image, &sha256(&image))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let mut outputs = harness.send_all(&worker, &rip, "decrypted/").await;
+    outputs.push("disc.iso".to_owned());
+
+    let (status, done) = harness
+        .complete(
+            &worker,
+            &rip,
+            json!({ "outcome": "read", "engine": "block_reader", "engine_version": "0.1.0",
+                    "outputs": outputs, "encryption": "css", "decryption": css() }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+
+    harness.drain().await;
+    let (_, finished) = harness.get(&format!("/api/v1/rips/{rip}")).await;
+    assert_eq!(finished["state"], "complete", "{finished}");
+    let original = finished["artifact_id"].as_str().expect("the original");
+    let copy = finished["copy_artifact_id"].as_str().expect("the copy");
+
+    let manifest = harness.manifest(original).await;
+    assert_eq!(manifest["classification"]["format"], "iso");
+    assert_eq!(
+        manifest["components"].as_array().unwrap().len(),
+        1,
+        "only the image"
+    );
+    let dump = &manifest["origin"]["physical_dump"];
+    assert_eq!(dump["encryption"], "css", "{dump}");
+    assert_eq!(dump["decrypted_at_acquisition"], false);
+    assert!(dump["decryption"].is_null());
+    assert_eq!(dump["engine"]["name"], "block_reader");
+
+    let copied = harness.manifest(copy).await;
+    assert_eq!(copied["classification"]["format"], "video_ts_directory");
+    assert_eq!(copied["origin"]["kind"], "derived");
+    assert_eq!(
+        copied["origin"]["physical_dump"]["decrypted_at_acquisition"],
+        true
+    );
+    assert_eq!(
+        copied["origin"]["physical_dump"]["engine"]["name"],
+        "dvdbackup"
+    );
+    let lineage = &copied["lineage"];
+    assert_eq!(lineage["parent_artifact_id"], original, "{lineage}");
+    assert_eq!(lineage["transformation"], "decrypt_css");
+    assert_eq!(lineage["normalized_options"]["read_from"], "disc");
+    assert_eq!(lineage["loss_character"], "semantically_equivalent");
+    let paths: Vec<&str> = copied["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["logical_path"].as_str().unwrap())
+        .collect();
+    assert!(
+        paths.contains(&"VIDEO_TS/VIDEO_TS.IFO"),
+        "no prefix kept: {paths:?}"
+    );
+
+    let (parent, transformation): (uuid::Uuid, String) = sqlx::query_as(
+        "SELECT parent_artifact_id, transformation FROM derivations
+         WHERE child_artifact_id = $1::uuid",
+    )
+    .bind(copy)
+    .fetch_one(&harness.pool)
+    .await
+    .expect("the lineage is recorded");
+    assert_eq!(parent.to_string(), original);
+    assert_eq!(transformation, "decrypt_css");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn decrypted_files_go_only_where_the_rip_chose() {
+    let harness = harness_with(true).await;
+    let worker = harness.worker(true).await;
+    harness.can_decrypt(&worker).await;
+    let (name, bytes) = video_ts().remove(0);
+
+    // A plain rip takes neither a tree nor a copy.
+    let rip = harness.taken(&worker).await;
+    for sent in [name.to_owned(), format!("decrypted/{name}")] {
+        let (status, body) = harness
+            .upload(&worker, &rip, &sent, &bytes, &sha256(&bytes))
+            .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{sent}: {body}");
+    }
+    harness.cancel_as_operator(&rip).await;
+
+    // A decrypted original takes no copy beside it.
+    let rip = harness
+        .taken_decrypting(&worker, "decrypted_original")
+        .await;
+    let (status, body) = harness
+        .upload(
+            &worker,
+            &rip,
+            &format!("decrypted/{name}"),
+            &bytes,
+            &sha256(&bytes),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    // Nor anything not DVD-Video, nor deeper paths.
+    for odd in [
+        "VIDEO_TS/notes.txt",
+        "VIDEO_TS/sub/VTS_01_1.VOB",
+        "VIDEO_TS/../disc.iso",
+    ] {
+        let (status, _) = harness
+            .upload(&worker, &rip, odd, &bytes, &sha256(&bytes))
+            .await;
+        assert_ne!(status, StatusCode::OK, "{odd}");
+    }
+    let names = harness.send_all(&worker, &rip, "").await;
+
+    // A decrypted tree has to say how it was decrypted, truthfully.
+    for (report, why) in [
+        (json!({ "encryption": "css" }), "no decryption"),
+        (
+            json!({ "encryption": "none", "decryption": css() }),
+            "system mismatch",
+        ),
+        (
+            json!({ "encryption": "css", "decryption": { "system": "css", "library": "lib dvdcss",
+            "library_version": "1", "tool": "dvdbackup", "tool_version": "1" } }),
+            "odd library",
+        ),
+        (
+            json!({ "encryption": "css", "decryption": { "system": "css", "library": "libdvdcss",
+            "library_version": "1", "tool": "dvdbackup", "tool_version": "1", "key": "00" } }),
+            "a key",
+        ),
+        (
+            json!({ "encryption": "scrambled", "decryption": css() }),
+            "odd encryption",
+        ),
+    ] {
+        let mut body = json!({ "outcome": "read", "engine": "dvdbackup",
+                               "engine_version": "0.4.2", "outputs": names });
+        for (key, value) in report.as_object().unwrap() {
+            body[key] = value.clone();
+        }
+        let (status, reply) = harness.complete(&worker, &rip, body).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{why}: {reply}");
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_plain_rip_reports_no_decryption() {
+    let harness = harness_with(true).await;
+    let worker = harness.worker(true).await;
+    let rip = harness.taken(&worker).await;
+    let image = iso_image(32);
+    harness
+        .upload(&worker, &rip, "disc.iso", &image, &sha256(&image))
+        .await;
+    let (status, reply) = harness
+        .complete(
+            &worker,
+            &rip,
+            json!({ "outcome": "read", "engine": "block_reader", "engine_version": "0.1.0",
+                    "outputs": ["disc.iso"], "encryption": "css", "decryption": css() }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+    let (status, reply) = harness
+        .complete(
+            &worker,
+            &rip,
+            json!({ "outcome": "read", "engine": "block_reader", "engine_version": "0.1.0",
+                    "outputs": ["disc.iso"] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(reply["encryption"], "none");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_withdrawn_decrypting_rip_leaves_neither_area_behind() {
+    let harness = harness_with(true).await;
+    let worker = harness.worker(true).await;
+    harness.can_decrypt(&worker).await;
+    let before = harness.staged_files();
+    let rip = harness
+        .taken_decrypting(&worker, "encrypted_original")
+        .await;
+    let image = iso_image(32);
+    harness
+        .upload(&worker, &rip, "disc.iso", &image, &sha256(&image))
+        .await;
+    harness.send_all(&worker, &rip, "decrypted/").await;
+    assert_eq!(harness.staged_files(), before + 6);
+    harness.cancel_as_operator(&rip).await;
+    assert_eq!(harness.staged_files(), before);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_copy_that_does_not_import_fails_the_rip_and_says_the_original_is_kept() {
+    let harness = harness_with(true).await;
+    let worker = harness.worker(true).await;
+    harness.can_decrypt(&worker).await;
+    let rip = harness
+        .taken_decrypting(&worker, "encrypted_original")
+        .await;
+    let image = iso_image(32);
+    harness
+        .upload(&worker, &rip, "disc.iso", &image, &sha256(&image))
+        .await;
+    let mut outputs = harness.send_all(&worker, &rip, "decrypted/").await;
+    outputs.push("disc.iso".to_owned());
+    let (status, done) = harness
+        .complete(
+            &worker,
+            &rip,
+            json!({ "outcome": "read", "engine": "block_reader", "engine_version": "0.1.0",
+                    "outputs": outputs, "encryption": "css", "decryption": css() }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+
+    // The original is imported, and the copy queued behind it.
+    assert!(harness.runner.step().await.expect("step"));
+    let (_, waiting) = harness.get(&format!("/api/v1/rips/{rip}")).await;
+    assert_eq!(waiting["state"], "registering", "{waiting}");
+    assert!(waiting["artifact_id"].is_string(), "{waiting}");
+    let copy = waiting["copy_import_id"]
+        .as_str()
+        .expect("the copy is queued")
+        .to_owned();
+
+    sqlx::query("UPDATE import_jobs SET state = 'canceled' WHERE id = $1::uuid")
+        .bind(&copy)
+        .execute(&harness.pool)
+        .await
+        .unwrap();
+    harness.drain().await;
+    let (_, failed) = harness.get(&format!("/api/v1/rips/{rip}")).await;
+    assert_eq!(failed["state"], "failed", "{failed}");
+    assert_eq!(failed["error_code"], "IMPORT_FAILED");
+    let detail = failed["error_detail"].as_str().unwrap();
+    assert!(
+        detail.contains("the original is in the library") && detail.contains("decrypted copy"),
+        "{detail}"
+    );
+}

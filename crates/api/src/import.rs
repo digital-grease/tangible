@@ -35,8 +35,8 @@ use tangible_domain::enums::{
 };
 use tangible_domain::manifest::{
     ArtifactManifest, BurnSupport, Classification, Compatibility, Component, ContentHashes,
-    Detector, Extensions, FilesystemEvidence as ManifestFilesystem, Origin, SCHEMA_ID, StorageRef,
-    Subchannel, Topology, Track, TrackIndex, Validation, ValidatorResult,
+    Detector, Extensions, FilesystemEvidence as ManifestFilesystem, Lineage, Origin, PhysicalDump,
+    SCHEMA_ID, StorageRef, Subchannel, Topology, Track, TrackIndex, Validation, ValidatorResult,
 };
 use tangible_domain::{
     ArtifactId, ComponentId, ImportJobId, ImportState, ImportTransitionError, LogicalPath,
@@ -62,6 +62,11 @@ pub struct ImportRequest {
     pub source_reference: Option<String>,
     /// Limits applied when promoting into the object store.
     pub limits: IngestLimits,
+    /// How the bytes were read from a disc, for a rip's import.
+    pub physical_dump: Option<PhysicalDump>,
+    /// What this is a derivative of, for a rip's decrypted copy of an
+    /// encrypted original (ADR 0013).
+    pub lineage: Option<Lineage>,
 }
 
 /// What one component contributed, recorded so a restart need not redo it.
@@ -840,6 +845,28 @@ impl ImportPipeline {
         Topology::Unknown
     }
 
+    /// Where the bytes came from, as the request says.
+    fn build_origin(request: &ImportRequest) -> Origin {
+        Origin {
+            // A rip is a dump of a disc in a drive, not a file somebody
+            // supplied; its decrypted copy is a derivative of the dump,
+            // made from the same disc.
+            kind: if request.lineage.is_some() {
+                ArtifactOrigin::Derived
+            } else if request.source_kind == "physical_drive" {
+                ArtifactOrigin::PhysicalDump
+            } else {
+                ArtifactOrigin::ImportedOriginal
+            },
+            source_kind: request.source_kind.clone(),
+            source_reference: request.source_reference.clone(),
+            source_filename: request.source_filename.clone(),
+            acquired_at: Some(OffsetDateTime::now_utc()),
+            operator_note: None,
+            physical_dump: request.physical_dump.clone(),
+        }
+    }
+
     /// Assemble the manifest from what the checkpoint recorded.
     fn build_manifest(
         artifact_id: ArtifactId,
@@ -915,20 +942,7 @@ impl ImportPipeline {
             schema: SCHEMA_ID.to_owned(),
             artifact_id,
             created_at: OffsetDateTime::now_utc(),
-            origin: Origin {
-                // A rip is a dump of a disc in a drive, not a file somebody
-                // supplied.
-                kind: if request.source_kind == "physical_drive" {
-                    ArtifactOrigin::PhysicalDump
-                } else {
-                    ArtifactOrigin::ImportedOriginal
-                },
-                source_kind: request.source_kind.clone(),
-                source_reference: request.source_reference.clone(),
-                source_filename: request.source_filename.clone(),
-                acquired_at: Some(OffsetDateTime::now_utc()),
-                operator_note: None,
-            },
+            origin: Self::build_origin(request),
             classification: Classification {
                 artifact_kind: if components.len() == 1 {
                     ArtifactKind::SingleFileImage
@@ -952,7 +966,7 @@ impl ImportPipeline {
                 validated_at: Some(OffsetDateTime::now_utc()),
                 validators,
             },
-            lineage: None,
+            lineage: request.lineage.clone(),
             associations: vec![],
             compatibility: Compatibility {
                 structurally_valid: state.permits_burning(),

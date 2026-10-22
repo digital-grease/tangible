@@ -165,6 +165,10 @@ pub enum ManifestError {
     /// A derivative's lineage names its own artifact as parent.
     #[error("lineage names the artifact as its own parent")]
     SelfParent,
+
+    /// A physical dump's account of decryption does not hold together.
+    #[error("origin.physical_dump: {0}")]
+    PhysicalDump(&'static str),
 }
 
 /// A portable description of one immutable artifact.
@@ -228,7 +232,86 @@ pub struct Origin {
     /// Operator's free-text note.
     #[serde(default)]
     pub operator_note: Option<String>,
+    /// How the bytes were read from a disc, for an artifact a rip produced
+    /// (ADR 0013). Absent on everything else, and from manifests written
+    /// before rips recorded it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub physical_dump: Option<PhysicalDump>,
 }
+
+/// How an artifact was read from a disc in a worker's drive.
+///
+/// Library and tool versions only: never a key, a title key, a key file or
+/// where one is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PhysicalDump {
+    /// The rip that read it.
+    pub rip_id: String,
+    /// The drive, as it described itself.
+    #[serde(default)]
+    pub drive: Option<DumpDrive>,
+    /// What read the disc, such as `cdrdao`, `block_reader` or `dvdbackup`.
+    pub engine: ToolRef,
+    /// Sectors that gave trouble, when the engine counts them.
+    #[serde(default)]
+    pub read_errors: Option<DumpReadErrors>,
+    /// The disc's encryption: `none`, `css`, `aacs` or `unknown`.
+    pub encryption: String,
+    /// Whether these bytes were decrypted as they were read. A decrypted
+    /// image is not a faithful copy of the disc and will not match a
+    /// preservation database.
+    pub decrypted_at_acquisition: bool,
+    /// How, when it was.
+    #[serde(default)]
+    pub decryption: Option<DecryptionRecord>,
+}
+
+/// A drive, as it described itself to its worker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DumpDrive {
+    /// Vendor.
+    #[serde(default)]
+    pub vendor: Option<String>,
+    /// Model.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Firmware revision.
+    #[serde(default)]
+    pub firmware: Option<String>,
+    /// `usb`, `sata` or `unknown`.
+    pub connection: String,
+}
+
+/// Sectors that gave trouble while a disc was read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DumpReadErrors {
+    /// Sectors that could not be read at all.
+    pub unreadable_sectors: u64,
+    /// Sectors that read only after retrying.
+    pub retried_sectors: u64,
+}
+
+/// The decryption applied as a disc was read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DecryptionRecord {
+    /// `css` or `aacs`.
+    pub system: String,
+    /// Such as `libdvdcss`.
+    pub library: String,
+    /// Its version.
+    pub library_version: String,
+    /// Such as `dvdbackup`.
+    pub tool: String,
+    /// Its version.
+    pub tool_version: String,
+}
+
+/// The encryption values a physical dump may record.
+pub const DUMP_ENCRYPTIONS: [&str; 4] = ["none", "css", "aacs", "unknown"];
 
 /// What the artifact was detected to be.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -603,6 +686,35 @@ pub struct TargetClaim {
     pub evidence: Vec<String>,
 }
 
+impl PhysicalDump {
+    /// Decrypted bytes say how, undecrypted bytes say nothing about it, and
+    /// only an encrypted disc is decrypted.
+    ///
+    /// # Errors
+    ///
+    /// [`ManifestError::PhysicalDump`] naming the rule broken.
+    pub fn validate(&self) -> Result<(), ManifestError> {
+        if !DUMP_ENCRYPTIONS.contains(&self.encryption.as_str()) {
+            return Err(ManifestError::PhysicalDump(
+                "encryption is not none, css, aacs or unknown",
+            ));
+        }
+        if self.decrypted_at_acquisition != self.decryption.is_some() {
+            return Err(ManifestError::PhysicalDump(
+                "decryption is recorded exactly when the bytes were decrypted at acquisition",
+            ));
+        }
+        if let Some(decryption) = &self.decryption
+            && decryption.system != self.encryption
+        {
+            return Err(ManifestError::PhysicalDump(
+                "decryption.system must be the disc's encryption",
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl ArtifactManifest {
     /// Check every internal consistency rule.
     ///
@@ -665,6 +777,9 @@ impl ArtifactManifest {
             && lineage.parent_artifact_id == self.artifact_id
         {
             return Err(ManifestError::SelfParent);
+        }
+        if let Some(dump) = &self.origin.physical_dump {
+            dump.validate()?;
         }
 
         self.validate_topology(&seen_ids)?;
@@ -825,6 +940,7 @@ mod tests {
                 source_filename: None,
                 acquired_at: None,
                 operator_note: None,
+                physical_dump: None,
             },
             classification: Classification {
                 artifact_kind: ArtifactKind::SingleFileImage,
@@ -1289,5 +1405,90 @@ mod tests {
             .unwrap()
             .remove("sha256");
         assert!(ArtifactManifest::from_json(&value.to_string()).is_err());
+    }
+
+    fn dump(encryption: &str, decrypted: bool) -> PhysicalDump {
+        PhysicalDump {
+            rip_id: "0198-rip".to_owned(),
+            drive: Some(DumpDrive {
+                vendor: Some("Slimtype".to_owned()),
+                model: Some("DVD A DS8A8SH".to_owned()),
+                firmware: Some("KS21".to_owned()),
+                connection: "usb".to_owned(),
+            }),
+            engine: ToolRef {
+                name: "block_reader".to_owned(),
+                version: "0.1.0".to_owned(),
+            },
+            read_errors: Some(DumpReadErrors {
+                unreadable_sectors: 0,
+                retried_sectors: 3,
+            }),
+            encryption: encryption.to_owned(),
+            decrypted_at_acquisition: decrypted,
+            decryption: decrypted.then(|| DecryptionRecord {
+                system: encryption.to_owned(),
+                library: "libdvdcss".to_owned(),
+                library_version: "1.6.0".to_owned(),
+                tool: "dvdbackup".to_owned(),
+                tool_version: "0.4.2-4.1".to_owned(),
+            }),
+        }
+    }
+
+    #[test]
+    fn a_physical_dump_round_trips_and_holds_together() {
+        for (encryption, decrypted) in [("none", false), ("css", false), ("css", true)] {
+            let mut m = manifest(vec![component(0, "disc.iso", 1, 5)]);
+            m.origin.physical_dump = Some(dump(encryption, decrypted));
+            m.validate().expect("valid");
+            let json = m.to_json().expect("serialize");
+            assert_eq!(ArtifactManifest::from_json(&json).expect("parse"), m);
+        }
+
+        let mut m = manifest(vec![component(0, "disc.iso", 1, 5)]);
+        for broken in [
+            dump("scrambled", false),
+            PhysicalDump {
+                decryption: None,
+                ..dump("css", true)
+            },
+            PhysicalDump {
+                decrypted_at_acquisition: false,
+                ..dump("css", true)
+            },
+            dump("aacs", true).clone_with_system("css"),
+        ] {
+            m.origin.physical_dump = Some(broken.clone());
+            assert!(
+                matches!(m.validate(), Err(ManifestError::PhysicalDump(_))),
+                "{broken:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn manifests_without_a_dump_are_written_as_before() {
+        // Additive: nothing new appears in a manifest that has no dump, so
+        // every manifest already written stays byte-identical when rewritten.
+        let json = manifest(vec![component(0, "d.iso", 1, 5)])
+            .to_json()
+            .unwrap();
+        assert!(!json.contains("physical_dump"), "{json}");
+        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        value["origin"]["physical_dump"] = serde_json::json!({ "rip_id": "x", "key": "00" });
+        assert!(
+            ArtifactManifest::from_json(&value.to_string()).is_err(),
+            "unknown fields in a dump, such as a key, are refused"
+        );
+    }
+
+    impl PhysicalDump {
+        fn clone_with_system(mut self, system: &str) -> Self {
+            if let Some(decryption) = &mut self.decryption {
+                decryption.system = system.to_owned();
+            }
+            self
+        }
     }
 }

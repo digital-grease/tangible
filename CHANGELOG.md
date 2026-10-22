@@ -74,6 +74,13 @@ may change between minor versions, and the release notes say how.
   no longer decrypt when its worker takes it is refused the same way. The
   drive list says which drives can (`can_decrypt_rips`), and diagnostics
   shows the setting. Workers do not decrypt yet.
+- The server accepts what a decrypting rip sends: a decrypted `VIDEO_TS`
+  tree as the original, or the encrypted disc image with a decrypted copy
+  beside it, which is imported after the original as its derivative
+  (`decrypt_css`, made from the disc). A ripped artifact's manifest now
+  records how it was read (`origin.physical_dump`): the drive, the engine,
+  read errors, the encryption found, and whether and how it was decrypted
+  at acquisition, never a key.
   The release now checks its image contains none of these before signing
   it (`deploy/check-no-decryption.sh`).
 - DVD-Video `VIDEO_TS` folders are recognised: imported from a watched folder

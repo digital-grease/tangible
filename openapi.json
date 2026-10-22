@@ -3632,7 +3632,7 @@
         ]
       }
     },
-    "/api/v1/rips/{rip_id}/files/{name}": {
+    "/api/v1/rips/{rip_id}/files/{*name}": {
       "put": {
         "tags": [
           "rips"
@@ -3653,7 +3653,7 @@
           {
             "name": "name",
             "in": "path",
-            "description": "The file, such as disc.bin",
+            "description": "The file, such as disc.bin, VIDEO_TS/VTS_01_1.VOB, or a decrypted copy's decrypted/VIDEO_TS/VTS_01_1.VOB",
             "required": true,
             "schema": {
               "type": "string"
@@ -8315,6 +8315,20 @@
           "outcome"
         ],
         "properties": {
+          "decryption": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "For `read`, when anything was decrypted: the library and tool, never\na key. Only for a rip asked to decrypt."
+          },
+          "encryption": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `read`: the disc's encryption, `none` (the default), `css`,\n`aacs` or `unknown`."
+          },
           "engine": {
             "type": [
               "string",
@@ -8359,7 +8373,7 @@
             "items": {
               "type": "string"
             },
-            "description": "For `read`: the files that make up the image, all already sent."
+            "description": "For `read`: every file sent, all already received: the original's,\nand a decrypted copy's under `decrypted/`."
           },
           "read_errors": {
             "oneOf": [
@@ -8593,6 +8607,20 @@
             ],
             "description": "When it ended."
           },
+          "copy_artifact_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The decrypted copy's artifact, once imported."
+          },
+          "copy_import_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The import of the decrypted copy kept beside an encrypted original,\nonce queued."
+          },
           "created_at": {
             "type": "string",
             "description": "When it was asked for."
@@ -8601,6 +8629,13 @@
             "type": "boolean",
             "description": "Whether they asked for an encrypted disc to be decrypted."
           },
+          "decryption": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The library and tool that decrypted it, when anything was decrypted."
+          },
           "drive_id": {
             "type": "string",
             "description": "The drive."
@@ -8608,6 +8643,13 @@
           "drive_name": {
             "type": "string",
             "description": "What the drive is called."
+          },
+          "encryption": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the worker found on the disc: `none`, `css`, `aacs` or\n`unknown`. Absent until it has read the disc."
           },
           "engine": {
             "type": [

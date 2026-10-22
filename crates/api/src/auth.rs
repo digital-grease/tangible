@@ -339,7 +339,7 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
     ("POST", "/api/v1/rips/{rip_id}/cancel", Signed(Import)),
     ("POST", "/api/v1/workers/{worker_id}/rip-claims", Worker),
     ("POST", "/api/v1/rips/{rip_id}/events", Worker),
-    ("PUT", "/api/v1/rips/{rip_id}/files/{name}", Worker),
+    ("PUT", "/api/v1/rips/{rip_id}/files/{*name}", Worker),
     ("POST", "/api/v1/rips/{rip_id}/complete", Worker),
     // Diagnostics describe the machine and its configuration.
     ("GET", "/api/v1/diagnostics", Signed(Diagnose)),

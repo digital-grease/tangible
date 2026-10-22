@@ -159,6 +159,8 @@ impl Server {
                     source_kind: "upload".to_owned(),
                     source_filename: Some("disc.iso".to_owned()),
                     source_reference: None,
+                    physical_dump: None,
+                    lineage: None,
                     limits: IngestLimits {
                         max_bytes: None,
                         fsync: false,
@@ -215,6 +217,8 @@ impl Server {
                     source_kind: "upload".to_owned(),
                     source_filename: Some("disc.cue".to_owned()),
                     source_reference: None,
+                    physical_dump: None,
+                    lineage: None,
                     limits: IngestLimits {
                         max_bytes: None,
                         fsync: false,

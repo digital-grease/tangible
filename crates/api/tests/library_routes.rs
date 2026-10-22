@@ -100,6 +100,8 @@ async fn harness_with(sets: Vec<Vec<(String, Vec<u8>)>>) -> Harness {
                     source_kind: "upload".to_owned(),
                     source_filename: Some(name),
                     source_reference: None,
+                    physical_dump: None,
+                    lineage: None,
                     limits: IngestLimits {
                         max_bytes: None,
                         fsync: false,

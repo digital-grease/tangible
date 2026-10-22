@@ -17,7 +17,11 @@
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::str::FromStr;
-use tangible_domain::rip::{DecryptionRefusal, check_decryption};
+use tangible_domain::ArtifactId;
+use tangible_domain::manifest::{
+    DecryptionRecord, DumpDrive, DumpReadErrors, Lineage, PhysicalDump, ToolRef,
+};
+use tangible_domain::rip::{DECRYPTED_PREFIX, DecryptionRefusal, check_decryption, copy_lineage};
 use tangible_domain::{DriveId, ImportJobId, RipJobId, RipOriginal, RipState, WorkerId};
 use time::OffsetDateTime;
 
@@ -46,6 +50,17 @@ pub struct RipRecord {
     pub import_job_id: Option<ImportJobId>,
     /// The artifact the import produced, once it has.
     pub artifact_id: Option<uuid::Uuid>,
+    /// Where a decrypted copy beside an encrypted original is sent, and its
+    /// import's id once queued. Only for a rip that may make one.
+    pub copy_staging_id: Option<ImportJobId>,
+    /// The decrypted copy's import, once queued.
+    pub copy_import_job_id: Option<ImportJobId>,
+    /// The decrypted copy's artifact, once imported.
+    pub copy_artifact_id: Option<uuid::Uuid>,
+    /// What the worker found: `none`, `css`, `aacs` or `unknown`.
+    pub encryption: Option<String>,
+    /// The library and tool it decrypted with, when it did.
+    pub decryption: Option<Value>,
     /// What the worker found in the drive.
     pub medium: Option<Value>,
     /// The tool that read it.
@@ -125,8 +140,19 @@ pub enum RipResult<'a> {
         medium: Option<&'a Value>,
         /// Sectors that could not be read, or needed retries.
         read_errors: Option<&'a Value>,
-        /// The files that make up the image, which must all have arrived.
+        /// The files that make up the original, which must all have
+        /// arrived.
         outputs: &'a [String],
+        /// The decrypted copy's files, with their `decrypted/` prefix, when
+        /// one was sent beside an encrypted original.
+        copy_outputs: &'a [String],
+        /// What the worker found: `none`, `css`, `aacs` or `unknown`.
+        encryption: &'a str,
+        /// The library and tool it decrypted with, when it did.
+        decryption: Option<&'a DecryptionRecord>,
+        /// Whether the original itself is decrypted: a `VIDEO_TS` tree kept
+        /// as the original.
+        decrypted_original: bool,
     },
     /// Nothing was read: no disc, or one this worker will not rip.
     Refused {
@@ -183,10 +209,12 @@ pub struct RipEventRecord {
 const RIP_COLUMNS: &str = "r.id, r.drive_id, d.configured_name AS drive_name, r.state, \
      r.requested_by, r.decrypt, r.keep, r.staging_id, r.import_job_id, i.artifact_id, r.medium_json, r.engine, \
      r.engine_version, r.read_errors_json, r.outputs_json, r.bytes_received, r.error_code, \
-     r.error_detail, r.created_at, r.started_at, r.completed_at";
+     r.error_detail, r.created_at, r.started_at, r.completed_at, r.copy_staging_id, \
+     r.copy_import_job_id, c.artifact_id AS copy_artifact_id, r.encryption, r.decryption_json";
 
 const RIP_FROM: &str = "rip_jobs r JOIN drives d ON d.id = r.drive_id \
-     LEFT JOIN import_jobs i ON i.id = r.import_job_id";
+     LEFT JOIN import_jobs i ON i.id = r.import_job_id \
+     LEFT JOIN import_jobs c ON c.id = r.copy_import_job_id";
 
 fn parse<T: FromStr>(column: &'static str, value: String) -> Result<T, DbError> {
     T::from_str(&value).map_err(|_| DbError::Enum { column, value })
@@ -212,6 +240,17 @@ fn rip_from_row(row: &sqlx::postgres::PgRow) -> Result<RipRecord, DbError> {
             .map_err(get)?
             .map(ImportJobId::from_uuid),
         artifact_id: row.try_get("artifact_id").map_err(get)?,
+        copy_staging_id: row
+            .try_get::<Option<uuid::Uuid>, _>("copy_staging_id")
+            .map_err(get)?
+            .map(ImportJobId::from_uuid),
+        copy_import_job_id: row
+            .try_get::<Option<uuid::Uuid>, _>("copy_import_job_id")
+            .map_err(get)?
+            .map(ImportJobId::from_uuid),
+        copy_artifact_id: row.try_get("copy_artifact_id").map_err(get)?,
+        encryption: row.try_get("encryption").map_err(get)?,
+        decryption: row.try_get("decryption_json").map_err(get)?,
         medium: row.try_get("medium_json").map_err(get)?,
         engine: row.try_get("engine").map_err(get)?,
         engine_version: row.try_get("engine_version").map_err(get)?,
@@ -359,8 +398,9 @@ pub async fn request_rip(
 
     let id = RipJobId::generate();
     let inserted = sqlx::query(
-        "INSERT INTO rip_jobs (id, drive_id, requested_by, staging_id, decrypt, keep)
-         VALUES ($1, $2, $3, $4, $5, $6)
+        "INSERT INTO rip_jobs (id, drive_id, requested_by, staging_id, decrypt, keep,
+                               copy_staging_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (drive_id) WHERE state IN ('queued', 'reading', 'uploading') DO NOTHING",
     )
     .bind(id.as_uuid())
@@ -369,6 +409,11 @@ pub async fn request_rip(
     .bind(ImportJobId::generate().as_uuid())
     .bind(options.decrypt)
     .bind(options.decrypt.then(|| options.keep.as_str()))
+    // Chosen now, so the worker's uploads of a copy have somewhere to go.
+    .bind(
+        (options.decrypt && options.keep == RipOriginal::EncryptedOriginal)
+            .then(|| *ImportJobId::generate().as_uuid()),
+    )
     .execute(&mut *tx)
     .await
     .map_err(DbError::Query)?;
@@ -856,6 +901,10 @@ pub async fn complete_rip(
             medium,
             read_errors,
             outputs,
+            copy_outputs,
+            encryption,
+            decryption,
+            decrypted_original,
         } => {
             queue_import(
                 &mut tx,
@@ -867,6 +916,10 @@ pub async fn complete_rip(
                     medium: *medium,
                     read_errors: *read_errors,
                     outputs,
+                    copy_outputs,
+                    encryption,
+                    decryption: *decryption,
+                    decrypted_original: *decrypted_original,
                 },
             )
             .await?
@@ -918,11 +971,93 @@ struct ReadReport<'a> {
     medium: Option<&'a Value>,
     read_errors: Option<&'a Value>,
     outputs: &'a [String],
+    copy_outputs: &'a [String],
+    encryption: &'a str,
+    decryption: Option<&'a DecryptionRecord>,
+    decrypted_original: bool,
+}
+
+/// The original's length, when the files the worker names are exactly the
+/// files that arrived, and a copy is named only where there is somewhere to
+/// keep one.
+fn original_bytes(report: &ReadReport<'_>, copy_allowed: bool, received: &Value) -> Option<i64> {
+    if report.outputs.is_empty() || (!report.copy_outputs.is_empty() && !copy_allowed) {
+        return None;
+    }
+    let mut named: Vec<&str> = report
+        .outputs
+        .iter()
+        .chain(report.copy_outputs)
+        .map(String::as_str)
+        .collect();
+    named.sort_unstable();
+    named.dedup();
+    let mut arrived: Vec<&str> = received
+        .as_object()
+        .map(|files| files.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+    arrived.sort_unstable();
+    (named == arrived).then(|| {
+        report
+            .outputs
+            .iter()
+            .filter_map(|name| received[name.as_str()]["bytes"].as_i64())
+            .sum()
+    })
+}
+
+/// The physical dump record of a rip's original: decrypted only when the
+/// original itself is a decrypted tree.
+fn original_dump(report: &ReadReport<'_>, id: RipJobId, drive: DumpDrive) -> PhysicalDump {
+    PhysicalDump {
+        rip_id: id.to_string(),
+        drive: Some(drive),
+        engine: ToolRef {
+            name: report.engine.to_owned(),
+            version: report.engine_version.to_owned(),
+        },
+        read_errors: report
+            .read_errors
+            .and_then(|value| serde_json::from_value::<DumpReadErrors>(value.clone()).ok()),
+        encryption: report.encryption.to_owned(),
+        decrypted_at_acquisition: report.decrypted_original,
+        decryption: report
+            .decrypted_original
+            .then(|| report.decryption.cloned())
+            .flatten(),
+    }
+}
+
+/// The drive a rip read, as it described itself.
+async fn dump_drive(
+    tx: &mut Transaction<'_, Postgres>,
+    id: RipJobId,
+) -> Result<DumpDrive, DbError> {
+    let row = sqlx::query(
+        "SELECT d.vendor, d.model, d.firmware, d.connection
+         FROM rip_jobs r JOIN drives d ON d.id = r.drive_id WHERE r.id = $1",
+    )
+    .bind(id.as_uuid())
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(DbError::Query)?;
+    let get = DbError::Query;
+    Ok(DumpDrive {
+        vendor: row.try_get("vendor").map_err(get)?,
+        model: row.try_get("model").map_err(get)?,
+        firmware: row.try_get("firmware").map_err(get)?,
+        connection: row.try_get("connection").map_err(get)?,
+    })
 }
 
 /// Queue the import of what a rip read, and move it to registering. Returns
 /// false, changing nothing, when the files the worker names are not exactly
-/// the files that arrived.
+/// the files that arrived, or name a copy the rip has nowhere to keep.
+///
+/// The import's descriptor carries the physical dump record its manifest
+/// will hold. A decrypted copy is not imported yet: it becomes a derivative
+/// of the original, so it waits until the original is an artifact
+/// ([`settle_rips`]).
 async fn queue_import(
     tx: &mut Transaction<'_, Postgres>,
     worker_id: WorkerId,
@@ -930,7 +1065,7 @@ async fn queue_import(
     report: &ReadReport<'_>,
 ) -> Result<bool, DbError> {
     let row = sqlx::query(
-        "SELECT staging_id, requested_by, outputs_json, bytes_received
+        "SELECT staging_id, copy_staging_id, requested_by, outputs_json
          FROM rip_jobs WHERE id = $1",
     )
     .bind(id.as_uuid())
@@ -939,26 +1074,19 @@ async fn queue_import(
     .map_err(DbError::Query)?;
     let get = DbError::Query;
     let staging_id: uuid::Uuid = row.try_get("staging_id").map_err(get)?;
+    let copy_staging_id: Option<uuid::Uuid> = row.try_get("copy_staging_id").map_err(get)?;
     let requested_by: String = row.try_get("requested_by").map_err(get)?;
     let received: Value = row.try_get("outputs_json").map_err(get)?;
-    let bytes: i64 = row.try_get("bytes_received").map_err(get)?;
 
-    let mut named: Vec<&str> = report.outputs.iter().map(String::as_str).collect();
-    named.sort_unstable();
-    named.dedup();
-    let mut arrived: Vec<&str> = received
-        .as_object()
-        .map(|files| files.keys().map(String::as_str).collect())
-        .unwrap_or_default();
-    arrived.sort_unstable();
-    if named.is_empty() || named != arrived {
+    let Some(original_bytes) = original_bytes(report, copy_staging_id.is_some(), &received) else {
         return Ok(false);
-    }
-
+    };
+    let dump = original_dump(report, id, dump_drive(tx, id).await?);
     let descriptor = serde_json::json!({
         "kind": "physical_drive",
         "rip_id": id.to_string(),
         "reference": format!("rip {id}"),
+        "physical_dump": dump,
     });
     sqlx::query(
         "INSERT INTO import_jobs
@@ -968,7 +1096,7 @@ async fn queue_import(
     )
     .bind(staging_id)
     .bind(&descriptor)
-    .bind(bytes)
+    .bind(original_bytes)
     .bind(&requested_by)
     .execute(&mut **tx)
     .await
@@ -977,7 +1105,7 @@ async fn queue_import(
         "UPDATE rip_jobs
          SET state = 'registering', import_job_id = staging_id, engine = $2,
              engine_version = $3, medium_json = COALESCE($4, medium_json),
-             read_errors_json = $5
+             read_errors_json = $5, encryption = $6, decryption_json = $7
          WHERE id = $1",
     )
     .bind(id.as_uuid())
@@ -985,6 +1113,17 @@ async fn queue_import(
     .bind(report.engine_version)
     .bind(report.medium)
     .bind(report.read_errors)
+    .bind(report.encryption)
+    .bind(
+        report
+            .decryption
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|error| DbError::Enum {
+                column: "rip_jobs.decryption_json",
+                value: error.to_string(),
+            })?,
+    )
     .execute(&mut **tx)
     .await
     .map_err(DbError::Query)?;
@@ -995,7 +1134,13 @@ async fn queue_import(
         "rip.read",
         id,
         "success",
-        serde_json::json!({ "engine": report.engine, "import_id": staging_id.to_string() }),
+        serde_json::json!({
+            "engine": report.engine,
+            "import_id": staging_id.to_string(),
+            "encryption": report.encryption,
+            "decrypted": report.decryption.is_some(),
+            "decrypted_copy": !report.copy_outputs.is_empty(),
+        }),
     )
     .await?;
     Ok(true)
@@ -1041,61 +1186,291 @@ async fn close(
     .await
 }
 
-/// Move rips whose import has ended: complete when the import completed,
-/// failed when it failed for good or was canceled. An import that will be
-/// retried is waited for. Returns the rips that moved.
+/// Whether a rip's uploads include a decrypted copy, as SQL over `r`.
+const HAS_COPY: &str =
+    "EXISTS (SELECT 1 FROM jsonb_object_keys(r.outputs_json) AS k WHERE k LIKE 'decrypted/%')";
+
+/// Move rips whose imports have ended. Returns the rips that moved.
+///
+/// - The original's import completed and a decrypted copy was sent: the
+///   copy's import is queued, as a derivative of the artifact the original
+///   became.
+/// - Every import completed: the rip is complete, and a copy's lineage is
+///   recorded as a derivation, linked to the original's discs.
+/// - An import failed for good or was canceled: the rip failed. A retrying
+///   import is waited for.
 ///
 /// # Errors
 ///
 /// [`DbError::Query`] on a database failure.
 pub async fn settle_rips(pool: &PgPool) -> Result<Vec<RipJobId>, DbError> {
     let mut tx = pool.begin().await.map_err(DbError::Query)?;
-    let completed: Vec<uuid::Uuid> = sqlx::query_scalar(
-        "UPDATE rip_jobs r SET state = 'complete', completed_at = now()
-         FROM import_jobs i
-         WHERE i.id = r.import_job_id AND r.state = 'registering' AND i.state = 'complete'
-         RETURNING r.id",
-    )
-    .fetch_all(&mut *tx)
-    .await
-    .map_err(DbError::Query)?;
+    let mut moved = queue_copies(&mut tx).await?;
+    moved.extend(complete_rips(&mut tx).await?);
+
     let failed: Vec<uuid::Uuid> = sqlx::query_scalar(
         "UPDATE rip_jobs r
          SET state = 'failed', error_code = 'IMPORT_FAILED',
-             error_detail = 'the import of what was read ended as ' || i.state
-                 || COALESCE(' (' || i.error_code || ')', ''),
+             error_detail = CASE WHEN f.copy_state IN ('failed_terminal', 'canceled', 'quarantined')
+               THEN 'the original is in the library, but the import of its decrypted copy \
+                     ended as ' || f.copy_state || COALESCE(' (' || f.copy_code || ')', '')
+               ELSE 'the import of what was read ended as ' || f.state
+                 || COALESCE(' (' || f.code || ')', '')
+             END,
              completed_at = now()
-         FROM import_jobs i
-         WHERE i.id = r.import_job_id AND r.state = 'registering'
-           AND i.state IN ('failed_terminal', 'canceled', 'quarantined')
+         FROM (SELECT r2.id, i.state, i.error_code AS code, c.state AS copy_state,
+                      c.error_code AS copy_code
+               FROM rip_jobs r2
+               JOIN import_jobs i ON i.id = r2.import_job_id
+               LEFT JOIN import_jobs c ON c.id = r2.copy_import_job_id
+               WHERE r2.state = 'registering'
+                 AND (i.state IN ('failed_terminal', 'canceled', 'quarantined')
+                      OR c.state IN ('failed_terminal', 'canceled', 'quarantined'))) AS f
+         WHERE r.id = f.id
          RETURNING r.id",
     )
     .fetch_all(&mut *tx)
     .await
     .map_err(DbError::Query)?;
-    for (ids, action, outcome) in [
-        (&completed, "rip.completed", "success"),
-        (&failed, "rip.import_failed", "failure"),
-    ] {
-        for id in ids {
-            audit(
-                &mut tx,
-                "system",
-                "import-runner",
-                action,
-                RipJobId::from_uuid(*id),
-                outcome,
-                serde_json::json!({}),
-            )
-            .await?;
-        }
+    for id in &failed {
+        audit(
+            &mut tx,
+            "system",
+            "import-runner",
+            "rip.import_failed",
+            RipJobId::from_uuid(*id),
+            "failure",
+            serde_json::json!({}),
+        )
+        .await?;
     }
     tx.commit().await.map_err(DbError::Query)?;
-    Ok(completed
-        .into_iter()
-        .chain(failed)
-        .map(RipJobId::from_uuid)
-        .collect())
+    moved.extend(failed.into_iter().map(RipJobId::from_uuid));
+    Ok(moved)
+}
+
+/// Queue the import of every decrypted copy whose original is now an
+/// artifact.
+async fn queue_copies(tx: &mut Transaction<'_, Postgres>) -> Result<Vec<RipJobId>, DbError> {
+    let rows = sqlx::query(&format!(
+        "SELECT r.id, r.copy_staging_id, r.requested_by, r.decryption_json, r.outputs_json,
+                i.artifact_id, i.source_descriptor_json
+         FROM rip_jobs r JOIN import_jobs i ON i.id = r.import_job_id
+         WHERE r.state = 'registering' AND i.state = 'complete'
+           AND r.copy_staging_id IS NOT NULL AND r.copy_import_job_id IS NULL AND {HAS_COPY}
+         FOR UPDATE OF r"
+    ))
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(DbError::Query)?;
+
+    let mut queued = Vec::new();
+    for row in rows {
+        let get = DbError::Query;
+        let id = RipJobId::from_uuid(row.try_get("id").map_err(get)?);
+        let copy_staging_id: uuid::Uuid = row.try_get("copy_staging_id").map_err(get)?;
+        let requested_by: String = row.try_get("requested_by").map_err(get)?;
+        let decryption: Option<Value> = row.try_get("decryption_json").map_err(get)?;
+        let outputs: Value = row.try_get("outputs_json").map_err(get)?;
+        let parent: Option<uuid::Uuid> = row.try_get("artifact_id").map_err(get)?;
+        let original: Value = row.try_get("source_descriptor_json").map_err(get)?;
+
+        let decryption =
+            decryption.and_then(|value| serde_json::from_value::<DecryptionRecord>(value).ok());
+        let (Some(decryption), Some(parent)) = (decryption, parent) else {
+            // The completion route requires both; a rip without them cannot
+            // say what its copy is, so it is not imported as one.
+            fail_copy(tx, id, "the rip did not record how its copy was decrypted").await?;
+            queued.push(id);
+            continue;
+        };
+        let lineage: Lineage = copy_lineage(ArtifactId::from_uuid(parent), id, &decryption);
+        let dump = serde_json::from_value::<PhysicalDump>(original["physical_dump"].clone())
+            .ok()
+            .map(|dump| PhysicalDump {
+                engine: ToolRef {
+                    name: decryption.tool.clone(),
+                    version: decryption.tool_version.clone(),
+                },
+                read_errors: None,
+                decrypted_at_acquisition: true,
+                decryption: Some(decryption.clone()),
+                ..dump
+            });
+        let bytes: i64 = outputs
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(name, _)| name.starts_with(DECRYPTED_PREFIX))
+            .filter_map(|(_, file)| file["bytes"].as_i64())
+            .sum();
+        let descriptor = serde_json::json!({
+            "kind": "physical_drive",
+            "rip_id": id.to_string(),
+            "reference": format!("rip {id}, decrypted copy"),
+            "physical_dump": dump,
+            "lineage": lineage,
+        });
+        sqlx::query(
+            "INSERT INTO import_jobs
+                 (id, source_kind, source_descriptor_json, state, bytes_expected,
+                  bytes_received, created_by)
+             VALUES ($1, 'physical_drive', $2, 'staged', $3, $3, $4)",
+        )
+        .bind(copy_staging_id)
+        .bind(&descriptor)
+        .bind(bytes)
+        .bind(&requested_by)
+        .execute(&mut **tx)
+        .await
+        .map_err(DbError::Query)?;
+        sqlx::query("UPDATE rip_jobs SET copy_import_job_id = copy_staging_id WHERE id = $1")
+            .bind(id.as_uuid())
+            .execute(&mut **tx)
+            .await
+            .map_err(DbError::Query)?;
+        audit(
+            tx,
+            "system",
+            "import-runner",
+            "rip.copy_queued",
+            id,
+            "success",
+            serde_json::json!({
+                "import_id": copy_staging_id.to_string(),
+                "parent_artifact_id": parent.to_string(),
+            }),
+        )
+        .await?;
+        queued.push(id);
+    }
+    Ok(queued)
+}
+
+/// Close a rip whose decrypted copy cannot be imported.
+async fn fail_copy(
+    tx: &mut Transaction<'_, Postgres>,
+    id: RipJobId,
+    detail: &str,
+) -> Result<(), DbError> {
+    sqlx::query(
+        "UPDATE rip_jobs SET state = 'failed', error_code = 'COPY_UNDESCRIBED',
+             error_detail = $2, completed_at = now()
+         WHERE id = $1",
+    )
+    .bind(id.as_uuid())
+    .bind(format!("the original is in the library, but {detail}"))
+    .execute(&mut **tx)
+    .await
+    .map_err(DbError::Query)?;
+    audit(
+        tx,
+        "system",
+        "import-runner",
+        "rip.import_failed",
+        id,
+        "failure",
+        serde_json::json!({ "error_code": "COPY_UNDESCRIBED" }),
+    )
+    .await
+}
+
+/// Complete every rip whose imports have all completed, recording a copy's
+/// lineage.
+async fn complete_rips(tx: &mut Transaction<'_, Postgres>) -> Result<Vec<RipJobId>, DbError> {
+    let rows = sqlx::query(&format!(
+        "SELECT r.id, r.started_at, i.artifact_id AS parent, c.artifact_id AS child,
+                c.source_descriptor_json -> 'lineage' AS lineage
+         FROM rip_jobs r
+         JOIN import_jobs i ON i.id = r.import_job_id
+         LEFT JOIN import_jobs c ON c.id = r.copy_import_job_id
+         WHERE r.state = 'registering' AND i.state = 'complete'
+           AND ((NOT {HAS_COPY}) OR c.state = 'complete')
+         FOR UPDATE OF r"
+    ))
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(DbError::Query)?;
+
+    let mut completed = Vec::new();
+    for row in rows {
+        let get = DbError::Query;
+        let id = RipJobId::from_uuid(row.try_get("id").map_err(get)?);
+        let started_at: Option<OffsetDateTime> = row.try_get("started_at").map_err(get)?;
+        let parent: Option<uuid::Uuid> = row.try_get("parent").map_err(get)?;
+        let child: Option<uuid::Uuid> = row.try_get("child").map_err(get)?;
+        let lineage: Option<Value> = row.try_get("lineage").map_err(get)?;
+        if let (Some(parent), Some(child), Some(lineage)) = (
+            parent,
+            child,
+            lineage.and_then(|value| serde_json::from_value::<Lineage>(value).ok()),
+        ) {
+            record_copy_lineage(tx, parent, child, &lineage, started_at).await?;
+        }
+        sqlx::query("UPDATE rip_jobs SET state = 'complete', completed_at = now() WHERE id = $1")
+            .bind(id.as_uuid())
+            .execute(&mut **tx)
+            .await
+            .map_err(DbError::Query)?;
+        audit(
+            tx,
+            "system",
+            "import-runner",
+            "rip.completed",
+            id,
+            "success",
+            serde_json::json!({ "decrypted_copy": child.map(|child| child.to_string()) }),
+        )
+        .await?;
+        completed.push(id);
+    }
+    Ok(completed)
+}
+
+/// The derivation row for a rip's decrypted copy, and the copy linked to
+/// every disc its original is linked to, as a derivation job records its
+/// derivative.
+async fn record_copy_lineage(
+    tx: &mut Transaction<'_, Postgres>,
+    parent: uuid::Uuid,
+    child: uuid::Uuid,
+    lineage: &Lineage,
+    started_at: Option<OffsetDateTime>,
+) -> Result<(), DbError> {
+    sqlx::query(
+        "INSERT INTO derivations
+             (id, parent_artifact_id, child_artifact_id, transformation, tool_name,
+              tool_version, normalized_options_json, command_fingerprint, loss_character,
+              started_at, completed_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, now()), now())",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(parent)
+    .bind(child)
+    .bind(&lineage.transformation)
+    .bind(&lineage.tool.name)
+    .bind(&lineage.tool.version)
+    .bind(serde_json::to_value(&lineage.normalized_options).unwrap_or_default())
+    .bind(&lineage.command_fingerprint)
+    .bind(lineage.loss_character.as_str())
+    .bind(started_at)
+    .execute(&mut **tx)
+    .await
+    .map_err(DbError::Query)?;
+    sqlx::query(
+        "INSERT INTO artifact_disc_links
+             (artifact_id, disc_id, relationship, confidence, evidence_json)
+         SELECT $1, disc_id, 'representation_of', confidence,
+                jsonb_build_object('derived_from', $2::text)
+         FROM artifact_disc_links WHERE artifact_id = $2
+         ON CONFLICT (artifact_id, disc_id) DO NOTHING",
+    )
+    .bind(child)
+    .bind(parent)
+    .execute(&mut **tx)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(())
 }
 
 async fn audit(

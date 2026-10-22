@@ -458,6 +458,7 @@ fn child_manifest(input: &ChildManifest<'_>) -> ArtifactManifest {
             source_filename: Some(input.output_name.as_str().to_owned()),
             acquired_at: Some(input.completed),
             operator_note: None,
+            physical_dump: None,
         },
         classification: Classification {
             artifact_kind: ArtifactKind::SingleFileImage,

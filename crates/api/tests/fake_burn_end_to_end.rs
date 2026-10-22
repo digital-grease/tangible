@@ -202,6 +202,8 @@ impl World {
                     source_kind: "upload".to_owned(),
                     source_filename: Some("disc.iso".to_owned()),
                     source_reference: Some("upload:end-to-end".to_owned()),
+                    physical_dump: None,
+                    lineage: None,
                     limits: IngestLimits {
                         max_bytes: None,
                         fsync: false,

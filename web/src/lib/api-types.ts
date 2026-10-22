@@ -1136,7 +1136,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/rips/{rip_id}/files/{name}": {
+    "/api/v1/rips/{rip_id}/files/{*name}": {
         parameters: {
             query?: never;
             header?: never;
@@ -3061,6 +3061,16 @@ export interface components {
         };
         /** @description How a rip ended, as the worker reports it. */
         RipCompletion: {
+            /**
+             * @description For `read`, when anything was decrypted: the library and tool, never
+             *     a key. Only for a rip asked to decrypt.
+             */
+            decryption?: Record<string, never> | null;
+            /**
+             * @description For `read`: the disc's encryption, `none` (the default), `css`,
+             *     `aacs` or `unknown`.
+             */
+            encryption?: string | null;
             /** @description For `read`: the tool that read the disc, such as `cdrdao`. */
             engine?: string | null;
             /** @description For `read`: its version. */
@@ -3076,7 +3086,10 @@ export interface components {
             medium?: Record<string, never> | null;
             /** @description `read`, `refused` or `failed`. */
             outcome: string;
-            /** @description For `read`: the files that make up the image, all already sent. */
+            /**
+             * @description For `read`: every file sent, all already received: the original's,
+             *     and a decrypted copy's under `decrypted/`.
+             */
             outputs?: string[];
             read_errors?: null | components["schemas"]["ReadErrors"];
         };
@@ -3169,14 +3182,28 @@ export interface components {
             can_cancel: boolean;
             /** @description When it ended. */
             completed_at?: string | null;
+            /** @description The decrypted copy's artifact, once imported. */
+            copy_artifact_id?: string | null;
+            /**
+             * @description The import of the decrypted copy kept beside an encrypted original,
+             *     once queued.
+             */
+            copy_import_id?: string | null;
             /** @description When it was asked for. */
             created_at: string;
             /** @description Whether they asked for an encrypted disc to be decrypted. */
             decrypt: boolean;
+            /** @description The library and tool that decrypted it, when anything was decrypted. */
+            decryption?: Record<string, never> | null;
             /** @description The drive. */
             drive_id: string;
             /** @description What the drive is called. */
             drive_name: string;
+            /**
+             * @description What the worker found on the disc: `none`, `css`, `aacs` or
+             *     `unknown`. Absent until it has read the disc.
+             */
+            encryption?: string | null;
             /** @description The tool that read the disc, such as `cdrdao`. */
             engine?: string | null;
             /** @description Its version. */
@@ -5833,7 +5860,7 @@ export interface operations {
             path: {
                 /** @description Rip identifier */
                 rip_id: string;
-                /** @description The file, such as disc.bin */
+                /** @description The file, such as disc.bin, VIDEO_TS/VTS_01_1.VOB, or a decrypted copy's decrypted/VIDEO_TS/VTS_01_1.VOB */
                 name: string;
             };
             cookie?: never;

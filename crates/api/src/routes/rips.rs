@@ -28,12 +28,13 @@ use tangible_burn::MediumInfo;
 use tangible_db::rips::{
     CancelOutcome, ReceivedFile, RequestOutcome, RipEvent, RipEventRecord, RipOptions, RipRecord,
     RipResult, WorkerOutcome, cancel_rip, check_upload, claim_rip, complete_rip, drive_can_decrypt,
-    drive_rip_engines, get_rip, list_rip_events, list_rips, record_rip_events, record_upload,
-    request_rip,
+    drive_rip_engines, get_rip, get_rip_for_worker, list_rip_events, list_rips, record_rip_events,
+    record_upload, request_rip,
 };
+use tangible_domain::manifest::{DUMP_ENCRYPTIONS, DecryptionRecord};
 use tangible_domain::rip::{
-    DecryptionRefusal, MAX_IMAGE_BYTES, RIP_OUTPUTS, check_decryption, is_complete_output_set,
-    is_rip_output, max_output_bytes,
+    DECRYPTED_PREFIX, DecryptionRefusal, MAX_IMAGE_BYTES, OriginalKind, RIP_OUTPUTS, VIDEO_TS_DIR,
+    check_decryption, check_output_set, max_output_bytes,
 };
 use tangible_domain::{DriveId, LogicalPath, RipJobId, RipOriginal, RipState};
 use time::OffsetDateTime;
@@ -209,6 +210,17 @@ pub struct RipView {
     pub import_id: Option<String>,
     /// The artifact it became, once imported.
     pub artifact_id: Option<String>,
+    /// What the worker found on the disc: `none`, `css`, `aacs` or
+    /// `unknown`. Absent until it has read the disc.
+    pub encryption: Option<String>,
+    /// The library and tool that decrypted it, when anything was decrypted.
+    #[schema(value_type = Option<Object>)]
+    pub decryption: Option<serde_json::Value>,
+    /// The import of the decrypted copy kept beside an encrypted original,
+    /// once queued.
+    pub copy_import_id: Option<String>,
+    /// The decrypted copy's artifact, once imported.
+    pub copy_artifact_id: Option<String>,
     /// Why it did not finish, when it did not.
     pub error_code: Option<String>,
     /// More about that.
@@ -258,6 +270,10 @@ impl From<RipRecord> for RipView {
             bytes_received: record.bytes_received,
             import_id: record.import_job_id.map(|id| id.to_string()),
             artifact_id: record.artifact_id.map(|id| id.to_string()),
+            encryption: record.encryption,
+            decryption: record.decryption,
+            copy_import_id: record.copy_import_job_id.map(|id| id.to_string()),
+            copy_artifact_id: record.copy_artifact_id.map(|id| id.to_string()),
             error_code: record.error_code,
             error_detail: record.error_detail,
             created_at: rfc3339(record.created_at),
@@ -432,9 +448,17 @@ pub struct RipCompletion {
     pub medium: Option<MediumInfo>,
     /// For `read`: sectors that gave trouble.
     pub read_errors: Option<ReadErrors>,
-    /// For `read`: the files that make up the image, all already sent.
+    /// For `read`: every file sent, all already received: the original's,
+    /// and a decrypted copy's under `decrypted/`.
     #[serde(default)]
     pub outputs: Vec<String>,
+    /// For `read`: the disc's encryption, `none` (the default), `css`,
+    /// `aacs` or `unknown`.
+    pub encryption: Option<String>,
+    /// For `read`, when anything was decrypted: the library and tool, never
+    /// a key. Only for a rip asked to decrypt.
+    #[schema(value_type = Option<Object>)]
+    pub decryption: Option<DecryptionRecord>,
     /// For `refused` and `failed`: why, as a stable code such as
     /// `NO_MEDIUM`.
     pub error_code: Option<String>,
@@ -712,10 +736,13 @@ pub async fn cancel_one_rip(
 
 /// Remove whatever a rip that will not be imported had sent.
 async fn discard_staged(state: &ApiState, record: &RipRecord) {
-    if let Some(imports) = state.imports()
-        && let Err(error) = imports.pipeline.discard(record.staging_id).await
-    {
-        tracing::warn!(rip_id = %record.id, error = ?error, "could not discard a rip's files");
+    let Some(imports) = state.imports() else {
+        return;
+    };
+    for area in std::iter::once(record.staging_id).chain(record.copy_staging_id) {
+        if let Err(error) = imports.pipeline.discard(area).await {
+            tracing::warn!(rip_id = %record.id, error = ?error, "could not discard a rip's files");
+        }
     }
 }
 
@@ -858,7 +885,7 @@ pub async fn submit_rip_events(
 /// that do not match what the worker said.
 #[utoipa::path(
     put,
-    path = "/api/v1/rips/{rip_id}/files/{name}",
+    path = "/api/v1/rips/{rip_id}/files/{*name}",
     tag = "rips",
     description = "Send one file a rip read, as the request body, with its length in \
                    Content-Length and its SHA-256 in X-Content-SHA256. The server \
@@ -866,7 +893,9 @@ pub async fn submit_rip_events(
                    a file again replaces it.",
     params(
         ("rip_id" = String, Path, description = "Rip identifier"),
-        ("name" = String, Path, description = "The file, such as disc.bin"),
+        ("name" = String, Path, description = "The file, such as disc.bin, \
+                                               VIDEO_TS/VTS_01_1.VOB, or a decrypted \
+                                               copy's decrypted/VIDEO_TS/VTS_01_1.VOB"),
     ),
     request_body(content = Vec<u8>, content_type = "application/octet-stream"),
     responses(
@@ -888,7 +917,10 @@ pub async fn upload_rip_file(
     let Some(limit) = max_output_bytes(&name) else {
         return Err(Problem::new(
             ErrorCode::ValidationFailed,
-            format!("a rip sends only {}", RIP_OUTPUTS.join(", ")),
+            format!(
+                "a rip sends only {}, or a decrypted DVD's VIDEO_TS files",
+                RIP_OUTPUTS.join(", ")
+            ),
         ));
     };
     let claimed = headers
@@ -927,11 +959,12 @@ pub async fn upload_rip_file(
         .map_err(database("the rip could not be read"))?
         .map_err(|outcome| worker_refusal(id, outcome))?;
 
-    let logical = LogicalPath::parse(&name)
+    let (staging_id, staged_name) = upload_target(&record, &name)?;
+    let logical = LogicalPath::parse(staged_name)
         .map_err(|_| Problem::new(ErrorCode::ValidationFailed, "not a valid file name"))?;
     let area = imports
         .pipeline
-        .open_area(record.staging_id)
+        .open_area(staging_id)
         .await
         .map_err(|error| {
             tracing::error!(error = ?error, "could not open a rip's staging area");
@@ -981,6 +1014,36 @@ pub async fn upload_rip_file(
     }
 }
 
+/// Where a file a rip sends is staged, and under what name: a decrypted
+/// copy's in the copy's own area without its prefix, everything else in the
+/// rip's. Files of a kind this rip was not asked for are refused before any
+/// byte is stored.
+fn upload_target<'a>(
+    record: &RipRecord,
+    name: &'a str,
+) -> Result<(tangible_domain::ImportJobId, &'a str), Problem> {
+    if let Some(copy_name) = name.strip_prefix(DECRYPTED_PREFIX) {
+        return record
+            .copy_staging_id
+            .map(|area| (area, copy_name))
+            .ok_or_else(|| {
+                Problem::new(
+                    ErrorCode::ValidationFailed,
+                    "this rip was not asked to keep a decrypted copy beside its original",
+                )
+            });
+    }
+    if name.starts_with(VIDEO_TS_DIR)
+        && !(record.decrypt && record.keep == Some(RipOriginal::DecryptedOriginal))
+    {
+        return Err(Problem::new(
+            ErrorCode::ValidationFailed,
+            "this rip was not asked to keep a decrypted original",
+        ));
+    }
+    Ok((record.staging_id, name))
+}
+
 /// Stream a request body into a staged file, hashing it, refusing more than
 /// `length` bytes. Durable before it returns.
 async fn stream_to(
@@ -1020,6 +1083,71 @@ async fn stream_to(
     file.flush().await.map_err(|e| staging(&e))?;
     file.sync_all().await.map_err(|e| staging(&e))?;
     Ok((hex::encode(hasher.finalize()), received))
+}
+
+/// What a `read` completion was found to say.
+struct CheckedRead {
+    original: Vec<String>,
+    copy: Vec<String>,
+    encryption: &'static str,
+    decrypted_original: bool,
+}
+
+/// Check what a worker says it read against what its rip asked for.
+///
+/// The files must be a whole rip of the kind chosen; decryption may be
+/// reported only by a rip asked to decrypt, must be of the encryption found,
+/// and must be reported whenever anything decrypted was sent.
+fn checked_read(rip: &RipRecord, report: &RipCompletion) -> Result<CheckedRead, Problem> {
+    let invalid = |detail: &str| Problem::new(ErrorCode::ValidationFailed, detail.to_owned());
+    let sets = check_output_set(&report.outputs, rip.decrypt, rip.keep)
+        .map_err(|error| invalid(&error.to_string()))?;
+    let encryption = report.encryption.as_deref().unwrap_or("none");
+    let Some(encryption) = DUMP_ENCRYPTIONS.iter().copied().find(|e| *e == encryption) else {
+        return Err(invalid("encryption must be none, css, aacs or unknown"));
+    };
+    let decrypted_original = sets.original == OriginalKind::VideoTs;
+    let decrypted_anything = decrypted_original || !sets.copy_files.is_empty();
+    match &report.decryption {
+        None if decrypted_anything => {
+            return Err(invalid(
+                "decrypted files were sent, so decryption must say how they were decrypted",
+            ));
+        }
+        None => {}
+        Some(_) if !rip.decrypt => {
+            return Err(invalid("this rip was not asked to decrypt"));
+        }
+        Some(_) if !decrypted_anything => {
+            return Err(invalid(
+                "decryption was reported, but nothing decrypted was sent",
+            ));
+        }
+        Some(decryption) => {
+            if decryption.system != encryption {
+                return Err(invalid("decryption.system must be the encryption found"));
+            }
+            for (value, field) in [
+                (&decryption.library, "decryption.library"),
+                (&decryption.library_version, "decryption.library_version"),
+                (&decryption.tool, "decryption.tool"),
+                (&decryption.tool_version, "decryption.tool_version"),
+            ] {
+                checked_token(Some(value), field)?;
+            }
+        }
+    }
+    if decrypted_anything && encryption == "none" {
+        return Err(invalid(
+            "decrypted files were sent from a disc reported as not encrypted",
+        ));
+    }
+    Ok(CheckedRead {
+        original: sets.original_files,
+        copy: sets.copy_files,
+        encryption,
+        decrypted_original,
+    })
 }
 
 /// Report how a rip ended.
@@ -1070,26 +1198,24 @@ pub async fn complete_drive_rip(
         .as_deref()
         .map(|detail| detail.chars().take(MAX_ERROR_DETAIL).collect());
 
+    let read: CheckedRead;
     let result = match report.outcome.as_str() {
         "read" => {
-            if let Some(name) = report.outputs.iter().find(|name| !is_rip_output(name)) {
-                return Err(Problem::new(
-                    ErrorCode::ValidationFailed,
-                    format!("{name} is not a file a rip sends"),
-                ));
-            }
-            if !is_complete_output_set(&report.outputs) {
-                return Err(Problem::new(
-                    ErrorCode::ValidationFailed,
-                    "a rip is either disc.toc and disc.bin, or disc.iso alone",
-                ));
-            }
+            let rip = get_rip_for_worker(state.database().pool(), identity.worker_id, id)
+                .await
+                .map_err(database("the rip could not be read"))?
+                .ok_or_else(|| Problem::not_found("rip", &id.to_string()))?;
+            read = checked_read(&rip, &report)?;
             RipResult::Read {
                 engine: checked_token(report.engine.as_deref(), "engine")?,
                 engine_version: checked_token(report.engine_version.as_deref(), "engine_version")?,
                 medium: medium.as_ref(),
                 read_errors: read_errors.as_ref(),
-                outputs: &report.outputs,
+                outputs: &read.original,
+                copy_outputs: &read.copy,
+                encryption: read.encryption,
+                decryption: report.decryption.as_ref(),
+                decrypted_original: read.decrypted_original,
             }
         }
         "refused" | "failed" => {
@@ -1148,7 +1274,7 @@ pub fn router() -> Router<ApiState> {
             get(list_events_of_rip).post(submit_rip_events),
         )
         .route("/rips/{rip_id}/cancel", post(cancel_one_rip))
-        .route("/rips/{rip_id}/files/{name}", put(upload_rip_file))
+        .route("/rips/{rip_id}/files/{*name}", put(upload_rip_file))
         .route("/rips/{rip_id}/complete", post(complete_drive_rip))
         .route("/workers/{worker_id}/rip-claims", post(claim_drive_rip))
 }

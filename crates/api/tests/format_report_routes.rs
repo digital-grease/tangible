@@ -92,6 +92,8 @@ async fn harness(sets: Vec<Vec<(&str, Vec<u8>)>>, reports: ReportSettings) -> Ha
                     source_kind: "upload".to_owned(),
                     source_filename: Some(set[0].0.to_owned()),
                     source_reference: None,
+                    physical_dump: None,
+                    lineage: None,
                     limits: IngestLimits {
                         max_bytes: None,
                         fsync: false,

@@ -192,6 +192,11 @@ impl ImportRunner {
             source_filename: descriptor_string(&job.source_descriptor, "filename"),
             source_reference: descriptor_string(&job.source_descriptor, "reference"),
             limits: self.settings.limits,
+            // Written by the server when it queued a rip's import; a
+            // descriptor that does not parse is a server bug, and the
+            // manifest then simply lacks the record rather than failing.
+            physical_dump: parsed(&job.source_descriptor, "physical_dump"),
+            lineage: parsed(&job.source_descriptor, "lineage"),
         };
 
         // Bytes first, for sources that have not delivered them yet. An
@@ -430,6 +435,18 @@ impl ImportRunner {
 
 fn lease_seconds(duration: Duration) -> i64 {
     i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
+}
+
+/// A field of a job's descriptor, as the type the server wrote it as.
+fn parsed<T: serde::de::DeserializeOwned>(descriptor: &serde_json::Value, key: &str) -> Option<T> {
+    let value = descriptor.get(key)?;
+    match serde_json::from_value(value.clone()) {
+        Ok(parsed) => Some(parsed),
+        Err(error) => {
+            tracing::error!(%error, key, "an import's descriptor field could not be read");
+            None
+        }
+    }
 }
 
 /// Read a string out of a source descriptor, if it has one.

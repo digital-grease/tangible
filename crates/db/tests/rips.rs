@@ -89,6 +89,10 @@ fn read_report(outputs: &[String]) -> RipResult<'_> {
         medium: None,
         read_errors: None,
         outputs,
+        copy_outputs: &[],
+        encryption: "none",
+        decryption: None,
+        decrypted_original: false,
     }
 }
 

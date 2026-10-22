@@ -18,7 +18,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use tangible_domain::dvd::{SECTOR_BYTES, css_scrambled};
+use tangible_domain::dvd::{MAX_TITLE_SETS, SECTOR_BYTES, css_scrambled};
 
 /// What a video manager's information file begins with.
 pub const VMG_SIGNATURE: &[u8; 12] = b"DVDVIDEO-VMG";
@@ -35,9 +35,6 @@ pub const HEADER_BYTES: usize = 256;
 /// a scrambled disc. The block reader probes the same places.
 pub const SAMPLE_SECTORS: [u64; 4] = [1, 2, 16, 64];
 
-/// The most title sets DVD-Video allows.
-const MAX_TITLE_SETS: u8 = 99;
-
 /// Offset of the number of title sets in `VIDEO_TS.IFO`, big-endian `u16`.
 const VMG_TITLE_SETS: usize = 0x3E;
 
@@ -47,55 +44,7 @@ const VMG_VERSION: usize = 0x20;
 /// Most names listed in one warning.
 const MAX_NAMES_LISTED: usize = 5;
 
-/// One of the files DVD-Video defines.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum DvdFile {
-    /// `VIDEO_TS.IFO`, the video manager.
-    VmgIfo,
-    /// `VIDEO_TS.BUP`, its backup.
-    VmgBup,
-    /// `VIDEO_TS.VOB`, the first-play menu.
-    VmgMenu,
-    /// `VTS_nn_0.IFO`, a title set's information.
-    VtsIfo(u8),
-    /// `VTS_nn_0.BUP`, its backup.
-    VtsBup(u8),
-    /// `VTS_nn_0.VOB`, a title set's menus.
-    VtsMenu(u8),
-    /// `VTS_nn_m.VOB`, `m` from 1 to 9: a title set's video.
-    VtsTitle(u8, u8),
-}
-
-impl DvdFile {
-    /// Classify a file's name, exactly as DVD-Video spells it.
-    #[must_use]
-    pub fn classify(name: &str) -> Option<Self> {
-        match name {
-            "VIDEO_TS.IFO" => return Some(Self::VmgIfo),
-            "VIDEO_TS.BUP" => return Some(Self::VmgBup),
-            "VIDEO_TS.VOB" => return Some(Self::VmgMenu),
-            _ => {}
-        }
-        // VTS_nn_m.EXT, twelve characters.
-        let bytes = name.as_bytes();
-        if bytes.len() != 12 || !name.starts_with("VTS_") || bytes[6] != b'_' || bytes[8] != b'.' {
-            return None;
-        }
-        let digit = |byte: u8| byte.is_ascii_digit().then(|| byte - b'0');
-        let set = digit(bytes[4])? * 10 + digit(bytes[5])?;
-        if !(1..=MAX_TITLE_SETS).contains(&set) {
-            return None;
-        }
-        let part = digit(bytes[7])?;
-        match (&name[9..], part) {
-            ("IFO", 0) => Some(Self::VtsIfo(set)),
-            ("BUP", 0) => Some(Self::VtsBup(set)),
-            ("VOB", 0) => Some(Self::VtsMenu(set)),
-            ("VOB", 1..=9) => Some(Self::VtsTitle(set, part)),
-            _ => None,
-        }
-    }
-}
+pub use tangible_domain::dvd::DvdFile;
 
 /// Where the tree is among the staged files, and what each file is.
 #[derive(Debug, Clone, PartialEq, Eq)]

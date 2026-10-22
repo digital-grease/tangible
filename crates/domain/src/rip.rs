@@ -22,7 +22,15 @@
 //! decides from what is in the drive, or when a restarted worker's rip is
 //! closed.
 
-use crate::enums::RipState;
+use sha2::{Digest as _, Sha256};
+
+use crate::dvd::{DvdFile, MAX_VOB_BYTES};
+use crate::enums::{LossCharacter, RipOriginal, RipState};
+use crate::id::{ArtifactId, RipJobId};
+use crate::manifest::{DecryptionRecord, Extensions, Lineage, ToolRef};
+
+/// The schema a decrypted copy's fingerprint is computed over.
+pub const COPY_FINGERPRINT_SCHEMA: &str = "org.tangible.rip-decryption/v1";
 
 /// A transition the machine does not allow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -58,6 +66,18 @@ pub const MAX_CD_DATA_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 /// The largest disc image: a quad-layer BDXL holds 128 GB.
 pub const MAX_IMAGE_BYTES: u64 = 128 * 1000 * 1000 * 1000;
+
+/// The folder a decrypted DVD's video files are sent in: `VIDEO_TS/` and
+/// one of the names DVD-Video defines, nothing deeper.
+pub const VIDEO_TS_DIR: &str = "VIDEO_TS/";
+
+/// What a decrypted copy's files are sent under when it travels beside an
+/// encrypted original, so the two are never mistaken for one image.
+pub const DECRYPTED_PREFIX: &str = "decrypted/";
+
+/// The largest DVD information file or backup a rip may send. Real ones are
+/// tens or hundreds of kilobytes.
+pub const MAX_IFO_BYTES: u64 = 16 * 1024 * 1024;
 
 impl RipState {
     /// Whether the rip is still going.
@@ -134,31 +154,196 @@ pub fn is_cd_output(name: &str) -> bool {
     CD_OUTPUTS.contains(&name)
 }
 
-/// Whether `name` is one of the files any rip may send.
+/// The DVD-Video file a name sent as part of a `VIDEO_TS` tree is, if it is
+/// one: `VIDEO_TS/` and a name DVD-Video defines, exactly as it spells it.
+#[must_use]
+pub fn video_ts_member(name: &str) -> Option<DvdFile> {
+    name.strip_prefix(VIDEO_TS_DIR).and_then(DvdFile::classify)
+}
+
+/// Whether `name` is one of the files any rip may send: a CD's two files, a
+/// disc image, a decrypted `VIDEO_TS` tree's files, or those under
+/// [`DECRYPTED_PREFIX`].
 #[must_use]
 pub fn is_rip_output(name: &str) -> bool {
     RIP_OUTPUTS.contains(&name)
+        || video_ts_member(name).is_some()
+        || name
+            .strip_prefix(DECRYPTED_PREFIX)
+            .and_then(video_ts_member)
+            .is_some()
 }
 
 /// The largest a file of this name may be, when it is one a rip may send.
 #[must_use]
 pub fn max_output_bytes(name: &str) -> Option<u64> {
     match name {
-        "disc.toc" => Some(MAX_TOC_BYTES),
-        "disc.bin" => Some(MAX_CD_DATA_BYTES),
-        IMAGE_OUTPUT => Some(MAX_IMAGE_BYTES),
-        _ => None,
+        "disc.toc" => return Some(MAX_TOC_BYTES),
+        "disc.bin" => return Some(MAX_CD_DATA_BYTES),
+        IMAGE_OUTPUT => return Some(MAX_IMAGE_BYTES),
+        _ => {}
+    }
+    let member = name.strip_prefix(DECRYPTED_PREFIX).unwrap_or(name);
+    match video_ts_member(member)? {
+        DvdFile::VmgMenu | DvdFile::VtsMenu(_) | DvdFile::VtsTitle(..) => Some(MAX_VOB_BYTES),
+        DvdFile::VmgIfo | DvdFile::VmgBup | DvdFile::VtsIfo(_) | DvdFile::VtsBup(_) => {
+            Some(MAX_IFO_BYTES)
+        }
     }
 }
 
-/// Whether `names` make up one whole rip: a CD's table of contents and data,
-/// or one disc image. Never a mixture, and never a part.
-#[must_use]
-pub fn is_complete_output_set(names: &[String]) -> bool {
+/// What a rip's original is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OriginalKind {
+    /// A CD: `disc.toc` and `disc.bin`.
+    Cd,
+    /// A disc image: `disc.iso`, encrypted or not.
+    Image,
+    /// A decrypted DVD's `VIDEO_TS` tree, kept as the original.
+    VideoTs,
+}
+
+/// The files of a whole rip, split into the original and, beside an
+/// encrypted image, its decrypted copy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputSets {
+    /// What the original is.
+    pub original: OriginalKind,
+    /// Its files, by the names they were sent under.
+    pub original_files: Vec<String>,
+    /// The decrypted copy's files, by the names they were sent under (with
+    /// [`DECRYPTED_PREFIX`]). Empty when there is none.
+    pub copy_files: Vec<String>,
+}
+
+/// Why a set of names is not a whole rip.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum OutputSetError {
+    /// A name no rip sends.
+    #[error("{0} is not a file a rip sends")]
+    Unknown(String),
+    /// Nothing, a part, or a mixture.
+    #[error(
+        "a rip is disc.toc and disc.bin, disc.iso, or a VIDEO_TS tree, never a mixture or a part"
+    )]
+    NotWhole,
+    /// A `VIDEO_TS` tree without its video manager.
+    #[error("a VIDEO_TS tree must include VIDEO_TS/VIDEO_TS.IFO")]
+    NoVideoManager,
+    /// A decrypted tree as the original of a rip that did not choose one.
+    #[error("only a rip asked to keep a decrypted original may send a VIDEO_TS tree as one")]
+    TreeNotChosen,
+    /// A decrypted copy that the rip did not ask for, or without the
+    /// encrypted image it belongs beside.
+    #[error(
+        "a decrypted copy is sent only beside disc.iso, by a rip asked to decrypt and keep the \
+         encrypted original"
+    )]
+    CopyNotChosen,
+}
+
+/// Check that `names` are one whole rip, for a rip that asked to decrypt
+/// (`decrypt`) and chose `keep`.
+///
+/// # Errors
+///
+/// [`OutputSetError`] for anything else.
+pub fn check_output_set(
+    names: &[String],
+    decrypt: bool,
+    keep: Option<RipOriginal>,
+) -> Result<OutputSets, OutputSetError> {
+    if let Some(name) = names.iter().find(|name| !is_rip_output(name)) {
+        return Err(OutputSetError::Unknown(name.clone()));
+    }
     let mut names: Vec<&str> = names.iter().map(String::as_str).collect();
     names.sort_unstable();
     names.dedup();
-    names == ["disc.bin", "disc.toc"] || names == [IMAGE_OUTPUT]
+    let (copy, original): (Vec<&str>, Vec<&str>) = names
+        .into_iter()
+        .partition(|name| name.starts_with(DECRYPTED_PREFIX));
+
+    let has_manager = |files: &[&str], prefix: &str| {
+        files
+            .iter()
+            .any(|name| name.strip_prefix(prefix) == Some("VIDEO_TS/VIDEO_TS.IFO"))
+    };
+    let kind = if original == ["disc.bin", "disc.toc"] {
+        OriginalKind::Cd
+    } else if original == [IMAGE_OUTPUT] {
+        OriginalKind::Image
+    } else if !original.is_empty() && original.iter().all(|name| video_ts_member(name).is_some()) {
+        if !has_manager(&original, "") {
+            return Err(OutputSetError::NoVideoManager);
+        }
+        if !(decrypt && keep == Some(RipOriginal::DecryptedOriginal)) {
+            return Err(OutputSetError::TreeNotChosen);
+        }
+        OriginalKind::VideoTs
+    } else {
+        return Err(OutputSetError::NotWhole);
+    };
+
+    if !copy.is_empty() {
+        if !(decrypt && keep == Some(RipOriginal::EncryptedOriginal) && kind == OriginalKind::Image)
+        {
+            return Err(OutputSetError::CopyNotChosen);
+        }
+        if !has_manager(&copy, DECRYPTED_PREFIX) {
+            return Err(OutputSetError::NoVideoManager);
+        }
+    }
+    Ok(OutputSets {
+        original: kind,
+        original_files: original.into_iter().map(str::to_owned).collect(),
+        copy_files: copy.into_iter().map(str::to_owned).collect(),
+    })
+}
+
+/// The lineage of a rip's decrypted copy, a derivative of the encrypted
+/// original read in the same rip.
+///
+/// Its transformation is `decrypt_` and the system (`decrypt_css`), and
+/// `read_from: disc` records that it was made from the disc in the drive,
+/// not from the original's bytes: decryption only ever reads a disc. Such a
+/// derivative is registered as the rip finishes, never queued as a
+/// derivation job. Semantically equivalent: the same video, not the same
+/// bytes.
+#[must_use]
+pub fn copy_lineage(parent: ArtifactId, rip: RipJobId, decryption: &DecryptionRecord) -> Lineage {
+    let mut options = Extensions::new();
+    options.insert("library".to_owned(), decryption.library.clone().into());
+    options.insert(
+        "library_version".to_owned(),
+        decryption.library_version.clone().into(),
+    );
+    options.insert("read_from".to_owned(), "disc".into());
+    options.insert("rip_id".to_owned(), rip.to_string().into());
+    let transformation = format!("decrypt_{}", decryption.system);
+    let document = serde_json::json!({
+        "schema": COPY_FINGERPRINT_SCHEMA,
+        "parent": parent.to_string(),
+        "transformation": transformation,
+        "options": options,
+        "tool": { "name": decryption.tool, "version": decryption.tool_version },
+    });
+    // Sorted keys, as derivation fingerprints: serde_json's map is ordered.
+    let fingerprint = hex::encode(Sha256::digest(
+        serde_json::to_vec(&document).unwrap_or_default(),
+    ));
+    Lineage {
+        parent_artifact_id: parent,
+        transformation,
+        tool: ToolRef {
+            name: decryption.tool.clone(),
+            version: decryption.tool_version.clone(),
+        },
+        normalized_options: options,
+        command_fingerprint: fingerprint,
+        loss_character: LossCharacter::SemanticallyEquivalent,
+        started_at: None,
+        completed_at: None,
+    }
 }
 
 /// Why a rip that asks to decrypt may not go ahead.
@@ -314,27 +499,170 @@ mod tests {
         }
     }
 
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    const TREE: [&str; 4] = [
+        "VIDEO_TS/VIDEO_TS.IFO",
+        "VIDEO_TS/VIDEO_TS.BUP",
+        "VIDEO_TS/VTS_01_0.IFO",
+        "VIDEO_TS/VTS_01_1.VOB",
+    ];
+
+    fn copy() -> Vec<String> {
+        TREE.iter()
+            .map(|name| format!("{DECRYPTED_PREFIX}{name}"))
+            .collect()
+    }
+
     #[test]
-    fn a_rip_is_a_cd_pair_or_one_image() {
-        let set = |names: &[&str]| {
-            is_complete_output_set(&names.iter().map(|n| (*n).to_owned()).collect::<Vec<_>>())
-        };
-        assert!(set(&["disc.toc", "disc.bin"]));
-        assert!(set(&["disc.bin", "disc.toc", "disc.toc"]));
-        assert!(set(&["disc.iso"]));
+    fn a_plain_rip_is_a_cd_pair_or_one_image() {
+        let plain = |list: &[&str]| check_output_set(&names(list), false, None);
+        assert_eq!(
+            plain(&["disc.toc", "disc.bin"]).unwrap().original,
+            OriginalKind::Cd
+        );
+        assert_eq!(
+            plain(&["disc.bin", "disc.toc", "disc.toc"])
+                .unwrap()
+                .original,
+            OriginalKind::Cd
+        );
+        let image = plain(&["disc.iso"]).unwrap();
+        assert_eq!(image.original, OriginalKind::Image);
+        assert!(image.copy_files.is_empty());
         for wrong in [
             &[][..],
             &["disc.toc"][..],
             &["disc.iso", "disc.toc"][..],
             &["disc.iso", "disc.toc", "disc.bin"][..],
-            &["other.iso"][..],
+            &["disc.iso", "VIDEO_TS/VIDEO_TS.IFO"][..],
         ] {
-            assert!(!set(wrong), "{wrong:?}");
+            assert_eq!(plain(wrong), Err(OutputSetError::NotWhole), "{wrong:?}");
         }
+        assert_eq!(
+            plain(&["other.iso"]),
+            Err(OutputSetError::Unknown("other.iso".to_owned()))
+        );
+        // A tree, or a copy, needs a rip that chose one.
+        assert_eq!(plain(&TREE), Err(OutputSetError::TreeNotChosen));
+        let mut with_copy = names(&["disc.iso"]);
+        with_copy.extend(copy());
+        assert_eq!(
+            check_output_set(&with_copy, false, None),
+            Err(OutputSetError::CopyNotChosen)
+        );
+    }
+
+    #[test]
+    fn a_decrypting_rip_sends_what_was_chosen() {
+        let encrypted = Some(RipOriginal::EncryptedOriginal);
+        let decrypted = Some(RipOriginal::DecryptedOriginal);
+
+        // Encrypted original: the image, with the copy beside it.
+        let mut with_copy = names(&["disc.iso"]);
+        with_copy.extend(copy());
+        let sets = check_output_set(&with_copy, true, encrypted).unwrap();
+        assert_eq!(sets.original, OriginalKind::Image);
+        assert_eq!(sets.original_files, ["disc.iso"]);
+        assert_eq!(sets.copy_files.len(), 4);
+        // The disc turned out not to be encrypted: the image alone.
+        assert!(check_output_set(&names(&["disc.iso"]), true, encrypted).is_ok());
+        // A copy needs the image, and a tree as the original is the other choice.
+        assert_eq!(
+            check_output_set(&copy(), true, encrypted),
+            Err(OutputSetError::NotWhole)
+        );
+        assert_eq!(
+            check_output_set(&names(&TREE), true, encrypted),
+            Err(OutputSetError::TreeNotChosen)
+        );
+
+        // Decrypted original: the tree.
+        let sets = check_output_set(&names(&TREE), true, decrypted).unwrap();
+        assert_eq!(sets.original, OriginalKind::VideoTs);
+        assert!(sets.copy_files.is_empty());
+        assert_eq!(
+            check_output_set(&with_copy, true, decrypted),
+            Err(OutputSetError::CopyNotChosen)
+        );
+        // Not encrypted after all: the image is the original.
+        assert!(check_output_set(&names(&["disc.iso"]), true, decrypted).is_ok());
+
+        // Trees need their video manager.
+        assert_eq!(
+            check_output_set(&names(&TREE[1..]), true, decrypted),
+            Err(OutputSetError::NoVideoManager)
+        );
+        let mut headless = names(&["disc.iso"]);
+        headless.extend(copy().into_iter().skip(1));
+        assert_eq!(
+            check_output_set(&headless, true, encrypted),
+            Err(OutputSetError::NoVideoManager)
+        );
+    }
+
+    #[test]
+    fn a_decrypted_copy_says_what_it_was_made_with_and_from() {
+        let parent = ArtifactId::generate();
+        let rip = RipJobId::generate();
+        let css = DecryptionRecord {
+            system: "css".to_owned(),
+            library: "libdvdcss".to_owned(),
+            library_version: "1.6.0".to_owned(),
+            tool: "dvdbackup".to_owned(),
+            tool_version: "0.4.2-4.1".to_owned(),
+        };
+        let lineage = copy_lineage(parent, rip, &css);
+        assert_eq!(lineage.parent_artifact_id, parent);
+        assert_eq!(lineage.transformation, "decrypt_css");
+        assert_eq!(lineage.tool.name, "dvdbackup");
+        assert_eq!(lineage.normalized_options["read_from"], "disc");
+        assert_eq!(lineage.normalized_options["rip_id"], rip.to_string());
+        assert_eq!(lineage.normalized_options["library"], "libdvdcss");
+        assert_eq!(
+            lineage.loss_character,
+            LossCharacter::SemanticallyEquivalent
+        );
+        assert_eq!(lineage.command_fingerprint.len(), 64);
+        // Deterministic, and different for another rip of the same disc.
+        assert_eq!(copy_lineage(parent, rip, &css), lineage);
+        assert_ne!(
+            copy_lineage(parent, RipJobId::generate(), &css).command_fingerprint,
+            lineage.command_fingerprint
+        );
+        // Nothing about keys can be in it: it is built from versions alone.
+        let text = serde_json::to_string(&lineage).unwrap();
+        assert!(!text.to_ascii_lowercase().contains("key"), "{text}");
+    }
+
+    #[test]
+    fn names_and_limits() {
         assert_eq!(max_output_bytes("disc.toc"), Some(MAX_TOC_BYTES));
         assert_eq!(max_output_bytes("disc.iso"), Some(MAX_IMAGE_BYTES));
         assert_eq!(max_output_bytes("disc.img"), None);
         assert!(is_rip_output("disc.iso") && !is_cd_output("disc.iso"));
+        assert_eq!(
+            max_output_bytes("VIDEO_TS/VTS_01_1.VOB"),
+            Some(MAX_VOB_BYTES)
+        );
+        assert_eq!(
+            max_output_bytes("decrypted/VIDEO_TS/VTS_01_0.IFO"),
+            Some(MAX_IFO_BYTES)
+        );
+        for not in [
+            "VIDEO_TS/notes.txt",
+            "VIDEO_TS/sub/VTS_01_1.VOB",
+            "video_ts/VIDEO_TS.IFO",
+            "decrypted/disc.iso",
+            "decrypted/decrypted/VIDEO_TS/VIDEO_TS.IFO",
+            "VTS_01_1.VOB",
+            "../VIDEO_TS/VIDEO_TS.IFO",
+        ] {
+            assert!(!is_rip_output(not), "{not}");
+            assert_eq!(max_output_bytes(not), None, "{not}");
+        }
     }
 
     #[test]

@@ -222,6 +222,7 @@ mod tests {
                 source_filename: Some("disc.iso".to_owned()),
                 acquired_at: None,
                 operator_note: None,
+                physical_dump: None,
             },
             classification: Classification {
                 artifact_kind: ArtifactKind::SingleFileImage,

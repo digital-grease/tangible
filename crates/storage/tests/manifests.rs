@@ -87,6 +87,7 @@ async fn manifest_for(
             source_filename: None,
             acquired_at: None,
             operator_note: None,
+            physical_dump: None,
         },
         classification: Classification {
             artifact_kind: ArtifactKind::SingleFileImage,
