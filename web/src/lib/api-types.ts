@@ -1537,6 +1537,7 @@ export interface components {
              * @description Detection confidence, from 0 to 1. Diagnostic only.
              */
             format_confidence: number;
+            ripped?: null | components["schemas"]["RippedView"];
             /** @description Where the bytes came from. */
             source_kind: string;
             /** @description Structural findings, if any. */
@@ -2031,6 +2032,19 @@ export interface components {
          */
         DecryptionReport: {
             css?: null | components["schemas"]["CssDecryptionReport"];
+        };
+        /** @description The library and tool that decrypted a disc as it was read. */
+        DecryptionView: {
+            /** @description Such as `libdvdcss`. */
+            library: string;
+            /** @description Its version. */
+            library_version: string;
+            /** @description `css` or `aacs`. */
+            system: string;
+            /** @description Such as `dvdbackup`. */
+            tool: string;
+            /** @description Its version. */
+            tool_version: string;
         };
         /** @description The state of one dependency. */
         DependencyCheck: {
@@ -3061,11 +3075,7 @@ export interface components {
         };
         /** @description How a rip ended, as the worker reports it. */
         RipCompletion: {
-            /**
-             * @description For `read`, when anything was decrypted: the library and tool, never
-             *     a key. Only for a rip asked to decrypt.
-             */
-            decryption?: Record<string, never> | null;
+            decryption?: null | components["schemas"]["DecryptionView"];
             /**
              * @description For `read`: the disc's encryption, `none` (the default), `css`,
              *     `aacs` or `unknown`.
@@ -3193,8 +3203,7 @@ export interface components {
             created_at: string;
             /** @description Whether they asked for an encrypted disc to be decrypted. */
             decrypt: boolean;
-            /** @description The library and tool that decrypted it, when anything was decrypted. */
-            decryption?: Record<string, never> | null;
+            decryption?: null | components["schemas"]["DecryptionView"];
             /** @description The drive. */
             drive_id: string;
             /** @description What the drive is called. */
@@ -3236,6 +3245,35 @@ export interface components {
              *     `canceled`, `refused` or `failed`.
              */
             state: string;
+        };
+        /**
+         * @description How an artifact was read from a disc in a drive (ADR 0013). Library and
+         *     tool versions only; nothing about keys.
+         */
+        RippedView: {
+            /**
+             * @description Whether these bytes were decrypted as they were read: such an image
+             *     is not a faithful copy of the disc.
+             */
+            decrypted_at_acquisition: boolean;
+            decryption?: null | components["schemas"]["DecryptionView"];
+            /** @description How it was attached: `usb`, `sata` or `unknown`, when known. */
+            drive_connection?: string | null;
+            /** @description Its firmware revision. */
+            drive_firmware?: string | null;
+            /** @description Its model. */
+            drive_model?: string | null;
+            /** @description The drive's vendor, as it described itself. */
+            drive_vendor?: string | null;
+            /** @description The disc's encryption: `none`, `css`, `aacs` or `unknown`. */
+            encryption: string;
+            /** @description What read the disc, such as `cdrdao`, `block_reader` or `dvdbackup`. */
+            engine: string;
+            /** @description Its version. */
+            engine_version: string;
+            read_errors?: null | components["schemas"]["ReadErrors"];
+            /** @description The rip that read it. */
+            rip_id: string;
         };
         /** @description Whether this server exports to RomM, and to which platforms. */
         RommSettings: {

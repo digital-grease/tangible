@@ -10,6 +10,9 @@
   import { formatBytes } from '$lib/library';
   import {
     cancelRip,
+    decryptionSummary,
+    encryptionLabel,
+    keepLabel,
     loadRip,
     loadRipEvents,
     ripProgress,
@@ -98,6 +101,15 @@
     {/if}
     {#if rip.state === 'complete' && rip.artifact_id}
       <p><a href={`/library/${rip.artifact_id}`}>Open it in the library</a></p>
+      {#if rip.copy_artifact_id}
+        <p><a href={`/library/${rip.copy_artifact_id}`}>Open the decrypted copy</a></p>
+      {/if}
+      {#if rip.keep === 'decrypted_original' && rip.decryption}
+        <p>
+          Only a decrypted image was kept. It was decrypted when ripped and is not a faithful copy
+          of the disc.
+        </p>
+      {/if}
     {/if}
     {#if rip.error_code}
       <p>{ripRefusal(rip.error_code) ?? rip.error_detail}</p>
@@ -138,6 +150,14 @@
       <dd>{when(rip.completed_at)}</dd>
       <dt>Disc found</dt>
       <dd>{rip.medium ? rip.medium.profile : '—'}</dd>
+      <dt>Decryption</dt>
+      <dd>{rip.decrypt ? `Asked for. Keep: ${keepLabel(rip.keep)}` : 'Not asked for'}</dd>
+      <dt>Encryption found</dt>
+      <dd>{encryptionLabel(rip.encryption)}</dd>
+      {#if rip.decryption}
+        <dt>Decrypted with</dt>
+        <dd>{decryptionSummary(rip.decryption)}</dd>
+      {/if}
       <dt>Read with</dt>
       <dd>{rip.engine ? `${rip.engine} ${rip.engine_version ?? ''}` : '—'}</dd>
       <dt>Read errors</dt>

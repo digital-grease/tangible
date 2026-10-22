@@ -45,6 +45,7 @@ describe('derivatives', () => {
 
   it('names transformations and job states in words', () => {
     expect(transformationLabel('chd_create_cd')).toBe('CHD of a CD');
+    expect(transformationLabel('decrypt_css')).toContain('Decrypted copy');
     expect(jobStateLabel(job({ state: 'running' }))).toBe('Being made');
     expect(jobStateLabel(job({ state: 'failed_terminal' }))).toBe('Failed');
     expect(isOpen(job({ state: 'failed_retryable' }))).toBe(true);

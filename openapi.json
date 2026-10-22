@@ -4895,6 +4895,17 @@
                 "format": "float",
                 "description": "Detection confidence, from 0 to 1. Diagnostic only."
               },
+              "ripped": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/RippedView",
+                    "description": "How it was ripped, when a worker read it from a disc in a drive."
+                  }
+                ]
+              },
               "source_kind": {
                 "type": "string",
                 "description": "Where the bytes came from."
@@ -6021,6 +6032,39 @@
                 "description": "DVD decryption, through libdvdcss and dvdbackup."
               }
             ]
+          }
+        }
+      },
+      "DecryptionView": {
+        "type": "object",
+        "description": "The library and tool that decrypted a disc as it was read.",
+        "required": [
+          "system",
+          "library",
+          "library_version",
+          "tool",
+          "tool_version"
+        ],
+        "properties": {
+          "library": {
+            "type": "string",
+            "description": "Such as `libdvdcss`."
+          },
+          "library_version": {
+            "type": "string",
+            "description": "Its version."
+          },
+          "system": {
+            "type": "string",
+            "description": "`css` or `aacs`."
+          },
+          "tool": {
+            "type": "string",
+            "description": "Such as `dvdbackup`."
+          },
+          "tool_version": {
+            "type": "string",
+            "description": "Its version."
           }
         }
       },
@@ -8316,11 +8360,15 @@
         ],
         "properties": {
           "decryption": {
-            "type": [
-              "object",
-              "null"
-            ],
-            "description": "For `read`, when anything was decrypted: the library and tool, never\na key. Only for a rip asked to decrypt."
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DecryptionView",
+                "description": "For `read`, when anything was decrypted: the library and tool, never\na key. Only for a rip asked to decrypt."
+              }
+            ]
           },
           "encryption": {
             "type": [
@@ -8630,11 +8678,15 @@
             "description": "Whether they asked for an encrypted disc to be decrypted."
           },
           "decryption": {
-            "type": [
-              "object",
-              "null"
-            ],
-            "description": "The library and tool that decrypted it, when anything was decrypted."
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DecryptionView",
+                "description": "The library and tool that decrypted it, when anything was decrypted."
+              }
+            ]
           },
           "drive_id": {
             "type": "string",
@@ -8744,6 +8796,89 @@
           "state": {
             "type": "string",
             "description": "`queued`, `reading`, `uploading`, `registering`, `complete`,\n`canceled`, `refused` or `failed`."
+          }
+        }
+      },
+      "RippedView": {
+        "type": "object",
+        "description": "How an artifact was read from a disc in a drive (ADR 0013). Library and\ntool versions only; nothing about keys.",
+        "required": [
+          "rip_id",
+          "engine",
+          "engine_version",
+          "encryption",
+          "decrypted_at_acquisition"
+        ],
+        "properties": {
+          "decrypted_at_acquisition": {
+            "type": "boolean",
+            "description": "Whether these bytes were decrypted as they were read: such an image\nis not a faithful copy of the disc."
+          },
+          "decryption": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DecryptionView",
+                "description": "How it was decrypted, when it was."
+              }
+            ]
+          },
+          "drive_connection": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How it was attached: `usb`, `sata` or `unknown`, when known."
+          },
+          "drive_firmware": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its firmware revision."
+          },
+          "drive_model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its model."
+          },
+          "drive_vendor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The drive's vendor, as it described itself."
+          },
+          "encryption": {
+            "type": "string",
+            "description": "The disc's encryption: `none`, `css`, `aacs` or `unknown`."
+          },
+          "engine": {
+            "type": "string",
+            "description": "What read the disc, such as `cdrdao`, `block_reader` or `dvdbackup`."
+          },
+          "engine_version": {
+            "type": "string",
+            "description": "Its version."
+          },
+          "read_errors": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ReadErrors",
+                "description": "Sectors that gave trouble, when the engine counts them."
+              }
+            ]
+          },
+          "rip_id": {
+            "type": "string",
+            "description": "The rip that read it."
           }
         }
       },

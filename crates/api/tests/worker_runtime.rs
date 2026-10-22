@@ -1100,6 +1100,10 @@ async fn a_worker_rips_the_disc_it_is_asked_to_into_the_library() {
     let detail = server.get(&format!("/api/v1/artifacts/{artifact}")).await;
     assert_eq!(detail["format"], "toc_bin", "{detail}");
     assert_eq!(detail["disc"]["tracks"].as_array().unwrap().len(), 2);
+    assert_eq!(detail["ripped"]["rip_id"], rip, "{detail}");
+    assert_eq!(detail["ripped"]["encryption"], "none");
+    assert_eq!(detail["ripped"]["decrypted_at_acquisition"], false);
+    assert!(detail["ripped"]["decryption"].is_null(), "{detail}");
     let events = server.get(&format!("/api/v1/rips/{rip}/events")).await;
     assert!(
         events["items"]
@@ -1378,6 +1382,15 @@ async fn a_worker_decrypts_a_dvd_keeping_the_encrypted_original_and_a_copy() {
     let copy = done["copy_artifact_id"].as_str().expect("the copy");
     let copied = server.get(&format!("/api/v1/artifacts/{copy}")).await;
     assert_eq!(copied["format"], "video_ts_directory", "{copied}");
+    // The original is the disc as it is; only the copy says it was decrypted.
+    assert_eq!(detail["ripped"]["encryption"], "css", "{detail}");
+    assert_eq!(detail["ripped"]["decrypted_at_acquisition"], false);
+    assert!(detail["ripped"]["decryption"].is_null(), "{detail}");
+    assert_eq!(
+        copied["ripped"]["decrypted_at_acquisition"], true,
+        "{copied}"
+    );
+    assert_eq!(copied["ripped"]["decryption"]["library"], "libdvdcss");
     server.stop().await;
 }
 
@@ -1412,6 +1425,9 @@ async fn a_worker_decrypts_a_dvd_into_a_decrypted_original() {
     let original = done["artifact_id"].as_str().expect("the original");
     let detail = server.get(&format!("/api/v1/artifacts/{original}")).await;
     assert_eq!(detail["format"], "video_ts_directory", "{detail}");
+    assert_eq!(detail["ripped"]["engine"], "dvdbackup", "{detail}");
+    assert_eq!(detail["ripped"]["decrypted_at_acquisition"], true);
+    assert_eq!(detail["ripped"]["decryption"]["system"], "css");
     server.stop().await;
 }
 

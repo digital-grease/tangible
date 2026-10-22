@@ -12,13 +12,28 @@ import { apiCall, apiFetch, type Result } from './session';
 export type RipView = components['schemas']['RipView'];
 export type RipPage = components['schemas']['RipPage'];
 export type RipEventView = components['schemas']['RipEventView'];
+export type RipRequest = components['schemas']['RequestRip'];
+export type DecryptionView = components['schemas']['DecryptionView'];
+export type RippedView = components['schemas']['RippedView'];
 
-/** Ask for the disc in a drive to be ripped. */
+/** The original a decrypting rip keeps (ADR 0013). */
+export type KeepChoice = 'encrypted_original' | 'decrypted_original';
+
+/**
+ * Ask for the disc in a drive to be ripped. Without options it rips without
+ * decryption; the server refuses `decrypt` where it is not allowed.
+ */
 export function requestRip(
   driveId: string,
+  options: RipRequest = {},
   fetcher: typeof fetch = apiFetch,
 ): Promise<Result<RipView>> {
-  return apiCall(fetcher, `/api/v1/drives/${encodeURIComponent(driveId)}/rips`, 'POST', {});
+  return apiCall(fetcher, `/api/v1/drives/${encodeURIComponent(driveId)}/rips`, 'POST', options);
+}
+
+/** What a rip asks for: decryption only when asked, with the original chosen. */
+export function ripOptions(decrypt: boolean, keep: KeepChoice): RipRequest {
+  return decrypt ? { decrypt: true, keep } : {};
 }
 
 /** Recent rips, newest first. */
@@ -81,7 +96,9 @@ export function ripRefusal(code: string | null | undefined): string | null {
     case 'RELOAD_DISC':
       return 'The system has not caught up with the disc in the drive (this happens straight after a burn). Take the disc out, put it back, and ask again.';
     case 'ENCRYPTED':
-      return 'The disc is encrypted. Ripping encrypted discs is not built yet; nothing that was read was kept.';
+      return 'The disc is encrypted, and this rip did not decrypt it. Nothing that was read was kept. Where a drive offers "Decrypt an encrypted disc", ask again with it ticked.';
+    case 'DECRYPTION_FAILED':
+      return 'The disc is encrypted, and decrypting it failed. Nothing that was read was kept. Clean the disc and ask again; the technical detail says where it stopped.';
     case 'WORKER_RESTARTED':
       return 'The worker restarted while ripping. Ask again; reading does not harm the disc.';
     case 'IMPORT_FAILED':
@@ -105,4 +122,51 @@ export function ripProgress(events: RipEventView[]): number | null {
     }
   }
   return null;
+}
+
+/** What a worker found on a disc, in words. */
+export function encryptionLabel(encryption: string | null | undefined): string {
+  switch (encryption) {
+    case null:
+    case undefined:
+      return 'Not read yet';
+    case 'none':
+      return 'Not encrypted';
+    case 'css':
+      return 'Encrypted (CSS, a DVD)';
+    case 'aacs':
+      return 'Encrypted (AACS, a Blu-ray)';
+    case 'unknown':
+      return 'Encrypted, with a system not recognised';
+    default:
+      return encryption;
+  }
+}
+
+/** The original a decrypting rip asked to keep, in words. */
+export function keepLabel(keep: string | null | undefined): string {
+  switch (keep) {
+    case 'encrypted_original':
+      return 'The encrypted image, and a decrypted copy';
+    case 'decrypted_original':
+      return 'Only a decrypted image (not a faithful copy of the disc)';
+    default:
+      return '—';
+  }
+}
+
+/** Which library and tool decrypted a disc. Versions only; never a key. */
+export function decryptionSummary(decryption: DecryptionView): string {
+  return `${decryption.library} ${decryption.library_version}, through ${decryption.tool} ${decryption.tool_version}`;
+}
+
+/** The drive a disc was ripped in, as it described itself. */
+export function rippedDrive(ripped: RippedView): string {
+  const name = [ripped.drive_vendor, ripped.drive_model].filter(Boolean).join(' ');
+  const parts = [name || 'A drive that did not say what it is'];
+  if (ripped.drive_firmware) parts.push(`firmware ${ripped.drive_firmware}`);
+  if (ripped.drive_connection && ripped.drive_connection !== 'unknown') {
+    parts.push(ripped.drive_connection.toUpperCase());
+  }
+  return parts.join(', ');
 }

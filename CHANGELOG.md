@@ -91,6 +91,17 @@ may change between minor versions, and the release notes say how.
   time limit and its key cache off, and nothing it prints that could carry
   key material is kept. A disc that will not decrypt fails as
   `DECRYPTION_FAILED`, keeping nothing.
+- The web UI asks about decryption on a drive that can decrypt: "Rip the
+  disc in {drive}" opens a dialog with a "Decrypt an encrypted disc" box,
+  the notice that whether ripping is lawful is the operator's to determine,
+  and, once ticked, the choice of original. A rip's page shows the
+  encryption found, which library and tool decrypted it, the choice made,
+  and a link to the decrypted copy. An artifact's page says "Ripped from a
+  disc" with the drive, the engine, read errors and the encryption, and
+  states plainly when an image was decrypted when ripped and is not a
+  faithful copy of the disc. For this, `GET /api/v1/artifacts/{id}` gains
+  `ripped`, and a rip's `decryption` is now described in the OpenAPI
+  document (`DecryptionView`) instead of as any object.
 - DVD-Video `VIDEO_TS` folders are recognised: imported from a watched folder
   (the `VIDEO_TS` folder itself, or the disc's folder holding it), a folder
   whose `VIDEO_TS.IFO` really is a DVD-Video manager becomes a

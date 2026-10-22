@@ -21,7 +21,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use serde::Serialize;
 use tangible_domain::ArtifactId;
-use tangible_domain::manifest::ArtifactManifest;
+use tangible_domain::manifest::{ArtifactManifest, DecryptionRecord};
 use utoipa::ToSchema;
 
 use crate::pagination::{Page, PageQuery};
@@ -125,6 +125,64 @@ pub struct ArtifactDetail {
     /// The disc's tracks, when the artifact was described by a CUE sheet or a
     /// TOC whose tracks could be laid out.
     pub disc: Option<DiscLayout>,
+    /// How it was ripped, when a worker read it from a disc in a drive.
+    pub ripped: Option<RippedView>,
+}
+
+/// How an artifact was read from a disc in a drive (ADR 0013). Library and
+/// tool versions only; nothing about keys.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RippedView {
+    /// The rip that read it.
+    pub rip_id: String,
+    /// The drive's vendor, as it described itself.
+    pub drive_vendor: Option<String>,
+    /// Its model.
+    pub drive_model: Option<String>,
+    /// Its firmware revision.
+    pub drive_firmware: Option<String>,
+    /// How it was attached: `usb`, `sata` or `unknown`, when known.
+    pub drive_connection: Option<String>,
+    /// What read the disc, such as `cdrdao`, `block_reader` or `dvdbackup`.
+    pub engine: String,
+    /// Its version.
+    pub engine_version: String,
+    /// Sectors that gave trouble, when the engine counts them.
+    pub read_errors: Option<crate::routes::rips::ReadErrors>,
+    /// The disc's encryption: `none`, `css`, `aacs` or `unknown`.
+    pub encryption: String,
+    /// Whether these bytes were decrypted as they were read: such an image
+    /// is not a faithful copy of the disc.
+    pub decrypted_at_acquisition: bool,
+    /// How it was decrypted, when it was.
+    pub decryption: Option<DecryptionView>,
+}
+
+/// The library and tool that decrypted a disc as it was read.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct DecryptionView {
+    /// `css` or `aacs`.
+    pub system: String,
+    /// Such as `libdvdcss`.
+    pub library: String,
+    /// Its version.
+    pub library_version: String,
+    /// Such as `dvdbackup`.
+    pub tool: String,
+    /// Its version.
+    pub tool_version: String,
+}
+
+impl From<DecryptionRecord> for DecryptionView {
+    fn from(record: DecryptionRecord) -> Self {
+        Self {
+            system: record.system,
+            library: record.library,
+            library_version: record.library_version,
+            tool: record.tool,
+            tool_version: record.tool_version,
+        }
+    }
 }
 
 /// A disc of tracks.
@@ -179,6 +237,29 @@ pub struct TrackIndexView {
     pub number: u32,
     /// Sectors from the track's first present sector.
     pub relative_lba: u64,
+}
+
+fn ripped_view(manifest: &ArtifactManifest) -> Option<RippedView> {
+    let dump = manifest.origin.physical_dump.as_ref()?;
+    let drive = dump.drive.as_ref();
+    Some(RippedView {
+        rip_id: dump.rip_id.clone(),
+        drive_vendor: drive.and_then(|drive| drive.vendor.clone()),
+        drive_model: drive.and_then(|drive| drive.model.clone()),
+        drive_firmware: drive.and_then(|drive| drive.firmware.clone()),
+        drive_connection: drive.map(|drive| drive.connection.clone()),
+        engine: dump.engine.name.clone(),
+        engine_version: dump.engine.version.clone(),
+        read_errors: dump
+            .read_errors
+            .map(|errors| crate::routes::rips::ReadErrors {
+                unreadable_sectors: errors.unreadable_sectors,
+                retried_sectors: errors.retried_sectors,
+            }),
+        encryption: dump.encryption.clone(),
+        decrypted_at_acquisition: dump.decrypted_at_acquisition,
+        decryption: dump.decryption.clone().map(DecryptionView::from),
+    })
 }
 
 fn disc_view(manifest: &ArtifactManifest) -> Option<DiscLayout> {
@@ -385,6 +466,7 @@ pub async fn get_artifact(
         warnings,
         components: manifest.components.iter().map(component_view).collect(),
         disc: disc_view(&manifest),
+        ripped: ripped_view(&manifest),
     }))
 }
 

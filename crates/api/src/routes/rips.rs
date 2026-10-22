@@ -44,6 +44,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::auth::SignedIn;
 use crate::problem::{ErrorCode, Problem};
+use crate::routes::artifacts::DecryptionView;
 use crate::routes::burns::MediumView;
 use crate::routes::workers::same_worker;
 use crate::state::ApiState;
@@ -214,8 +215,7 @@ pub struct RipView {
     /// `unknown`. Absent until it has read the disc.
     pub encryption: Option<String>,
     /// The library and tool that decrypted it, when anything was decrypted.
-    #[schema(value_type = Option<Object>)]
-    pub decryption: Option<serde_json::Value>,
+    pub decryption: Option<DecryptionView>,
     /// The import of the decrypted copy kept beside an encrypted original,
     /// once queued.
     pub copy_import_id: Option<String>,
@@ -271,7 +271,10 @@ impl From<RipRecord> for RipView {
             import_id: record.import_job_id.map(|id| id.to_string()),
             artifact_id: record.artifact_id.map(|id| id.to_string()),
             encryption: record.encryption,
-            decryption: record.decryption,
+            decryption: record
+                .decryption
+                .and_then(|value| serde_json::from_value::<DecryptionRecord>(value).ok())
+                .map(DecryptionView::from),
             copy_import_id: record.copy_import_job_id.map(|id| id.to_string()),
             copy_artifact_id: record.copy_artifact_id.map(|id| id.to_string()),
             error_code: record.error_code,
@@ -457,7 +460,7 @@ pub struct RipCompletion {
     pub encryption: Option<String>,
     /// For `read`, when anything was decrypted: the library and tool, never
     /// a key. Only for a rip asked to decrypt.
-    #[schema(value_type = Option<Object>)]
+    #[schema(value_type = Option<DecryptionView>)]
     pub decryption: Option<DecryptionRecord>,
     /// For `refused` and `failed`: why, as a stable code such as
     /// `NO_MEDIUM`.

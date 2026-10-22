@@ -7,8 +7,9 @@
   import { goto } from '$app/navigation';
   import { onDestroy, onMount } from 'svelte';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
+  import RipDialog from '$lib/components/RipDialog.svelte';
   import { formatBytes } from '$lib/library';
-  import { requestRip, loadRips, ripStateLabel, type RipView } from '$lib/rips';
+  import { requestRip, loadRips, ripStateLabel, type RipRequest, type RipView } from '$lib/rips';
   import type { Problem } from '$lib/session';
   import { driveModel, loadDrives, type DriveView } from '$lib/workers';
 
@@ -19,6 +20,9 @@
   let rips = $state<View<RipView[]>>({ kind: 'loading' });
   let refusal = $state<Problem | null>(null);
   let asking = $state<string | null>(null);
+  // The drive whose rip dialog is open: only drives that can decrypt get one.
+  let choosing = $state<DriveView | null>(null);
+  let dialogOpen = $state(false);
   let timer: ReturnType<typeof setInterval> | undefined;
 
   /** A poll while something is going; slow, since a CD takes minutes. */
@@ -41,11 +45,23 @@
 
   onDestroy(() => clearInterval(timer));
 
-  async function rip(drive: DriveView) {
+  /** Rip straight away, or ask first where the drive could decrypt. */
+  function choose(drive: DriveView) {
+    if (drive.can_decrypt_rips) {
+      refusal = null;
+      choosing = drive;
+      dialogOpen = true;
+      return;
+    }
+    void rip(drive, {});
+  }
+
+  async function rip(drive: DriveView, options: RipRequest) {
     asking = drive.id;
     refusal = null;
-    const result = await requestRip(drive.id);
+    const result = await requestRip(drive.id, options);
     asking = null;
+    dialogOpen = false;
     if (result.kind === 'error') {
       refusal = result.problem;
       return;
@@ -66,6 +82,11 @@
   Put a disc you own in a drive and rip it into the library. The drive's worker reads it, sends what
   it read, and it is imported and kept exactly as read. Reading changes nothing on the disc. CDs and
   DVDs, for now; a CD becomes a table of contents and its data, a DVD an image.
+</p>
+<p>
+  An encrypted disc is ripped only by a drive that offers to decrypt it: its worker runs an image
+  built to decrypt, and an administrator has turned decryption on. Elsewhere an encrypted disc is
+  refused and nothing read from it is kept.
 </p>
 
 {#if refusal}
@@ -103,9 +124,12 @@
             <td>{driveModel(drive)}</td>
             <td>{drive.worker_name} ({drive.worker_status})</td>
             <td>
-              <button type="button" onclick={() => rip(drive)} disabled={asking !== null}>
+              <button type="button" onclick={() => choose(drive)} disabled={asking !== null}>
                 {asking === drive.id ? 'Asking…' : `Rip the disc in ${drive.name}`}
               </button>
+              {#if drive.can_decrypt_rips}
+                <small>Can decrypt</small>
+              {/if}
             </td>
           </tr>
         {/each}
@@ -113,6 +137,15 @@
     </table>
   {/if}
 </section>
+
+{#if choosing}
+  <RipDialog
+    drive={choosing}
+    bind:open={dialogOpen}
+    asking={asking !== null}
+    onstart={(options) => choosing && rip(choosing, options)}
+  />
+{/if}
 
 <section aria-labelledby="rips-heading" aria-live="polite" aria-busy={rips.kind === 'loading'}>
   <h2 id="rips-heading">Recent rips</h2>

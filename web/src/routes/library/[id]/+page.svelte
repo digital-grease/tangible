@@ -20,6 +20,7 @@
     type ArtifactDetail,
     type LoadState,
   } from '$lib/library';
+  import { decryptionSummary, encryptionLabel, rippedDrive } from '$lib/rips';
 
   let view = $state<LoadState<ArtifactDetail>>({ kind: 'loading' });
 
@@ -85,6 +86,42 @@
         that record what produced them.
       </p>
     </section>
+
+    {#if view.data.ripped}
+      {@const ripped = view.data.ripped}
+      <section aria-labelledby="ripped-heading">
+        <h2 id="ripped-heading">Ripped from a disc</h2>
+        {#if ripped.decrypted_at_acquisition}
+          <!-- Said plainly: these bytes are not what is on the disc. -->
+          <p class="badge">
+            <strong>Decrypted when ripped.</strong>
+            This is not a faithful copy of the disc, and it will not match a preservation database.
+          </p>
+        {/if}
+        <dl>
+          <dt>Drive</dt>
+          <dd>{rippedDrive(ripped)}</dd>
+          <dt>Read with</dt>
+          <dd>{ripped.engine} {ripped.engine_version}</dd>
+          <dt>Read errors</dt>
+          <dd>
+            {#if ripped.read_errors}
+              {ripped.read_errors.unreadable_sectors} unreadable, {ripped.read_errors
+                .retried_sectors} retried
+            {:else}
+              Not counted by this tool
+            {/if}
+          </dd>
+          <dt>Encryption</dt>
+          <dd>{encryptionLabel(ripped.encryption)}</dd>
+          {#if ripped.decryption}
+            <dt>Decrypted with</dt>
+            <dd>{decryptionSummary(ripped.decryption)}</dd>
+          {/if}
+        </dl>
+        <p><a href={`/rips/${ripped.rip_id}`}>The rip that read it</a></p>
+      </section>
+    {/if}
 
     {#if view.data.warnings.length > 0}
       <section aria-labelledby="findings-heading">

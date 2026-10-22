@@ -45,6 +45,8 @@ export function transformationLabel(transformation: string): string {
       return 'CHD of a CD';
     case 'chd_create_dvd':
       return 'CHD of a DVD';
+    case 'decrypt_css':
+      return 'Decrypted copy of a DVD, made as it was ripped';
     default:
       return transformation;
   }
