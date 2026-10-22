@@ -11,9 +11,12 @@
 //! the read, because an image with a hole in it is not the disc.
 //!
 //! Every sector is also checked for CSS scrambling, the flag in a DVD-Video
-//! sector's MPEG header. A scrambled sector stops the read: until
-//! decryption is built (R3), an encrypted disc is refused, never kept as
-//! scrambled bytes that look like content.
+//! sector's MPEG header. Unless the rip asked to keep the encrypted original
+//! of a disc it decrypts, a scrambled sector stops the read: an encrypted
+//! disc is refused, never kept as scrambled bytes that look like content.
+//! When it did ask, the drive has been authenticated first, the scrambled
+//! sectors are kept as they are on the disc, and the rip records the image
+//! as CSS-encrypted.
 //!
 //! Many drives never return a scrambled sector at all: without the
 //! authentication a player performs, they answer a read of one with an
@@ -51,6 +54,19 @@ pub struct ImageRead {
     pub bytes: u64,
     /// Sectors that read only after retrying.
     pub retried_sectors: u64,
+    /// Sectors kept CSS-scrambled, as they are on the disc. Always zero
+    /// unless scrambled sectors were allowed.
+    pub scrambled_sectors: u64,
+}
+
+/// What to do with a CSS-scrambled sector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scrambled {
+    /// Stop: the disc is encrypted and is not to be kept as it is.
+    Refuse,
+    /// Keep it as it is on the disc. Only for a rip that decrypts and keeps
+    /// the encrypted original, after the drive has been authenticated.
+    Keep,
 }
 
 /// Whether a sector is CSS-scrambled DVD-Video; in the domain crate so the
@@ -62,7 +78,8 @@ pub use tangible_domain::dvd::css_scrambled;
 /// # Errors
 ///
 /// [`EngineError::NoMedium`] when the device has nothing readable,
-/// [`EngineError::Encrypted`] at the first scrambled sector,
+/// [`EngineError::Encrypted`] at the first scrambled sector unless they are
+/// kept,
 /// [`EngineError::Unsupported`] naming the first sector that would not read,
 /// [`EngineError::Cancelled`], or [`EngineError::Io`]. On any of these the
 /// partial image is removed.
@@ -70,6 +87,7 @@ pub async fn read_image(
     device: &Path,
     output: &Path,
     expected_bytes: Option<u64>,
+    scrambled: Scrambled,
     cancel: &CancelToken,
     sink: &dyn EventSink,
 ) -> Result<ImageRead, EngineError> {
@@ -81,7 +99,7 @@ pub async fn read_image(
             source: std::io::Error::from(std::io::ErrorKind::AlreadyExists),
         });
     }
-    let result = read_into(device, output, expected_bytes, cancel, sink).await;
+    let result = read_into(device, output, expected_bytes, scrambled, cancel, sink).await;
     if result.is_err() {
         let _ = fs::remove_file(output).await;
     }
@@ -92,6 +110,7 @@ async fn read_into(
     device: &Path,
     output: &Path,
     expected_bytes: Option<u64>,
+    scrambled: Scrambled,
     cancel: &CancelToken,
     sink: &dyn EventSink,
 ) -> Result<ImageRead, EngineError> {
@@ -141,6 +160,7 @@ async fn read_into(
     let mut buffer = vec![0_u8; CHUNK_SECTORS * SECTOR_BYTES];
     let mut offset = 0_u64;
     let mut retried = 0_u64;
+    let mut kept_scrambled = 0_u64;
     let mut last_percent = None;
     while offset < size {
         if cancel.is_cancelled() {
@@ -154,50 +174,80 @@ async fn read_into(
         let want =
             usize::try_from((size - offset).min(buffer.len() as u64)).unwrap_or(buffer.len());
         let chunk = &mut buffer[..want];
-        retried += read_chunk(&mut disc, offset, chunk, sink).await?;
-        if let Some(index) = chunk.chunks(SECTOR_BYTES).position(css_scrambled) {
-            sink.emit(BurnEvent::new(
-                "ripping",
-                "RIP_ENCRYPTED",
-                format!(
-                    "sector {} is CSS-scrambled; encrypted discs are not ripped yet",
-                    offset / SECTOR_BYTES as u64 + index as u64
-                ),
-            ));
-            return Err(EngineError::Encrypted { system: "CSS" });
-        }
+        retried += read_chunk(&mut disc, offset, chunk, scrambled, sink).await?;
+        kept_scrambled += scrambled_sectors(chunk, offset, scrambled, sink)?;
         image
             .write_all(chunk)
             .await
             .map_err(io("writing the image"))?;
         offset += want as u64;
-
-        // A whole percent, rounded down, so 100 is said only at the end.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-        let fraction = (offset as f64 / size as f64) as f32;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let percent = (fraction * 100.0) as u32;
-        if last_percent != Some(percent) {
-            last_percent = Some(percent);
-            sink.emit(BurnEvent::progress(
-                "ripping",
-                "RIP_PROGRESS",
-                fraction,
-                format!("{percent}% read"),
-            ));
-        }
+        report_progress(sink, offset, size, &mut last_percent);
     }
     image.flush().await.map_err(io("writing the image"))?;
     image.sync_all().await.map_err(io("writing the image"))?;
     sink.emit(BurnEvent::new(
         "ripping",
         "RIP_READ",
-        format!("read {offset} bytes"),
+        if kept_scrambled > 0 {
+            format!(
+                "read {offset} bytes, {kept_scrambled} sectors of them CSS-scrambled as on the disc"
+            )
+        } else {
+            format!("read {offset} bytes")
+        },
     ));
     Ok(ImageRead {
         bytes: offset,
         retried_sectors: retried,
+        scrambled_sectors: kept_scrambled,
     })
+}
+
+/// How many of a chunk's sectors are CSS-scrambled, when they are kept;
+/// when they are not, the first one refuses the disc.
+fn scrambled_sectors(
+    chunk: &[u8],
+    offset: u64,
+    scrambled: Scrambled,
+    sink: &dyn EventSink,
+) -> Result<u64, EngineError> {
+    if scrambled == Scrambled::Keep {
+        return Ok(chunk
+            .chunks(SECTOR_BYTES)
+            .filter(|sector| css_scrambled(sector))
+            .count() as u64);
+    }
+    if let Some(index) = chunk.chunks(SECTOR_BYTES).position(css_scrambled) {
+        sink.emit(BurnEvent::new(
+            "ripping",
+            "RIP_ENCRYPTED",
+            format!(
+                "sector {} is CSS-scrambled; an encrypted disc is kept only by a rip that \
+                 decrypts it",
+                offset / SECTOR_BYTES as u64 + index as u64
+            ),
+        ));
+        return Err(EngineError::Encrypted { system: "CSS" });
+    }
+    Ok(0)
+}
+
+/// Say how far the read has got, once for each whole percent, rounded down
+/// so that 100 is said only at the end.
+fn report_progress(sink: &dyn EventSink, offset: u64, size: u64, last_percent: &mut Option<u32>) {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    let fraction = (offset as f64 / size as f64) as f32;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let percent = (fraction * 100.0) as u32;
+    if *last_percent != Some(percent) {
+        *last_percent = Some(percent);
+        sink.emit(BurnEvent::progress(
+            "ripping",
+            "RIP_PROGRESS",
+            fraction,
+            format!("{percent}% read"),
+        ));
+    }
 }
 
 /// Read one chunk, falling back to a sector at a time when it fails whole.
@@ -206,12 +256,13 @@ async fn read_chunk(
     disc: &mut fs::File,
     offset: u64,
     chunk: &mut [u8],
+    scrambled: Scrambled,
     sink: &dyn EventSink,
 ) -> Result<u64, EngineError> {
     if read_at(disc, offset, chunk).await.is_ok() {
         return Ok(0);
     }
-    match read_sectors_slowly(disc, offset, chunk).await {
+    match read_sectors_slowly(disc, offset, chunk, scrambled).await {
         Err(error @ EngineError::Encrypted { .. }) => {
             sink.emit(BurnEvent::new(
                 "ripping",
@@ -237,6 +288,7 @@ async fn read_sectors_slowly(
     disc: &mut fs::File,
     offset: u64,
     chunk: &mut [u8],
+    scrambled: Scrambled,
 ) -> Result<u64, EngineError> {
     let mut retried = 0;
     for (index, sector) in chunk.chunks_mut(SECTOR_BYTES).enumerate() {
@@ -248,7 +300,9 @@ async fn read_sectors_slowly(
                 break;
             }
             if tries >= SECTOR_TRIES {
-                if title_video_refused(disc).await {
+                // An authenticated drive hands over the title video, so a
+                // sector it still refuses is damage, not encryption.
+                if scrambled == Scrambled::Refuse && title_video_refused(disc).await {
                     return Err(EngineError::Encrypted { system: "CSS" });
                 }
                 return Err(EngineError::Unsupported {
@@ -367,6 +421,27 @@ async fn vob_extents(disc: &mut fs::File) -> Vec<std::ops::Range<u64>> {
         })
         .map(|entry| entry.extent..entry.extent + entry.bytes.div_ceil(SECTOR_BYTES as u64))
         .collect()
+}
+
+/// Whether the disc in `device` is CSS-encrypted DVD-Video: its largest
+/// title video will not read, or reads scrambled. Answers no for a disc that
+/// is not DVD-Video at all.
+///
+/// Asked before a rip that may decrypt, after the drive has been offered
+/// authentication: an authenticated drive returns scrambled sectors, one
+/// that is not refuses them, and either way the answer is yes.
+///
+/// # Errors
+///
+/// [`EngineError::Io`] when the drive cannot be opened.
+pub async fn disc_is_css(device: &Path) -> Result<bool, EngineError> {
+    let mut disc = fs::File::open(device)
+        .await
+        .map_err(|source| EngineError::Io {
+            operation: "opening the drive",
+            source,
+        })?;
+    Ok(title_video_refused(&mut disc).await)
 }
 
 /// Sectors probed into a title video, past its first, which is often
@@ -551,6 +626,7 @@ mod tests {
             device,
             &dir.join("disc.iso"),
             None,
+            Scrambled::Refuse,
             &CancelToken::new(),
             &CollectingSink::new(),
         )
@@ -566,6 +642,7 @@ mod tests {
             &device,
             &dir.path().join("disc.iso"),
             Some(2384 * SECTOR_BYTES as u64),
+            Scrambled::Refuse,
             &CancelToken::new(),
             &CollectingSink::new(),
         )
@@ -584,6 +661,7 @@ mod tests {
                 &device,
                 &dir.path().join("disc.iso"),
                 Some(SECTOR_BYTES as u64),
+                Scrambled::Refuse,
                 &CancelToken::new(),
                 &CollectingSink::new(),
             )
@@ -605,6 +683,7 @@ mod tests {
             &device,
             &dir.path().join("disc.iso"),
             None,
+            Scrambled::Refuse,
             &CancelToken::new(),
             &sink,
         )
@@ -639,6 +718,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn scrambled_sectors_are_kept_as_they_are_when_asked() {
+        let dir = tempfile::tempdir().unwrap();
+        let device = dir.path().join("device");
+        let mut bytes = vec![0_u8; SECTOR_BYTES * 600];
+        for sector in [550, 551, 599] {
+            bytes[SECTOR_BYTES * sector..SECTOR_BYTES * (sector + 1)]
+                .copy_from_slice(&vob_sector(0xE0, 1, 0));
+        }
+        std::fs::write(&device, &bytes).unwrap();
+        let sink = CollectingSink::new();
+        let read = read_image(
+            &device,
+            &dir.path().join("disc.iso"),
+            None,
+            Scrambled::Keep,
+            &CancelToken::new(),
+            &sink,
+        )
+        .await
+        .unwrap();
+        assert_eq!(read.scrambled_sectors, 3);
+        assert_eq!(
+            std::fs::read(dir.path().join("disc.iso")).unwrap(),
+            bytes,
+            "kept byte for byte"
+        );
+        let last = sink.events().last().unwrap().message.clone();
+        assert!(last.contains("3 sectors of them CSS-scrambled"), "{last}");
+    }
+
+    #[tokio::test]
+    async fn a_css_disc_is_told_from_a_clear_one_and_from_a_data_disc() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dvd");
+        let mut image = dvd_video_image();
+        std::fs::write(&path, &image).unwrap();
+        assert!(!disc_is_css(&path).await.unwrap(), "clear DVD-Video");
+        image[41 * SECTOR_BYTES..42 * SECTOR_BYTES].copy_from_slice(&vob_sector(0xE0, 1, 0));
+        std::fs::write(&path, &image).unwrap();
+        assert!(disc_is_css(&path).await.unwrap(), "scrambled title video");
+        std::fs::write(&path, vec![0_u8; SECTOR_BYTES * 40]).unwrap();
+        assert!(!disc_is_css(&path).await.unwrap(), "not DVD-Video");
+        assert!(matches!(
+            disc_is_css(&dir.path().join("absent")).await,
+            Err(EngineError::Io { .. })
+        ));
+    }
+
+    #[tokio::test]
     async fn nothing_readable_is_no_medium() {
         let dir = tempfile::tempdir().unwrap();
         let device = dir.path().join("device");
@@ -660,6 +788,7 @@ mod tests {
             &device,
             &dir.path().join("disc.iso"),
             None,
+            Scrambled::Refuse,
             &cancel,
             &CollectingSink::new(),
         )
@@ -678,6 +807,7 @@ mod tests {
             &device,
             &dir.path().join("disc.iso"),
             None,
+            Scrambled::Refuse,
             &CancelToken::new(),
             &CollectingSink::new(),
         )

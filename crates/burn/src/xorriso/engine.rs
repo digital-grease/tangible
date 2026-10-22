@@ -794,6 +794,10 @@ impl BurnEngine for XorrisoEngine {
     ) -> Result<crate::plan::RipReport, EngineError> {
         crate::engine::rip_image_from_drive(request, sink).await
     }
+
+    async fn css_encrypted(&self, drive: &DriveRef) -> Result<bool, EngineError> {
+        crate::engine::css_encrypted_on_drive(drive).await
+    }
 }
 
 /// What reading a disc back produced.

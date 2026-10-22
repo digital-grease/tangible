@@ -19,6 +19,7 @@ pub mod combined;
 pub mod connection;
 pub mod decryption;
 pub mod device_lock;
+pub mod dvdbackup;
 pub mod engine;
 pub mod erasing;
 pub mod fake;

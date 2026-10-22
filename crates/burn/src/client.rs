@@ -384,6 +384,14 @@ pub struct RipClaim {
     pub outputs: Vec<String>,
     /// The largest file the server accepts.
     pub max_file_bytes: u64,
+    /// Whether to decrypt an encrypted disc: only when the server allows it
+    /// and this worker said it can.
+    #[serde(default)]
+    pub decrypt: bool,
+    /// When decrypting, the original to keep: `encrypted_original` or
+    /// `decrypted_original`.
+    #[serde(default)]
+    pub keep: Option<String>,
 }
 
 /// Sectors that gave trouble during a rip.
@@ -408,8 +416,17 @@ pub struct RipCompletion {
     pub medium: Option<crate::plan::MediumInfo>,
     /// Sectors that gave trouble.
     pub read_errors: Option<ReadErrorsBody>,
-    /// The files sent, for a read.
+    /// The files sent, for a read: the original's, and a decrypted copy's
+    /// under `decrypted/`.
     pub outputs: Vec<String>,
+    /// For a read by a rip asked to decrypt: the disc's encryption, `none`
+    /// or `css`. Absent means none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encryption: Option<String>,
+    /// For a read that decrypted anything: the library and tool, never a
+    /// key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decryption: Option<tangible_domain::manifest::DecryptionRecord>,
     /// Why, for a refusal or a failure.
     pub error_code: Option<String>,
     /// More about that.

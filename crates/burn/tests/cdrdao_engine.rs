@@ -312,6 +312,7 @@ async fn a_rip_of_a_drive_that_is_not_there_is_unavailable() {
     let Some(program) = binary() else { return };
     let fixture = Fixture::new(&program);
     let request = tangible_burn::RipRequest {
+        scrambled: tangible_burn::block_reader::Scrambled::Refuse,
         drive: mixed_mode(&fixture).drive,
         output_dir: fixture.dir.path().join("rip"),
         cancel: tangible_burn::CancelToken::new(),

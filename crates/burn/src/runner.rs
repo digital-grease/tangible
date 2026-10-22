@@ -26,7 +26,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tangible_domain::{
-    ArtifactId, BurnAttemptId, BurnJobId, DriveId, SecretString, Sha256Digest, WorkerId,
+    ArtifactId, BurnAttemptId, BurnJobId, DriveId, RipOriginal, SecretString, Sha256Digest,
+    WorkerId,
 };
 use time::OffsetDateTime;
 
@@ -37,6 +38,7 @@ use crate::client::{
     identity_path, rfc3339,
 };
 use crate::device_lock::{DeviceLock, DeviceLockError};
+use crate::dvdbackup::{CssCopier, Dvdbackup};
 use crate::engine::{BurnEngine, BurnEvent, EngineError, EventSink, NullSink};
 use crate::erasing::erase_disc;
 use crate::fake::CancelToken;
@@ -44,7 +46,7 @@ use crate::plan::{
     BurnPlan, DriveCapabilities, DriveRef, MediumInfo, PlannedInput, PreflightFailure,
     VerifyReport, WriteMode, WriteReport,
 };
-use crate::ripping::{RipOutcome, rip_disc};
+use crate::ripping::{Decrypting, RipOptions, RipOutcome, rip_disc};
 use crate::worker::{EventBuffer, RecoveryRecord, RecoveryStore, WorkerStage, plan_for};
 
 /// How a worker is configured.
@@ -192,6 +194,8 @@ pub struct WorkerRuntime<E: BurnEngine> {
     engine: E,
     /// Held for as long as this worker runs, for engines that drive hardware.
     drive: Option<DeviceLock>,
+    /// What decrypts a DVD, when this worker's image can.
+    css: Option<Arc<dyn CssCopier>>,
 }
 
 impl<E: BurnEngine> WorkerRuntime<E> {
@@ -202,12 +206,28 @@ impl<E: BurnEngine> WorkerRuntime<E> {
     /// [`RunnerError::Client`] if the HTTP client cannot be built.
     pub fn new(settings: WorkerSettings, engine: E) -> Result<Self, RunnerError> {
         let client = WorkerClient::new(&settings.server_url)?;
+        // dvdbackup at its one installed place, only when the image was
+        // found to have it.
+        let css = settings
+            .decryption
+            .as_ref()
+            .and_then(|found| found.css.clone())
+            .map(|css| Arc::new(Dvdbackup::installed(css)) as Arc<dyn CssCopier>);
         Ok(Self {
             settings,
             client,
             engine,
             drive: None,
+            css,
         })
+    }
+
+    /// Decrypt with `copier` instead of the installed dvdbackup. For tests:
+    /// the capability reported is still the one in the settings.
+    #[must_use]
+    pub fn with_css_copier(mut self, copier: Arc<dyn CssCopier>) -> Self {
+        self.css = Some(copier);
+        self
     }
 
     fn recovery_store(&self) -> RecoveryStore {
@@ -761,10 +781,12 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         let sink = RipSink {
             events: Arc::clone(&events),
         };
+        let options = self.rip_options(rip);
         let outcome = rip_disc(
             &self.engine,
             &self.drive_ref(identity, drive_id),
             &dir,
+            options,
             &cancel,
             &sink,
         )
@@ -775,6 +797,47 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         let result = self.finish_rip(rip, &dir, &events, outcome).await;
         let _ = tokio::fs::remove_dir_all(&dir).await;
         result
+    }
+
+    /// What the claim asks for, as far as this worker can do it.
+    ///
+    /// The server leases a decrypting rip only to a worker that reported
+    /// the capability, so a claim to decrypt without a copier is the server's
+    /// mistake; the rip then reads without decrypting, and an encrypted disc
+    /// is refused, which is the safe ending.
+    fn rip_options(&self, rip: &RipClaim) -> RipOptions<'_> {
+        let can_decrypt = self.css.is_some();
+        let decrypt = match (&self.css, rip.decrypt) {
+            (Some(copier), true) => {
+                let keep = match rip.keep.as_deref().map(str::parse::<RipOriginal>) {
+                    None => Some(RipOriginal::EncryptedOriginal),
+                    Some(Ok(keep)) => Some(keep),
+                    Some(Err(_)) => {
+                        tracing::warn!(
+                            rip_id = %rip.rip_id,
+                            "the rip names an original this worker does not know; not decrypting"
+                        );
+                        None
+                    }
+                };
+                keep.map(|keep| Decrypting {
+                    keep,
+                    copier: copier.as_ref(),
+                })
+            }
+            (None, true) => {
+                tracing::warn!(
+                    rip_id = %rip.rip_id,
+                    "the rip asks to decrypt, and this worker cannot; not decrypting"
+                );
+                None
+            }
+            (_, false) => None,
+        };
+        RipOptions {
+            decrypt,
+            can_decrypt,
+        }
     }
 
     /// Send what a rip read and report how it ended.

@@ -88,6 +88,11 @@ struct Server {
 }
 
 async fn server() -> Server {
+    server_with(false).await
+}
+
+/// A server, with decryption turned on by its administrator or not.
+async fn server_with(decryption_allowed: bool) -> Server {
     let url = std::env::var("TANGIBLE_TEST_DATABASE_URL")
         .or_else(|_| std::env::var("TANGIBLE_DATABASE_URL"))
         .expect("set TANGIBLE_TEST_DATABASE_URL to run integration tests");
@@ -115,11 +120,13 @@ async fn server() -> Server {
     let address = listener.local_addr().expect("local address");
 
     let (shutdown, stopped) = tokio::sync::oneshot::channel();
-    let state = ApiState::with_manifests(database.clone(), manifests).with_imports(ImportContext {
-        pipeline: pipeline.clone(),
-        roots: WatchRoots::new(std::collections::BTreeMap::new()),
-        max_upload_bytes: 64 * 1024 * 1024,
-    });
+    let state = ApiState::with_manifests(database.clone(), manifests)
+        .with_imports(ImportContext {
+            pipeline: pipeline.clone(),
+            roots: WatchRoots::new(std::collections::BTreeMap::new()),
+            max_upload_bytes: 64 * 1024 * 1024,
+        })
+        .with_decryption_allowed(decryption_allowed);
     let handle = tokio::spawn(async move {
         let _ = axum::serve(listener, router(state))
             .with_graceful_shutdown(async {
@@ -1178,28 +1185,52 @@ async fn a_withdrawn_rip_stops_the_worker_reading_and_nothing_is_sent() {
 /// Run a worker with `behaviour` until the rip it is asked for has ended or
 /// been sent, and answer the rip as the server last saw it.
 async fn rip_with(server: &Server, behaviour: FakeBehaviour) -> serde_json::Value {
+    rip_asking(server, behaviour, serde_json::json!({}), None).await
+}
+
+/// As [`rip_with`], asking for the rip with `request`, on a worker that
+/// decrypts with `copier` when there is one.
+async fn rip_asking(
+    server: &Server,
+    behaviour: FakeBehaviour,
+    request: serde_json::Value,
+    copier: Option<tangible_burn::fake::FakeCssCopier>,
+) -> serde_json::Value {
     let worker_dir = TempDir::new().expect("temp dir");
     let token = server.enrollment_token().await;
-    let settings = settings(server, worker_dir.path().to_path_buf(), token);
-    let engine =
-        || FakeEngine::new(settings.state_dir.join("media")).with_behaviour(behaviour.clone());
+    let mut settings = settings(server, worker_dir.path().to_path_buf(), token);
+    if copier.is_some() {
+        settings.decryption = Some(tangible_burn::decryption::DecryptionCapability {
+            css: Some(tangible_burn::decryption::CssDecryption {
+                library: "libdvdcss".to_owned(),
+                version: "1.6.0".to_owned(),
+                tool: "dvdbackup".to_owned(),
+                tool_version: "0.4.2-4.1".to_owned(),
+            }),
+        });
+    }
+    let runtime = |settings: WorkerSettings| {
+        let engine =
+            FakeEngine::new(settings.state_dir.join("media")).with_behaviour(behaviour.clone());
+        let runtime = WorkerRuntime::new(settings, engine).expect("runtime");
+        match &copier {
+            Some(copier) => runtime.with_css_copier(std::sync::Arc::new(copier.clone())),
+            None => runtime,
+        }
+    };
     let drive = {
-        let mut runtime = WorkerRuntime::new(settings.clone(), engine()).expect("runtime");
+        let mut runtime = runtime(settings.clone());
         let mut identity = runtime.identify().await.expect("enroll");
         runtime.announce(&mut identity).await.expect("announce")
     };
     let (status, requested) = server
-        .post(
-            &format!("/api/v1/drives/{drive}/rips"),
-            serde_json::json!({}),
-        )
+        .post(&format!("/api/v1/drives/{drive}/rips"), request)
         .await;
     assert_eq!(status, 201, "{requested}");
     let rip = requested["id"].as_str().expect("a rip").to_owned();
     let (stop, stopped) = tokio::sync::oneshot::channel();
-    let engine = engine();
+    let mut runtime = runtime(settings);
     let worker = tokio::spawn(async move {
-        let mut runtime = WorkerRuntime::new(settings, engine).expect("runtime");
         runtime
             .run(async {
                 let _ = stopped.await;
@@ -1276,5 +1307,132 @@ async fn an_encrypted_dvd_is_refused_and_nothing_is_sent() {
     assert_eq!(ended["error_code"], "ENCRYPTED");
     assert_eq!(ended["bytes_received"], 0);
     assert_eq!(ended["medium"]["profile"], "DVD-ROM");
+    server.stop().await;
+}
+
+/// A CSS-encrypted DVD, as the fake engine presents one.
+fn encrypted_dvd() -> FakeBehaviour {
+    FakeBehaviour {
+        medium_profile: Some("DVD-ROM".to_owned()),
+        medium_sessions: 1,
+        rip_encrypted: true,
+        ..FakeBehaviour::default()
+    }
+}
+
+impl Server {
+    /// Run the import queue until it has nothing left.
+    async fn run_imports(&self) {
+        let runner = ImportRunner::new(
+            self.database.clone(),
+            self.pipeline.clone(),
+            ImportRunnerSettings {
+                owner: format!("test-{}", uuid::Uuid::now_v7()),
+                ..ImportRunnerSettings::default()
+            },
+        );
+        for _ in 0..10 {
+            if !runner.step().await.expect("queue") {
+                break;
+            }
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_worker_decrypts_a_dvd_keeping_the_encrypted_original_and_a_copy() {
+    let _queue = exclusive_queue().await;
+    let mut server = server_with(true).await;
+    server.drain_queue().await;
+    let sent = rip_asking(
+        &server,
+        encrypted_dvd(),
+        serde_json::json!({ "decrypt": true }),
+        Some(tangible_burn::fake::FakeCssCopier::default()),
+    )
+    .await;
+    assert_eq!(sent["state"], "registering", "{sent}");
+    let names: Vec<&str> = sent["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| file["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"disc.iso"), "{names:?}");
+    assert!(
+        names.contains(&"decrypted/VIDEO_TS/VTS_01_1.VOB"),
+        "sent under its full name: {names:?}"
+    );
+    assert_eq!(sent["encryption"], "css");
+    assert_eq!(sent["decryption"]["library"], "libdvdcss");
+    assert_eq!(sent["keep"], "encrypted_original");
+
+    server.run_imports().await;
+    let rip = sent["id"].as_str().unwrap();
+    let done = server.get(&format!("/api/v1/rips/{rip}")).await;
+    assert_eq!(done["state"], "complete", "{done}");
+    let original = done["artifact_id"].as_str().expect("the original");
+    let detail = server.get(&format!("/api/v1/artifacts/{original}")).await;
+    assert_eq!(detail["format"], "iso", "{detail}");
+    let copy = done["copy_artifact_id"].as_str().expect("the copy");
+    let copied = server.get(&format!("/api/v1/artifacts/{copy}")).await;
+    assert_eq!(copied["format"], "video_ts_directory", "{copied}");
+    server.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_worker_decrypts_a_dvd_into_a_decrypted_original() {
+    let _queue = exclusive_queue().await;
+    let mut server = server_with(true).await;
+    server.drain_queue().await;
+    let sent = rip_asking(
+        &server,
+        encrypted_dvd(),
+        serde_json::json!({ "decrypt": true, "keep": "decrypted_original" }),
+        Some(tangible_burn::fake::FakeCssCopier::default()),
+    )
+    .await;
+    assert_eq!(sent["state"], "registering", "{sent}");
+    assert_eq!(sent["engine"], "dvdbackup");
+    assert!(
+        sent["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|file| file["name"].as_str().unwrap().starts_with("VIDEO_TS/")),
+        "{sent}"
+    );
+    server.run_imports().await;
+    let rip = sent["id"].as_str().unwrap();
+    let done = server.get(&format!("/api/v1/rips/{rip}")).await;
+    assert_eq!(done["state"], "complete", "{done}");
+    assert!(done["copy_artifact_id"].is_null(), "{done}");
+    let original = done["artifact_id"].as_str().expect("the original");
+    let detail = server.get(&format!("/api/v1/artifacts/{original}")).await;
+    assert_eq!(detail["format"], "video_ts_directory", "{detail}");
+    server.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_dvd_that_will_not_decrypt_fails_and_nothing_is_sent() {
+    let _queue = exclusive_queue().await;
+    let mut server = server_with(true).await;
+    server.drain_queue().await;
+    let ended = rip_asking(
+        &server,
+        encrypted_dvd(),
+        serde_json::json!({ "decrypt": true }),
+        Some(tangible_burn::fake::FakeCssCopier {
+            authenticate_fails: true,
+            ..tangible_burn::fake::FakeCssCopier::default()
+        }),
+    )
+    .await;
+    assert_eq!(ended["state"], "failed", "{ended}");
+    assert_eq!(ended["error_code"], "DECRYPTION_FAILED");
+    assert_eq!(ended["bytes_received"], 0);
     server.stop().await;
 }

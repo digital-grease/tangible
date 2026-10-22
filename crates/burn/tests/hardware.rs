@@ -18,6 +18,14 @@
 //!   It destroys whatever is on the rewritable disc in the drive, which is why
 //!   it has a gate of its own.
 //!
+//! - `TANGIBLE_DVDBACKUP_BIN`, as well as the first, runs the one that
+//!   decrypts the CSS-encrypted DVD in the drive (ADR 0013), with the
+//!   dvdbackup it names, which needs libdvdcss beside it: a wrapper around the
+//!   image `deploy/decryption/Dockerfile` builds. Whether ripping that disc
+//!   is lawful is yours to determine. What it reads stays in the temporary
+//!   directory and is removed; nothing ripped from a commercial disc is ever
+//!   committed. It needs room for the disc twice over.
+//!
 //! `TANGIBLE_HARDWARE_DEVICE` names the drive (default `/dev/sr0`).
 //! `TANGIBLE_XORRISO_BIN` and `TANGIBLE_CDRDAO_BIN` point at the tools when
 //! they are not on `PATH`; a wrapper that runs them in a container works if it
@@ -443,6 +451,7 @@ async fn the_disc_in_the_drive_is_ripped() {
         &engine,
         &drive(&device),
         &out,
+        tangible_burn::ripping::RipOptions::default(),
         &tangible_burn::CancelToken::new(),
         &Print,
     )
@@ -480,4 +489,109 @@ async fn the_disc_in_the_drive_is_ripped() {
         .expect("the data")
         .len();
     assert!(bytes > 0);
+}
+
+#[tokio::test]
+async fn the_encrypted_dvd_in_the_drive_is_ripped_and_decrypted() {
+    // Read-only. Needs a CSS-encrypted DVD-Video disc in the drive, and
+    // dvdbackup with libdvdcss.
+    let Some(device) = device() else { return };
+    let Ok(program) = std::env::var("TANGIBLE_DVDBACKUP_BIN") else {
+        eprintln!("skipping: set TANGIBLE_DVDBACKUP_BIN to a dvdbackup that has libdvdcss");
+        return;
+    };
+    let keep = match std::env::var("TANGIBLE_HARDWARE_KEEP").as_deref() {
+        Ok("decrypted_original") => tangible_domain::RipOriginal::DecryptedOriginal,
+        _ => tangible_domain::RipOriginal::EncryptedOriginal,
+    };
+    let copier = tangible_burn::dvdbackup::Dvdbackup::at(
+        program,
+        tangible_burn::decryption::CssDecryption {
+            library: "libdvdcss".to_owned(),
+            version: "1.6.0".to_owned(),
+            tool: "dvdbackup".to_owned(),
+            tool_version: "0.4.2-4.1".to_owned(),
+        },
+    );
+    let dir = TempDir::new().expect("temp dir");
+    let engine = engine(dir.path()).await;
+    let out = dir.path().join("rip");
+    let started = std::time::Instant::now();
+    let outcome = tangible_burn::ripping::rip_disc(
+        &engine,
+        &drive(&device),
+        &out,
+        tangible_burn::ripping::RipOptions {
+            decrypt: Some(tangible_burn::ripping::Decrypting {
+                keep,
+                copier: &copier,
+            }),
+            can_decrypt: true,
+        },
+        &tangible_burn::CancelToken::new(),
+        &Print,
+    )
+    .await;
+    let tangible_burn::ripping::RipOutcome::Ended(done) = outcome else {
+        panic!("nothing withdrew this rip");
+    };
+    println!(
+        "  rip ({}s): {} {:?} {:?}, {} files",
+        started.elapsed().as_secs(),
+        done.outcome,
+        done.error_code,
+        done.error_detail,
+        done.outputs.len()
+    );
+    assert_eq!(done.outcome, "read", "{done:?}");
+    assert_eq!(
+        done.encryption.as_deref(),
+        Some("css"),
+        "put a CSS-encrypted DVD-Video disc in the drive"
+    );
+    assert_eq!(
+        done.decryption.as_ref().map(|d| d.system.as_str()),
+        Some("css")
+    );
+
+    // Every file of the decrypted tree is clear: the scrambling flag is set
+    // in no sector of its largest title video.
+    let prefix = match keep {
+        tangible_domain::RipOriginal::EncryptedOriginal => "decrypted/",
+        tangible_domain::RipOriginal::DecryptedOriginal => "",
+    };
+    let largest = done
+        .outputs
+        .iter()
+        .filter(|name| {
+            name.starts_with(prefix)
+                && Path::new(name.as_str())
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("vob"))
+        })
+        .max_by_key(|name| std::fs::metadata(out.join(name)).map_or(0, |m| m.len()))
+        .expect("a title video");
+    let video = std::fs::read(out.join(largest)).expect("the title video");
+    assert!(
+        !video
+            .chunks(2048)
+            .any(tangible_burn::block_reader::css_scrambled),
+        "{largest} is decrypted"
+    );
+    if keep == tangible_domain::RipOriginal::EncryptedOriginal {
+        assert_eq!(done.outputs[0], "disc.iso");
+        assert_eq!(done.engine.as_deref(), Some("block_reader"));
+        // The image is the disc as it is: scrambled sectors and all.
+        let image = std::fs::File::open(out.join("disc.iso")).expect("the image");
+        let mut reader = std::io::BufReader::with_capacity(1 << 20, image);
+        let mut sector = vec![0_u8; 2048];
+        let mut scrambled = 0_u64;
+        while std::io::Read::read_exact(&mut reader, &mut sector).is_ok() {
+            if tangible_burn::block_reader::css_scrambled(&sector) {
+                scrambled += 1;
+            }
+        }
+        println!("  {scrambled} scrambled sectors kept in the image");
+        assert!(scrambled > 0, "the encrypted original is still encrypted");
+    }
 }

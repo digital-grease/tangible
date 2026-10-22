@@ -115,6 +115,124 @@ pub struct FakeBehaviour {
     pub rip_encrypted: bool,
 }
 
+/// A decrypted DVD's `VIDEO_TS` files, as dvdbackup writes them: a video
+/// manager naming one title set, the title set's information, and clear
+/// video. Paths are relative to the copy's directory.
+#[must_use]
+pub fn fake_video_ts() -> Vec<(&'static str, Vec<u8>)> {
+    let header = |signature: &[u8], title_sets: u16| {
+        let mut bytes = vec![0_u8; 2048];
+        bytes[..12].copy_from_slice(signature);
+        bytes[0x3E..0x40].copy_from_slice(&title_sets.to_be_bytes());
+        bytes
+    };
+    let mut vob = Vec::new();
+    for _ in 0..70 {
+        let mut sector = vec![0_u8; 2048];
+        sector[..4].copy_from_slice(&[0, 0, 1, 0xBA]);
+        sector[4] = 0x44;
+        sector[13] = 0xF8;
+        sector[14..18].copy_from_slice(&[0, 0, 1, 0xE0]);
+        sector[20] = 0x80;
+        vob.extend(sector);
+    }
+    vec![
+        ("VIDEO_TS/VIDEO_TS.IFO", header(b"DVDVIDEO-VMG", 1)),
+        ("VIDEO_TS/VIDEO_TS.BUP", header(b"DVDVIDEO-VMG", 1)),
+        ("VIDEO_TS/VTS_01_0.IFO", header(b"DVDVIDEO-VTS", 0)),
+        ("VIDEO_TS/VTS_01_0.BUP", header(b"DVDVIDEO-VTS", 0)),
+        ("VIDEO_TS/VTS_01_1.VOB", vob),
+    ]
+}
+
+/// A stand-in for dvdbackup: authentication that succeeds or fails as told,
+/// and a copy that writes [`fake_video_ts`].
+#[derive(Debug, Clone, Default)]
+pub struct FakeCssCopier {
+    /// Fail authentication, as a drive that will not authenticate.
+    pub authenticate_fails: bool,
+    /// Fail the copy.
+    pub mirror_fails: bool,
+    /// Write this file into the copy's `VIDEO_TS` as well.
+    pub extra_file: Option<String>,
+    /// Withdraw the rip as the copy starts, through the token given.
+    pub cancel_during_mirror: bool,
+}
+
+#[async_trait]
+impl crate::dvdbackup::CssCopier for FakeCssCopier {
+    fn decryption(&self) -> tangible_domain::manifest::DecryptionRecord {
+        tangible_domain::manifest::DecryptionRecord {
+            system: "css".to_owned(),
+            library: "libdvdcss".to_owned(),
+            library_version: "1.6.0".to_owned(),
+            tool: "dvdbackup".to_owned(),
+            tool_version: "0.4.2-4.1".to_owned(),
+        }
+    }
+
+    async fn authenticate(
+        &self,
+        _device: &Path,
+        _work_dir: &Path,
+        cancel: &CancelToken,
+    ) -> Result<(), EngineError> {
+        if cancel.is_cancelled() {
+            return Err(EngineError::Cancelled);
+        }
+        if self.authenticate_fails {
+            return Err(EngineError::Unsupported {
+                what: "dvdbackup could not read the disc's DVD-Video information; it exited 1"
+                    .to_owned(),
+            });
+        }
+        Ok(())
+    }
+
+    async fn mirror(
+        &self,
+        _device: &Path,
+        into: &Path,
+        _expected_bytes: Option<u64>,
+        cancel: &CancelToken,
+        sink: &dyn EventSink,
+    ) -> Result<(), EngineError> {
+        if self.cancel_during_mirror {
+            cancel.cancel();
+        }
+        if cancel.is_cancelled() {
+            return Err(EngineError::Cancelled);
+        }
+        if self.mirror_fails {
+            return Err(EngineError::Unsupported {
+                what: "dvdbackup could not copy the disc's video; it exited 1".to_owned(),
+            });
+        }
+        let io = |source| EngineError::Io {
+            operation: "writing the simulated copy",
+            source,
+        };
+        fs::create_dir_all(into.join("VIDEO_TS"))
+            .await
+            .map_err(io)?;
+        for (name, bytes) in fake_video_ts() {
+            fs::write(into.join(name), bytes).await.map_err(io)?;
+        }
+        if let Some(extra) = &self.extra_file {
+            fs::write(into.join("VIDEO_TS").join(extra), b"extra")
+                .await
+                .map_err(io)?;
+        }
+        sink.emit(BurnEvent::progress(
+            "ripping",
+            "RIP_COPY_PROGRESS",
+            0.99,
+            "99% of the decrypted copy made",
+        ));
+        Ok(())
+    }
+}
+
 /// State shared with whoever wants to cancel.
 #[derive(Debug, Clone, Default)]
 pub struct CancelToken {
@@ -679,7 +797,9 @@ impl BurnEngine for FakeEngine {
         if request.cancel.is_cancelled() {
             return Err(EngineError::Cancelled);
         }
-        if self.behaviour.rip_encrypted {
+        if self.behaviour.rip_encrypted
+            && request.scrambled == crate::block_reader::Scrambled::Refuse
+        {
             return Err(EngineError::Encrypted { system: "CSS" });
         }
         if self.behaviour.rip_fails {
@@ -717,6 +837,15 @@ impl BurnEngine for FakeEngine {
 
     fn rips_cds(&self) -> bool {
         true
+    }
+
+    async fn css_encrypted(&self, drive: &DriveRef) -> Result<bool, EngineError> {
+        if self.behaviour.drive_unavailable {
+            return Err(EngineError::DriveUnavailable {
+                alias: drive.device_alias.clone(),
+            });
+        }
+        Ok(self.behaviour.rip_encrypted)
     }
 
     async fn rip_cd(

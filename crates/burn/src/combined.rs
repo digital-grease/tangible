@@ -164,6 +164,10 @@ impl<D: BurnEngine, T: BurnEngine> BurnEngine for CombinedEngine<D, T> {
     ) -> Result<RipReport, EngineError> {
         self.data.rip_image(request, sink).await
     }
+
+    async fn css_encrypted(&self, drive: &DriveRef) -> Result<bool, EngineError> {
+        self.data.css_encrypted(drive).await
+    }
 }
 
 #[cfg(test)]

@@ -287,7 +287,16 @@ mod tests {
 
         drop(lock);
         let after = File::options().read(true).open(&path).expect("open");
-        assert!(after.try_lock().is_ok(), "the lock outlived the claim");
+        // Another test starting a tool can fork while the claim is open; the
+        // child holds a copy of it until it runs the tool, which closes it.
+        // A moment, then, not forever.
+        let free = (0..100).any(|_| {
+            after.try_lock().is_ok() || {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                false
+            }
+        });
+        assert!(free, "the lock outlived the claim");
     }
 
     #[cfg(unix)]

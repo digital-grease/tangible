@@ -863,6 +863,9 @@ pub struct RipRequest {
     /// How many bytes the drive says the disc holds, when it says. An image
     /// read checks the system agrees before trusting the device's end.
     pub expected_bytes: Option<u64>,
+    /// What an image read does with a CSS-scrambled sector: refuse the
+    /// disc, unless the rip decrypts and keeps the encrypted original.
+    pub scrambled: crate::block_reader::Scrambled,
 }
 
 /// How a rip read.

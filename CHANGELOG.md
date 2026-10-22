@@ -63,8 +63,7 @@ may change between minor versions, and the release notes say how.
   `deploy/compose.decryption.yaml` to run a worker from it): VideoLAN's
   libdvdcss from its source release, pinned by checksum, and Debian's
   `dvdbackup`, `libaacs0` and `libbdplus0`. A worker started from it says so
-  in its log and reports the library and tool versions to the server; it
-  does not decrypt anything yet.
+  in its log and reports the library and tool versions to the server.
 - A rip can ask to decrypt an encrypted disc, and choose its original: the
   disc as it is with a decrypted copy beside it (the default), or only a
   decrypted image (`decrypt` and `keep` on `POST /api/v1/drives/{id}/rips`).
@@ -73,7 +72,7 @@ may change between minor versions, and the release notes say how.
   `DECRYPTION_OFF` or `ENCRYPTED_NO_DECRYPTION`, and a queued rip that can
   no longer decrypt when its worker takes it is refused the same way. The
   drive list says which drives can (`can_decrypt_rips`), and diagnostics
-  shows the setting. Workers do not decrypt yet.
+  shows the setting.
 - The server accepts what a decrypting rip sends: a decrypted `VIDEO_TS`
   tree as the original, or the encrypted disc image with a decrypted copy
   beside it, which is imported after the original as its derivative
@@ -83,6 +82,15 @@ may change between minor versions, and the release notes say how.
   at acquisition, never a key.
   The release now checks its image contains none of these before signing
   it (`deploy/check-no-decryption.sh`).
+- Workers decrypt CSS DVDs for a rip that asks. The drive is authenticated
+  through dvdbackup and libdvdcss first; a disc that turns out not to be
+  encrypted is read as it is. Keeping the encrypted original reads the disc
+  whole, scrambled sectors as they are, then makes the decrypted copy while
+  the disc is still in the drive; keeping a decrypted original makes only
+  the copy. dvdbackup runs with fixed arguments, a cleared environment, a
+  time limit and its key cache off, and nothing it prints that could carry
+  key material is kept. A disc that will not decrypt fails as
+  `DECRYPTION_FAILED`, keeping nothing.
 - DVD-Video `VIDEO_TS` folders are recognised: imported from a watched folder
   (the `VIDEO_TS` folder itself, or the disc's folder holding it), a folder
   whose `VIDEO_TS.IFO` really is a DVD-Video manager becomes a

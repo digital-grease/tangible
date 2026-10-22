@@ -367,6 +367,29 @@ pub trait BurnEngine: Send + Sync {
             what: format!("the {} engine does not rip discs", self.name()),
         })
     }
+
+    /// Whether the DVD in the drive is CSS-encrypted, asked only by a rip
+    /// that may decrypt it. Defaulted to no: a rip told no reads the disc
+    /// with scrambled sectors refused, so an engine that cannot tell still
+    /// never keeps an encrypted disc as if it were plain.
+    ///
+    /// # Errors
+    ///
+    /// As [`crate::block_reader::disc_is_css`].
+    async fn css_encrypted(&self, drive: &DriveRef) -> Result<bool, EngineError> {
+        let _ = drive;
+        Ok(false)
+    }
+}
+
+/// Whether the DVD in the drive is CSS-encrypted, for an engine that drives
+/// real hardware.
+///
+/// # Errors
+///
+/// As [`crate::block_reader::disc_is_css`].
+pub async fn css_encrypted_on_drive(drive: &DriveRef) -> Result<bool, EngineError> {
+    crate::block_reader::disc_is_css(std::path::Path::new(&drive.device_alias)).await
 }
 
 /// Read a disc image from the drive itself, for an engine that drives real
@@ -389,6 +412,7 @@ pub async fn rip_image_from_drive(
         std::path::Path::new(&request.drive.device_alias),
         &request.output_dir.join(crate::plan::RIP_IMAGE),
         request.expected_bytes,
+        request.scrambled,
         &request.cancel,
         sink,
     )
