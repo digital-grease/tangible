@@ -91,6 +91,11 @@ may change between minor versions, and the release notes say how.
   time limit and its key cache off, and nothing it prints that could carry
   key material is kept. A disc that will not decrypt fails as
   `DECRYPTION_FAILED`, keeping nothing.
+- The opt-in worker image also installs redumper (ADR 0015), from its
+  GitHub release pinned by build and SHA-256 for amd64 and arm64, for CD
+  rips with the drive's read offset corrected. The worker does not use it
+  yet. It is not in the published image, and the release's check refuses
+  it there, because it carries its own CSS and AACS code.
 - The web UI asks about decryption on a drive that can decrypt: "Rip the
   disc in {drive}" opens a dialog with a "Decrypt an encrypted disc" box,
   the notice that whether ripping is lawful is the operator's to determine,

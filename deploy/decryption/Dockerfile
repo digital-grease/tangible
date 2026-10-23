@@ -27,6 +27,12 @@
 #   dvdbackup  Debian's, to copy a DVD's video into a VIDEO_TS tree.
 #   libaacs0   Debian's (main: no keys in it). Reads keys only from the
 #   libbdplus0 KEYDB.cfg the operator mounts; for Blu-ray, later.
+#   redumper   upstream's static Linux build, pinned below by build and
+#              SHA-256, for CD rips with the drive's read offset corrected
+#              (ADR 0015). It is here, not in the published image, because
+#              it also carries CSS and AACS code and commands that crack DVD
+#              keys; the worker only ever runs its drive::detect, dump and
+#              split, on a CD.
 #
 # /usr/share/tangible/decryption.json records what was installed, for the
 # worker to report. The worker believes it only when the library and the
@@ -67,9 +73,51 @@ RUN curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
  && install -D -m 0644 COPYING /out/usr/local/share/doc/libdvdcss/COPYING \
  && rm -rf /out/usr/local/include /out/usr/local/lib/pkgconfig
 
+# redumper is fetched in a throwaway stage too, so the worker image gets the
+# binary and its licence and nothing used to fetch them.
+FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS redumper
+
+# To move to a newer build: take the build number and each zip's SHA-256
+# from https://github.com/superg/redumper/releases (GitHub shows a digest
+# for every asset), check them against the downloads yourself, and change
+# all four lines together. Then rip a test CD before trusting it
+# (docs/plans/redumper.md, phase F).
+ARG REDUMPER_BUILD=b768
+ARG REDUMPER_SHA256_AMD64=34409e24beb1acb11db975bdda12a7818096b6b92642266cfb0a12b4f700baf9
+ARG REDUMPER_SHA256_ARM64=6e578b5e9c5ab577eac41b5a2b1dd2bcbf8a723bc1698a13797023203696577c
+# GPL-3.0's text, from the same tag.
+ARG REDUMPER_LICENSE_SHA256=3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986
+
+RUN apt-get update \
+ && apt-get install --no-install-recommends -y ca-certificates curl unzip \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+# Both checksums are checked before anything is opened; a mismatch, or an
+# architecture with no pinned build, stops the build. The architecture is
+# this stage's own, which is the image's: asking dpkg works with the legacy
+# builder too, which does not set TARGETARCH.
+RUN set -eu; \
+    arch="$(dpkg --print-architecture)"; \
+    case "${arch}" in \
+      amd64) asset=x64;   sha="${REDUMPER_SHA256_AMD64}" ;; \
+      arm64) asset=arm64; sha="${REDUMPER_SHA256_ARM64}" ;; \
+      *) echo "no pinned redumper build for ${arch}" >&2; exit 1 ;; \
+    esac; \
+    base="https://github.com/superg/redumper"; \
+    fetch() { curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 -o "$1" "$2"; }; \
+    fetch redumper.zip "${base}/releases/download/${REDUMPER_BUILD}/redumper-${REDUMPER_BUILD}-linux-${asset}.zip"; \
+    echo "${sha}  redumper.zip" | sha256sum --check --strict; \
+    fetch LICENSE "https://raw.githubusercontent.com/superg/redumper/${REDUMPER_BUILD}/LICENSE"; \
+    echo "${REDUMPER_LICENSE_SHA256}  LICENSE" | sha256sum --check --strict; \
+    unzip -q redumper.zip; \
+    install -D -m 0755 "redumper-${REDUMPER_BUILD}-linux-${asset}/bin/redumper" /out/usr/local/bin/redumper; \
+    install -D -m 0644 LICENSE /out/usr/local/share/doc/redumper/LICENSE
+
 FROM ${TANGIBLE_IMAGE}
 
 ARG LIBDVDCSS_VERSION=1.6.0
+ARG REDUMPER_BUILD=b768
 
 USER root
 
@@ -81,6 +129,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=libdvdcss /out/usr/local/ /usr/local/
+COPY --from=redumper /out/usr/local/ /usr/local/
 RUN ldconfig
 
 # What the worker reports, written from what is actually installed. Versions
@@ -89,9 +138,10 @@ RUN set -eu; \
     pkg() { dpkg-query --showformat='${Version}' --show "$1"; }; \
     test -e /usr/local/lib/libdvdcss.so.2; \
     test -x /usr/bin/dvdbackup; \
+    test -x /usr/local/bin/redumper; \
     mkdir -p /usr/share/tangible; \
-    printf '{"css":{"library":"libdvdcss","version":"%s","tool":"dvdbackup","tool_version":"%s"},"aacs":{"library":"libaacs","version":"%s","bdplus_version":"%s"}}\n' \
-      "${LIBDVDCSS_VERSION}" "$(pkg dvdbackup)" "$(pkg libaacs0)" "$(pkg libbdplus0)" \
+    printf '{"css":{"library":"libdvdcss","version":"%s","tool":"dvdbackup","tool_version":"%s"},"aacs":{"library":"libaacs","version":"%s","bdplus_version":"%s"},"redumper":{"build":"%s"}}\n' \
+      "${LIBDVDCSS_VERSION}" "$(pkg dvdbackup)" "$(pkg libaacs0)" "$(pkg libbdplus0)" "${REDUMPER_BUILD}" \
       > /usr/share/tangible/decryption.json
 
 # libdvdcss caches title keys under the home directory unless told not to.

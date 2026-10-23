@@ -5,7 +5,8 @@
 # Fail if an image carries decryption code (ADR 0013).
 #
 # The image Tangible publishes never contains libdvdcss, libaacs or libbdplus,
-# the tools built on them, or a key database; an operator who wants to rip
+# the tools built on them, redumper (which carries its own CSS and AACS code,
+# ADR 0015), or a key database; an operator who wants to rip
 # encrypted discs builds deploy/decryption/Dockerfile themselves. This lists
 # every file in the image's filesystem, without running anything in it, and
 # refuses any that is one of those.
@@ -27,7 +28,7 @@ trap 'docker rm "$container" > /dev/null' EXIT
 # opt-in image writes, and key databases under the names the libraries look
 # for.
 found=$(docker export "$container" | tar -t \
-    | grep -E '(^|/)(libdvdcss[^/]*|libaacs[^/]*|libbdplus[^/]*|dvdbackup|tangible-bd-backup|decryption\.json|KEYDB\.cfg|keydb\.cfg)$' \
+    | grep -E '(^|/)(libdvdcss[^/]*|libaacs[^/]*|libbdplus[^/]*|dvdbackup|redumper|tangible-bd-backup|decryption\.json|KEYDB\.cfg|keydb\.cfg)$' \
     || true)
 
 if [ -n "$found" ]; then

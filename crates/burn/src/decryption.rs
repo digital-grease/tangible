@@ -162,7 +162,7 @@ fn plausible_version(version: &str) -> bool {
 mod tests {
     use super::*;
 
-    const GOOD: &str = r#"{"css":{"library":"libdvdcss","version":"1.6.0","tool":"dvdbackup","tool_version":"0.4.2-4.1"},"aacs":{"library":"libaacs","version":"0.11.1-2","bdplus_version":"0.2.0-3"}}"#;
+    const GOOD: &str = r#"{"css":{"library":"libdvdcss","version":"1.6.0","tool":"dvdbackup","tool_version":"0.4.2-4.1"},"aacs":{"library":"libaacs","version":"0.11.1-2","bdplus_version":"0.2.0-3"},"redumper":{"build":"b768"}}"#;
 
     fn image(record: Option<&str>, library: bool, tool: bool) -> tempfile::TempDir {
         let root = tempfile::tempdir().expect("test step");
@@ -209,6 +209,7 @@ mod tests {
         // AACS is in the record but not reported: there is no tool for it.
         let json = serde_json::to_value(&found).expect("test step");
         assert!(json.get("aacs").is_none(), "{json}");
+        assert!(json.get("redumper").is_none(), "{json}");
     }
 
     #[test]

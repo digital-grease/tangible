@@ -314,15 +314,18 @@ free: a CD with `cdrdao read-cd` into a table of contents and its data,
 imported as TOC/BIN; a DVD sector by sector from the drive itself into an
 image, imported as an ISO. Either is kept exactly as read, padding and all.
 Reading changes nothing on the disc, so a rip can be withdrawn while it
-reads. Blank discs, Blu-rays and encrypted DVDs are refused for now; an
-encrypted DVD is recognised while it reads and nothing of it is kept.
+reads. Blank discs and Blu-rays are refused. An encrypted DVD is
+recognised while it reads and refused with nothing kept, unless the rip
+asked to decrypt it on a worker that can (below).
 
 Straight after Tangible burns a disc, the system may still think the drive
 holds the old, blank disc. A rip then refuses ("take the disc out and put
 it back") rather than reading a fragment; reloading the disc fixes it.
 
 Ripped audio CDs are not read-offset corrected, so their audio will not
-match AccurateRip or Redump databases. Data tracks are unaffected.
+match AccurateRip or Redump databases. Data tracks are unaffected. The
+image below also carries redumper, which will correct the offset on the
+workers that run it (ADR 0015); the worker does not use it yet.
 
 ### Ripping encrypted discs
 
@@ -333,13 +336,15 @@ that rips encrypted discs runs an image you build yourself, on top of the
 release you run. Whether ripping a disc is lawful where you are is yours to
 determine.
 
-Not yet in use: the image below builds and works on a drive, but the worker
-does not use it yet, and encrypted DVDs are still refused.
-
 Read [`decryption/Dockerfile`](decryption/Dockerfile) first; it is short. It
 fetches libdvdcss from VideoLAN's source release, checks it against the
-SHA-256 written there, and builds it; and it installs Debian's `dvdbackup`,
-`libaacs0` and `libbdplus0`. Then build it from the release you run, and
+SHA-256 written there, and builds it; it installs Debian's `dvdbackup`,
+`libaacs0` and `libbdplus0`; and it fetches redumper's Linux build from its
+GitHub release, checked against the SHA-256 written there for your
+architecture (amd64 or arm64). redumper is for CD rips with the read offset
+corrected, and is here rather than in the published image because it also
+carries its own CSS and AACS code; the worker only ever runs its
+`drive::detect`, `dump` and `split`, on a CD. Then build it from the release you run, and
 check it carries what you expect:
 
 ```bash
