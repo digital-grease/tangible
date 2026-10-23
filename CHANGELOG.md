@@ -119,6 +119,12 @@ may change between minor versions, and the release notes say how.
 
 ### Fixed
 
+- The block reader reads a DVD with direct I/O, around the page cache.
+  Through the cache, the kernel read ahead of the sector asked for, so a
+  refused sector a few dozen ahead made good ones fail and the error was
+  blamed on the wrong sector; a damaged disc failed before it needed to. A
+  whole disc no longer passes through the cache either. Where direct reads
+  are refused, the reader falls back to cached ones.
 - A completed import now removes its staging copy. Every import since 0.1.0
   kept a second full copy of its bytes in the staging directory, doubling
   the disk it used; those left by earlier versions can be deleted from
