@@ -31,7 +31,7 @@ use tangible_db::rips::{
     drive_has_redumper, drive_rip_engines, get_rip, get_rip_for_worker, list_rip_events, list_rips,
     record_rip_events, record_upload, request_rip,
 };
-use tangible_domain::manifest::{DUMP_ENCRYPTIONS, DecryptionRecord};
+use tangible_domain::manifest::{CdReadRecord, DUMP_ENCRYPTIONS, DecryptionRecord};
 use tangible_domain::rip::{
     DECRYPTED_PREFIX, DecryptionRefusal, MAX_IMAGE_BYTES, OriginalKind, RIP_OUTPUTS, VIDEO_TS_DIR,
     cd_engine_available, check_decryption, check_output_set, max_output_bytes,
@@ -44,7 +44,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::auth::SignedIn;
 use crate::problem::{ErrorCode, Problem};
-use crate::routes::artifacts::DecryptionView;
+use crate::routes::artifacts::{CdReadView, DecryptionView};
 use crate::routes::burns::MediumView;
 use crate::routes::workers::same_worker;
 use crate::state::ApiState;
@@ -220,6 +220,9 @@ pub struct RipView {
     pub encryption: Option<String>,
     /// The library and tool that decrypted it, when anything was decrypted.
     pub decryption: Option<DecryptionView>,
+    /// For a CD read by redumper: the offsets it applied and found
+    /// (ADR 0015).
+    pub cd_read: Option<CdReadView>,
     /// The import of the decrypted copy kept beside an encrypted original,
     /// once queued.
     pub copy_import_id: Option<String>,
@@ -280,6 +283,10 @@ impl From<RipRecord> for RipView {
                 .decryption
                 .and_then(|value| serde_json::from_value::<DecryptionRecord>(value).ok())
                 .map(DecryptionView::from),
+            cd_read: record
+                .cd_read
+                .and_then(|value| serde_json::from_value::<CdReadRecord>(value).ok())
+                .map(CdReadView::from),
             copy_import_id: record.copy_import_job_id.map(|id| id.to_string()),
             copy_artifact_id: record.copy_artifact_id.map(|id| id.to_string()),
             error_code: record.error_code,
@@ -478,6 +485,10 @@ pub struct RipCompletion {
     /// a key. Only for a rip asked to decrypt.
     #[schema(value_type = Option<DecryptionView>)]
     pub decryption: Option<DecryptionRecord>,
+    /// For `read` of a CD by redumper, and only then: the offsets it applied
+    /// and found (ADR 0015).
+    #[schema(value_type = Option<CdReadView>)]
+    pub cd_read: Option<CdReadRecord>,
     /// For `refused` and `failed`: why, as a stable code such as
     /// `NO_MEDIUM`.
     pub error_code: Option<String>,
@@ -966,7 +977,8 @@ pub async fn upload_rip_file(
         return Err(Problem::new(
             ErrorCode::ValidationFailed,
             format!(
-                "a rip sends only {}, or a decrypted DVD's VIDEO_TS files",
+                "a rip sends only {}, a redumper rip's track files, or a decrypted DVD's \
+                 VIDEO_TS files",
                 RIP_OUTPUTS.join(", ")
             ),
         ));
@@ -1139,17 +1151,50 @@ struct CheckedRead {
     copy: Vec<String>,
     encryption: &'static str,
     decrypted_original: bool,
+    cd_read: Option<CdReadRecord>,
 }
 
 /// Check what a worker says it read against what its rip asked for.
 ///
 /// The files must be a whole rip of the kind chosen; decryption may be
 /// reported only by a rip asked to decrypt, must be of the encryption found,
-/// and must be reported whenever anything decrypted was sent.
+/// and must be reported whenever anything decrypted was sent. A CUE sheet
+/// and its tracks come from redumper and only redumper, with its offsets,
+/// and never for a rip that asked for cdrdao; a rip that insisted on
+/// redumper is never read with something else.
 fn checked_read(rip: &RipRecord, report: &RipCompletion) -> Result<CheckedRead, Problem> {
     let invalid = |detail: &str| Problem::new(ErrorCode::ValidationFailed, detail.to_owned());
     let sets = check_output_set(&report.outputs, rip.decrypt, rip.keep)
         .map_err(|error| invalid(&error.to_string()))?;
+    let by_redumper = report.engine.as_deref() == Some(CdRipEngine::Redumper.as_str());
+    if by_redumper != (sets.original == OriginalKind::CueBin) {
+        return Err(invalid(
+            "a CUE sheet and its tracks are what redumper sends, and all it sends",
+        ));
+    }
+    match (&report.cd_read, by_redumper) {
+        (None, true) => {
+            return Err(invalid(
+                "a CD read by redumper must say its offsets in cd_read",
+            ));
+        }
+        (Some(_), false) => return Err(invalid("cd_read is only for a CD read by redumper")),
+        (Some(cd_read), true) if !cd_read.is_plausible() => {
+            return Err(invalid("cd_read offsets are larger than a second of audio"));
+        }
+        _ => {}
+    }
+    match rip.cd_engine {
+        Some(CdRipEngine::Cdrdao) if by_redumper => {
+            return Err(invalid("this rip asked for its CD to be read with cdrdao"));
+        }
+        Some(CdRipEngine::Redumper) if sets.original == OriginalKind::Cd => {
+            return Err(invalid(
+                "this rip insisted on its CD being read with redumper",
+            ));
+        }
+        _ => {}
+    }
     let encryption = report.encryption.as_deref().unwrap_or("none");
     let Some(encryption) = DUMP_ENCRYPTIONS.iter().copied().find(|e| *e == encryption) else {
         return Err(invalid("encryption must be none, css, aacs or unknown"));
@@ -1195,6 +1240,7 @@ fn checked_read(rip: &RipRecord, report: &RipCompletion) -> Result<CheckedRead, 
         copy: sets.copy_files,
         encryption,
         decrypted_original,
+        cd_read: report.cd_read,
     })
 }
 
@@ -1264,6 +1310,7 @@ pub async fn complete_drive_rip(
                 encryption: read.encryption,
                 decryption: report.decryption.as_ref(),
                 decrypted_original: read.decrypted_original,
+                cd_read: read.cd_read.as_ref(),
             }
         }
         "refused" | "failed" => {

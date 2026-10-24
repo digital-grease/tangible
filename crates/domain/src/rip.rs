@@ -49,16 +49,26 @@ pub struct RipTransitionError {
 /// what the import will find.
 pub const CD_OUTPUTS: [&str; 2] = ["disc.toc", "disc.bin"];
 
+/// The CUE sheet a CD rip read by redumper produces (ADR 0015). Beside it are
+/// its tracks: `disc.bin` for a disc of one track, otherwise one
+/// `disc (Track N).bin` for each ([`cue_track`]).
+pub const CUE_OUTPUT: &str = "disc.cue";
+
 /// The file a DVD or Blu-ray rip produces: the disc's sectors in order, an
 /// image of its filesystem.
 pub const IMAGE_OUTPUT: &str = "disc.iso";
 
-/// Every name a rip may send.
-pub const RIP_OUTPUTS: [&str; 3] = ["disc.toc", "disc.bin", IMAGE_OUTPUT];
+/// Every fixed name a rip may send. A redumper rip's track files and a
+/// decrypted DVD's `VIDEO_TS` files follow rules instead
+/// ([`is_rip_output`]).
+pub const RIP_OUTPUTS: [&str; 4] = ["disc.toc", "disc.bin", CUE_OUTPUT, IMAGE_OUTPUT];
 
 /// The largest table of contents a rip may send: cdrdao's are a few
 /// kilobytes.
 pub const MAX_TOC_BYTES: u64 = 1024 * 1024;
+
+/// The largest CUE sheet a rip may send: redumper's are a few kilobytes.
+pub const MAX_CUE_BYTES: u64 = 1024 * 1024;
 
 /// The largest CD data file: a 99-minute CD of raw 2352-byte sectors is
 /// about 1.05 GB; this leaves room and no more.
@@ -154,6 +164,25 @@ pub fn is_cd_output(name: &str) -> bool {
     CD_OUTPUTS.contains(&name)
 }
 
+/// The track a redumper rip's file holds, if `name` is one of its track files:
+/// `disc (Track N).bin`, where `N` is 1 to 99 written with as many digits as
+/// the disc's last track has, so `disc (Track 1).bin` on a disc of nine
+/// tracks and `disc (Track 01).bin` on one of ten or more. Answers the track
+/// number and how many digits it was written with; whether those digits suit
+/// the whole disc is for [`check_output_set`].
+///
+/// Lead-in and lead-out (`Track 0`, `Track AA`) are never sent: no CUE sheet
+/// names them.
+#[must_use]
+pub fn cue_track(name: &str) -> Option<(u8, usize)> {
+    let digits = name.strip_prefix("disc (Track ")?.strip_suffix(").bin")?;
+    if !(1..=2).contains(&digits.len()) || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let number: u8 = digits.parse().ok()?;
+    (number >= 1).then_some((number, digits.len()))
+}
+
 /// The DVD-Video file a name sent as part of a `VIDEO_TS` tree is, if it is
 /// one: `VIDEO_TS/` and a name DVD-Video defines, exactly as it spells it.
 #[must_use]
@@ -162,11 +191,12 @@ pub fn video_ts_member(name: &str) -> Option<DvdFile> {
 }
 
 /// Whether `name` is one of the files any rip may send: a CD's two files, a
-/// disc image, a decrypted `VIDEO_TS` tree's files, or those under
-/// [`DECRYPTED_PREFIX`].
+/// CUE sheet and its tracks, a disc image, a decrypted `VIDEO_TS` tree's
+/// files, or those under [`DECRYPTED_PREFIX`].
 #[must_use]
 pub fn is_rip_output(name: &str) -> bool {
     RIP_OUTPUTS.contains(&name)
+        || cue_track(name).is_some()
         || video_ts_member(name).is_some()
         || name
             .strip_prefix(DECRYPTED_PREFIX)
@@ -180,8 +210,12 @@ pub fn max_output_bytes(name: &str) -> Option<u64> {
     match name {
         "disc.toc" => return Some(MAX_TOC_BYTES),
         "disc.bin" => return Some(MAX_CD_DATA_BYTES),
+        CUE_OUTPUT => return Some(MAX_CUE_BYTES),
         IMAGE_OUTPUT => return Some(MAX_IMAGE_BYTES),
         _ => {}
+    }
+    if cue_track(name).is_some() {
+        return Some(MAX_CD_DATA_BYTES);
     }
     let member = name.strip_prefix(DECRYPTED_PREFIX).unwrap_or(name);
     match video_ts_member(member)? {
@@ -195,8 +229,10 @@ pub fn max_output_bytes(name: &str) -> Option<u64> {
 /// What a rip's original is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OriginalKind {
-    /// A CD: `disc.toc` and `disc.bin`.
+    /// A CD read by cdrdao: `disc.toc` and `disc.bin`.
     Cd,
+    /// A CD read by redumper: `disc.cue` and its tracks (ADR 0015).
+    CueBin,
     /// A disc image: `disc.iso`, encrypted or not.
     Image,
     /// A decrypted DVD's `VIDEO_TS` tree, kept as the original.
@@ -224,9 +260,17 @@ pub enum OutputSetError {
     Unknown(String),
     /// Nothing, a part, or a mixture.
     #[error(
-        "a rip is disc.toc and disc.bin, disc.iso, or a VIDEO_TS tree, never a mixture or a part"
+        "a rip is disc.toc and disc.bin, disc.cue and its tracks, disc.iso, or a VIDEO_TS tree, \
+         never a mixture or a part"
     )]
     NotWhole,
+    /// Track files that are not one disc's: numbered twice, or with digits
+    /// that do not suit its last track.
+    #[error(
+        "a CUE sheet's tracks are disc.bin alone, or two or more disc (Track N).bin, each number \
+         once and written with as many digits as the last"
+    )]
+    TrackNames,
     /// A `VIDEO_TS` tree without its video manager.
     #[error("a VIDEO_TS tree must include VIDEO_TS/VIDEO_TS.IFO")]
     NoVideoManager,
@@ -270,6 +314,9 @@ pub fn check_output_set(
     };
     let kind = if original == ["disc.bin", "disc.toc"] {
         OriginalKind::Cd
+    } else if original.contains(&CUE_OUTPUT) {
+        check_cue_tracks(&original)?;
+        OriginalKind::CueBin
     } else if original == [IMAGE_OUTPUT] {
         OriginalKind::Image
     } else if !original.is_empty() && original.iter().all(|name| video_ts_member(name).is_some()) {
@@ -298,6 +345,42 @@ pub fn check_output_set(
         original_files: original.into_iter().map(str::to_owned).collect(),
         copy_files: copy.into_iter().map(str::to_owned).collect(),
     })
+}
+
+/// Check that `names`, sorted and holding [`CUE_OUTPUT`], are a CUE sheet
+/// and its tracks as redumper names them, and nothing else.
+fn check_cue_tracks(names: &[&str]) -> Result<(), OutputSetError> {
+    let files: Vec<&str> = names
+        .iter()
+        .copied()
+        .filter(|name| *name != CUE_OUTPUT)
+        .collect();
+    if files == ["disc.bin"] {
+        return Ok(());
+    }
+    let mut tracks = Vec::with_capacity(files.len());
+    for name in &files {
+        let Some(track) = cue_track(name) else {
+            return Err(if *name == "disc.bin" {
+                OutputSetError::TrackNames
+            } else {
+                OutputSetError::NotWhole
+            });
+        };
+        tracks.push(track);
+    }
+    let Some(last) = tracks.iter().map(|(number, _)| *number).max() else {
+        return Err(OutputSetError::NotWhole);
+    };
+    let width = if last >= 10 { 2 } else { 1 };
+    let mut numbers: Vec<u8> = tracks.iter().map(|(number, _)| *number).collect();
+    numbers.sort_unstable();
+    numbers.dedup();
+    if tracks.len() < 2 || numbers.len() != tracks.len() || tracks.iter().any(|(_, w)| *w != width)
+    {
+        return Err(OutputSetError::TrackNames);
+    }
+    Ok(())
 }
 
 /// The lineage of a rip's decrypted copy, a derivative of the encrypted
@@ -689,6 +772,94 @@ mod tests {
             assert!(!is_rip_output(not), "{not}");
             assert_eq!(max_output_bytes(not), None, "{not}");
         }
+    }
+
+    #[test]
+    fn a_redumper_rip_is_a_cue_sheet_and_its_tracks() {
+        let plain = |list: &[&str]| check_output_set(&names(list), false, None);
+        for whole in [
+            &["disc.cue", "disc.bin"][..],
+            &["disc.cue", "disc (Track 1).bin", "disc (Track 2).bin"][..],
+            // A disc need not start at track 1.
+            &["disc (Track 3).bin", "disc (Track 4).bin", "disc.cue"][..],
+            &["disc.cue", "disc (Track 09).bin", "disc (Track 10).bin"][..],
+        ] {
+            let sets = plain(whole).unwrap_or_else(|error| panic!("{whole:?}: {error}"));
+            assert_eq!(sets.original, OriginalKind::CueBin, "{whole:?}");
+            assert_eq!(sets.original_files.len(), whole.len());
+        }
+        let twelve: Vec<String> = std::iter::once("disc.cue".to_owned())
+            .chain((1..=12).map(|n| format!("disc (Track {n:02}).bin")))
+            .collect();
+        assert!(check_output_set(&twelve, false, None).is_ok());
+
+        for wrong_names in [
+            // One track is disc.bin; two are both numbered.
+            &["disc.cue", "disc (Track 1).bin"][..],
+            &["disc.cue", "disc.bin", "disc (Track 2).bin"][..],
+            // Digits that do not suit the last track.
+            &["disc.cue", "disc (Track 01).bin", "disc (Track 02).bin"][..],
+            &["disc.cue", "disc (Track 9).bin", "disc (Track 10).bin"][..],
+            // A track numbered twice.
+            &["disc.cue", "disc (Track 1).bin", "disc (Track 01).bin"][..],
+        ] {
+            assert_eq!(
+                plain(wrong_names),
+                Err(OutputSetError::TrackNames),
+                "{wrong_names:?}"
+            );
+        }
+        for not_whole in [
+            &["disc.cue"][..],
+            &["disc (Track 1).bin", "disc (Track 2).bin"][..],
+            &["disc.cue", "disc.toc", "disc.bin"][..],
+            &["disc.cue", "disc.iso"][..],
+            &["disc.cue", "disc (Track 1).bin", "VIDEO_TS/VIDEO_TS.IFO"][..],
+        ] {
+            assert!(plain(not_whole).is_err(), "{not_whole:?}");
+        }
+        // Never beside a decrypted copy.
+        let mut with_copy = names(&["disc.cue", "disc.bin"]);
+        with_copy.extend(copy());
+        assert_eq!(
+            check_output_set(&with_copy, true, Some(RipOriginal::EncryptedOriginal)),
+            Err(OutputSetError::CopyNotChosen)
+        );
+    }
+
+    #[test]
+    fn redumper_track_names_are_exactly_its_own() {
+        assert_eq!(cue_track("disc (Track 1).bin"), Some((1, 1)));
+        assert_eq!(cue_track("disc (Track 07).bin"), Some((7, 2)));
+        assert_eq!(cue_track("disc (Track 99).bin"), Some((99, 2)));
+        for not in [
+            "disc (Track 0).bin",
+            "disc (Track 00).bin",
+            "disc (Track AA).bin",
+            "disc (Track 0.1).bin",
+            "disc (Track 100).bin",
+            "disc (Track 001).bin",
+            "disc (Track ).bin",
+            "disc (Track +1).bin",
+            "disc (track 1).bin",
+            "disc (Track 1).BIN",
+            "other (Track 1).bin",
+            "disc (Track 1).bin/x",
+            "../disc (Track 1).bin",
+            "disc.scram",
+            "disc.subcode",
+            "disc.log",
+        ] {
+            assert_eq!(cue_track(not), None, "{not}");
+            assert!(!is_rip_output(not), "{not}");
+        }
+        assert!(is_rip_output("disc.cue") && is_rip_output("disc (Track 12).bin"));
+        assert_eq!(max_output_bytes("disc.cue"), Some(MAX_CUE_BYTES));
+        assert_eq!(
+            max_output_bytes("disc (Track 2).bin"),
+            Some(MAX_CD_DATA_BYTES)
+        );
+        assert!(!is_cd_output("disc.cue"), "cdrdao's pair is unchanged");
     }
 
     #[test]

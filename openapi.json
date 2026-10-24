@@ -5456,6 +5456,42 @@
           }
         }
       },
+      "CdReadView": {
+        "type": "object",
+        "description": "How redumper read a CD (ADR 0015). Offsets are in samples, 588 to a\nsector.",
+        "required": [
+          "generic_drive",
+          "retried_samples"
+        ],
+        "properties": {
+          "generic_drive": {
+            "type": "boolean",
+            "description": "Whether redumper treated the drive as generic: one it does not trust\nto dump faithfully."
+          },
+          "read_offset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The drive's read offset that was corrected. Absent when redumper has\nnone for the drive: the read was then not offset-corrected."
+          },
+          "retried_samples": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Samples the first pass could not read cleanly, all read again.",
+            "minimum": 0
+          },
+          "write_offset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The disc's write offset, as redumper found it."
+          }
+        }
+      },
       "CheckStatus": {
         "type": "string",
         "description": "How a check came out.",
@@ -8378,6 +8414,17 @@
           "outcome"
         ],
         "properties": {
+          "cd_read": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CdReadView",
+                "description": "For `read` of a CD by redumper, and only then: the offsets it applied\nand found (ADR 0015)."
+              }
+            ]
+          },
           "decryption": {
             "oneOf": [
               {
@@ -8674,6 +8721,17 @@
             ],
             "description": "The tool they asked to read a CD with, `redumper` or `cdrdao`; absent\nfor the worker's best."
           },
+          "cd_read": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CdReadView",
+                "description": "For a CD read by redumper: the offsets it applied and found\n(ADR 0015)."
+              }
+            ]
+          },
           "completed_at": {
             "type": [
               "string",
@@ -8836,6 +8894,17 @@
           "decrypted_at_acquisition"
         ],
         "properties": {
+          "cd_read": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CdReadView",
+                "description": "For a CD read by redumper: the offsets it applied and found\n(ADR 0015)."
+              }
+            ]
+          },
           "decrypted_at_acquisition": {
             "type": "boolean",
             "description": "Whether these bytes were decrypted as they were read: such an image\nis not a faithful copy of the disc."

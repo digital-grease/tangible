@@ -19,7 +19,7 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::str::FromStr;
 use tangible_domain::ArtifactId;
 use tangible_domain::manifest::{
-    DecryptionRecord, DumpDrive, DumpReadErrors, Lineage, PhysicalDump, ToolRef,
+    CdReadRecord, DecryptionRecord, DumpDrive, DumpReadErrors, Lineage, PhysicalDump, ToolRef,
 };
 use tangible_domain::rip::{
     CD_ENGINE_UNAVAILABLE, DECRYPTED_PREFIX, DecryptionRefusal, cd_engine_available,
@@ -68,6 +68,8 @@ pub struct RipRecord {
     pub encryption: Option<String>,
     /// The library and tool it decrypted with, when it did.
     pub decryption: Option<Value>,
+    /// For a CD read by redumper: the offsets it applied and found.
+    pub cd_read: Option<Value>,
     /// What the worker found in the drive.
     pub medium: Option<Value>,
     /// The tool that read it.
@@ -160,6 +162,8 @@ pub enum RipResult<'a> {
         /// Whether the original itself is decrypted: a `VIDEO_TS` tree kept
         /// as the original.
         decrypted_original: bool,
+        /// For a CD read by redumper: the offsets it applied and found.
+        cd_read: Option<&'a CdReadRecord>,
     },
     /// Nothing was read: no disc, or one this worker will not rip.
     Refused {
@@ -217,7 +221,8 @@ const RIP_COLUMNS: &str = "r.id, r.drive_id, d.configured_name AS drive_name, r.
      r.requested_by, r.decrypt, r.keep, r.cd_engine, r.staging_id, r.import_job_id, i.artifact_id, r.medium_json, r.engine, \
      r.engine_version, r.read_errors_json, r.outputs_json, r.bytes_received, r.error_code, \
      r.error_detail, r.created_at, r.started_at, r.completed_at, r.copy_staging_id, \
-     r.copy_import_job_id, c.artifact_id AS copy_artifact_id, r.encryption, r.decryption_json";
+     r.copy_import_job_id, c.artifact_id AS copy_artifact_id, r.encryption, r.decryption_json, \
+     r.cd_read_json";
 
 const RIP_FROM: &str = "rip_jobs r JOIN drives d ON d.id = r.drive_id \
      LEFT JOIN import_jobs i ON i.id = r.import_job_id \
@@ -263,6 +268,7 @@ fn rip_from_row(row: &sqlx::postgres::PgRow) -> Result<RipRecord, DbError> {
         copy_artifact_id: row.try_get("copy_artifact_id").map_err(get)?,
         encryption: row.try_get("encryption").map_err(get)?,
         decryption: row.try_get("decryption_json").map_err(get)?,
+        cd_read: row.try_get("cd_read_json").map_err(get)?,
         medium: row.try_get("medium_json").map_err(get)?,
         engine: row.try_get("engine").map_err(get)?,
         engine_version: row.try_get("engine_version").map_err(get)?,
@@ -969,6 +975,7 @@ pub async fn complete_rip(
             encryption,
             decryption,
             decrypted_original,
+            cd_read,
         } => {
             queue_import(
                 &mut tx,
@@ -984,6 +991,7 @@ pub async fn complete_rip(
                     encryption,
                     decryption: *decryption,
                     decrypted_original: *decrypted_original,
+                    cd_read: *cd_read,
                 },
             )
             .await?
@@ -1039,6 +1047,7 @@ struct ReadReport<'a> {
     encryption: &'a str,
     decryption: Option<&'a DecryptionRecord>,
     decrypted_original: bool,
+    cd_read: Option<&'a CdReadRecord>,
 }
 
 /// The original's length, when the files the worker names are exactly the
@@ -1089,6 +1098,7 @@ fn original_dump(report: &ReadReport<'_>, id: RipJobId, drive: DumpDrive) -> Phy
             .decrypted_original
             .then(|| report.decryption.cloned())
             .flatten(),
+        cd_read: report.cd_read.copied(),
     }
 }
 
@@ -1169,7 +1179,8 @@ async fn queue_import(
         "UPDATE rip_jobs
          SET state = 'registering', import_job_id = staging_id, engine = $2,
              engine_version = $3, medium_json = COALESCE($4, medium_json),
-             read_errors_json = $5, encryption = $6, decryption_json = $7
+             read_errors_json = $5, encryption = $6, decryption_json = $7,
+             cd_read_json = $8
          WHERE id = $1",
     )
     .bind(id.as_uuid())
@@ -1185,6 +1196,16 @@ async fn queue_import(
             .transpose()
             .map_err(|error| DbError::Enum {
                 column: "rip_jobs.decryption_json",
+                value: error.to_string(),
+            })?,
+    )
+    .bind(
+        report
+            .cd_read
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|error| DbError::Enum {
+                column: "rip_jobs.cd_read_json",
                 value: error.to_string(),
             })?,
     )

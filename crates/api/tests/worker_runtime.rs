@@ -1200,6 +1200,18 @@ async fn rip_asking(
     request: serde_json::Value,
     copier: Option<tangible_burn::fake::FakeCssCopier>,
 ) -> serde_json::Value {
+    rip_on(server, behaviour, request, copier, None).await
+}
+
+/// As [`rip_asking`], on a worker that reads CDs with `dumper` when there is
+/// one, as a worker from the opt-in image reads them with redumper.
+async fn rip_on(
+    server: &Server,
+    behaviour: FakeBehaviour,
+    request: serde_json::Value,
+    copier: Option<tangible_burn::fake::FakeCssCopier>,
+    dumper: Option<tangible_burn::fake::FakeCdDumper>,
+) -> serde_json::Value {
     let worker_dir = TempDir::new().expect("temp dir");
     let token = server.enrollment_token().await;
     let mut settings = settings(server, worker_dir.path().to_path_buf(), token);
@@ -1217,8 +1229,12 @@ async fn rip_asking(
         let engine =
             FakeEngine::new(settings.state_dir.join("media")).with_behaviour(behaviour.clone());
         let runtime = WorkerRuntime::new(settings, engine).expect("runtime");
-        match &copier {
+        let runtime = match &copier {
             Some(copier) => runtime.with_css_copier(std::sync::Arc::new(copier.clone())),
+            None => runtime,
+        };
+        match &dumper {
+            Some(dumper) => runtime.with_cd_dumper(std::sync::Arc::new(dumper.clone())),
             None => runtime,
         }
     };
@@ -1249,6 +1265,108 @@ async fn rip_asking(
     let _ = stop.send(());
     let _ = worker.await.expect("the worker task");
     record
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_worker_with_redumper_rips_a_cd_offset_corrected_into_the_library() {
+    // Through the real client: the track files' names have spaces in them.
+    let _queue = exclusive_queue().await;
+    let mut server = server().await;
+    server.drain_queue().await;
+    let sent = rip_on(
+        &server,
+        pressed_cd(),
+        serde_json::json!({}),
+        None,
+        Some(tangible_burn::fake::FakeCdDumper::default()),
+    )
+    .await;
+    assert_eq!(sent["state"], "registering", "{sent}");
+    assert_eq!(sent["engine"], "redumper");
+    assert_eq!(sent["engine_version"], "b768");
+    let names: Vec<&str> = sent["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| file["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        ["disc (Track 1).bin", "disc (Track 2).bin", "disc.cue"],
+        "the raw dump stays behind"
+    );
+    assert_eq!(sent["cd_read"]["read_offset"], 6, "{sent}");
+    let drives = server.get("/api/v1/drives").await;
+    assert!(
+        drives["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|drive| drive["can_rip_with_redumper"] == true),
+        "{drives}"
+    );
+
+    server.run_imports().await;
+    let rip = sent["id"].as_str().unwrap();
+    let done = server.get(&format!("/api/v1/rips/{rip}")).await;
+    assert_eq!(done["state"], "complete", "{done}");
+    let artifact = done["artifact_id"].as_str().expect("an artifact");
+    let detail = server.get(&format!("/api/v1/artifacts/{artifact}")).await;
+    assert_eq!(detail["format"], "cue_bin", "{detail}");
+    assert_eq!(detail["ripped"]["engine"], "redumper");
+    assert_eq!(detail["ripped"]["cd_read"]["write_offset"], -6);
+    server.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_rip_that_asks_for_cdrdao_is_read_with_it_beside_redumper() {
+    let _queue = exclusive_queue().await;
+    let mut server = server().await;
+    server.drain_queue().await;
+    let sent = rip_on(
+        &server,
+        pressed_cd(),
+        serde_json::json!({ "cd_engine": "cdrdao" }),
+        None,
+        Some(tangible_burn::fake::FakeCdDumper::default()),
+    )
+    .await;
+    assert_eq!(sent["state"], "registering", "{sent}");
+    assert_eq!(sent["engine"], "fake", "the engine's own reader");
+    assert!(sent["cd_read"].is_null(), "{sent}");
+    server.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_redumper_rip_that_fails_says_why_and_sends_nothing() {
+    let _queue = exclusive_queue().await;
+    let mut server = server().await;
+    server.drain_queue().await;
+    let ended = rip_on(
+        &server,
+        pressed_cd(),
+        serde_json::json!({ "cd_engine": "redumper" }),
+        None,
+        Some(tangible_burn::fake::FakeCdDumper {
+            fails: true,
+            ..tangible_burn::fake::FakeCdDumper::default()
+        }),
+    )
+    .await;
+    assert_eq!(ended["state"], "failed", "{ended}");
+    assert_eq!(ended["error_code"], "READ_FAILED");
+    assert!(
+        ended["error_detail"]
+            .as_str()
+            .unwrap()
+            .contains("even after retrying"),
+        "{ended}"
+    );
+    assert_eq!(ended["files"], serde_json::json!([]));
+    server.stop().await;
 }
 
 #[tokio::test]

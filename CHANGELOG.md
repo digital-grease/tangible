@@ -103,6 +103,19 @@ may change between minor versions, and the release notes say how.
   (`CD_ENGINE_UNAVAILABLE`), when asked and again when the worker takes
   the rip. The drive list says which drives have it
   (`can_rip_with_redumper`), and the web UI offers the choice there.
+- A worker built from the opt-in image now rips CDs with redumper: the
+  drive's read offset is corrected, so audio tracks can match AccurateRip
+  and Redump, and the rip becomes a CUE/BIN artifact (`disc.cue` and one
+  file per track). Sectors that do not read cleanly are read again up to
+  20 times; a disc with sectors that still will not read fails rather than
+  being kept with holes. The rip and the artifact's manifest record the
+  read offset corrected (none when redumper does not know the drive), the
+  disc's write offset, and whether redumper treated the drive as generic
+  (`cd_read`). A rip that asks for cdrdao, and every worker without
+  redumper, reads CDs with cdrdao as before. Database migration 0014 adds
+  a column; it is additive.
+- A CUE sheet that gives a track the ISRC `000000000000`, as redumper does
+  for a track without one, is read as having none, with no warning.
 - The web UI asks about decryption on a drive that can decrypt: "Rip the
   disc in {drive}" opens a dialog with a "Decrypt an encrypted disc" box,
   the notice that whether ripping is lawful is the operator's to determine,

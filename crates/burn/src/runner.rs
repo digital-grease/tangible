@@ -26,8 +26,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tangible_domain::{
-    ArtifactId, BurnAttemptId, BurnJobId, DriveId, RipOriginal, SecretString, Sha256Digest,
-    WorkerId,
+    ArtifactId, BurnAttemptId, BurnJobId, CdRipEngine, DriveId, RipOriginal, SecretString,
+    Sha256Digest, WorkerId,
 };
 use time::OffsetDateTime;
 
@@ -46,7 +46,8 @@ use crate::plan::{
     BurnPlan, DriveCapabilities, DriveRef, MediumInfo, PlannedInput, PreflightFailure,
     VerifyReport, WriteMode, WriteReport,
 };
-use crate::ripping::{Decrypting, RipOptions, RipOutcome, rip_disc};
+use crate::redumper::{CdDumper, Redumper};
+use crate::ripping::{CdReader, Decrypting, RipOptions, RipOutcome, rip_disc};
 use crate::worker::{EventBuffer, RecoveryRecord, RecoveryStore, WorkerStage, plan_for};
 
 /// How a worker is configured.
@@ -82,6 +83,10 @@ pub struct WorkerSettings {
     /// What this worker's image can decrypt, found once at start
     /// ([`crate::decryption::detect`]). `None` in the published image.
     pub decryption: Option<crate::decryption::DecryptionCapability>,
+    /// The redumper build this worker's image has, found once at start
+    /// ([`crate::decryption::detect_redumper`]). `None` in the published
+    /// image, which rips CDs with cdrdao.
+    pub redumper: Option<String>,
 }
 
 impl WorkerSettings {
@@ -107,6 +112,7 @@ impl WorkerSettings {
             media_poll_interval: Duration::from_secs(5),
             report_interval: Duration::from_secs(5),
             decryption: None,
+            redumper: None,
         }
     }
 }
@@ -196,6 +202,9 @@ pub struct WorkerRuntime<E: BurnEngine> {
     drive: Option<DeviceLock>,
     /// What decrypts a DVD, when this worker's image can.
     css: Option<Arc<dyn CssCopier>>,
+    /// What reads a CD with its read offset corrected, when this worker's
+    /// image has redumper (ADR 0015).
+    cd_dumper: Option<Arc<dyn CdDumper>>,
 }
 
 impl<E: BurnEngine> WorkerRuntime<E> {
@@ -213,12 +222,18 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             .as_ref()
             .and_then(|found| found.css.clone())
             .map(|css| Arc::new(Dvdbackup::installed(css)) as Arc<dyn CssCopier>);
+        // redumper at its one installed place, likewise.
+        let cd_dumper = settings
+            .redumper
+            .clone()
+            .map(|build| Arc::new(Redumper::installed(build)) as Arc<dyn CdDumper>);
         Ok(Self {
             settings,
             client,
             engine,
             drive: None,
             css,
+            cd_dumper,
         })
     }
 
@@ -227,6 +242,14 @@ impl<E: BurnEngine> WorkerRuntime<E> {
     #[must_use]
     pub fn with_css_copier(mut self, copier: Arc<dyn CssCopier>) -> Self {
         self.css = Some(copier);
+        self
+    }
+
+    /// Read CDs with `dumper` instead of the installed redumper. For tests:
+    /// the capability reported follows it.
+    #[must_use]
+    pub fn with_cd_dumper(mut self, dumper: Arc<dyn CdDumper>) -> Self {
+        self.cd_dumper = Some(dumper);
         self
     }
 
@@ -378,7 +401,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
     }
 
     /// What this worker can rip with, if anything: its engine for CDs, and
-    /// the block reader for DVDs.
+    /// redumper beside it where the image has it; the block reader for DVDs.
     fn rip_capability(&self) -> Option<RipCapabilityBody> {
         let mut engines = Vec::new();
         if self.engine.rips_cds() {
@@ -386,6 +409,13 @@ impl<E: BurnEngine> WorkerRuntime<E> {
                 name: self.engine.name().to_owned(),
                 version: self.engine.version(),
             });
+            if let Some(dumper) = &self.cd_dumper {
+                let tool = dumper.tool();
+                engines.push(EngineDescription {
+                    name: tool.name,
+                    version: tool.version,
+                });
+            }
         }
         if self.engine.rips_images() {
             engines.push(EngineDescription {
@@ -837,6 +867,37 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         RipOptions {
             decrypt,
             can_decrypt,
+            cd: self.cd_reader(rip),
+        }
+    }
+
+    /// What reads the disc if it is a CD (ADR 0015): redumper where this
+    /// worker has it, unless the rip asked for cdrdao; nothing at all for a
+    /// rip that insisted on redumper here, since the server checks the
+    /// worker has it and a rip that insisted is never read with something
+    /// else.
+    fn cd_reader(&self, rip: &RipClaim) -> CdReader<'_> {
+        let requested = match rip.cd_engine.as_deref().map(str::parse::<CdRipEngine>) {
+            None => None,
+            Some(Ok(engine)) => Some(engine),
+            Some(Err(_)) => {
+                tracing::warn!(
+                    rip_id = %rip.rip_id,
+                    "the rip names a CD engine this worker does not know; reading with cdrdao"
+                );
+                Some(CdRipEngine::Cdrdao)
+            }
+        };
+        match (requested, &self.cd_dumper) {
+            (Some(CdRipEngine::Cdrdao), _) | (None, None) => CdReader::Engine,
+            (_, Some(dumper)) => CdReader::Corrected(dumper.as_ref()),
+            (Some(CdRipEngine::Redumper), None) => {
+                tracing::warn!(
+                    rip_id = %rip.rip_id,
+                    "the rip insists on redumper, and this worker does not have it"
+                );
+                CdReader::Unavailable
+            }
         }
     }
 
@@ -1716,6 +1777,84 @@ pub fn recovery_plan(directive: crate::worker::RecoveryDirective) -> crate::work
 #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::fake::FakeEngine;
+
+    fn runtime_with(dumper: Option<crate::fake::FakeCdDumper>) -> WorkerRuntime<FakeEngine> {
+        let settings = WorkerSettings::new(
+            "http://127.0.0.1:9",
+            "w",
+            std::path::PathBuf::from("/nonexistent"),
+        );
+        let runtime =
+            WorkerRuntime::new(settings, FakeEngine::new("/nonexistent")).expect("a runtime");
+        match dumper {
+            Some(dumper) => runtime.with_cd_dumper(Arc::new(dumper)),
+            None => runtime,
+        }
+    }
+
+    fn claim(cd_engine: Option<&str>) -> RipClaim {
+        RipClaim {
+            rip_id: "r".to_owned(),
+            outputs: Vec::new(),
+            max_file_bytes: 1,
+            decrypt: false,
+            keep: None,
+            cd_engine: cd_engine.map(str::to_owned),
+        }
+    }
+
+    fn which(reader: CdReader<'_>) -> &'static str {
+        match reader {
+            CdReader::Engine => "engine",
+            CdReader::Corrected(_) => "redumper",
+            CdReader::Unavailable => "unavailable",
+        }
+    }
+
+    #[test]
+    fn a_cd_is_read_with_redumper_where_the_worker_has_it_unless_asked_otherwise() {
+        let with = runtime_with(Some(crate::fake::FakeCdDumper::default()));
+        let without = runtime_with(None);
+        for (asked, on_with, on_without) in [
+            (None, "redumper", "engine"),
+            (Some("cdrdao"), "engine", "engine"),
+            (Some("redumper"), "redumper", "unavailable"),
+            (Some("eac"), "engine", "engine"),
+        ] {
+            assert_eq!(which(with.cd_reader(&claim(asked))), on_with, "{asked:?}");
+            assert_eq!(
+                which(without.cd_reader(&claim(asked))),
+                on_without,
+                "{asked:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn redumper_is_reported_only_beside_an_engine_that_rips_cds() {
+        let names = |runtime: &WorkerRuntime<FakeEngine>| -> Vec<String> {
+            runtime
+                .rip_capability()
+                .map(|rip| rip.engines.into_iter().map(|e| e.name).collect())
+                .unwrap_or_default()
+        };
+        assert!(
+            !names(&runtime_with(None)).contains(&"redumper".to_owned()),
+            "the published image"
+        );
+        let with = runtime_with(Some(crate::fake::FakeCdDumper::default()));
+        assert!(names(&with).contains(&"redumper".to_owned()));
+        let version = with
+            .rip_capability()
+            .unwrap()
+            .engines
+            .into_iter()
+            .find(|engine| engine.name == "redumper")
+            .unwrap()
+            .version;
+        assert_eq!(version, "b768");
+    }
 
     #[test]
     fn a_policy_that_reads_the_disc_back_is_recognised() {

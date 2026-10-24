@@ -233,6 +233,97 @@ impl crate::dvdbackup::CssCopier for FakeCssCopier {
     }
 }
 
+/// The CUE sheet a simulated redumper rip writes: a data track and an audio
+/// track, each in its own file, as redumper splits a mixed-mode disc.
+pub const FAKE_CUE: &str = "FILE \"disc (Track 1).bin\" BINARY\n\
+  TRACK 01 MODE1/2352\n\
+    INDEX 01 00:00:00\n\
+FILE \"disc (Track 2).bin\" BINARY\n\
+  TRACK 02 AUDIO\n\
+    ISRC 000000000000\n\
+    INDEX 00 00:00:00\n\
+    INDEX 01 00:00:10\n";
+
+/// A stand-in for redumper: writes [`FAKE_CUE`] and its two tracks, or fails
+/// as told.
+#[derive(Debug, Clone, Default)]
+pub struct FakeCdDumper {
+    /// Fail, as a disc with sectors that would not read.
+    pub fails: bool,
+    /// Withdraw the rip as the dump starts, through the token given.
+    pub cancel_during_dump: bool,
+    /// Report the drive as one redumper has no read offset for.
+    pub offset_unknown: bool,
+}
+
+#[async_trait]
+impl crate::redumper::CdDumper for FakeCdDumper {
+    fn tool(&self) -> tangible_domain::manifest::ToolRef {
+        tangible_domain::manifest::ToolRef {
+            name: "redumper".to_owned(),
+            version: "b768".to_owned(),
+        }
+    }
+
+    async fn dump(
+        &self,
+        _device: &Path,
+        output_dir: &Path,
+        cancel: &CancelToken,
+        sink: &dyn EventSink,
+    ) -> Result<crate::redumper::CdDump, EngineError> {
+        if self.cancel_during_dump {
+            cancel.cancel();
+        }
+        if cancel.is_cancelled() {
+            return Err(EngineError::Cancelled);
+        }
+        if self.fails {
+            return Err(EngineError::Unsupported {
+                what: "redumper found sectors that would not read, even after retrying; it \
+                       exited 255"
+                    .to_owned(),
+            });
+        }
+        let io = |source| EngineError::Io {
+            operation: "writing the simulated dump",
+            source,
+        };
+        sink.emit(BurnEvent::progress(
+            "ripping",
+            "RIP_PROGRESS",
+            0.5,
+            "50% read",
+        ));
+        fs::write(output_dir.join("disc.cue"), FAKE_CUE)
+            .await
+            .map_err(io)?;
+        fs::write(output_dir.join("disc (Track 1).bin"), vec![0_u8; 75 * 2352])
+            .await
+            .map_err(io)?;
+        fs::write(output_dir.join("disc (Track 2).bin"), vec![0_u8; 35 * 2352])
+            .await
+            .map_err(io)?;
+        // What redumper leaves beside them, which is never sent.
+        fs::write(output_dir.join("disc.scram"), b"raw")
+            .await
+            .map_err(io)?;
+        Ok(crate::redumper::CdDump {
+            outputs: vec![
+                "disc.cue".to_owned(),
+                "disc (Track 1).bin".to_owned(),
+                "disc (Track 2).bin".to_owned(),
+            ],
+            cd_read: tangible_domain::manifest::CdReadRecord {
+                read_offset: (!self.offset_unknown).then_some(6),
+                write_offset: Some(-6),
+                generic_drive: true,
+                retried_samples: 0,
+            },
+        })
+    }
+}
+
 /// State shared with whoever wants to cancel.
 #[derive(Debug, Clone, Default)]
 pub struct CancelToken {

@@ -26,6 +26,13 @@
 //!   directory and is removed; nothing ripped from a commercial disc is ever
 //!   committed. It needs room for the disc twice over.
 //!
+//! - `TANGIBLE_REDUMPER_BIN`, as well as the first, runs the one that rips
+//!   the CD in the drive with redumper (ADR 0015): a wrapper around the same
+//!   image. With `TANGIBLE_HARDWARE_DATA_SHA256` set to the SHA-256 of the
+//!   ISO burned as the mixed-mode fixture's data track, the disc is taken to
+//!   be that fixture: the data track's user data must hash to it and the
+//!   audio track must be the generated tone exactly.
+//!
 //! `TANGIBLE_HARDWARE_DEVICE` names the drive (default `/dev/sr0`).
 //! `TANGIBLE_XORRISO_BIN` and `TANGIBLE_CDRDAO_BIN` point at the tools when
 //! they are not on `PATH`; a wrapper that runs them in a container works if it
@@ -527,6 +534,7 @@ async fn the_encrypted_dvd_in_the_drive_is_ripped_and_decrypted() {
                 copier: &copier,
             }),
             can_decrypt: true,
+            ..tangible_burn::ripping::RipOptions::default()
         },
         &tangible_burn::CancelToken::new(),
         &Print,
@@ -594,4 +602,86 @@ async fn the_encrypted_dvd_in_the_drive_is_ripped_and_decrypted() {
         println!("  {scrambled} scrambled sectors kept in the image");
         assert!(scrambled > 0, "the encrypted original is still encrypted");
     }
+}
+
+#[tokio::test]
+async fn the_cd_in_the_drive_is_ripped_with_redumper() {
+    // Read-only. Needs a CD with something on it in the drive, and redumper.
+    let Some(device) = device() else { return };
+    let Ok(program) = std::env::var("TANGIBLE_REDUMPER_BIN") else {
+        eprintln!("skipping: set TANGIBLE_REDUMPER_BIN to redumper");
+        return;
+    };
+    let dumper = tangible_burn::redumper::Redumper::at(program, "b768");
+    let dir = TempDir::new().expect("temp dir");
+    let engine = engine(dir.path()).await;
+    let out = dir.path().join("rip");
+    let started = std::time::Instant::now();
+    let outcome = tangible_burn::ripping::rip_disc(
+        &engine,
+        &drive(&device),
+        &out,
+        tangible_burn::ripping::RipOptions {
+            cd: tangible_burn::ripping::CdReader::Corrected(&dumper),
+            ..tangible_burn::ripping::RipOptions::default()
+        },
+        &tangible_burn::CancelToken::new(),
+        &Print,
+    )
+    .await;
+    let tangible_burn::ripping::RipOutcome::Ended(done) = outcome else {
+        panic!("nothing withdrew this rip");
+    };
+    println!(
+        "  rip ({}s): {} {:?} {:?} {:?}",
+        started.elapsed().as_secs(),
+        done.outcome,
+        done.error_code,
+        done.error_detail,
+        done.cd_read
+    );
+    assert_eq!(done.outcome, "read", "{done:?}");
+    assert_eq!(done.engine.as_deref(), Some("redumper"));
+    assert!(
+        tangible_domain::rip::check_output_set(&done.outputs, false, None).is_ok(),
+        "{:?}",
+        done.outputs
+    );
+    let mut leftovers: Vec<String> = std::fs::read_dir(&out)
+        .expect("the rip directory")
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|name| !done.outputs.contains(name))
+        .collect();
+    leftovers.sort();
+    println!("  not sent: {leftovers:?}");
+
+    let Ok(expected) = std::env::var("TANGIBLE_HARDWARE_DATA_SHA256") else {
+        return;
+    };
+    // The mixed-mode fixture: its data track's user data is the ISO burned,
+    // and its audio track, after the two-second pregap, the tone.
+    let data = std::fs::read(out.join("disc (Track 1).bin")).expect("the data track");
+    assert!(data.len().is_multiple_of(2352), "{} bytes", data.len());
+    let mut hasher = Sha256::new();
+    for sector in data.chunks(2352) {
+        assert_eq!(
+            &sector[..12],
+            &[0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0]
+        );
+        hasher.update(&sector[16..2064]);
+    }
+    assert_eq!(
+        hex::encode(hasher.finalize()),
+        expected,
+        "the data track's user data"
+    );
+    let audio = std::fs::read(out.join("disc (Track 2).bin")).expect("the audio track");
+    let tone_path = dir.path().join("tone.bin");
+    tone(&tone_path, 30);
+    let generated = std::fs::read(&tone_path).expect("the tone");
+    assert_eq!(audio.len(), 150 * 2352 + generated.len(), "pregap and tone");
+    assert!(
+        audio[150 * 2352..] == generated[..],
+        "the tone, sample for sample, with no shift"
+    );
 }

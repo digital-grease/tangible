@@ -39,6 +39,9 @@ pub use tangible_domain::cd::{FRAMES_PER_SECOND, SECONDS_PER_MINUTE};
 /// that a file merely *named* `.cue` cannot be walked line by line.
 pub const MAX_CUE_BYTES: usize = 1 << 20;
 
+/// The ISRC redumper writes for a track that has none.
+const NO_ISRC: &str = "000000000000";
+
 /// Longest line the parser will consider.
 pub const MAX_LINE_BYTES: usize = 4096;
 
@@ -858,7 +861,10 @@ pub fn parse(bytes: &[u8]) -> Result<CueSheet, CueError> {
                 let Some(track) = current_track(&mut files) else {
                     return Err(CueError::CommandBeforeTrack { line, command });
                 };
-                if !tangible_domain::cd::is_isrc(&value) {
+                // Twelve zeros is how redumper writes a track without an
+                // ISRC (ADR 0015): no code, and nothing wrong with the sheet.
+                // The layout leaves it out like any value that is not one.
+                if !tangible_domain::cd::is_isrc(&value) && value != NO_ISRC {
                     warnings.push(CueWarning::MalformedIsrc {
                         track: track.number,
                         value: value.clone(),

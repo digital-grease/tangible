@@ -431,6 +431,10 @@ pub struct RipCompletion {
     /// key.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decryption: Option<tangible_domain::manifest::DecryptionRecord>,
+    /// For a CD read by redumper: the offsets it applied and found
+    /// (ADR 0015).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cd_read: Option<tangible_domain::manifest::CdReadRecord>,
     /// Why, for a refusal or a failure.
     pub error_code: Option<String>,
     /// More about that.
@@ -846,6 +850,10 @@ impl WorkerClient {
         };
         let (digest, length) = hash_and_length(path).await.map_err(io)?;
         let file = tokio::fs::File::open(path).await.map_err(io)?;
+        // A redumper track is `disc (Track 1).bin`: its spaces are encoded
+        // here rather than left to the URL parser. Every other character a
+        // rip's names may hold is one a path may carry as it is.
+        let name = name.replace(' ', "%20");
         let response = self
             .authorised(
                 self.http

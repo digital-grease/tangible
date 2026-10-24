@@ -13,6 +13,12 @@
 //!
 //! Only DVD (CSS) decryption is reported for now. The record also names
 //! libaacs, which needs the Blu-ray helper that is not built yet.
+//!
+//! The same image carries redumper (ADR 0015), which reads CDs with the
+//! drive's read offset corrected. It is kept out of the published image for
+//! the decryption code it contains, so its build is in the same record, and
+//! believed the same way: only when the binary is at its one fixed place
+//! ([`detect_redumper`]).
 
 use std::io::Read;
 use std::path::Path;
@@ -27,6 +33,9 @@ pub const LIBDVDCSS: &str = "usr/local/lib/libdvdcss.so.2";
 
 /// Where Debian installs dvdbackup.
 pub const DVDBACKUP: &str = "usr/bin/dvdbackup";
+
+/// Where the opt-in image installs redumper.
+pub const REDUMPER: &str = "usr/local/bin/redumper";
 
 /// Longest record read. The real one is about 200 bytes.
 const MAX_RECORD_BYTES: u64 = 4096;
@@ -77,6 +86,14 @@ pub enum DecryptionRecordError {
 #[derive(Debug, Deserialize)]
 struct Record {
     css: Option<CssDecryption>,
+    redumper: Option<RedumperRecord>,
+}
+
+/// What the record says about redumper.
+#[derive(Debug, Deserialize)]
+struct RedumperRecord {
+    /// Upstream's build number, such as `b768`.
+    build: String,
 }
 
 /// Detect decryption in the running image.
@@ -97,19 +114,9 @@ pub fn detect() -> Result<Option<DecryptionCapability>, DecryptionRecordError> {
 ///
 /// As [`detect`].
 pub fn detect_in(root: &Path) -> Result<Option<DecryptionCapability>, DecryptionRecordError> {
-    let file = match std::fs::File::open(root.join(RECORD)) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
+    let Some(record) = read_record(root)? else {
+        return Ok(None);
     };
-    let mut bytes = Vec::new();
-    file.take(MAX_RECORD_BYTES + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_RECORD_BYTES {
-        return Err(DecryptionRecordError::TooLarge);
-    }
-    let record: Record = serde_json::from_slice(&bytes)
-        .map_err(|error| DecryptionRecordError::Malformed(error.to_string()))?;
-
     let Some(css) = record.css else {
         return Ok(None);
     };
@@ -140,6 +147,67 @@ pub fn detect_in(root: &Path) -> Result<Option<DecryptionCapability>, Decryption
         return Err(DecryptionRecordError::Missing("dvdbackup"));
     }
     Ok(Some(DecryptionCapability { css: Some(css) }))
+}
+
+/// Find redumper in the running image: its build, when the record names one
+/// and the binary is where the image installs it.
+///
+/// # Errors
+///
+/// [`DecryptionRecordError`] when the record cannot be believed; the worker
+/// then rips CDs with cdrdao and says why in its log.
+pub fn detect_redumper() -> Result<Option<String>, DecryptionRecordError> {
+    detect_redumper_in(Path::new("/"))
+}
+
+/// Find redumper under `root`, which is `/` except in tests.
+///
+/// `Ok(None)` when there is no record or it does not name redumper.
+///
+/// # Errors
+///
+/// As [`detect_redumper`].
+pub fn detect_redumper_in(root: &Path) -> Result<Option<String>, DecryptionRecordError> {
+    let Some(Record {
+        redumper: Some(redumper),
+        ..
+    }) = read_record(root)?
+    else {
+        return Ok(None);
+    };
+    if !plausible_build(&redumper.build) {
+        return Err(DecryptionRecordError::Malformed(
+            "redumper.build is not a build number".to_owned(),
+        ));
+    }
+    if !is_file(&root.join(REDUMPER)) {
+        return Err(DecryptionRecordError::Missing("redumper"));
+    }
+    Ok(Some(redumper.build))
+}
+
+/// The record under `root`, bounded; `None` when there is none.
+fn read_record(root: &Path) -> Result<Option<Record>, DecryptionRecordError> {
+    let file = match std::fs::File::open(root.join(RECORD)) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let mut bytes = Vec::new();
+    file.take(MAX_RECORD_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_RECORD_BYTES {
+        return Err(DecryptionRecordError::TooLarge);
+    }
+    serde_json::from_slice(&bytes)
+        .map(Some)
+        .map_err(|error| DecryptionRecordError::Malformed(error.to_string()))
+}
+
+/// An upstream redumper build: `b` and up to six digits.
+fn plausible_build(build: &str) -> bool {
+    build.strip_prefix('b').is_some_and(|digits| {
+        (1..=6).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit())
+    })
 }
 
 /// A regular file, following links: the library is a link to its full
@@ -189,6 +257,52 @@ mod tests {
     fn the_published_image_has_none() {
         let root = image(None, false, false);
         assert_eq!(detect_in(root.path()).expect("test step"), None);
+        assert_eq!(detect_redumper_in(root.path()).expect("test step"), None);
+    }
+
+    fn with_redumper(record: &str) -> tempfile::TempDir {
+        let root = image(Some(record), true, true);
+        let path = root.path().join(REDUMPER);
+        std::fs::create_dir_all(path.parent().expect("test step")).expect("test step");
+        std::fs::write(path, b"\x7fELF").expect("test step");
+        root
+    }
+
+    #[test]
+    fn redumper_is_believed_only_where_the_image_installs_it() {
+        let root = with_redumper(GOOD);
+        assert_eq!(
+            detect_redumper_in(root.path())
+                .expect("test step")
+                .as_deref(),
+            Some("b768")
+        );
+        // Named in the record, but not installed.
+        let root = image(Some(GOOD), true, true);
+        assert!(matches!(
+            detect_redumper_in(root.path()),
+            Err(DecryptionRecordError::Missing("redumper"))
+        ));
+        // Installed, but not named: nothing says which build it is.
+        let unnamed = GOOD.replace(r#","redumper":{"build":"b768"}"#, "");
+        let root = with_redumper(&unnamed);
+        assert_eq!(detect_redumper_in(root.path()).expect("test step"), None);
+    }
+
+    #[test]
+    fn a_redumper_build_is_a_build_number() {
+        for build in ["", "768", "b", "b768; rm -rf /", "b7681234", "b76a", "B768"] {
+            let record = GOOD.replace(r#""build":"b768""#, &format!(r#""build":"{build}""#));
+            let root = with_redumper(&record);
+            assert!(
+                matches!(
+                    detect_redumper_in(root.path()),
+                    Err(DecryptionRecordError::Malformed(_))
+                ),
+                "{build:?}"
+            );
+        }
+        assert!(plausible_build("b1") && plausible_build("b999999"));
     }
 
     #[test]

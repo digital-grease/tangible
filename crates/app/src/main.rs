@@ -643,9 +643,24 @@ async fn burn_worker_command(worker: &WorkerConfig) -> Result<()> {
         }
     };
 
+    // redumper, likewise: believed only at its fixed place, and otherwise
+    // CDs are ripped with cdrdao.
+    let redumper = match tangible_burn::decryption::detect_redumper() {
+        Ok(Some(build)) => {
+            tracing::info!(%build, "this worker's image has redumper; CDs are read offset-corrected");
+            Some(build)
+        }
+        Ok(None) => None,
+        Err(error) => {
+            tracing::warn!(%error, "this worker's image claims redumper, but it is not usable");
+            None
+        }
+    };
+
     let settings = WorkerSettings {
         enrollment_token: worker.enrollment_token.clone(),
         decryption,
+        redumper,
         device_alias: worker.device_alias.to_string_lossy().into_owned(),
         configured_name: worker.worker_name.clone(),
         ..WorkerSettings::new(

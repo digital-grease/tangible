@@ -280,6 +280,8 @@ impl Harness {
         bytes: &[u8],
         claimed: &str,
     ) -> (StatusCode, Value) {
+        // A redumper track's name has spaces, encoded as the worker does.
+        let name = name.replace(' ', "%20");
         self.send(
             "PUT",
             &format!("/api/v1/rips/{rip}/files/{name}"),
@@ -369,7 +371,7 @@ async fn a_rip_becomes_an_artifact_in_the_library() {
     assert_eq!(status, StatusCode::OK, "{claim}");
     assert_eq!(
         claim["outputs"],
-        json!(["disc.toc", "disc.bin", "disc.iso"])
+        json!(["disc.toc", "disc.bin", "disc.cue", "disc.iso"])
     );
     let rip = claim["rip_id"].as_str().unwrap().to_owned();
     assert_eq!(rip, queued["id"]);
@@ -925,6 +927,200 @@ async fn the_choice_of_cd_engine_reaches_the_worker() {
     .await
     .unwrap();
     assert_eq!(metadata["cd_engine"], "redumper");
+}
+
+/// A CUE sheet as redumper writes it for a mixed-mode disc: a data track and
+/// an audio track, each in its own file, the audio track without an ISRC.
+const CUE: &str = "FILE \"disc (Track 1).bin\" BINARY
+  TRACK 01 MODE1/2352
+    INDEX 01 00:00:00
+FILE \"disc (Track 2).bin\" BINARY
+  TRACK 02 AUDIO
+    ISRC 000000000000
+    INDEX 00 00:00:00
+    INDEX 01 00:00:10
+";
+
+fn redumper_files() -> Vec<(&'static str, Vec<u8>)> {
+    vec![
+        ("disc.cue", CUE.as_bytes().to_vec()),
+        ("disc (Track 1).bin", vec![0_u8; 20 * 2352]),
+        ("disc (Track 2).bin", vec![0_u8; 30 * 2352]),
+    ]
+}
+
+fn bench_read() -> Value {
+    json!({ "read_offset": 6, "write_offset": -6, "generic_drive": true, "retried_samples": 0 })
+}
+
+impl Harness {
+    /// Send a redumper rip's files, answering their names.
+    async fn send_redumper_files(&self, worker: &Worker, rip: &str) -> Vec<String> {
+        let mut names = Vec::new();
+        for (name, bytes) in redumper_files() {
+            let (status, body) = self
+                .upload(worker, rip, name, &bytes, &sha256(&bytes))
+                .await;
+            assert_eq!(status, StatusCode::OK, "{name}: {body}");
+            names.push(name.to_owned());
+        }
+        names
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_cd_read_by_redumper_becomes_a_cue_bin_artifact_with_its_offsets() {
+    let harness = harness().await;
+    let worker = harness.worker(true).await;
+    harness.has_redumper(&worker).await;
+    let rip = harness.taken(&worker).await;
+    let names = harness.send_redumper_files(&worker, &rip).await;
+
+    let (status, done) = harness
+        .complete(
+            &worker,
+            &rip,
+            json!({ "outcome": "read", "engine": "redumper", "engine_version": "b768",
+                    "outputs": names, "cd_read": bench_read() }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["cd_read"], bench_read());
+    assert_eq!(done["files"].as_array().unwrap().len(), 3);
+
+    harness.drain().await;
+    let (_, finished) = harness.get(&format!("/api/v1/rips/{rip}")).await;
+    assert_eq!(finished["state"], "complete", "{finished}");
+    let artifact = finished["artifact_id"].as_str().expect("an artifact");
+    let (status, detail) = harness.get(&format!("/api/v1/artifacts/{artifact}")).await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["format"], "cue_bin", "{detail}");
+    assert_eq!(detail["disc"]["tracks"].as_array().unwrap().len(), 2);
+    assert!(
+        detail["disc"]["tracks"][1]["isrc"].is_null(),
+        "twelve zeros is no ISRC"
+    );
+    assert_eq!(detail["ripped"]["engine"], "redumper", "{detail}");
+    assert_eq!(detail["ripped"]["cd_read"], bench_read());
+
+    let manifest = harness.manifest(artifact).await;
+    let dump = &manifest["origin"]["physical_dump"];
+    assert_eq!(
+        dump["engine"],
+        json!({ "name": "redumper", "version": "b768" })
+    );
+    assert_eq!(dump["cd_read"], bench_read());
+    let paths: Vec<&str> = manifest["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|component| component["logical_path"].as_str().unwrap())
+        .collect();
+    assert!(paths.contains(&"disc (Track 2).bin"), "{paths:?}");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn what_a_redumper_read_must_say_is_checked() {
+    let harness = harness().await;
+    let worker = harness.worker(true).await;
+    harness.has_redumper(&worker).await;
+    let rip = harness.taken(&worker).await;
+    let names = harness.send_redumper_files(&worker, &rip).await;
+    // Not a stray name: a lead-out track is never sent.
+    let (status, body) = harness
+        .upload(&worker, &rip, "disc (Track AA).bin", b"x", &sha256(b"x"))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    for body in [
+        // Without its offsets.
+        json!({ "outcome": "read", "engine": "redumper", "engine_version": "b768",
+                "outputs": names }),
+        // A CUE sheet from something else.
+        json!({ "outcome": "read", "engine": "cdrdao", "engine_version": "1.2.4",
+                "outputs": names }),
+        // Offsets that cannot be.
+        json!({ "outcome": "read", "engine": "redumper", "engine_version": "b768",
+                "outputs": names,
+                "cd_read": { "read_offset": 100_000, "write_offset": 0,
+                             "generic_drive": false, "retried_samples": 0 } }),
+        // A field the record does not have.
+        json!({ "outcome": "read", "engine": "redumper", "engine_version": "b768",
+                "outputs": names,
+                "cd_read": { "read_offset": 6, "write_offset": 0, "generic_drive": false,
+                             "retried_samples": 0, "key": "00" } }),
+        // A part of the set.
+        json!({ "outcome": "read", "engine": "redumper", "engine_version": "b768",
+                "outputs": ["disc.cue", "disc (Track 1).bin"], "cd_read": bench_read() }),
+    ] {
+        let (status, refused) = harness.complete(&worker, &rip, body.clone()).await;
+        assert!(
+            status == StatusCode::UNPROCESSABLE_ENTITY,
+            "{body} -> {status} {refused}"
+        );
+    }
+    let (_, still) = harness.get(&format!("/api/v1/rips/{rip}")).await;
+    assert_eq!(still["state"], "uploading", "nothing was recorded");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_rip_is_read_with_the_tool_it_asked_for() {
+    let harness = harness().await;
+    let worker = harness.worker(true).await;
+    harness.has_redumper(&worker).await;
+
+    // Asked for cdrdao: a redumper read is refused.
+    let (status, body) = harness
+        .request_with(&worker.drive, json!({ "cd_engine": "cdrdao" }))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (_, claim) = harness.claim(&worker).await;
+    let rip = claim["rip_id"].as_str().unwrap().to_owned();
+    let names = harness.send_redumper_files(&worker, &rip).await;
+    let (status, refused) = harness
+        .complete(
+            &worker,
+            &rip,
+            json!({ "outcome": "read", "engine": "redumper", "engine_version": "b768",
+                    "outputs": names, "cd_read": bench_read() }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert!(
+        refused["detail"].as_str().unwrap().contains("cdrdao"),
+        "{refused}"
+    );
+    harness.cancel_as_operator(&rip).await;
+
+    // Insisted on redumper: a cdrdao read is refused, and cd_read with it.
+    let (status, body) = harness
+        .request_with(&worker.drive, json!({ "cd_engine": "redumper" }))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (_, claim) = harness.claim(&worker).await;
+    let rip = claim["rip_id"].as_str().unwrap().to_owned();
+    let disc = bin();
+    for (name, bytes) in [("disc.toc", TOC.to_vec()), ("disc.bin", disc)] {
+        let (status, body) = harness
+            .upload(&worker, &rip, name, &bytes, &sha256(&bytes))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    for body in [
+        json!({ "outcome": "read", "engine": "cdrdao", "engine_version": "1.2.4",
+                "outputs": ["disc.toc", "disc.bin"] }),
+        json!({ "outcome": "read", "engine": "cdrdao", "engine_version": "1.2.4",
+                "outputs": ["disc.toc", "disc.bin"], "cd_read": bench_read() }),
+    ] {
+        let (status, refused) = harness.complete(&worker, &rip, body.clone()).await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{body}: {refused}"
+        );
+    }
 }
 
 // --- decrypted outputs -----------------------------------------------------------

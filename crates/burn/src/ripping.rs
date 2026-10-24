@@ -27,12 +27,21 @@
 //!
 //! The completion then says the disc was `css` and names the library and
 //! tool that decrypted it. Never a key: there is none here to name.
+//!
+//! # Reading a CD with its read offset corrected
+//!
+//! On a worker that has redumper (ADR 0015), a CD is read with it instead of
+//! cdrdao, unless the rip asked for cdrdao: the CUE sheet and track files it
+//! writes are sent, and the completion records the offsets. A rip that
+//! insisted on redumper, on a worker without it, reads nothing.
 
 use std::path::Path;
 
 use tangible_domain::RipOriginal;
 use tangible_domain::manifest::DecryptionRecord;
-use tangible_domain::rip::{DECRYPTED_PREFIX, VIDEO_TS_DIR, video_ts_member};
+use tangible_domain::rip::{
+    CD_ENGINE_UNAVAILABLE, DECRYPTED_PREFIX, VIDEO_TS_DIR, video_ts_member,
+};
 
 use crate::block_reader::Scrambled;
 use crate::client::{ReadErrorsBody, RipCompletion};
@@ -40,6 +49,7 @@ use crate::dvdbackup::CssCopier;
 use crate::engine::{BurnEngine, BurnEvent, EngineError, EventSink};
 use crate::fake::CancelToken;
 use crate::plan::{DriveRef, MediumInfo, RIP_DATA, RIP_IMAGE, RIP_TOC, RipReport, RipRequest};
+use crate::redumper::CdDumper;
 
 /// The directory a decrypted copy is made in, beside the encrypted image.
 const COPY_DIR: &str = "decrypted";
@@ -97,6 +107,21 @@ pub struct RipOptions<'a> {
     pub decrypt: Option<Decrypting<'a>>,
     /// Whether this worker can decrypt at all, for what a refusal says.
     pub can_decrypt: bool,
+    /// What reads the disc if it is a CD.
+    pub cd: CdReader<'a>,
+}
+
+/// What reads a CD (ADR 0015).
+#[derive(Clone, Copy, Default)]
+pub enum CdReader<'a> {
+    /// The engine's own reader, cdrdao: the read offset is not corrected.
+    #[default]
+    Engine,
+    /// redumper, the read offset corrected.
+    Corrected(&'a dyn CdDumper),
+    /// The rip insisted on redumper, and this worker has none: a CD is
+    /// refused with nothing read, never read with something else.
+    Unavailable,
 }
 
 /// How a rip that may decrypt does it.
@@ -127,6 +152,7 @@ fn ended(outcome: &str, medium: Option<MediumInfo>, code: &str, detail: String) 
         outputs: Vec::new(),
         encryption: None,
         decryption: None,
+        cd_read: None,
         error_code: Some(code.to_owned()),
         error_detail: Some(detail),
     }))
@@ -146,6 +172,7 @@ fn read(medium: MediumInfo, report: RipReport, outputs: Vec<String>) -> RipCompl
         outputs,
         encryption: None,
         decryption: None,
+        cd_read: None,
         error_code: None,
         error_detail: None,
     }
@@ -197,19 +224,91 @@ pub async fn rip_disc<E: BurnEngine + ?Sized>(
         scrambled: Scrambled::Refuse,
     };
     if decision == RipDecision::Cd {
-        return match engine.rip_cd(&request, sink).await {
-            Ok(report) => RipOutcome::Ended(Box::new(read(
-                medium,
-                report,
-                vec![RIP_TOC.to_owned(), RIP_DATA.to_owned()],
-            ))),
-            Err(error) => read_failed(error, medium, options.can_decrypt),
+        return match options.cd {
+            CdReader::Engine => match engine.rip_cd(&request, sink).await {
+                Ok(report) => RipOutcome::Ended(Box::new(read(
+                    medium,
+                    report,
+                    vec![RIP_TOC.to_owned(), RIP_DATA.to_owned()],
+                ))),
+                Err(error) => read_failed(error, medium, options.can_decrypt),
+            },
+            CdReader::Corrected(dumper) => {
+                rip_cd_corrected(dumper, &request, medium, options.can_decrypt, sink).await
+            }
+            CdReader::Unavailable => ended(
+                "refused",
+                Some(medium),
+                CD_ENGINE_UNAVAILABLE,
+                "this rip asked for redumper, and this worker does not have it; nothing was \
+                 read. Ask again with cdrdao, or run the worker from the image built with \
+                 redumper"
+                    .to_owned(),
+            ),
         };
     }
     if let Some(decrypting) = options.decrypt {
         return rip_dvd_decrypting(engine, request, medium, decrypting, sink).await;
     }
     rip_plain_image(engine, &request, medium, options.can_decrypt, sink).await
+}
+
+/// Read a CD with redumper into a CUE sheet and its tracks.
+async fn rip_cd_corrected(
+    dumper: &dyn CdDumper,
+    request: &RipRequest,
+    medium: MediumInfo,
+    can_decrypt: bool,
+    sink: &dyn EventSink,
+) -> RipOutcome {
+    if let Err(source) = tokio::fs::create_dir_all(&request.output_dir).await {
+        return ended(
+            "failed",
+            Some(medium),
+            "READ_FAILED",
+            EngineError::Io {
+                operation: "creating the rip directory",
+                source,
+            }
+            .to_string(),
+        );
+    }
+    let device = Path::new(&request.drive.device_alias);
+    match dumper
+        .dump(device, &request.output_dir, &request.cancel, sink)
+        .await
+    {
+        Ok(dump) => {
+            let tool = dumper.tool();
+            sink.emit(BurnEvent::new(
+                "ripping",
+                "RIP_READ",
+                match dump.cd_read.read_offset {
+                    Some(offset) => format!("read, the drive's read offset ({offset:+}) corrected"),
+                    None => "read; redumper has no read offset for this drive, so none was \
+                             corrected"
+                        .to_owned(),
+                },
+            ));
+            RipOutcome::Ended(Box::new(RipCompletion {
+                outcome: "read".to_owned(),
+                engine: Some(tool.name),
+                engine_version: Some(tool.version),
+                medium: Some(medium),
+                // redumper counts samples, not sectors; what it read again
+                // is in the offsets record, and a rip that finished read
+                // every sector in the end.
+                read_errors: None,
+                outputs: dump.outputs,
+                encryption: None,
+                decryption: None,
+                cd_read: Some(dump.cd_read),
+                error_code: None,
+                error_detail: None,
+            }))
+        }
+        Err(error) => read_failed(error, medium, can_decrypt),
+    }
 }
 
 /// Read a DVD or Blu-ray into one image, refusing it if it is encrypted.
@@ -378,6 +477,7 @@ async fn keep_decrypted_original(
         outputs,
         encryption: None,
         decryption: None,
+        cd_read: None,
         error_code: None,
         error_detail: None,
     })
@@ -537,7 +637,7 @@ fn read_failed(error: EngineError, medium: MediumInfo, can_decrypt: bool) -> Rip
 mod tests {
     use super::*;
     use crate::engine::CollectingSink;
-    use crate::fake::{FakeBehaviour, FakeCssCopier, FakeEngine};
+    use crate::fake::{FakeBehaviour, FakeCdDumper, FakeCssCopier, FakeEngine};
 
     fn drive() -> DriveRef {
         DriveRef {
@@ -709,6 +809,7 @@ mod tests {
             RipOptions {
                 decrypt: Some(Decrypting { keep, copier }),
                 can_decrypt: true,
+                ..RipOptions::default()
             },
             &CancelToken::new(),
             &sink,
@@ -920,6 +1021,7 @@ mod tests {
             RipOptions {
                 decrypt: None,
                 can_decrypt: true,
+                ..RipOptions::default()
             },
             &CancelToken::new(),
             &CollectingSink::new(),
@@ -933,6 +1035,124 @@ mod tests {
             done.error_detail
                 .unwrap()
                 .contains("Ask again with decryption")
+        );
+    }
+
+    async fn rip_with(engine: &FakeEngine, out: &Path, cd: CdReader<'_>) -> RipOutcome {
+        rip_disc(
+            engine,
+            &drive(),
+            out,
+            RipOptions {
+                cd,
+                ..RipOptions::default()
+            },
+            &CancelToken::new(),
+            &CollectingSink::new(),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_cd_on_a_worker_with_redumper_is_read_offset_corrected() {
+        let (dir, engine) = engine(pressed_cd());
+        let out = dir.path().join("rip");
+        let dumper = FakeCdDumper::default();
+        let RipOutcome::Ended(done) = rip_with(&engine, &out, CdReader::Corrected(&dumper)).await
+        else {
+            panic!("withdrawn")
+        };
+        assert_eq!(done.outcome, "read", "{done:?}");
+        assert_eq!(
+            done.outputs,
+            ["disc.cue", "disc (Track 1).bin", "disc (Track 2).bin"]
+        );
+        assert_eq!(done.engine.as_deref(), Some("redumper"));
+        assert_eq!(done.engine_version.as_deref(), Some("b768"));
+        let cd_read = done.cd_read.unwrap();
+        assert_eq!(
+            (cd_read.read_offset, cd_read.write_offset),
+            (Some(6), Some(-6))
+        );
+        for name in &done.outputs {
+            assert!(out.join(name).is_file(), "{name}");
+        }
+        assert!(
+            tangible_domain::rip::check_output_set(&done.outputs, false, None).is_ok(),
+            "what the server takes"
+        );
+        assert!(!out.join("disc.toc").exists(), "cdrdao did not run");
+    }
+
+    #[tokio::test]
+    async fn redumper_never_reads_a_dvd() {
+        let (dir, engine) = engine(FakeBehaviour {
+            medium_profile: Some("DVD-ROM".to_owned()),
+            medium_sessions: 1,
+            ..FakeBehaviour::default()
+        });
+        let dumper = FakeCdDumper {
+            fails: true,
+            ..FakeCdDumper::default()
+        };
+        for cd in [CdReader::Corrected(&dumper), CdReader::Unavailable] {
+            let out = dir.path().join("rip");
+            let _ = std::fs::remove_dir_all(&out);
+            let RipOutcome::Ended(done) = rip_with(&engine, &out, cd).await else {
+                panic!("withdrawn")
+            };
+            assert_eq!(done.outcome, "read", "{done:?}");
+            assert_eq!(done.outputs, ["disc.iso"]);
+            assert!(done.cd_read.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_rip_that_insisted_on_redumper_reads_nothing_without_it() {
+        let (dir, engine) = engine(pressed_cd());
+        let out = dir.path().join("rip");
+        let RipOutcome::Ended(done) = rip_with(&engine, &out, CdReader::Unavailable).await else {
+            panic!("withdrawn")
+        };
+        assert_eq!(done.outcome, "refused");
+        assert_eq!(done.error_code.as_deref(), Some("CD_ENGINE_UNAVAILABLE"));
+        assert_eq!(done.medium.unwrap().profile, "CD-ROM");
+        assert!(!out.exists(), "nothing read");
+    }
+
+    #[tokio::test]
+    async fn a_redumper_rip_that_fails_or_is_withdrawn_ends_as_such() {
+        let (dir, engine) = engine(pressed_cd());
+        let failing = FakeCdDumper {
+            fails: true,
+            ..FakeCdDumper::default()
+        };
+        let RipOutcome::Ended(done) = rip_with(
+            &engine,
+            &dir.path().join("a"),
+            CdReader::Corrected(&failing),
+        )
+        .await
+        else {
+            panic!("withdrawn")
+        };
+        assert_eq!(done.outcome, "failed");
+        assert_eq!(done.error_code.as_deref(), Some("READ_FAILED"));
+        assert!(done.error_detail.unwrap().contains("even after retrying"));
+        assert!(done.outputs.is_empty() && done.cd_read.is_none());
+
+        let withdrawn = FakeCdDumper {
+            cancel_during_dump: true,
+            ..FakeCdDumper::default()
+        };
+        assert_eq!(
+            rip_with(
+                &engine,
+                &dir.path().join("b"),
+                CdReader::Corrected(&withdrawn)
+            )
+            .await,
+            RipOutcome::Withdrawn
         );
     }
 

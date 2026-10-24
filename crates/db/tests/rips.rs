@@ -18,6 +18,7 @@ use tangible_db::rips::{
     record_rip_events, record_upload, request_rip, settle_rips,
 };
 use tangible_db::{Database, DbConfig};
+use tangible_domain::manifest::CdReadRecord;
 use tangible_domain::{
     CdRipEngine, DriveId, ErasureMode, RipJobId, RipOriginal, RipState, WorkerId,
 };
@@ -95,6 +96,7 @@ fn read_report(outputs: &[String]) -> RipResult<'_> {
         encryption: "none",
         decryption: None,
         decrypted_original: false,
+        cd_read: None,
     }
 }
 
@@ -239,6 +241,75 @@ async fn a_read_rip_queues_its_import_with_the_staging_areas_id() {
         .unwrap()
         .unwrap();
     assert_eq!(again.state, RipState::Registering);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_cd_read_by_redumper_keeps_its_offsets_for_the_rip_and_the_manifest() {
+    let pool = pool().await;
+    let (worker, _, rip) = reading(&pool).await;
+    let outputs = vec![
+        "disc.cue".to_owned(),
+        "disc (Track 1).bin".to_owned(),
+        "disc (Track 2).bin".to_owned(),
+    ];
+    for name in &outputs {
+        upload(&pool, worker, rip, name, 2352).await;
+    }
+    let cd_read = CdReadRecord {
+        read_offset: Some(6),
+        write_offset: Some(-6),
+        generic_drive: true,
+        retried_samples: 1176,
+    };
+    let done = complete_rip(
+        &pool,
+        worker,
+        rip,
+        &RipResult::Read {
+            engine: "redumper",
+            engine_version: "b768",
+            medium: None,
+            read_errors: None,
+            outputs: &outputs,
+            copy_outputs: &[],
+            encryption: "none",
+            decryption: None,
+            decrypted_original: false,
+            cd_read: Some(&cd_read),
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(done.state, RipState::Registering);
+    assert_eq!(
+        done.cd_read,
+        Some(serde_json::json!({ "read_offset": 6, "write_offset": -6,
+                                 "generic_drive": true, "retried_samples": 1176 }))
+    );
+    let descriptor: serde_json::Value =
+        sqlx::query_scalar("SELECT source_descriptor_json FROM import_jobs WHERE id = $1")
+            .bind(done.staging_id.as_uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let dump = &descriptor["physical_dump"];
+    assert_eq!(dump["engine"]["name"], "redumper", "{dump}");
+    assert_eq!(dump["cd_read"]["read_offset"], 6);
+    assert_eq!(dump["cd_read"]["generic_drive"], true);
+
+    // A cdrdao read records none.
+    let (worker, _, rip) = reading(&pool).await;
+    let pair = vec!["disc.toc".to_owned(), "disc.bin".to_owned()];
+    for name in &pair {
+        upload(&pool, worker, rip, name, 2352).await;
+    }
+    let done = complete_rip(&pool, worker, rip, &read_report(&pair))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(done.cd_read, None);
 }
 
 #[tokio::test]

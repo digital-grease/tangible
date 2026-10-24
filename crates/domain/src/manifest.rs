@@ -265,6 +265,47 @@ pub struct PhysicalDump {
     /// How, when it was.
     #[serde(default)]
     pub decryption: Option<DecryptionRecord>,
+    /// The offsets of a CD read by redumper (ADR 0015). Absent for every
+    /// other engine, and from manifests written before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cd_read: Option<CdReadRecord>,
+}
+
+/// How redumper read a CD: the offsets it applied and found, and whether it
+/// knew the drive (ADR 0015).
+///
+/// An offset is in samples, a sample being one 16-bit stereo pair, 588 to a
+/// sector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CdReadRecord {
+    /// The drive's read offset that was corrected, from redumper's table of
+    /// drives. `None` when the drive is not in it: the read was then not
+    /// offset-corrected, and audio will not match AccurateRip or Redump.
+    pub read_offset: Option<i32>,
+    /// The disc's write offset, as redumper found it when it split the dump.
+    pub write_offset: Option<i32>,
+    /// Whether redumper treated the drive as generic: one not in its list of
+    /// drives it trusts to dump faithfully.
+    pub generic_drive: bool,
+    /// Samples the first pass could not read cleanly, all read again by its
+    /// retries: a rip that finished read every one of them in the end.
+    pub retried_samples: u64,
+}
+
+/// The largest offset a [`CdReadRecord`] may hold, either way: a second of
+/// audio. Real drive and disc offsets are a few thousand samples at most.
+pub const MAX_CD_OFFSET_SAMPLES: i32 = 44_100;
+
+impl CdReadRecord {
+    /// Whether the offsets are within [`MAX_CD_OFFSET_SAMPLES`].
+    #[must_use]
+    pub fn is_plausible(&self) -> bool {
+        [self.read_offset, self.write_offset]
+            .into_iter()
+            .flatten()
+            .all(|offset| offset.unsigned_abs() <= MAX_CD_OFFSET_SAMPLES.unsigned_abs())
+    }
 }
 
 /// A drive, as it described itself to its worker.
@@ -709,6 +750,13 @@ impl PhysicalDump {
         {
             return Err(ManifestError::PhysicalDump(
                 "decryption.system must be the disc's encryption",
+            ));
+        }
+        if let Some(cd_read) = &self.cd_read
+            && !cd_read.is_plausible()
+        {
+            return Err(ManifestError::PhysicalDump(
+                "cd_read offsets are larger than a second of audio",
             ));
         }
         Ok(())
@@ -1433,7 +1481,76 @@ mod tests {
                 tool: "dvdbackup".to_owned(),
                 tool_version: "0.4.2-4.1".to_owned(),
             }),
+            cd_read: None,
         }
+    }
+
+    fn redumper_dump(cd_read: CdReadRecord) -> PhysicalDump {
+        PhysicalDump {
+            engine: ToolRef {
+                name: "redumper".to_owned(),
+                version: "b768".to_owned(),
+            },
+            read_errors: None,
+            cd_read: Some(cd_read),
+            ..dump("none", false)
+        }
+    }
+
+    const BENCH_READ: CdReadRecord = CdReadRecord {
+        read_offset: Some(6),
+        write_offset: Some(-6),
+        generic_drive: true,
+        retried_samples: 0,
+    };
+
+    #[test]
+    fn a_cd_read_by_redumper_records_its_offsets() {
+        let mut m = manifest(vec![component(0, "disc.cue", 1, 5)]);
+        m.origin.physical_dump = Some(redumper_dump(BENCH_READ));
+        m.validate().expect("valid");
+        let json = m.to_json().expect("serialize");
+        assert!(json.contains("\"read_offset\": 6"), "{json}");
+        assert_eq!(ArtifactManifest::from_json(&json).expect("parse"), m);
+
+        // A drive redumper has no offset for: read, but not corrected.
+        let uncorrected = CdReadRecord {
+            read_offset: None,
+            write_offset: None,
+            ..BENCH_READ
+        };
+        m.origin.physical_dump = Some(redumper_dump(uncorrected));
+        m.validate().expect("valid");
+
+        for offset in [
+            MAX_CD_OFFSET_SAMPLES + 1,
+            -MAX_CD_OFFSET_SAMPLES - 1,
+            i32::MIN,
+        ] {
+            for broken in [
+                CdReadRecord {
+                    read_offset: Some(offset),
+                    ..BENCH_READ
+                },
+                CdReadRecord {
+                    write_offset: Some(offset),
+                    ..BENCH_READ
+                },
+            ] {
+                m.origin.physical_dump = Some(redumper_dump(broken));
+                assert!(
+                    matches!(m.validate(), Err(ManifestError::PhysicalDump(_))),
+                    "{broken:?}"
+                );
+            }
+        }
+        assert!(
+            CdReadRecord {
+                read_offset: Some(-MAX_CD_OFFSET_SAMPLES),
+                ..BENCH_READ
+            }
+            .is_plausible()
+        );
     }
 
     #[test]
@@ -1475,6 +1592,10 @@ mod tests {
             .to_json()
             .unwrap();
         assert!(!json.contains("physical_dump"), "{json}");
+        // Nor in a dump by any engine but redumper.
+        let mut m = manifest(vec![component(0, "d.iso", 1, 5)]);
+        m.origin.physical_dump = Some(dump("none", false));
+        assert!(!m.to_json().unwrap().contains("cd_read"));
         let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
         value["origin"]["physical_dump"] = serde_json::json!({ "rip_id": "x", "key": "00" });
         assert!(

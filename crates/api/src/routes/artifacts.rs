@@ -21,7 +21,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use serde::Serialize;
 use tangible_domain::ArtifactId;
-use tangible_domain::manifest::{ArtifactManifest, DecryptionRecord};
+use tangible_domain::manifest::{ArtifactManifest, CdReadRecord, DecryptionRecord};
 use utoipa::ToSchema;
 
 use crate::pagination::{Page, PageQuery};
@@ -156,6 +156,36 @@ pub struct RippedView {
     pub decrypted_at_acquisition: bool,
     /// How it was decrypted, when it was.
     pub decryption: Option<DecryptionView>,
+    /// For a CD read by redumper: the offsets it applied and found
+    /// (ADR 0015).
+    pub cd_read: Option<CdReadView>,
+}
+
+/// How redumper read a CD (ADR 0015). Offsets are in samples, 588 to a
+/// sector.
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+pub struct CdReadView {
+    /// The drive's read offset that was corrected. Absent when redumper has
+    /// none for the drive: the read was then not offset-corrected.
+    pub read_offset: Option<i32>,
+    /// The disc's write offset, as redumper found it.
+    pub write_offset: Option<i32>,
+    /// Whether redumper treated the drive as generic: one it does not trust
+    /// to dump faithfully.
+    pub generic_drive: bool,
+    /// Samples the first pass could not read cleanly, all read again.
+    pub retried_samples: u64,
+}
+
+impl From<CdReadRecord> for CdReadView {
+    fn from(record: CdReadRecord) -> Self {
+        Self {
+            read_offset: record.read_offset,
+            write_offset: record.write_offset,
+            generic_drive: record.generic_drive,
+            retried_samples: record.retried_samples,
+        }
+    }
 }
 
 /// The library and tool that decrypted a disc as it was read.
@@ -259,6 +289,7 @@ fn ripped_view(manifest: &ArtifactManifest) -> Option<RippedView> {
         encryption: dump.encryption.clone(),
         decrypted_at_acquisition: dump.decrypted_at_acquisition,
         decryption: dump.decryption.clone().map(DecryptionView::from),
+        cd_read: dump.cd_read.map(CdReadView::from),
     })
 }
 

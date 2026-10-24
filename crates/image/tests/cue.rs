@@ -799,6 +799,22 @@ FILE "d.bin" BINARY
     assert_eq!(layout.tracks[0].isrc, None);
 }
 
+#[test]
+fn twelve_zeros_is_no_isrc_and_no_warning() {
+    // How redumper writes a track without one. The sheet keeps it as written.
+    let parsed = sheet(
+        r#"FILE "disc (Track 1).bin" BINARY
+  TRACK 01 AUDIO
+    ISRC 000000000000
+    INDEX 01 00:00:00
+"#,
+    );
+
+    assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+    let layout = cue::layout(&parsed, &[RAW_SECTOR * 100]).expect("a layout");
+    assert_eq!(layout.tracks[0].isrc, None);
+}
+
 // --- how the file stores samples, and the flags a track carries ---------------
 
 #[test]

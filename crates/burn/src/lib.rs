@@ -24,6 +24,7 @@ pub mod engine;
 pub mod erasing;
 pub mod fake;
 pub mod plan;
+pub mod redumper;
 pub mod ripping;
 pub mod runner;
 pub mod worker;

@@ -165,6 +165,7 @@ pub const API_BASE: &str = "/api/v1";
         routes::artifacts::TrackIndexView,
         routes::artifacts::RippedView,
         routes::artifacts::DecryptionView,
+        routes::artifacts::CdReadView,
         routes::catalog::TitleView,
         routes::catalog::TitlePage,
         routes::catalog::EditionView,

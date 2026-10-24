@@ -1784,6 +1784,33 @@ export interface components {
             drive_id: string;
         };
         /**
+         * @description How redumper read a CD (ADR 0015). Offsets are in samples, 588 to a
+         *     sector.
+         */
+        CdReadView: {
+            /**
+             * @description Whether redumper treated the drive as generic: one it does not trust
+             *     to dump faithfully.
+             */
+            generic_drive: boolean;
+            /**
+             * Format: int32
+             * @description The drive's read offset that was corrected. Absent when redumper has
+             *     none for the drive: the read was then not offset-corrected.
+             */
+            read_offset?: number | null;
+            /**
+             * Format: int64
+             * @description Samples the first pass could not read cleanly, all read again.
+             */
+            retried_samples: number;
+            /**
+             * Format: int32
+             * @description The disc's write offset, as redumper found it.
+             */
+            write_offset?: number | null;
+        };
+        /**
          * @description How a check came out.
          * @enum {string}
          */
@@ -3092,6 +3119,7 @@ export interface components {
         };
         /** @description How a rip ended, as the worker reports it. */
         RipCompletion: {
+            cd_read?: null | components["schemas"]["CdReadView"];
             decryption?: null | components["schemas"]["DecryptionView"];
             /**
              * @description For `read`: the disc's encryption, `none` (the default), `css`,
@@ -3212,6 +3240,7 @@ export interface components {
              *     for the worker's best.
              */
             cd_engine?: string | null;
+            cd_read?: null | components["schemas"]["CdReadView"];
             /** @description When it ended. */
             completed_at?: string | null;
             /** @description The decrypted copy's artifact, once imported. */
@@ -3273,6 +3302,7 @@ export interface components {
          *     tool versions only; nothing about keys.
          */
         RippedView: {
+            cd_read?: null | components["schemas"]["CdReadView"];
             /**
              * @description Whether these bytes were decrypted as they were read: such an image
              *     is not a faithful copy of the disc.
