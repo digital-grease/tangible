@@ -69,9 +69,11 @@ const DRIVE = {
   worker_status: 'online',
   can_rip: true,
   can_decrypt_rips: false,
+  can_rip_with_redumper: false,
 };
 
 const DECRYPTING_DRIVE = { ...DRIVE, can_decrypt_rips: true };
+const REDUMPER_DRIVE = { ...DRIVE, can_rip_with_redumper: true };
 
 function rip(extra: Record<string, unknown> = {}) {
   return {
@@ -230,6 +232,75 @@ describe('Rips page, on a drive that can decrypt', () => {
     await fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
     expect(screen.queryByRole('heading', { name: 'Rip the disc in sr0' })).toBeNull();
     expect(asked.some((call) => call.method === 'POST')).toBe(false);
+  });
+});
+
+describe('Rips page, on a drive that reads CDs with redumper', () => {
+  function serving(drive: typeof DRIVE) {
+    return server({
+      '/api/v1/drives': { status: 200, body: { items: [drive] } },
+      '/api/v1/rips?limit=20': { status: 200, body: { items: [] } },
+      'POST /api/v1/drives/d1/rips': { status: 201, body: rip({ state: 'queued' }) },
+      '/api/v1/report-settings': SETTINGS,
+    });
+  }
+
+  it('uses redumper unless cdrdao is chosen, and asks nothing about decryption', async () => {
+    const asked = serving(REDUMPER_DRIVE);
+    render(RipsPage);
+    expect(await screen.findByText('Corrects CD read offsets')).toBeTruthy();
+    await fireEvent.click(await screen.findByRole('button', { name: 'Rip the disc in sr0' }));
+    const redumper = (await screen.findByRole('radio', {
+      name: "redumper, correcting the drive's read offset",
+    })) as HTMLInputElement;
+    expect(redumper.checked).toBe(true);
+    expect(screen.queryByRole('checkbox', { name: 'Decrypt an encrypted disc' })).toBeNull();
+    await fireEvent.click(screen.getByRole('button', { name: 'Start ripping' }));
+    await vi.waitFor(() => expect(goto).toHaveBeenCalledWith('/rips/r1'));
+    expect(asked).toContainEqual({ url: '/api/v1/drives/d1/rips', method: 'POST', body: '{}' });
+  });
+
+  it('switches to cdrdao when asked', async () => {
+    const asked = serving(REDUMPER_DRIVE);
+    render(RipsPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Rip the disc in sr0' }));
+    await fireEvent.click(
+      await screen.findByRole('radio', { name: 'cdrdao, without offset correction' }),
+    );
+    await fireEvent.click(screen.getByRole('button', { name: 'Start ripping' }));
+    await vi.waitFor(() => expect(goto).toHaveBeenCalledWith('/rips/r1'));
+    expect(asked).toContainEqual({
+      url: '/api/v1/drives/d1/rips',
+      method: 'POST',
+      body: '{"cd_engine":"cdrdao"}',
+    });
+  });
+
+  it('offers both choices on a drive that has both', async () => {
+    const asked = serving({ ...REDUMPER_DRIVE, can_decrypt_rips: true });
+    render(RipsPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Rip the disc in sr0' }));
+    await fireEvent.click(
+      await screen.findByRole('checkbox', { name: 'Decrypt an encrypted disc' }),
+    );
+    await fireEvent.click(screen.getByRole('radio', { name: 'cdrdao, without offset correction' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Start ripping' }));
+    await vi.waitFor(() => expect(goto).toHaveBeenCalledWith('/rips/r1'));
+    expect(asked).toContainEqual({
+      url: '/api/v1/drives/d1/rips',
+      method: 'POST',
+      body: '{"decrypt":true,"keep":"encrypted_original","cd_engine":"cdrdao"}',
+    });
+  });
+
+  it('shows the CD tool a rip asked for', async () => {
+    server({
+      '/api/v1/rips/r1': { status: 200, body: rip({ cd_engine: 'cdrdao' }) },
+      '/api/v1/rips/r1/events': { status: 200, body: { items: [] } },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    render(RipPage);
+    expect(await screen.findByText('cdrdao, no offset correction')).toBeTruthy();
   });
 });
 

@@ -85,6 +85,9 @@ pub enum ErrorCode {
     /// A rip asked to decrypt, and the drive's worker cannot: its image was
     /// not built to (ADR 0013).
     EncryptedNoDecryption,
+    /// A rip asked for redumper, and the drive's worker does not have it
+    /// (ADR 0015).
+    CdEngineUnavailable,
     /// Anything unanticipated.
     Internal,
 }
@@ -112,6 +115,7 @@ impl ErrorCode {
             Self::UnsupportedProtocol => "UNSUPPORTED_PROTOCOL",
             Self::DecryptionOff => "DECRYPTION_OFF",
             Self::EncryptedNoDecryption => "ENCRYPTED_NO_DECRYPTION",
+            Self::CdEngineUnavailable => tangible_domain::rip::CD_ENGINE_UNAVAILABLE,
             Self::Internal => "INTERNAL",
         }
     }
@@ -147,7 +151,8 @@ impl ErrorCode {
             | Self::WriteInProgress
             | Self::NotRetryable
             | Self::DecryptionOff
-            | Self::EncryptedNoDecryption => StatusCode::CONFLICT,
+            | Self::EncryptedNoDecryption
+            | Self::CdEngineUnavailable => StatusCode::CONFLICT,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -174,6 +179,7 @@ impl ErrorCode {
             Self::UnsupportedProtocol => "Unsupported protocol version",
             Self::DecryptionOff => "Decryption is turned off",
             Self::EncryptedNoDecryption => "The drive's worker cannot decrypt",
+            Self::CdEngineUnavailable => "The drive's worker does not have that CD engine",
             Self::Internal => "Internal error",
         }
     }
@@ -321,6 +327,7 @@ mod tests {
             ErrorCode::UnsupportedProtocol,
             ErrorCode::DecryptionOff,
             ErrorCode::EncryptedNoDecryption,
+            ErrorCode::CdEngineUnavailable,
             ErrorCode::Internal,
         ];
         let mut seen = std::collections::BTreeSet::new();

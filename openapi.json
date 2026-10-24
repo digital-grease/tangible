@@ -1903,7 +1903,7 @@
           "rips"
         ],
         "summary": "Ask for the disc in a drive to be ripped into the library.",
-        "description": "Rip the disc in a drive into the library. The drive's worker reads it when the drive is free, sends what it read, and the result is imported like an upload. A CD becomes a TOC/BIN image, a DVD an ISO. `decrypt` asks for an encrypted disc to be decrypted, which needs an administrator to have turned decryption on and the drive's worker to be able to.",
+        "description": "Rip the disc in a drive into the library. The drive's worker reads it when the drive is free, sends what it read, and the result is imported like an upload. A CD becomes a TOC/BIN image, a DVD an ISO. `decrypt` asks for an encrypted disc to be decrypted, which needs an administrator to have turned decryption on and the drive's worker to be able to. `cd_engine` picks the tool for a CD: redumper (read offset corrected, where the worker has it, the default there) or cdrdao.",
         "operationId": "request_drive_rip",
         "parameters": [
           {
@@ -1948,7 +1948,7 @@
             }
           },
           "409": {
-            "description": "A rip is already reading, the worker cannot rip, or decryption was asked for and is off (`DECRYPTION_OFF`) or the worker cannot decrypt (`ENCRYPTED_NO_DECRYPTION`)",
+            "description": "A rip is already reading, the worker cannot rip, or decryption was asked for and is off (`DECRYPTION_OFF`) or the worker cannot decrypt (`ENCRYPTED_NO_DECRYPTION`), or redumper was asked for and the worker does not have it (`CD_ENGINE_UNAVAILABLE`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1958,7 +1958,7 @@
             }
           },
           "422": {
-            "description": "`keep` is not an original this server knows",
+            "description": "`keep` or `cd_engine` is not one this server knows",
             "content": {
               "application/json": {
                 "schema": {
@@ -6630,7 +6630,8 @@
           "worker_name",
           "worker_status",
           "can_rip",
-          "can_decrypt_rips"
+          "can_decrypt_rips",
+          "can_rip_with_redumper"
         ],
         "properties": {
           "can_decrypt_rips": {
@@ -6640,6 +6641,10 @@
           "can_rip": {
             "type": "boolean",
             "description": "Whether its worker can rip."
+          },
+          "can_rip_with_redumper": {
+            "type": "boolean",
+            "description": "Whether its worker can rip a CD with redumper, correcting the drive's\nread offset (ADR 0015). Its CD rips use it unless asked for cdrdao."
           },
           "connection": {
             "type": "string",
@@ -8258,8 +8263,15 @@
       },
       "RequestRip": {
         "type": "object",
-        "description": "What an operator sends to rip the disc in a drive. Both fields are\noptional: `{}` rips without decryption.",
+        "description": "What an operator sends to rip the disc in a drive. Every field is\noptional: `{}` rips without decryption, a CD with the worker's best tool.",
         "properties": {
+          "cd_engine": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The tool to read a CD with (ADR 0015): `redumper`, which corrects the\ndrive's read offset and needs a worker built with it, or `cdrdao`,\nwhich every worker has. Absent: redumper where the drive's worker has\nit, cdrdao elsewhere. Ignored for a disc that is not a CD."
+          },
           "decrypt": {
             "type": "boolean",
             "description": "Decrypt the disc if it is encrypted (ADR 0013). Needs an\nadministrator to have turned decryption on, and the drive's worker\nto run an image built to decrypt."
@@ -8308,6 +8320,13 @@
           "decrypt"
         ],
         "properties": {
+          "cd_engine": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The tool to read a CD with, `redumper` or `cdrdao`; absent for this\nworker's best. `redumper` only when this worker reported it."
+          },
           "decrypt": {
             "type": "boolean",
             "description": "Decrypt the disc if it is encrypted. Only ever true when this server\nallows it and this worker said it can."
@@ -8647,6 +8666,13 @@
           "can_cancel": {
             "type": "boolean",
             "description": "Whether it can still be withdrawn."
+          },
+          "cd_engine": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The tool they asked to read a CD with, `redumper` or `cdrdao`; absent\nfor the worker's best."
           },
           "completed_at": {
             "type": [

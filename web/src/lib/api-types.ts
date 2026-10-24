@@ -635,7 +635,7 @@ export interface paths {
         put?: never;
         /**
          * Ask for the disc in a drive to be ripped into the library.
-         * @description Rip the disc in a drive into the library. The drive's worker reads it when the drive is free, sends what it read, and the result is imported like an upload. A CD becomes a TOC/BIN image, a DVD an ISO. `decrypt` asks for an encrypted disc to be decrypted, which needs an administrator to have turned decryption on and the drive's worker to be able to.
+         * @description Rip the disc in a drive into the library. The drive's worker reads it when the drive is free, sends what it read, and the result is imported like an upload. A CD becomes a TOC/BIN image, a DVD an ISO. `decrypt` asks for an encrypted disc to be decrypted, which needs an administrator to have turned decryption on and the drive's worker to be able to. `cd_engine` picks the tool for a CD: redumper (read offset corrected, where the worker has it, the default there) or cdrdao.
          */
         post: operations["request_drive_rip"];
         delete?: never;
@@ -2305,6 +2305,11 @@ export interface components {
             /** @description Whether its worker can rip. */
             can_rip: boolean;
             /**
+             * @description Whether its worker can rip a CD with redumper, correcting the drive's
+             *     read offset (ADR 0015). Its CD rips use it unless asked for cdrdao.
+             */
+            can_rip_with_redumper: boolean;
+            /**
              * @description How it is attached: `usb`, `sata` or `unknown`, as the worker read it
              *     from the host's device tree.
              */
@@ -3019,10 +3024,17 @@ export interface components {
             mode: string;
         };
         /**
-         * @description What an operator sends to rip the disc in a drive. Both fields are
-         *     optional: `{}` rips without decryption.
+         * @description What an operator sends to rip the disc in a drive. Every field is
+         *     optional: `{}` rips without decryption, a CD with the worker's best tool.
          */
         RequestRip: {
+            /**
+             * @description The tool to read a CD with (ADR 0015): `redumper`, which corrects the
+             *     drive's read offset and needs a worker built with it, or `cdrdao`,
+             *     which every worker has. Absent: redumper where the drive's worker has
+             *     it, cdrdao elsewhere. Ignored for a disc that is not a CD.
+             */
+            cd_engine?: string | null;
             /**
              * @description Decrypt the disc if it is encrypted (ADR 0013). Needs an
              *     administrator to have turned decryption on, and the drive's worker
@@ -3045,6 +3057,11 @@ export interface components {
         };
         /** @description A rip a worker has taken. */
         RipClaim: {
+            /**
+             * @description The tool to read a CD with, `redumper` or `cdrdao`; absent for this
+             *     worker's best. `redumper` only when this worker reported it.
+             */
+            cd_engine?: string | null;
             /**
              * @description Decrypt the disc if it is encrypted. Only ever true when this server
              *     allows it and this worker said it can.
@@ -3190,6 +3207,11 @@ export interface components {
             bytes_received: number;
             /** @description Whether it can still be withdrawn. */
             can_cancel: boolean;
+            /**
+             * @description The tool they asked to read a CD with, `redumper` or `cdrdao`; absent
+             *     for the worker's best.
+             */
+            cd_engine?: string | null;
             /** @description When it ended. */
             completed_at?: string | null;
             /** @description The decrypted copy's artifact, once imported. */
@@ -4785,7 +4807,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description A rip is already reading, the worker cannot rip, or decryption was asked for and is off (`DECRYPTION_OFF`) or the worker cannot decrypt (`ENCRYPTED_NO_DECRYPTION`) */
+            /** @description A rip is already reading, the worker cannot rip, or decryption was asked for and is off (`DECRYPTION_OFF`) or the worker cannot decrypt (`ENCRYPTED_NO_DECRYPTION`), or redumper was asked for and the worker does not have it (`CD_ENGINE_UNAVAILABLE`) */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -4794,7 +4816,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description `keep` is not an original this server knows */
+            /** @description `keep` or `cd_engine` is not one this server knows */
             422: {
                 headers: {
                     [name: string]: unknown;

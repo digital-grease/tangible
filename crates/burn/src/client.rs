@@ -392,6 +392,10 @@ pub struct RipClaim {
     /// `decrypted_original`.
     #[serde(default)]
     pub keep: Option<String>,
+    /// The tool to read a CD with, `redumper` or `cdrdao` (ADR 0015); absent
+    /// for this worker's best.
+    #[serde(default)]
+    pub cd_engine: Option<String>,
 }
 
 /// Sectors that gave trouble during a rip.

@@ -991,6 +991,7 @@ mod tests {
             worker_last_seen_at: worker.last_seen_at,
             can_rip: true,
             can_decrypt: false,
+            has_redumper: false,
         }
     }
 

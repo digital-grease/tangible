@@ -28,15 +28,15 @@ use tangible_burn::MediumInfo;
 use tangible_db::rips::{
     CancelOutcome, ReceivedFile, RequestOutcome, RipEvent, RipEventRecord, RipOptions, RipRecord,
     RipResult, WorkerOutcome, cancel_rip, check_upload, claim_rip, complete_rip, drive_can_decrypt,
-    drive_rip_engines, get_rip, get_rip_for_worker, list_rip_events, list_rips, record_rip_events,
-    record_upload, request_rip,
+    drive_has_redumper, drive_rip_engines, get_rip, get_rip_for_worker, list_rip_events, list_rips,
+    record_rip_events, record_upload, request_rip,
 };
 use tangible_domain::manifest::{DUMP_ENCRYPTIONS, DecryptionRecord};
 use tangible_domain::rip::{
     DECRYPTED_PREFIX, DecryptionRefusal, MAX_IMAGE_BYTES, OriginalKind, RIP_OUTPUTS, VIDEO_TS_DIR,
-    check_decryption, check_output_set, max_output_bytes,
+    cd_engine_available, check_decryption, check_output_set, max_output_bytes,
 };
-use tangible_domain::{DriveId, LogicalPath, RipJobId, RipOriginal, RipState};
+use tangible_domain::{CdRipEngine, DriveId, LogicalPath, RipJobId, RipOriginal, RipState};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tokio::io::AsyncWriteExt as _;
@@ -195,6 +195,10 @@ pub struct RipView {
     /// `decrypted_original`.
     #[schema(value_type = Option<String>)]
     pub keep: Option<String>,
+    /// The tool they asked to read a CD with, `redumper` or `cdrdao`; absent
+    /// for the worker's best.
+    #[schema(value_type = Option<String>)]
+    pub cd_engine: Option<String>,
     /// What the worker found in the drive.
     pub medium: Option<MediumView>,
     /// The tool that read the disc, such as `cdrdao`.
@@ -257,6 +261,7 @@ impl From<RipRecord> for RipView {
             requested_by: record.requested_by,
             decrypt: record.decrypt,
             keep: record.keep.map(|keep| keep.as_str().to_owned()),
+            cd_engine: record.cd_engine.map(|engine| engine.as_str().to_owned()),
             medium: record
                 .medium
                 .and_then(|value| serde_json::from_value::<MediumInfo>(value).ok())
@@ -338,8 +343,8 @@ pub struct RipEventPage {
 
 // --- requests ----------------------------------------------------------------------
 
-/// What an operator sends to rip the disc in a drive. Both fields are
-/// optional: `{}` rips without decryption.
+/// What an operator sends to rip the disc in a drive. Every field is
+/// optional: `{}` rips without decryption, a CD with the worker's best tool.
 #[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RequestRip {
@@ -355,6 +360,13 @@ pub struct RequestRip {
     #[serde(default)]
     #[schema(value_type = Option<String>)]
     pub keep: Option<String>,
+    /// The tool to read a CD with (ADR 0015): `redumper`, which corrects the
+    /// drive's read offset and needs a worker built with it, or `cdrdao`,
+    /// which every worker has. Absent: redumper where the drive's worker has
+    /// it, cdrdao elsewhere. Ignored for a disc that is not a CD.
+    #[serde(default)]
+    #[schema(value_type = Option<String>)]
+    pub cd_engine: Option<String>,
 }
 
 /// Paging for the rip list.
@@ -400,6 +412,10 @@ pub struct RipClaim {
     /// `decrypted_original`.
     #[schema(value_type = Option<String>)]
     pub keep: Option<String>,
+    /// The tool to read a CD with, `redumper` or `cdrdao`; absent for this
+    /// worker's best. `redumper` only when this worker reported it.
+    #[schema(value_type = Option<String>)]
+    pub cd_engine: Option<String>,
 }
 
 /// One thing a worker says while ripping.
@@ -484,9 +500,21 @@ fn rip_options(request: &RequestRip) -> Result<RipOptions, Problem> {
             )
         })?,
     };
+    let cd_engine = request
+        .cd_engine
+        .as_deref()
+        .map(str::parse::<CdRipEngine>)
+        .transpose()
+        .map_err(|_| {
+            Problem::new(
+                ErrorCode::ValidationFailed,
+                "cd_engine must be redumper or cdrdao",
+            )
+        })?;
     Ok(RipOptions {
         decrypt: request.decrypt,
         keep,
+        cd_engine,
     })
 }
 
@@ -497,7 +525,8 @@ fn rip_options(request: &RequestRip) -> Result<RipOptions, Problem> {
 /// `NOT_FOUND` for an unknown drive; `CONFLICT` when the drive already has a
 /// rip reading, or its worker cannot rip; `DECRYPTION_OFF` or
 /// `ENCRYPTED_NO_DECRYPTION` when decryption is asked for and not possible;
-/// `VALIDATION_FAILED` for an unknown `keep`.
+/// `CD_ENGINE_UNAVAILABLE` when redumper is asked for and the worker does not
+/// have it; `VALIDATION_FAILED` for an unknown `keep` or `cd_engine`.
 #[utoipa::path(
     post,
     path = "/api/v1/drives/{drive_id}/rips",
@@ -507,7 +536,9 @@ fn rip_options(request: &RequestRip) -> Result<RipOptions, Problem> {
                    result is imported like an upload. A CD becomes a TOC/BIN image, \
                    a DVD an ISO. `decrypt` asks for an encrypted disc to be decrypted, \
                    which needs an administrator to have turned decryption on and the \
-                   drive's worker to be able to.",
+                   drive's worker to be able to. `cd_engine` picks the tool for a CD: \
+                   redumper (read offset corrected, where the worker has it, the \
+                   default there) or cdrdao.",
     params(("drive_id" = String, Path, description = "Drive identifier")),
     request_body = RequestRip,
     responses(
@@ -515,8 +546,10 @@ fn rip_options(request: &RequestRip) -> Result<RipOptions, Problem> {
         (status = 404, description = "No such drive", body = Problem),
         (status = 409, description = "A rip is already reading, the worker cannot rip, or \
                                       decryption was asked for and is off (`DECRYPTION_OFF`) \
-                                      or the worker cannot decrypt (`ENCRYPTED_NO_DECRYPTION`)", body = Problem),
-        (status = 422, description = "`keep` is not an original this server knows", body = Problem),
+                                      or the worker cannot decrypt (`ENCRYPTED_NO_DECRYPTION`), \
+                                      or redumper was asked for and the worker does not have it \
+                                      (`CD_ENGINE_UNAVAILABLE`)", body = Problem),
+        (status = 422, description = "`keep` or `cd_engine` is not one this server knows", body = Problem),
     ),
 )]
 pub async fn request_drive_rip(
@@ -569,6 +602,16 @@ pub async fn request_drive_rip(
             ),
         },
     )?;
+    let has_redumper = drive_has_redumper(pool, drive_id)
+        .await
+        .map_err(database("the drive could not be read"))?;
+    if !cd_engine_available(options.cd_engine, has_redumper) {
+        return Err(Problem::new(
+            ErrorCode::CdEngineUnavailable,
+            "this drive's worker does not have redumper; run it from the image built with it \
+             (deploy/README.md, \"Ripping encrypted discs\"), or ask for cdrdao",
+        ));
+    }
     let record = request_rip(pool, drive_id, &user.username, options)
         .await
         .map_err(database("the rip could not be queued"))?
@@ -585,6 +628,7 @@ pub async fn request_drive_rip(
         by = %user.username,
         decrypt = record.decrypt,
         keep = record.keep.map(|keep| keep.as_str()),
+        cd_engine = record.cd_engine.map(|engine| engine.as_str()),
         "rip requested"
     );
     Ok((StatusCode::CREATED, Json(RipView::from(record))).into_response())
@@ -800,6 +844,7 @@ pub async fn claim_drive_rip(
                 max_file_bytes: MAX_IMAGE_BYTES,
                 decrypt: record.decrypt,
                 keep: record.keep.map(|keep| keep.as_str().to_owned()),
+                cd_engine: record.cd_engine.map(|engine| engine.as_str().to_owned()),
             })
             .into_response()
         }

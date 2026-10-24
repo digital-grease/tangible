@@ -96,6 +96,13 @@ may change between minor versions, and the release notes say how.
   rips with the drive's read offset corrected. The worker does not use it
   yet. It is not in the published image, and the release's check refuses
   it there, because it carries its own CSS and AACS code.
+- A rip can choose the tool for a CD (`cd_engine` on
+  `POST /api/v1/drives/{id}/rips`): redumper, the default where the drive's
+  worker has it, or cdrdao, for a drive whose redumper rips go wrong.
+  Asking for redumper where the worker lacks it is refused
+  (`CD_ENGINE_UNAVAILABLE`), when asked and again when the worker takes
+  the rip. The drive list says which drives have it
+  (`can_rip_with_redumper`), and the web UI offers the choice there.
 - The web UI asks about decryption on a drive that can decrypt: "Rip the
   disc in {drive}" opens a dialog with a "Decrypt an encrypted disc" box,
   the notice that whether ripping is lawful is the operator's to determine,

@@ -32,8 +32,8 @@ pub mod secret;
 pub use burn::{BurnAttemptState, BurnJobState, BurnTransitionError};
 pub use digest::{DigestParseError, Sha256Digest};
 pub use enums::{
-    ArtifactFormat, ArtifactKind, ArtifactOrigin, ChdCodec, CompatibilityClaim, ComponentRole,
-    DerivationJobState, DiscRelationship, DriveConnection, DriveStatus, EjectPolicy,
+    ArtifactFormat, ArtifactKind, ArtifactOrigin, CdRipEngine, ChdCodec, CompatibilityClaim,
+    ComponentRole, DerivationJobState, DiscRelationship, DriveConnection, DriveStatus, EjectPolicy,
     EnumParseError, ErasureMode, ErasureState, HashAlgorithm, IntegrationKind, LossCharacter,
     MediaFamily, PhysicalCopyStatus, QuarantineState, RipOriginal, RipState, Role, SetKind,
     TitleKind, Transformation, ValidationState, VerificationStep, WorkerStatus,

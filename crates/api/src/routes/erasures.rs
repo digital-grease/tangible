@@ -110,6 +110,9 @@ pub struct DriveView {
     /// Whether a rip on this drive may decrypt an encrypted disc: this
     /// server allows decryption and the drive's worker can (ADR 0013).
     pub can_decrypt_rips: bool,
+    /// Whether its worker can rip a CD with redumper, correcting the drive's
+    /// read offset (ADR 0015). Its CD rips use it unless asked for cdrdao.
+    pub can_rip_with_redumper: bool,
 }
 
 impl DriveView {
@@ -128,6 +131,7 @@ impl From<DriveRecord> for DriveView {
     fn from(drive: DriveRecord) -> Self {
         Self {
             can_rip: drive.can_rip,
+            can_rip_with_redumper: drive.can_rip && drive.has_redumper,
             // Decryption is off unless the server says otherwise; see `new`.
             can_decrypt_rips: false,
             id: drive.id.to_string(),

@@ -14,11 +14,13 @@ use tangible_db::erasures::{claim_erasure, request_erasure};
 use tangible_db::repositories::{ClaimOutcome, claim_next_burn_job};
 use tangible_db::rips::{
     CancelOutcome, ReceivedFile, RequestOutcome, RipEvent, RipOptions, RipResult, WorkerOutcome,
-    cancel_rip, claim_rip, complete_rip, get_rip, list_rip_events, record_rip_events,
-    record_upload, request_rip, settle_rips,
+    cancel_rip, claim_rip, complete_rip, drive_has_redumper, get_rip, list_rip_events,
+    record_rip_events, record_upload, request_rip, settle_rips,
 };
 use tangible_db::{Database, DbConfig};
-use tangible_domain::{DriveId, ErasureMode, RipJobId, RipOriginal, RipState, WorkerId};
+use tangible_domain::{
+    CdRipEngine, DriveId, ErasureMode, RipJobId, RipOriginal, RipState, WorkerId,
+};
 use time::OffsetDateTime;
 
 async fn pool() -> PgPool {
@@ -466,6 +468,7 @@ async fn can_decrypt(pool: &PgPool, worker: WorkerId) {
 const DECRYPT: RipOptions = RipOptions {
     decrypt: true,
     keep: RipOriginal::DecryptedOriginal,
+    cd_engine: None,
 };
 
 #[tokio::test]
@@ -480,6 +483,7 @@ async fn the_choice_of_original_is_kept_only_when_decrypting() {
         RipOptions {
             decrypt: false,
             keep: RipOriginal::DecryptedOriginal,
+            cd_engine: None,
         },
     )
     .await
@@ -594,4 +598,85 @@ async fn a_decrypting_rip_goes_only_to_a_worker_that_can_on_a_server_that_allows
     assert_eq!(taken.state, RipState::Reading);
     assert!(taken.decrypt);
     assert_eq!(taken.keep, Some(RipOriginal::DecryptedOriginal));
+}
+
+/// Say the worker rips CDs with redumper and cdrdao, as a worker from the
+/// opt-in image does (ADR 0015).
+async fn has_redumper(pool: &PgPool, worker: WorkerId) {
+    sqlx::query(
+        "UPDATE workers SET capabilities_json = jsonb_build_object('rip', jsonb_build_object(
+             'engines', jsonb_build_array(
+                 jsonb_build_object('name', 'auto', 'version', '0.1.0'),
+                 jsonb_build_object('name', 'redumper', 'version', 'b768'))))
+         WHERE id = $1",
+    )
+    .bind(worker.as_uuid())
+    .execute(pool)
+    .await
+    .expect("set capabilities");
+}
+
+fn cd_engine(engine: CdRipEngine) -> RipOptions {
+    RipOptions {
+        cd_engine: Some(engine),
+        ..RipOptions::default()
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_rip_that_insists_on_redumper_goes_only_to_a_worker_that_has_it() {
+    let pool = pool().await;
+
+    // A worker without it: refused as the worker asks, nothing read.
+    let (worker, drive) = worker_and_drive(&pool).await;
+    assert!(!drive_has_redumper(&pool, drive).await.unwrap());
+    let rip = request_rip(&pool, drive, "operator", cd_engine(CdRipEngine::Redumper))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rip.cd_engine, Some(CdRipEngine::Redumper));
+    assert_eq!(
+        claim_rip(&pool, worker, drive, false).await.unwrap(),
+        Ok(None)
+    );
+    let refused = get_rip(&pool, rip.id).await.unwrap().unwrap();
+    assert_eq!(refused.state, RipState::Refused);
+    assert_eq!(refused.error_code.as_deref(), Some("CD_ENGINE_UNAVAILABLE"));
+    assert!(refused.started_at.is_none());
+
+    // cdrdao, or nothing asked for, goes to any worker.
+    for options in [cd_engine(CdRipEngine::Cdrdao), RipOptions::default()] {
+        let rip = request_rip(&pool, drive, "operator", options)
+            .await
+            .unwrap()
+            .unwrap();
+        let taken = claim_rip(&pool, worker, drive, false)
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("taken");
+        assert_eq!(taken.id, rip.id);
+        assert_eq!(taken.cd_engine, options.cd_engine);
+        cancel_rip(&pool, rip.id, "operator")
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    // A worker with it: taken, with the choice.
+    let (worker, drive) = worker_and_drive(&pool).await;
+    has_redumper(&pool, worker).await;
+    assert!(drive_has_redumper(&pool, drive).await.unwrap());
+    let rip = request_rip(&pool, drive, "operator", cd_engine(CdRipEngine::Redumper))
+        .await
+        .unwrap()
+        .unwrap();
+    let taken = claim_rip(&pool, worker, drive, false)
+        .await
+        .unwrap()
+        .unwrap()
+        .expect("taken");
+    assert_eq!(taken.id, rip.id);
+    assert_eq!(taken.cd_engine, Some(CdRipEngine::Redumper));
 }

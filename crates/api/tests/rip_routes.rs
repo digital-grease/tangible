@@ -699,6 +699,21 @@ impl Harness {
         .unwrap();
     }
 
+    /// Report redumper beside cdrdao, as a worker from the opt-in image does
+    /// (ADR 0015).
+    async fn has_redumper(&self, worker: &Worker) {
+        sqlx::query(
+            "UPDATE workers SET capabilities_json = '{\"rip\": {
+                 \"engines\": [{\"name\": \"auto\", \"version\": \"0.1.0\"},
+                               {\"name\": \"redumper\", \"version\": \"b768\"}]}}'
+             WHERE id = $1::uuid",
+        )
+        .bind(&worker.id)
+        .execute(&self.pool)
+        .await
+        .unwrap();
+    }
+
     async fn request_with(&self, drive: &str, body: Value) -> (StatusCode, Value) {
         self.json(
             "POST",
@@ -834,6 +849,82 @@ async fn a_plain_rip_tells_the_worker_not_to_decrypt() {
     assert_eq!(status, StatusCode::OK, "{claim}");
     assert_eq!(claim["decrypt"], false);
     assert!(claim["keep"].is_null(), "{claim}");
+}
+
+// --- the CD engine (ADR 0015) ------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn redumper_is_offered_only_where_the_worker_has_it() {
+    let harness = harness().await;
+    let worker = harness.worker(true).await;
+    assert_eq!(
+        harness.drive_view(&worker.drive).await["can_rip_with_redumper"],
+        false
+    );
+
+    let (status, body) = harness
+        .request_with(&worker.drive, json!({ "cd_engine": "redumper" }))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "CD_ENGINE_UNAVAILABLE");
+    let (status, body) = harness
+        .request_with(&worker.drive, json!({ "cd_engine": "eac" }))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["code"], "VALIDATION_FAILED");
+    let (status, _) = harness.claim(&worker).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "nothing was queued");
+
+    // cdrdao, which every worker has, is fine.
+    let (status, body) = harness
+        .request_with(&worker.drive, json!({ "cd_engine": "cdrdao" }))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["cd_engine"], "cdrdao");
+    let (status, claim) = harness.claim(&worker).await;
+    assert_eq!(status, StatusCode::OK, "{claim}");
+    assert_eq!(claim["cd_engine"], "cdrdao");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn the_choice_of_cd_engine_reaches_the_worker() {
+    let harness = harness().await;
+    let worker = harness.worker(true).await;
+    harness.has_redumper(&worker).await;
+    assert_eq!(
+        harness.drive_view(&worker.drive).await["can_rip_with_redumper"],
+        true
+    );
+
+    // Asking for nothing leaves it to the worker.
+    let (status, body) = harness.request(&worker.drive).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert!(body["cd_engine"].is_null(), "{body}");
+    let (status, claim) = harness.claim(&worker).await;
+    assert_eq!(status, StatusCode::OK, "{claim}");
+    assert!(claim["cd_engine"].is_null(), "{claim}");
+    let rip = claim["rip_id"].as_str().unwrap().to_owned();
+    harness.cancel_as_operator(&rip).await;
+
+    let (status, body) = harness
+        .request_with(&worker.drive, json!({ "cd_engine": "redumper" }))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (status, claim) = harness.claim(&worker).await;
+    assert_eq!(status, StatusCode::OK, "{claim}");
+    assert_eq!(claim["cd_engine"], "redumper");
+
+    let metadata: Value = sqlx::query_scalar(
+        "SELECT metadata FROM audit_events
+         WHERE action = 'rip.requested' AND target_id = $1 ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(body["id"].as_str().unwrap())
+    .fetch_one(&harness.pool)
+    .await
+    .unwrap();
+    assert_eq!(metadata["cd_engine"], "redumper");
 }
 
 // --- decrypted outputs -----------------------------------------------------------

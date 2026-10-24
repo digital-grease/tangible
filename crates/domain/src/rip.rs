@@ -25,7 +25,7 @@
 use sha2::{Digest as _, Sha256};
 
 use crate::dvd::{DvdFile, MAX_VOB_BYTES};
-use crate::enums::{LossCharacter, RipOriginal, RipState};
+use crate::enums::{CdRipEngine, LossCharacter, RipOriginal, RipState};
 use crate::id::{ArtifactId, RipJobId};
 use crate::manifest::{DecryptionRecord, Extensions, Lineage, ToolRef};
 
@@ -399,10 +399,36 @@ pub const fn check_decryption(
     }
 }
 
+/// The stable code for a rip that asks for redumper on a drive whose worker
+/// does not have it (ADR 0015), to a person and on a refused rip alike.
+pub const CD_ENGINE_UNAVAILABLE: &str = "CD_ENGINE_UNAVAILABLE";
+
+/// Whether a rip may go ahead as far as its CD engine goes.
+///
+/// Asking for nothing, or for cdrdao, always may: every worker that rips CDs
+/// has cdrdao. Asking for redumper needs a worker that reported it, checked
+/// when it is asked for and again when the worker takes it, since a worker
+/// may be rebuilt without it in between. A rip that insisted on redumper is
+/// never quietly read with something else.
+#[must_use]
+pub fn cd_engine_available(requested: Option<CdRipEngine>, worker_has_redumper: bool) -> bool {
+    requested != Some(CdRipEngine::Redumper) || worker_has_redumper
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redumper_needs_a_worker_that_has_it() {
+        for has in [false, true] {
+            assert!(cd_engine_available(None, has));
+            assert!(cd_engine_available(Some(CdRipEngine::Cdrdao), has));
+        }
+        assert!(cd_engine_available(Some(CdRipEngine::Redumper), true));
+        assert!(!cd_engine_available(Some(CdRipEngine::Redumper), false));
+    }
 
     #[test]
     fn decryption_needs_the_server_and_the_worker() {

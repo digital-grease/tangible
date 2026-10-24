@@ -20,7 +20,8 @@
   let rips = $state<View<RipView[]>>({ kind: 'loading' });
   let refusal = $state<Problem | null>(null);
   let asking = $state<string | null>(null);
-  // The drive whose rip dialog is open: only drives that can decrypt get one.
+  // The drive whose rip dialog is open: only drives with a choice to make
+  // get one, those that can decrypt or that read CDs with redumper.
   let choosing = $state<DriveView | null>(null);
   let dialogOpen = $state(false);
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -45,9 +46,9 @@
 
   onDestroy(() => clearInterval(timer));
 
-  /** Rip straight away, or ask first where the drive could decrypt. */
+  /** Rip straight away, or ask first where the drive offers a choice. */
   function choose(drive: DriveView) {
-    if (drive.can_decrypt_rips) {
+    if (drive.can_decrypt_rips || drive.can_rip_with_redumper) {
       refusal = null;
       choosing = drive;
       dialogOpen = true;
@@ -127,6 +128,9 @@
               <button type="button" onclick={() => choose(drive)} disabled={asking !== null}>
                 {asking === drive.id ? 'Asking…' : `Rip the disc in ${drive.name}`}
               </button>
+              {#if drive.can_rip_with_redumper}
+                <small>Corrects CD read offsets</small>
+              {/if}
               {#if drive.can_decrypt_rips}
                 <small>Can decrypt</small>
               {/if}
@@ -193,6 +197,9 @@
   }
   button {
     padding: 0.5rem 1rem;
+  }
+  small {
+    display: block;
   }
   section {
     margin-top: 1.5rem;

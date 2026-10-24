@@ -19,6 +19,9 @@ export type RippedView = components['schemas']['RippedView'];
 /** The original a decrypting rip keeps (ADR 0013). */
 export type KeepChoice = 'encrypted_original' | 'decrypted_original';
 
+/** The tool a CD is read with (ADR 0015). */
+export type CdEngineChoice = 'redumper' | 'cdrdao';
+
 /**
  * Ask for the disc in a drive to be ripped. Without options it rips without
  * decryption; the server refuses `decrypt` where it is not allowed.
@@ -31,9 +34,33 @@ export function requestRip(
   return apiCall(fetcher, `/api/v1/drives/${encodeURIComponent(driveId)}/rips`, 'POST', options);
 }
 
-/** What a rip asks for: decryption only when asked, with the original chosen. */
-export function ripOptions(decrypt: boolean, keep: KeepChoice): RipRequest {
-  return decrypt ? { decrypt: true, keep } : {};
+/**
+ * What a rip asks for: decryption only when asked, with the original chosen;
+ * cdrdao only when chosen. redumper is the worker's own default where it has
+ * it, so choosing it asks for nothing, and a worker rebuilt without it still
+ * rips the CD rather than refusing.
+ */
+export function ripOptions(
+  decrypt: boolean,
+  keep: KeepChoice,
+  cdEngine: CdEngineChoice = 'redumper',
+): RipRequest {
+  return {
+    ...(decrypt ? { decrypt: true, keep } : {}),
+    ...(cdEngine === 'cdrdao' ? { cd_engine: 'cdrdao' } : {}),
+  };
+}
+
+/** The tool a rip asked to read a CD with, in words. */
+export function cdEngineLabel(cdEngine: string | null | undefined): string {
+  switch (cdEngine) {
+    case 'redumper':
+      return 'redumper, read offset corrected';
+    case 'cdrdao':
+      return 'cdrdao, no offset correction';
+    default:
+      return "The worker's best";
+  }
 }
 
 /** Recent rips, newest first. */
@@ -97,6 +124,8 @@ export function ripRefusal(code: string | null | undefined): string | null {
       return 'The system has not caught up with the disc in the drive (this happens straight after a burn). Take the disc out, put it back, and ask again.';
     case 'ENCRYPTED':
       return 'The disc is encrypted, and this rip did not decrypt it. Nothing that was read was kept. Where a drive offers "Decrypt an encrypted disc", ask again with it ticked.';
+    case 'CD_ENGINE_UNAVAILABLE':
+      return "This drive's worker no longer has redumper. Ask again; choose cdrdao if the drive offers the choice.";
     case 'DECRYPTION_FAILED':
       return 'The disc is encrypted, and decrypting it failed. Nothing that was read was kept. Clean the disc and ask again; the technical detail says where it stopped.';
     case 'WORKER_RESTARTED':

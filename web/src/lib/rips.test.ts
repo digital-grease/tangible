@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   cancelRip,
+  cdEngineLabel,
   decryptionSummary,
   encryptionLabel,
   keepLabel,
@@ -83,6 +84,7 @@ describe('rips', () => {
     expect(ripRefusal('RELOAD_DISC')).toContain('put it back');
     expect(ripRefusal('ENCRYPTED')).toContain('Decrypt an encrypted disc');
     expect(ripRefusal('DECRYPTION_FAILED')).toContain('decrypting it failed');
+    expect(ripRefusal('CD_ENGINE_UNAVAILABLE')).toContain('redumper');
     expect(ripRefusal('READ_FAILED')).toBeNull();
     expect(ripRefusal(null)).toBeNull();
   });
@@ -99,6 +101,19 @@ describe('rips', () => {
       decrypt: true,
       keep: 'encrypted_original',
     });
+  });
+
+  it('asks for a CD tool only when cdrdao is chosen', () => {
+    expect(ripOptions(false, 'encrypted_original', 'redumper')).toEqual({});
+    expect(ripOptions(false, 'encrypted_original', 'cdrdao')).toEqual({ cd_engine: 'cdrdao' });
+    expect(ripOptions(true, 'decrypted_original', 'cdrdao')).toEqual({
+      decrypt: true,
+      keep: 'decrypted_original',
+      cd_engine: 'cdrdao',
+    });
+    expect(cdEngineLabel('redumper')).toContain('corrected');
+    expect(cdEngineLabel('cdrdao')).toContain('no offset correction');
+    expect(cdEngineLabel(null)).toBe("The worker's best");
   });
 
   it('says what was found and what was kept in words', () => {

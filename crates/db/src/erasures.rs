@@ -51,6 +51,9 @@ pub struct DriveRecord {
     /// Whether its worker reported that its image can decrypt a DVD
     /// (ADR 0013). Whether the server allows it is a separate question.
     pub can_decrypt: bool,
+    /// Whether its worker reported redumper among its rip engines
+    /// (ADR 0015), so its CD rips can have the read offset corrected.
+    pub has_redumper: bool,
 }
 
 /// A request to erase a disc.
@@ -178,7 +181,9 @@ const DRIVE_COLUMNS: &str = "d.id, d.configured_name, d.device_alias, d.vendor, 
          CASE WHEN jsonb_typeof(w.capabilities_json -> 'rip' -> 'engines') = 'array'
               THEN w.capabilities_json -> 'rip' -> 'engines' END) > 0, false) AS can_rip,
      COALESCE(jsonb_typeof(w.capabilities_json -> 'rip' -> 'decryption' -> 'css') = 'object',
-              false) AS can_decrypt";
+              false) AS can_decrypt,
+     COALESCE(w.capabilities_json -> 'rip' -> 'engines' @> '[{\"name\": \"redumper\"}]'::jsonb,
+              false) AS has_redumper";
 
 fn drive_from_row(row: &sqlx::postgres::PgRow) -> Result<DriveRecord, DbError> {
     let get = DbError::Query;
@@ -198,6 +203,7 @@ fn drive_from_row(row: &sqlx::postgres::PgRow) -> Result<DriveRecord, DbError> {
         worker_last_seen_at: row.try_get("worker_last_seen_at").map_err(get)?,
         can_rip: row.try_get("can_rip").map_err(get)?,
         can_decrypt: row.try_get("can_decrypt").map_err(get)?,
+        has_redumper: row.try_get("has_redumper").map_err(get)?,
     })
 }
 

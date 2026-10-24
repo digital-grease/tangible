@@ -1,10 +1,12 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
-  // Asking for a rip on a drive that can decrypt (ADR 0013). Decryption is
-  // off unless the box is ticked; ticking it shows the choice of original.
-  // The server decides whether the rip may decrypt; this only asks.
-  import { ripOptions, type KeepChoice, type RipRequest } from '$lib/rips';
+  // Asking for a rip on a drive with choices: one that can decrypt
+  // (ADR 0013), or whose worker reads CDs with redumper (ADR 0015).
+  // Decryption is off unless the box is ticked; ticking it shows the choice
+  // of original. A CD is read with redumper unless cdrdao is chosen. The
+  // server decides whether the rip may go ahead; this only asks.
+  import { ripOptions, type CdEngineChoice, type KeepChoice, type RipRequest } from '$lib/rips';
   import type { DriveView } from '$lib/workers';
 
   let {
@@ -22,6 +24,7 @@
   let dialog: HTMLDialogElement | undefined = $state();
   let decrypt = $state(false);
   let keep = $state<KeepChoice>('encrypted_original');
+  let cdEngine = $state<CdEngineChoice>('redumper');
   let opener: HTMLElement | null = null;
 
   $effect(() => {
@@ -30,6 +33,7 @@
       opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       decrypt = false;
       keep = 'encrypted_original';
+      cdEngine = 'redumper';
       dialog.showModal();
     } else if (!open && dialog.open) {
       dialog.close();
@@ -43,7 +47,9 @@
 
   function start(event: SubmitEvent) {
     event.preventDefault();
-    onstart(ripOptions(decrypt, keep));
+    // The CD choice is shown only where the worker has redumper; elsewhere it
+    // stays at its default, which asks for nothing.
+    onstart(ripOptions(drive.can_decrypt_rips && decrypt, keep, cdEngine));
   }
 </script>
 
@@ -55,36 +61,60 @@
       into the library like an upload. Reading changes nothing on the disc.
     </p>
 
-    <label class="choice">
-      <input type="checkbox" bind:checked={decrypt} aria-describedby="rip-dialog-notice" />
-      Decrypt an encrypted disc
-    </label>
-    <p id="rip-dialog-notice" class="notice">
-      Whether ripping an encrypted disc is lawful where you are is yours to determine. Decryption
-      uses only the libraries built into this worker's image. No key is kept, logged or sent
-      anywhere. A disc that turns out not to be encrypted is ripped as it is.
-    </p>
-
-    {#if decrypt}
+    {#if drive.can_rip_with_redumper}
       <fieldset>
-        <legend>What to keep</legend>
+        <legend>How to read a CD</legend>
         <label class="choice">
-          <input type="radio" name="keep" value="encrypted_original" bind:group={keep} />
-          Keep the encrypted image, and a decrypted copy
+          <input type="radio" name="cd-engine" value="redumper" bind:group={cdEngine} />
+          redumper, correcting the drive's read offset
         </label>
         <p class="hint">
-          The image is a faithful copy of the disc, still encrypted. The decrypted copy is kept
-          beside it as a derivative made from the same disc. Reads the disc twice.
+          Audio can then match AccurateRip and Redump. A drive redumper does not know is read as a
+          generic drive, which may not give a byte-perfect copy; the rip says so.
         </p>
         <label class="choice">
-          <input type="radio" name="keep" value="decrypted_original" bind:group={keep} />
-          Keep only a decrypted image (not a faithful copy of the disc)
+          <input type="radio" name="cd-engine" value="cdrdao" bind:group={cdEngine} />
+          cdrdao, without offset correction
         </label>
         <p class="hint">
-          Quicker. It is recorded as decrypted when ripped, and will not match a preservation
-          database.
+          For a drive whose redumper rips go wrong. Data tracks are the same either way. A DVD is
+          read the same way whichever is chosen.
         </p>
       </fieldset>
+    {/if}
+
+    {#if drive.can_decrypt_rips}
+      <label class="choice">
+        <input type="checkbox" bind:checked={decrypt} aria-describedby="rip-dialog-notice" />
+        Decrypt an encrypted disc
+      </label>
+      <p id="rip-dialog-notice" class="notice">
+        Whether ripping an encrypted disc is lawful where you are is yours to determine. Decryption
+        uses only the libraries built into this worker's image. No key is kept, logged or sent
+        anywhere. A disc that turns out not to be encrypted is ripped as it is.
+      </p>
+
+      {#if decrypt}
+        <fieldset>
+          <legend>What to keep</legend>
+          <label class="choice">
+            <input type="radio" name="keep" value="encrypted_original" bind:group={keep} />
+            Keep the encrypted image, and a decrypted copy
+          </label>
+          <p class="hint">
+            The image is a faithful copy of the disc, still encrypted. The decrypted copy is kept
+            beside it as a derivative made from the same disc. Reads the disc twice.
+          </p>
+          <label class="choice">
+            <input type="radio" name="keep" value="decrypted_original" bind:group={keep} />
+            Keep only a decrypted image (not a faithful copy of the disc)
+          </label>
+          <p class="hint">
+            Quicker. It is recorded as decrypted when ripped, and will not match a preservation
+            database.
+          </p>
+        </fieldset>
+      {/if}
     {/if}
 
     <div class="actions">

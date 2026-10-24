@@ -10,6 +10,7 @@
   import { formatBytes } from '$lib/library';
   import {
     cancelRip,
+    cdEngineLabel,
     decryptionSummary,
     encryptionLabel,
     keepLabel,
@@ -150,6 +151,10 @@
       <dd>{when(rip.completed_at)}</dd>
       <dt>Disc found</dt>
       <dd>{rip.medium ? rip.medium.profile : '—'}</dd>
+      {#if rip.cd_engine}
+        <dt>CD tool asked for</dt>
+        <dd>{cdEngineLabel(rip.cd_engine)}</dd>
+      {/if}
       <dt>Decryption</dt>
       <dd>{rip.decrypt ? `Asked for. Keep: ${keepLabel(rip.keep)}` : 'Not asked for'}</dd>
       <dt>Encryption found</dt>

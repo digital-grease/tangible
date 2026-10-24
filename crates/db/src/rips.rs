@@ -21,8 +21,13 @@ use tangible_domain::ArtifactId;
 use tangible_domain::manifest::{
     DecryptionRecord, DumpDrive, DumpReadErrors, Lineage, PhysicalDump, ToolRef,
 };
-use tangible_domain::rip::{DECRYPTED_PREFIX, DecryptionRefusal, check_decryption, copy_lineage};
-use tangible_domain::{DriveId, ImportJobId, RipJobId, RipOriginal, RipState, WorkerId};
+use tangible_domain::rip::{
+    CD_ENGINE_UNAVAILABLE, DECRYPTED_PREFIX, DecryptionRefusal, cd_engine_available,
+    check_decryption, copy_lineage,
+};
+use tangible_domain::{
+    CdRipEngine, DriveId, ImportJobId, RipJobId, RipOriginal, RipState, WorkerId,
+};
 use time::OffsetDateTime;
 
 use crate::DbError;
@@ -44,6 +49,8 @@ pub struct RipRecord {
     pub decrypt: bool,
     /// The original they chose, when they asked to decrypt.
     pub keep: Option<RipOriginal>,
+    /// The tool they asked to read a CD with; absent for the worker's best.
+    pub cd_engine: Option<CdRipEngine>,
     /// The staging area uploads go to, and the import's id once queued.
     pub staging_id: ImportJobId,
     /// The import, once queued.
@@ -207,7 +214,7 @@ pub struct RipEventRecord {
 }
 
 const RIP_COLUMNS: &str = "r.id, r.drive_id, d.configured_name AS drive_name, r.state, \
-     r.requested_by, r.decrypt, r.keep, r.staging_id, r.import_job_id, i.artifact_id, r.medium_json, r.engine, \
+     r.requested_by, r.decrypt, r.keep, r.cd_engine, r.staging_id, r.import_job_id, i.artifact_id, r.medium_json, r.engine, \
      r.engine_version, r.read_errors_json, r.outputs_json, r.bytes_received, r.error_code, \
      r.error_detail, r.created_at, r.started_at, r.completed_at, r.copy_staging_id, \
      r.copy_import_job_id, c.artifact_id AS copy_artifact_id, r.encryption, r.decryption_json";
@@ -233,6 +240,11 @@ fn rip_from_row(row: &sqlx::postgres::PgRow) -> Result<RipRecord, DbError> {
             .try_get::<Option<String>, _>("keep")
             .map_err(get)?
             .map(|keep| parse("rip_jobs.keep", keep))
+            .transpose()?,
+        cd_engine: row
+            .try_get::<Option<String>, _>("cd_engine")
+            .map_err(get)?
+            .map(|engine| parse("rip_jobs.cd_engine", engine))
             .transpose()?,
         staging_id: ImportJobId::from_uuid(row.try_get("staging_id").map_err(get)?),
         import_job_id: row
@@ -364,13 +376,35 @@ pub async fn drive_can_decrypt(pool: &PgPool, drive_id: DriveId) -> Result<bool,
 /// Whether the worker `w` reported DVD decryption, as SQL.
 const CAN_DECRYPT: &str = "COALESCE(jsonb_typeof(w.capabilities_json -> 'rip' -> 'decryption' -> 'css') = 'object', false)";
 
-/// What an operator chose about decryption for one rip.
+/// Whether the worker `w` reported redumper among its rip engines, as SQL.
+pub(crate) const HAS_REDUMPER: &str = "COALESCE(w.capabilities_json -> 'rip' -> 'engines' @> '[{\"name\": \"redumper\"}]'::jsonb, false)";
+
+/// Whether a drive's worker reported redumper among its rip engines
+/// (ADR 0015).
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn drive_has_redumper(pool: &PgPool, drive_id: DriveId) -> Result<bool, DbError> {
+    let has: Option<bool> = sqlx::query_scalar(&format!(
+        "SELECT {HAS_REDUMPER} FROM drives d JOIN workers w ON w.id = d.worker_id WHERE d.id = $1"
+    ))
+    .bind(drive_id.as_uuid())
+    .fetch_optional(pool)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(has.unwrap_or(false))
+}
+
+/// What an operator chose for one rip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RipOptions {
     /// Decrypt an encrypted disc.
     pub decrypt: bool,
     /// The original to keep, when decrypting. Ignored otherwise.
     pub keep: RipOriginal,
+    /// The tool to read a CD with; `None` for the worker's best.
+    pub cd_engine: Option<CdRipEngine>,
 }
 
 /// Ask for the disc in a drive to be ripped.
@@ -399,8 +433,8 @@ pub async fn request_rip(
     let id = RipJobId::generate();
     let inserted = sqlx::query(
         "INSERT INTO rip_jobs (id, drive_id, requested_by, staging_id, decrypt, keep,
-                               copy_staging_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+                               copy_staging_id, cd_engine)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (drive_id) WHERE state IN ('queued', 'reading', 'uploading') DO NOTHING",
     )
     .bind(id.as_uuid())
@@ -414,6 +448,7 @@ pub async fn request_rip(
         (options.decrypt && options.keep == RipOriginal::EncryptedOriginal)
             .then(|| *ImportJobId::generate().as_uuid()),
     )
+    .bind(options.cd_engine.map(|engine| engine.as_str()))
     .execute(&mut *tx)
     .await
     .map_err(DbError::Query)?;
@@ -433,6 +468,7 @@ pub async fn request_rip(
             "drive_id": drive_id.to_string(),
             "decrypt": options.decrypt,
             "keep": options.decrypt.then(|| options.keep.as_str()),
+            "cd_engine": options.cd_engine.map(|engine| engine.as_str()),
         }),
     )
     .await?;
@@ -585,8 +621,8 @@ pub async fn claim_rip(
         return Ok(Ok(None));
     }
 
-    let next: Option<(uuid::Uuid, bool, bool)> = sqlx::query_as(&format!(
-        "SELECT r.id, r.decrypt, {CAN_DECRYPT}
+    let next: Option<(uuid::Uuid, bool, bool, Option<String>, bool)> = sqlx::query_as(&format!(
+        "SELECT r.id, r.decrypt, {CAN_DECRYPT}, r.cd_engine, {HAS_REDUMPER}
          FROM rip_jobs r JOIN drives d ON d.id = r.drive_id JOIN workers w ON w.id = d.worker_id
          WHERE r.drive_id = $1 AND r.state = 'queued'
          ORDER BY r.created_at LIMIT 1 FOR UPDATE OF r"
@@ -595,7 +631,7 @@ pub async fn claim_rip(
     .fetch_optional(&mut *tx)
     .await
     .map_err(DbError::Query)?;
-    let Some((next, decrypt, worker_can)) = next else {
+    let Some((next, decrypt, worker_can, cd_engine, has_redumper)) = next else {
         tx.commit().await.map_err(DbError::Query)?;
         return Ok(Ok(None));
     };
@@ -607,6 +643,23 @@ pub async fn claim_rip(
     // that does not allow it; it is refused here, before anything is read.
     if let Err(refusal) = check_decryption(decrypt, decryption_allowed, worker_can) {
         refuse_for_decryption(&mut tx, worker_id, id, refusal).await?;
+        tx.commit().await.map_err(DbError::Query)?;
+        return Ok(Ok(None));
+    }
+    // And the CD engine, for the same reason (ADR 0015).
+    let cd_engine = cd_engine
+        .map(|engine| parse::<CdRipEngine>("rip_jobs.cd_engine", engine))
+        .transpose()?;
+    if !cd_engine_available(cd_engine, has_redumper) {
+        refuse(
+            &mut tx,
+            worker_id,
+            id,
+            CD_ENGINE_UNAVAILABLE,
+            "this drive's worker no longer reports redumper; run it from the image built \
+             with it, or ask again with cdrdao",
+        )
+        .await?;
         tx.commit().await.map_err(DbError::Query)?;
         return Ok(Ok(None));
     }
@@ -648,13 +701,24 @@ async fn refuse_for_decryption(
              built to decrypt, or ask again without decryption"
         }
     };
+    refuse(tx, worker_id, id, refusal.code(), detail).await
+}
+
+/// Close a queued rip its worker may not take as `refused`.
+async fn refuse(
+    tx: &mut Transaction<'_, Postgres>,
+    worker_id: WorkerId,
+    id: RipJobId,
+    code: &'static str,
+    detail: &'static str,
+) -> Result<(), DbError> {
     sqlx::query(
         "UPDATE rip_jobs SET state = 'refused', error_code = $2, error_detail = $3,
              completed_at = now()
          WHERE id = $1",
     )
     .bind(id.as_uuid())
-    .bind(refusal.code())
+    .bind(code)
     .bind(detail)
     .execute(&mut **tx)
     .await
@@ -666,7 +730,7 @@ async fn refuse_for_decryption(
         "rip.refused",
         id,
         "failure",
-        serde_json::json!({ "code": refusal.code() }),
+        serde_json::json!({ "code": code }),
     )
     .await
 }

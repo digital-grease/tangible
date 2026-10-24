@@ -475,6 +475,20 @@ string_enum! {
     default = EncryptedOriginal
 }
 
+string_enum! {
+    /// The tool a CD rip reads the disc with (ADR 0015). Asked for per rip;
+    /// absent means the worker's best: redumper where its image has it,
+    /// cdrdao everywhere else.
+    CdRipEngine {
+        /// redumper, with the drive's read offset corrected. Only in the
+        /// operator-built image.
+        Redumper => "redumper",
+        /// `cdrdao read-cd`, without offset correction. Every worker that
+        /// rips CDs has it.
+        Cdrdao => "cdrdao",
+    }
+}
+
 // --- workers and drives -----------------------------------------------------
 
 string_enum! {
@@ -727,6 +741,7 @@ mod tests {
             DriveConnection,
             IntegrationKind,
             PhysicalCopyStatus,
+            CdRipEngine,
         );
     }
 
