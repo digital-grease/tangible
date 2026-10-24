@@ -26,6 +26,10 @@ tracing = "0.1.44"
 # that has optical drives passed into containers.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.186"
+# Free space before a rip: a safe statvfs, so the workspace can keep
+# forbidding unsafe code. The same version and features tangible-storage
+# already uses, so nothing new enters the tree.
+rustix = { version = "1.1.4", default-features = false, features = ["std", "fs"] }
 
 [lints]
 workspace = true

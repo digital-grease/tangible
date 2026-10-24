@@ -27,6 +27,7 @@ pub mod plan;
 pub mod redumper;
 pub mod ripping;
 pub mod runner;
+pub mod space;
 pub mod worker;
 pub mod xorriso;
 

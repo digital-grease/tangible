@@ -125,6 +125,8 @@ export function ripRefusal(code: string | null | undefined): string | null {
       return 'The system has not caught up with the disc in the drive (this happens straight after a burn). Take the disc out, put it back, and ask again.';
     case 'ENCRYPTED':
       return 'The disc is encrypted, and this rip did not decrypt it. Nothing that was read was kept. Where a drive offers "Decrypt an encrypted disc", ask again with it ticked.';
+    case 'INSUFFICIENT_SPACE':
+      return "The drive's worker has too little free space for what this disc needs while it is ripped. Nothing was read. Free some space where the worker keeps its state, and ask again; the technical detail says how much it needs.";
     case 'CD_ENGINE_UNAVAILABLE':
       return "This drive's worker no longer has redumper. Ask again; choose cdrdao if the drive offers the choice.";
     case 'DECRYPTION_FAILED':

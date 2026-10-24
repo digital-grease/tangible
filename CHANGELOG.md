@@ -119,6 +119,12 @@ may change between minor versions, and the release notes say how.
   redumper they also show the disc's write offset, whether the drive was
   treated as generic (with a hint to ask for cdrdao if its rips go wrong),
   and how many samples were read again.
+- A worker refuses a rip it has no room for before reading anything
+  (`INSUFFICIENT_SPACE`, saying how much it needs and has), rather than
+  failing when its disk fills an hour in. It counts what each way of
+  reading writes: a redumper rip of a full CD needs about 2.1 GB, and a
+  DVD kept with a decrypted copy twice its size. Workers now report their
+  free space.
 - A CUE sheet that gives a track the ISRC `000000000000`, as redumper does
   for a track without one, is read as having none, with no warning.
 - The web UI asks about decryption on a drive that can decrypt: "Rip the

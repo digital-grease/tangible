@@ -50,6 +50,7 @@ use crate::engine::{BurnEngine, BurnEvent, EngineError, EventSink};
 use crate::fake::CancelToken;
 use crate::plan::{DriveRef, MediumInfo, RIP_DATA, RIP_IMAGE, RIP_TOC, RipReport, RipRequest};
 use crate::redumper::CdDumper;
+use crate::space::{self, Reading};
 
 /// The directory a decrypted copy is made in, beside the encrypted image.
 const COPY_DIR: &str = "decrypted";
@@ -109,6 +110,10 @@ pub struct RipOptions<'a> {
     pub can_decrypt: bool,
     /// What reads the disc if it is a CD.
     pub cd: CdReader<'a>,
+    /// Bytes free where the rip is written, when the worker could tell. A rip
+    /// the disc in the drive would not fit is refused before anything is read
+    /// ([`crate::space`]).
+    pub free_bytes: Option<u64>,
 }
 
 /// What reads a CD (ADR 0015).
@@ -212,6 +217,10 @@ pub async fn rip_disc<E: BurnEngine + ?Sized>(
         return ended("refused", Some(medium), code, detail);
     }
 
+    if let Some(refusal) = no_room(&medium, &decision, &options) {
+        return refusal;
+    }
+
     let request = RipRequest {
         drive: drive.clone(),
         output_dir: output_dir.to_path_buf(),
@@ -251,6 +260,50 @@ pub async fn rip_disc<E: BurnEngine + ?Sized>(
         return rip_dvd_decrypting(engine, request, medium, decrypting, sink).await;
     }
     rip_plain_image(engine, &request, medium, options.can_decrypt, sink).await
+}
+
+/// A refusal when the worker has too little room for what reading this disc
+/// will write, or `None` when it has room or cannot tell.
+fn no_room(
+    medium: &MediumInfo,
+    decision: &RipDecision,
+    options: &RipOptions<'_>,
+) -> Option<RipOutcome> {
+    let free = options.free_bytes?;
+    if medium.capacity_blocks == 0 {
+        return None;
+    }
+    let reading = match (decision, options.cd) {
+        (RipDecision::Cd, CdReader::Engine) => Reading::CdWithCdrdao,
+        (RipDecision::Cd, CdReader::Corrected(_)) => Reading::CdWithRedumper,
+        // Refused as it is, reading nothing.
+        (RipDecision::Cd, CdReader::Unavailable) | (RipDecision::Refuse { .. }, _) => return None,
+        (RipDecision::Image, _) => Reading::Image {
+            // Until the disc has been read nobody knows whether it is
+            // encrypted, so room for the copy too.
+            copies: match options.decrypt {
+                Some(Decrypting {
+                    keep: RipOriginal::EncryptedOriginal,
+                    ..
+                }) => 2,
+                _ => 1,
+            },
+        },
+    };
+    let needed = space::rip_needs(reading, medium.capacity_blocks, medium.block_size);
+    (free < needed).then(|| {
+        ended(
+            "refused",
+            Some(medium.clone()),
+            "INSUFFICIENT_SPACE",
+            format!(
+                "this worker needs about {} free to rip the disc in the drive, and has {}; \
+                 nothing was read. Free some space where the worker keeps its state, and ask again",
+                space::describe(needed),
+                space::describe(free)
+            ),
+        )
+    })
 }
 
 /// Read a CD with redumper into a CUE sheet and its tracks.
@@ -1154,6 +1207,109 @@ mod tests {
             .await,
             RipOutcome::Withdrawn
         );
+    }
+
+    #[tokio::test]
+    async fn a_disc_there_is_no_room_for_is_refused_before_anything_is_read() {
+        let dumper = FakeCdDumper::default();
+        let copier = FakeCssCopier::default();
+        let (dir, cd) = engine(pressed_cd());
+        let (_, dvd) = engine(FakeBehaviour {
+            medium_profile: Some("DVD-ROM".to_owned()),
+            medium_sessions: 1,
+            ..FakeBehaviour::default()
+        });
+        let cd_bytes = cd.inspect_medium(&drive()).await.unwrap().capacity_blocks;
+        let dvd_medium = dvd.inspect_medium(&drive()).await.unwrap();
+        let dvd_bytes = dvd_medium.capacity_blocks * u64::from(dvd_medium.block_size);
+        let redumper_needs = space::rip_needs(Reading::CdWithRedumper, cd_bytes, 2048);
+        let cdrdao_needs = space::rip_needs(Reading::CdWithCdrdao, cd_bytes, 2048);
+        assert!(cdrdao_needs < redumper_needs);
+
+        for (engine, options, refused) in [
+            // Room for cdrdao's read but not redumper's.
+            (
+                &cd,
+                RipOptions {
+                    free_bytes: Some(cdrdao_needs),
+                    ..RipOptions::default()
+                },
+                false,
+            ),
+            (
+                &cd,
+                RipOptions {
+                    cd: CdReader::Corrected(&dumper),
+                    free_bytes: Some(cdrdao_needs),
+                    ..RipOptions::default()
+                },
+                true,
+            ),
+            (
+                &cd,
+                RipOptions {
+                    cd: CdReader::Corrected(&dumper),
+                    free_bytes: Some(redumper_needs),
+                    ..RipOptions::default()
+                },
+                false,
+            ),
+            // Unknown: goes ahead.
+            (
+                &cd,
+                RipOptions {
+                    cd: CdReader::Corrected(&dumper),
+                    ..RipOptions::default()
+                },
+                false,
+            ),
+            // A DVD kept with a decrypted copy needs room for both.
+            (
+                &dvd,
+                RipOptions {
+                    free_bytes: Some(dvd_bytes + space::HEADROOM_BYTES),
+                    ..RipOptions::default()
+                },
+                false,
+            ),
+            (
+                &dvd,
+                RipOptions {
+                    decrypt: Some(Decrypting {
+                        keep: RipOriginal::EncryptedOriginal,
+                        copier: &copier,
+                    }),
+                    can_decrypt: true,
+                    free_bytes: Some(dvd_bytes + space::HEADROOM_BYTES),
+                    ..RipOptions::default()
+                },
+                true,
+            ),
+        ] {
+            let out = dir.path().join("rip");
+            let _ = std::fs::remove_dir_all(&out);
+            let RipOutcome::Ended(done) = rip_disc(
+                engine,
+                &drive(),
+                &out,
+                options,
+                &CancelToken::new(),
+                &CollectingSink::new(),
+            )
+            .await
+            else {
+                panic!("withdrawn")
+            };
+            if refused {
+                assert_eq!(done.outcome, "refused", "{done:?}");
+                assert_eq!(done.error_code.as_deref(), Some("INSUFFICIENT_SPACE"));
+                assert!(done.error_detail.unwrap().contains("nothing was read"));
+                assert!(done.medium.is_some());
+                assert!(!out.exists(), "nothing read");
+            } else {
+                assert_eq!(done.outcome, "read", "{done:?}");
+            }
+        }
     }
 
     #[test]

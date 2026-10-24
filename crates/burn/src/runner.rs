@@ -346,7 +346,8 @@ impl<E: BurnEngine> WorkerRuntime<E> {
                 capabilities: serde_json::to_value(capabilities)
                     .unwrap_or_else(|_| serde_json::json!({})),
             },
-            cache_free_bytes: None,
+            cache_free_bytes: crate::space::free_bytes(&self.staging_root())
+                .and_then(|bytes| i64::try_from(bytes).ok()),
             rip: self.rip_capability(),
         };
 
@@ -868,6 +869,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             decrypt,
             can_decrypt,
             cd: self.cd_reader(rip),
+            free_bytes: crate::space::free_bytes(&self.rips_root()),
         }
     }
 

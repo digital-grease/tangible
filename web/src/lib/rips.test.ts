@@ -90,6 +90,7 @@ describe('rips', () => {
     expect(ripRefusal('ENCRYPTED')).toContain('Decrypt an encrypted disc');
     expect(ripRefusal('DECRYPTION_FAILED')).toContain('decrypting it failed');
     expect(ripRefusal('CD_ENGINE_UNAVAILABLE')).toContain('redumper');
+    expect(ripRefusal('INSUFFICIENT_SPACE')).toContain('too little free space');
     expect(ripRefusal('READ_FAILED')).toBeNull();
     expect(ripRefusal(null)).toBeNull();
   });
