@@ -106,6 +106,35 @@ describe('Artifact page', () => {
     expect(screen.getByText(/0 unreadable, 3 retried/)).toBeTruthy();
   });
 
+  it('shows the offsets of a CD read by redumper', async () => {
+    serve(
+      artifact({
+        format: 'cue_bin',
+        ripped: {
+          ...RIPPED,
+          engine: 'redumper',
+          engine_version: 'b768',
+          encryption: 'none',
+          decrypted_at_acquisition: false,
+          decryption: null,
+          cd_read: { read_offset: 6, write_offset: -6, generic_drive: true, retried_samples: 0 },
+        },
+      }),
+    );
+    render(ArtifactPage);
+    expect(await screen.findByText('Corrected (+6 samples)')).toBeTruthy();
+    expect(screen.getByText('-6 samples')).toBeTruthy();
+    expect(screen.getByText(/If its rips go wrong, ask for cdrdao/)).toBeTruthy();
+    expect(screen.getByText('None: every sample read cleanly the first time')).toBeTruthy();
+  });
+
+  it('says nothing about offsets for a DVD', async () => {
+    serve(artifact({ format: 'iso', ripped: { ...RIPPED, engine: 'block_reader' } }));
+    render(ArtifactPage);
+    expect(await screen.findByRole('heading', { name: 'Ripped from a disc' })).toBeTruthy();
+    expect(screen.queryByText('Read offset')).toBeNull();
+  });
+
   it('says nothing about ripping for an upload', async () => {
     serve(artifact({ source_kind: 'upload' }));
     render(ArtifactPage);

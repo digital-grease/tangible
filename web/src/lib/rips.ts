@@ -15,6 +15,7 @@ export type RipEventView = components['schemas']['RipEventView'];
 export type RipRequest = components['schemas']['RequestRip'];
 export type DecryptionView = components['schemas']['DecryptionView'];
 export type RippedView = components['schemas']['RippedView'];
+export type CdReadView = components['schemas']['CdReadView'];
 
 /** The original a decrypting rip keeps (ADR 0013). */
 export type KeepChoice = 'encrypted_original' | 'decrypted_original';
@@ -198,4 +199,49 @@ export function rippedDrive(ripped: RippedView): string {
     parts.push(ripped.drive_connection.toUpperCase());
   }
   return parts.join(', ');
+}
+
+/** An offset in samples as redumper writes it: `+6`, `-6`, `0`. */
+function signed(samples: number): string {
+  return samples > 0 ? `+${samples}` : String(samples);
+}
+
+/**
+ * Whether a CD's read offset was corrected, in words (ADR 0015), or null where
+ * it does not apply: a DVD, or a disc not read yet.
+ */
+export function readOffsetLabel(
+  engine: string | null | undefined,
+  cdRead: CdReadView | null | undefined,
+): string | null {
+  if (cdRead) {
+    const offset = cdRead.read_offset ?? null;
+    return offset === null
+      ? 'Not corrected: redumper has no read offset for this drive, so audio tracks will not match AccurateRip or Redump'
+      : `Corrected (${signed(offset)} samples)`;
+  }
+  if (engine === 'cdrdao') {
+    return 'Not corrected: read with cdrdao, so audio tracks will not match AccurateRip or Redump';
+  }
+  return null;
+}
+
+/** The disc's write offset redumper found, in words. */
+export function writeOffsetLabel(cdRead: CdReadView): string {
+  const offset = cdRead.write_offset ?? null;
+  return offset === null ? 'Not found' : `${signed(offset)} samples`;
+}
+
+/** Whether redumper treated the drive as generic, in words. */
+export function genericDriveLabel(generic: boolean): string {
+  return generic
+    ? 'Yes: redumper does not count this drive among those it trusts to read faithfully. If its rips go wrong, ask for cdrdao instead.'
+    : 'No: a drive redumper knows';
+}
+
+/** What redumper read again, in words. A rip that finished read every sample. */
+export function retriedLabel(cdRead: CdReadView): string {
+  return cdRead.retried_samples === 0
+    ? 'None: every sample read cleanly the first time'
+    : `${cdRead.retried_samples} samples read again; every one read in the end`;
 }

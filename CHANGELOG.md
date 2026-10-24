@@ -114,6 +114,11 @@ may change between minor versions, and the release notes say how.
   (`cd_read`). A rip that asks for cdrdao, and every worker without
   redumper, reads CDs with cdrdao as before. Database migration 0014 adds
   a column; it is additive.
+- A rip's page and the artifact's page say whether a CD's read offset was
+  corrected, and by how many samples, or why not. For a CD read by
+  redumper they also show the disc's write offset, whether the drive was
+  treated as generic (with a hint to ask for cdrdao if its rips go wrong),
+  and how many samples were read again.
 - A CUE sheet that gives a track the ISRC `000000000000`, as redumper does
   for a track without one, is read as having none, with no warning.
 - The web UI asks about decryption on a drive that can decrypt: "Rip the

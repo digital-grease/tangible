@@ -20,7 +20,15 @@
     type ArtifactDetail,
     type LoadState,
   } from '$lib/library';
-  import { decryptionSummary, encryptionLabel, rippedDrive } from '$lib/rips';
+  import {
+    decryptionSummary,
+    encryptionLabel,
+    genericDriveLabel,
+    readOffsetLabel,
+    retriedLabel,
+    rippedDrive,
+    writeOffsetLabel,
+  } from '$lib/rips';
 
   let view = $state<LoadState<ArtifactDetail>>({ kind: 'loading' });
 
@@ -89,6 +97,7 @@
 
     {#if view.data.ripped}
       {@const ripped = view.data.ripped}
+      {@const readOffset = readOffsetLabel(ripped.engine, ripped.cd_read)}
       <section aria-labelledby="ripped-heading">
         <h2 id="ripped-heading">Ripped from a disc</h2>
         {#if ripped.decrypted_at_acquisition}
@@ -103,11 +112,23 @@
           <dd>{rippedDrive(ripped)}</dd>
           <dt>Read with</dt>
           <dd>{ripped.engine} {ripped.engine_version}</dd>
+          {#if readOffset}
+            <dt>Read offset</dt>
+            <dd>{readOffset}</dd>
+          {/if}
+          {#if ripped.cd_read}
+            <dt>Write offset</dt>
+            <dd>{writeOffsetLabel(ripped.cd_read)}</dd>
+            <dt>Generic drive</dt>
+            <dd>{genericDriveLabel(ripped.cd_read.generic_drive)}</dd>
+          {/if}
           <dt>Read errors</dt>
           <dd>
             {#if ripped.read_errors}
               {ripped.read_errors.unreadable_sectors} unreadable, {ripped.read_errors
                 .retried_sectors} retried
+            {:else if ripped.cd_read}
+              {retriedLabel(ripped.cd_read)}
             {:else}
               Not counted by this tool
             {/if}

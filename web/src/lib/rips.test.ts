@@ -6,6 +6,7 @@ import {
   cdEngineLabel,
   decryptionSummary,
   encryptionLabel,
+  genericDriveLabel,
   keepLabel,
   loadRip,
   loadRipEvents,
@@ -16,6 +17,10 @@ import {
   ripOptions,
   rippedDrive,
   ripStateLabel,
+  readOffsetLabel,
+  retriedLabel,
+  writeOffsetLabel,
+  type CdReadView,
   type RipEventView,
   type RippedView,
 } from './rips';
@@ -134,6 +139,37 @@ describe('rips', () => {
         tool_version: '0.4.2',
       }),
     ).toBe('libdvdcss 1.6.0, through dvdbackup 0.4.2');
+  });
+
+  it('says whether a CD was read offset-corrected, and only for a CD', () => {
+    const read: CdReadView = {
+      read_offset: 6,
+      write_offset: -6,
+      generic_drive: true,
+      retried_samples: 0,
+    };
+    expect(readOffsetLabel('redumper', read)).toBe('Corrected (+6 samples)');
+    expect(readOffsetLabel('redumper', { ...read, read_offset: -1164 })).toBe(
+      'Corrected (-1164 samples)',
+    );
+    expect(readOffsetLabel('redumper', { ...read, read_offset: null })).toContain(
+      'redumper has no read offset for this drive',
+    );
+    expect(readOffsetLabel('redumper', { ...read, read_offset: undefined })).toContain(
+      'Not corrected',
+    );
+    expect(readOffsetLabel('cdrdao', null)).toContain('read with cdrdao');
+    expect(readOffsetLabel('block_reader', null)).toBeNull();
+    expect(readOffsetLabel(null, undefined)).toBeNull();
+    expect(writeOffsetLabel(read)).toBe('-6 samples');
+    expect(writeOffsetLabel({ ...read, write_offset: 0 })).toBe('0 samples');
+    expect(writeOffsetLabel({ ...read, write_offset: null })).toBe('Not found');
+    expect(genericDriveLabel(true)).toContain('ask for cdrdao');
+    expect(genericDriveLabel(false)).toBe('No: a drive redumper knows');
+    expect(retriedLabel(read)).toContain('None');
+    expect(retriedLabel({ ...read, retried_samples: 588 })).toBe(
+      '588 samples read again; every one read in the end',
+    );
   });
 
   it('names the drive a disc was ripped in', () => {

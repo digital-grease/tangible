@@ -363,6 +363,60 @@ describe('Rip page', () => {
     expect(link.getAttribute('href')).toBe('/library/a1');
     expect(screen.getByText('cdrdao 1.2.4')).toBeTruthy();
     expect(screen.getByText(/0 unreadable, 2 retried/)).toBeTruthy();
+    expect(screen.getByText(/Not corrected: read with cdrdao/)).toBeTruthy();
+    expect(screen.queryByText('Write offset')).toBeNull();
+  });
+
+  it('shows the offsets of a CD read by redumper', async () => {
+    server({
+      '/api/v1/rips/r1': {
+        status: 200,
+        body: rip({
+          state: 'complete',
+          is_open: false,
+          can_cancel: false,
+          artifact_id: 'a1',
+          engine: 'redumper',
+          engine_version: 'b768',
+          read_errors: null,
+          cd_read: { read_offset: 6, write_offset: -6, generic_drive: true, retried_samples: 6 },
+        }),
+      },
+      '/api/v1/rips/r1/events': { status: 200, body: { items: [] } },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    render(RipPage);
+    expect(await screen.findByText('Corrected (+6 samples)')).toBeTruthy();
+    expect(screen.getByText('-6 samples')).toBeTruthy();
+    expect(screen.getByText(/does not count this drive among those it trusts/)).toBeTruthy();
+    expect(screen.getByText('6 samples read again; every one read in the end')).toBeTruthy();
+  });
+
+  it('says a redumper read was not corrected when the drive has no offset', async () => {
+    server({
+      '/api/v1/rips/r1': {
+        status: 200,
+        body: rip({
+          state: 'complete',
+          is_open: false,
+          can_cancel: false,
+          engine: 'redumper',
+          engine_version: 'b768',
+          cd_read: {
+            read_offset: null,
+            write_offset: null,
+            generic_drive: false,
+            retried_samples: 0,
+          },
+        }),
+      },
+      '/api/v1/rips/r1/events': { status: 200, body: { items: [] } },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    render(RipPage);
+    expect(await screen.findByText(/Not corrected: redumper has no read offset/)).toBeTruthy();
+    expect(screen.getByText('Not found')).toBeTruthy();
+    expect(screen.getByText('No: a drive redumper knows')).toBeTruthy();
   });
 
   it('explains a refusal in words', async () => {

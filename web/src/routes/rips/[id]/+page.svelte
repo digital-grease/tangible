@@ -13,12 +13,16 @@
     cdEngineLabel,
     decryptionSummary,
     encryptionLabel,
+    genericDriveLabel,
     keepLabel,
     loadRip,
     loadRipEvents,
     ripProgress,
     ripRefusal,
     ripStateLabel,
+    readOffsetLabel,
+    retriedLabel,
+    writeOffsetLabel,
     type RipEventView,
     type RipView,
   } from '$lib/rips';
@@ -37,6 +41,7 @@
   const id = $derived(page.params.id ?? '');
   const rip = $derived(view.kind === 'ready' ? view.data : null);
   const progress = $derived(ripProgress(events));
+  const readOffset = $derived(rip ? readOffsetLabel(rip.engine, rip.cd_read) : null);
 
   async function refresh() {
     const [next, timeline] = await Promise.all([loadRip(id), loadRipEvents(id)]);
@@ -165,11 +170,23 @@
       {/if}
       <dt>Read with</dt>
       <dd>{rip.engine ? `${rip.engine} ${rip.engine_version ?? ''}` : '—'}</dd>
+      {#if readOffset}
+        <dt>Read offset</dt>
+        <dd>{readOffset}</dd>
+      {/if}
+      {#if rip.cd_read}
+        <dt>Write offset</dt>
+        <dd>{writeOffsetLabel(rip.cd_read)}</dd>
+        <dt>Generic drive</dt>
+        <dd>{genericDriveLabel(rip.cd_read.generic_drive)}</dd>
+      {/if}
       <dt>Read errors</dt>
       <dd>
         {#if rip.read_errors}
           {rip.read_errors.unreadable_sectors} unreadable, {rip.read_errors.retried_sectors} retried
           {rip.read_errors.unreadable_sectors === 0 ? '' : '(the image is incomplete)'}
+        {:else if rip.cd_read}
+          {retriedLabel(rip.cd_read)}
         {:else}
           —
         {/if}
