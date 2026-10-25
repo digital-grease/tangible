@@ -11,7 +11,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use clap::{Args, ValueEnum};
+use clap::{Args, Subcommand, ValueEnum};
 use tangible_domain::SecretString;
 
 /// Which storage backend holds canonical bytes.
@@ -252,6 +252,37 @@ pub struct ServeConfig {
     /// its URL may carry a username and password.
     #[arg(long, env = "TANGIBLE_OUTBOUND_PROXY", hide_env_values = true)]
     pub outbound_proxy: Option<SecretString>,
+
+    /// A file holding the key integration secrets are sealed with (ADR 0016):
+    /// 32 random bytes, base64, as `tangible secrets generate` prints. Without
+    /// one the server runs, and integrations cannot hold a password. The path
+    /// is not secret; the file is.
+    #[arg(long, env = "TANGIBLE_SECRET_KEY_FILE")]
+    pub secret_key_file: Option<PathBuf>,
+}
+
+/// `tangible secrets`: the key integration secrets are sealed with.
+#[derive(Debug, Clone, Subcommand)]
+pub enum SecretsCommand {
+    /// Print a new random key, base64, to keep in the file
+    /// `TANGIBLE_SECRET_KEY_FILE` names.
+    Generate,
+    /// Seal every stored integration secret again under the key in
+    /// `TANGIBLE_SECRET_KEY_FILE`, opening each with the old key. All or
+    /// nothing, and safe to run again.
+    Rotate(RotateConfig),
+}
+
+/// Settings for `tangible secrets rotate`.
+#[derive(Debug, Clone, Args)]
+pub struct RotateConfig {
+    /// The file holding the key the secrets are sealed with now.
+    #[arg(long)]
+    pub old_key_file: PathBuf,
+
+    /// The file holding the key to seal them with from now on.
+    #[arg(long, env = "TANGIBLE_SECRET_KEY_FILE")]
+    pub key_file: PathBuf,
 }
 
 /// Settings for `tangible doctor`.

@@ -240,6 +240,42 @@ included, and an account may ask for 30 an hour. To loosen it:
 A file is fetched up to `TANGIBLE_MAX_UPLOAD_BYTES`. Diagnostics shows whether
 URL imports are on and how far they reach.
 
+## Integration secrets
+
+Download clients (qBittorrent, and SABnzbd and NZBGet later) sign in with a
+password. You enter it once, as an administrator, and Tangible stores it
+sealed with a key kept outside the database; nobody can read it back, through
+the web UI or the API. Without a key the server runs, and an integration
+cannot be given a password.
+
+Make the key once, readable only by the server's user (10001 in the image):
+
+```bash
+mkdir -p deploy/secrets
+docker compose -f deploy/compose.yaml run --rm --no-deps server \
+  secrets generate > deploy/secrets/tangible-secret-key
+chmod 0400 deploy/secrets/tangible-secret-key
+sudo chown 10001 deploy/secrets/tangible-secret-key
+```
+
+Then uncomment `TANGIBLE_SECRET_KEY_FILE` and the two `secrets` blocks in
+`compose.yaml`, and restart the server. Diagnostics says whether a key is
+loaded and whether it opens every stored password.
+
+Back the key up apart from the database: a database backup holds the
+passwords sealed, and the key is what opens them. A lost key loses only those
+passwords; enter them again. To move to a new key, make one as above under
+another name, then:
+
+```bash
+docker compose -f deploy/compose.yaml run --rm \
+  -v "$PWD/deploy/secrets:/keys:ro" server \
+  secrets rotate --old-key-file /keys/old-key --key-file /keys/new-key
+```
+
+and point `compose.yaml` at the new file. A rotation changes everything or
+nothing, and can be run again.
+
 ## Issue reports
 
 Tangible can turn a problem into a prefilled issue on its tracker. The

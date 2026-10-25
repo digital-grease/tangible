@@ -14,6 +14,7 @@ use crate::diagnostics::DiagnosticsSettings;
 use crate::import::ImportPipeline;
 use crate::report::ReportSettings;
 use crate::romm_export::RommExport;
+use crate::secrets::SecretKey;
 use crate::web::WebUi;
 
 /// State cloned into every request handler.
@@ -56,6 +57,10 @@ struct Inner {
     /// Whether an administrator has turned decryption on for rips
     /// (ADR 0013). Off unless they have.
     decryption_allowed: bool,
+    /// The key integration secrets are sealed with
+    /// (`TANGIBLE_SECRET_KEY_FILE`, ADR 0016). Without one, integrations
+    /// work but no secret can be stored or opened.
+    secret_key: Option<Arc<SecretKey>>,
 }
 
 /// What the import routes need beyond the database.
@@ -98,6 +103,7 @@ impl ApiState {
                 reports: ReportSettings::default(),
                 diagnostics: None,
                 decryption_allowed: false,
+                secret_key: None,
             }),
         }
     }
@@ -120,6 +126,7 @@ impl ApiState {
                 reports: ReportSettings::default(),
                 diagnostics: None,
                 decryption_allowed: false,
+                secret_key: None,
             }),
         }
     }
@@ -203,6 +210,22 @@ impl ApiState {
         Self {
             inner: Arc::new(inner),
         }
+    }
+
+    /// Seal and open integration secrets with `key`.
+    #[must_use]
+    pub fn with_secret_key(self, key: SecretKey) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.secret_key = Some(Arc::new(key));
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// The key integration secrets are sealed with, when there is one.
+    #[must_use]
+    pub fn secret_key(&self) -> Option<&SecretKey> {
+        self.inner.secret_key.as_deref()
     }
 
     /// Whether rips may decrypt.

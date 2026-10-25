@@ -13,3 +13,4 @@
 pub mod fetch;
 pub mod outbound;
 pub mod romm;
+pub mod settings;

@@ -11,6 +11,7 @@ pub mod accounts;
 pub mod derivations;
 pub mod diagnostics;
 pub mod erasures;
+pub mod integrations;
 pub mod repositories;
 pub mod rips;
 pub mod romm;

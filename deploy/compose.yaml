@@ -58,8 +58,14 @@ services:
       # matching volume below. Tangible writes only folders it marks as its
       # own there.
       # TANGIBLE_ROMM_EXPORT_ROOT: /var/lib/tangible/romm
+      # The key download-client passwords are sealed with (deploy/README.md,
+      # "Integration secrets"). Off unless set: uncomment this and the two
+      # secrets blocks below once the key file exists.
+      # TANGIBLE_SECRET_KEY_FILE: /run/secrets/tangible-secret-key
       # No engine is configured here. The server does not write discs; the
       # burn workers do, and they select an engine themselves.
+    # secrets:
+    #   - tangible-secret-key
     volumes:
       - library:/var/lib/tangible/library
       - staging:/var/lib/tangible/staging
@@ -129,3 +135,9 @@ volumes:
   library:
   staging:
   postgres-data:
+
+# The integration secret key (deploy/README.md, "Integration secrets"). The
+# file is yours to make and keep; it never goes in the repository or .env.
+# secrets:
+#   tangible-secret-key:
+#     file: ./secrets/tangible-secret-key

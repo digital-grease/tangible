@@ -17,6 +17,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use tangible_api::diagnostics::{self, DerivationStatus, DiagnosticsSettings};
 use tangible_api::report::{BuildIdentity, ReportSettings};
+use tangible_api::secrets::SecretKey;
 use tangible_api::{
     ApiState, AuthSettings, DerivationPipeline, DerivationRunner, DerivationRunnerSettings,
     Derivations, ImportContext, ImportPipeline, ImportRunner, ImportRunnerSettings, RommExport,
@@ -26,7 +27,8 @@ use tangible_db::{Database, DbConfig};
 use tangible_storage::{FilesystemStore, ManifestStore, StagingManager, WatchRoots};
 
 use crate::config::{
-    BurnEngineKind, CommonConfig, DerivationEngineKind, DoctorConfig, ServeConfig, WorkerConfig,
+    BurnEngineKind, CommonConfig, DerivationEngineKind, DoctorConfig, RotateConfig, SecretsCommand,
+    ServeConfig, WorkerConfig,
 };
 
 /// Self-hosted disc-image preservation, management, and burning.
@@ -54,6 +56,9 @@ enum Command {
     Migrate,
     /// Write the generated OpenAPI document to stdout.
     Openapi,
+    /// Make or rotate the key integration secrets are sealed with.
+    #[command(subcommand)]
+    Secrets(SecretsCommand),
 }
 
 #[tokio::main]
@@ -65,6 +70,10 @@ async fn main() -> Result<()> {
         Command::Serve(serve) => serve_command(&cli.common, &serve).await,
         Command::Migrate => migrate_command(&cli.common).await,
         Command::Openapi => openapi_command(),
+        Command::Secrets(SecretsCommand::Generate) => generate_secret_key(),
+        Command::Secrets(SecretsCommand::Rotate(rotate)) => {
+            rotate_secrets(&cli.common, &rotate).await
+        }
         Command::Doctor(doctor) => doctor_command(&cli.common, &doctor).await,
         Command::BurnWorker(worker) => burn_worker_command(&worker).await,
         Command::Manifest => {
@@ -110,12 +119,15 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
     let reports = report_settings(common, serve)?;
     warn_if_setup_needed(&database, &serve.public_url).await;
 
+    let secret_key = load_secret_key(serve)?;
+
     let engine = derivation_engine(serve.derivation_engine).await;
     let diagnostics = diagnostics_settings(
         common,
         serve,
         reports.clone(),
         derivation_status(serve.derivation_engine, engine.as_deref()),
+        secret_key.as_ref(),
     );
 
     let state = ApiState::with_manifests(database.clone(), manifests.clone())
@@ -130,6 +142,10 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         .with_reports(reports)
         .with_diagnostics(diagnostics)
         .with_decryption_allowed(serve.allow_decryption);
+    let state = match secret_key {
+        Some(key) => state.with_secret_key(key),
+        None => state,
+    };
     if serve.allow_decryption {
         tracing::info!(
             "rips may decrypt encrypted discs, on workers that can (TANGIBLE_ALLOW_DECRYPTION)"
@@ -390,12 +406,71 @@ fn derivation_status(
     }
 }
 
+/// The key integration secrets are sealed with, when
+/// `TANGIBLE_SECRET_KEY_FILE` names one. A file named and not usable stops
+/// the server: running on would refuse every secret for a reason only the
+/// log at start gave.
+fn load_secret_key(serve: &ServeConfig) -> Result<Option<SecretKey>> {
+    let Some(path) = serve
+        .secret_key_file
+        .as_deref()
+        .filter(|path| !path.as_os_str().is_empty())
+    else {
+        tracing::info!(
+            "no secret key; integrations cannot hold a password (set TANGIBLE_SECRET_KEY_FILE; \
+             tangible secrets generate makes a key)"
+        );
+        return Ok(None);
+    };
+    let key = SecretKey::from_file(path)
+        .with_context(|| format!("TANGIBLE_SECRET_KEY_FILE ({})", path.display()))?;
+    tracing::info!(key_id = key.id(), "integration secret key loaded");
+    Ok(Some(key))
+}
+
+/// `tangible secrets generate`: a new key on stdout, for the administrator
+/// to put in a file. The command's output, so not a log line.
+fn generate_secret_key() -> Result<()> {
+    let key = SecretKey::generate().context("generating a key")?;
+    let mut out = std::io::stdout().lock();
+    writeln!(out, "{}", key.expose())?;
+    out.flush()?;
+    Ok(())
+}
+
+/// `tangible secrets rotate`: every stored secret opened with the old key
+/// and sealed with the new, in one transaction. One already sealed with the
+/// new key is left as it is, so a rotation can be run again.
+async fn rotate_secrets(common: &CommonConfig, rotate: &RotateConfig) -> Result<()> {
+    let old = SecretKey::from_file(&rotate.old_key_file)
+        .with_context(|| format!("the old key file ({})", rotate.old_key_file.display()))?;
+    let new = SecretKey::from_file(&rotate.key_file)
+        .with_context(|| format!("the new key file ({})", rotate.key_file.display()))?;
+    let database = Database::connect(&DbConfig::new(common.database_url.expose()))
+        .await
+        .context("connecting to the database")?;
+    let resealed = tangible_db::integrations::reseal_all(database.pool(), |row| {
+        tangible_api::secrets::reseal(&old, &new, row)
+    })
+    .await
+    .context("reading or writing the stored secrets")?
+    .context("nothing was changed")?;
+    tracing::info!(
+        resealed,
+        old_key_id = old.id(),
+        new_key_id = new.id(),
+        "integration secrets sealed with the new key"
+    );
+    Ok(())
+}
+
 /// What diagnostics needs to know about this server.
 fn diagnostics_settings(
     common: &CommonConfig,
     serve: &ServeConfig,
     reports: ReportSettings,
     derivation: DerivationStatus,
+    secret_key: Option<&SecretKey>,
 ) -> DiagnosticsSettings {
     DiagnosticsSettings {
         build: BuildIdentity::current(
@@ -424,6 +499,7 @@ fn diagnostics_settings(
                     .as_ref()
                     .is_some_and(|proxy| !proxy.expose().trim().is_empty()),
             }),
+        secret_key_id: secret_key.map(|key| key.id().to_owned()),
     }
 }
 
@@ -637,11 +713,13 @@ async fn doctor_report(common: &CommonConfig, doctor: &DoctorConfig) -> Result<(
         .context("configuring the database pool")?;
     let reports = report_settings(common, &doctor.serve)?;
     let engine = derivation_engine(doctor.serve.derivation_engine).await;
+    let secret_key = load_secret_key(&doctor.serve)?;
     let settings = diagnostics_settings(
         common,
         &doctor.serve,
         reports.clone(),
         derivation_status(doctor.serve.derivation_engine, engine.as_deref()),
+        secret_key.as_ref(),
     );
     let report = diagnostics::run(&database, &settings).await;
 
@@ -874,6 +952,8 @@ mod tests {
         "TANGIBLE_REPORT_ISSUES_URL",
         "TANGIBLE_REPORT_SCRUB_ADDRESSES",
         "TANGIBLE_ROMM_EXPORT_ROOT",
+        // The path to the key file, which is secret; the path is not.
+        "TANGIBLE_SECRET_KEY_FILE",
         "TANGIBLE_SERVER_URL",
         "TANGIBLE_STAGING_ROOT",
         "TANGIBLE_STORAGE_KIND",
@@ -1018,6 +1098,7 @@ mod tests {
             &serve,
             ReportSettings::disabled(BuildIdentity::current(None, None)),
             derivation_status(DerivationEngineKind::Chdman, None),
+            None,
         );
         assert!(settings.public_url_https);
         assert_eq!(

@@ -24,3 +24,5 @@ dist/
 .dev-data/
 config/local.toml
 deploy/.env
+# Compose secrets, such as the integration secret key.
+deploy/secrets/

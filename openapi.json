@@ -2977,6 +2977,271 @@
         ]
       }
     },
+    "/api/v1/integrations": {
+      "get": {
+        "tags": [
+          "integrations"
+        ],
+        "summary": "Every integration.",
+        "description": "# Errors\n\n`STORAGE_UNAVAILABLE` if they cannot be read.",
+        "operationId": "list_all",
+        "responses": {
+          "200": {
+            "description": "Every integration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationList"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an administrator",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "integrations"
+        ],
+        "summary": "Make an integration.",
+        "description": "Make an integration. Secrets are write-only: sealed with the server's \\\n                   secret key and never answered back.",
+        "operationId": "create_one",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateIntegrationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Made",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Name taken, or no secret key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Something that will not do",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/integrations/{integration_id}": {
+      "get": {
+        "tags": [
+          "integrations"
+        ],
+        "summary": "One integration.",
+        "description": "# Errors\n\n`NOT_FOUND`.",
+        "operationId": "get_one",
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "description": "Integration identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The integration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such integration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "integrations"
+        ],
+        "summary": "Remove an integration and its secrets.",
+        "description": "# Errors\n\n`NOT_FOUND`; `CONFLICT` for the RomM export's, or one imports refer to.",
+        "operationId": "delete_one",
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "description": "Integration identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "404": {
+            "description": "No such integration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Managed, or still referred to",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "integrations"
+        ],
+        "summary": "Change an integration.",
+        "description": "Change an integration. Absent fields stay as they are; a secret set to \\\n                   null is removed. Changing settings or secrets marks it unconfigured until \\\n                   it is next tried.",
+        "operationId": "update_one",
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "description": "Integration identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateIntegrationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such integration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Name taken, managed, or no secret key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Something that will not do",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/physical-copies": {
       "get": {
         "tags": [
@@ -6382,6 +6647,48 @@
           }
         }
       },
+      "CreateIntegrationRequest": {
+        "type": "object",
+        "description": "What an administrator sends to make an integration.",
+        "required": [
+          "kind",
+          "name",
+          "settings"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether it is in use; on by default."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`qbittorrent`."
+          },
+          "name": {
+            "type": "string",
+            "description": "A name for it, unique."
+          },
+          "secrets": {
+            "type": "object",
+            "description": "Its secrets, by field. Write-only.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "settings": {
+            "type": "object",
+            "description": "Its kind's settings.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "CreateTitleRequest": {
         "type": "object",
         "description": "A new title.",
@@ -7972,6 +8279,96 @@
           }
         }
       },
+      "IntegrationList": {
+        "type": "object",
+        "description": "Every integration.",
+        "required": [
+          "items",
+          "secret_key_loaded"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrationView"
+            },
+            "description": "By name."
+          },
+          "secret_key_loaded": {
+            "type": "boolean",
+            "description": "Whether this server holds a secret key, without which no secret can\nbe stored (`TANGIBLE_SECRET_KEY_FILE`)."
+          }
+        }
+      },
+      "IntegrationView": {
+        "type": "object",
+        "description": "An integration, with its secrets named and never shown.",
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "enabled",
+          "settings",
+          "secrets",
+          "status",
+          "managed"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether it is in use."
+          },
+          "id": {
+            "type": "string",
+            "description": "Its id."
+          },
+          "kind": {
+            "type": "string",
+            "description": "Such as `qbittorrent`, or `romm` for the RomM export."
+          },
+          "last_error_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it last failed, as a stable code."
+          },
+          "last_success_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it last worked."
+          },
+          "managed": {
+            "type": "boolean",
+            "description": "Kept by the server's own settings (the RomM export), not here."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "secrets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SecretFieldView"
+            },
+            "description": "Every secret its kind takes, and whether each is set."
+          },
+          "settings": {
+            "type": "object",
+            "description": "Its settings.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string",
+            "description": "`unconfigured`, `ok`, `degraded`, `failing` or `disabled`."
+          }
+        }
+      },
       "IssueEnrollmentRequest": {
         "type": "object",
         "description": "What an operator sends to issue an enrollment token. Every field is\noptional; `{}` asks for the defaults.",
@@ -9479,6 +9876,24 @@
           }
         }
       },
+      "SecretFieldView": {
+        "type": "object",
+        "description": "A secret an integration takes.",
+        "required": [
+          "field",
+          "set"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "Its name, such as `password`."
+          },
+          "set": {
+            "type": "boolean",
+            "description": "Whether a value is stored. The value itself is never answered."
+          }
+        }
+      },
       "SessionView": {
         "type": "object",
         "description": "The signed-in session.",
@@ -9785,6 +10200,51 @@
             "minimum": 0
           }
         }
+      },
+      "UpdateIntegrationRequest": {
+        "type": "object",
+        "description": "What an administrator sends to change an integration. Absent fields stay\nas they are.",
+        "properties": {
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "On or off."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new name."
+          },
+          "secrets": {
+            "type": "object",
+            "description": "Secrets to set, or to remove with `null`, by field. Write-only.",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "settings": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "New settings, whole.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
       },
       "UpdatePhysicalCopyRequest": {
         "type": "object",
@@ -10118,6 +10578,10 @@
     {
       "name": "rips",
       "description": "Ripping the disc in a drive into the library"
+    },
+    {
+      "name": "integrations",
+      "description": "Download clients and other services, configured by administrators"
     }
   ]
 }

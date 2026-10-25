@@ -119,6 +119,16 @@ may change between minor versions, and the release notes say how.
   redumper they also show the disc's write offset, whether the drive was
   treated as generic (with a hint to ask for cdrdao if its rips go wrong),
   and how many samples were read again.
+- Administrators can configure integrations through the API
+  (`/api/v1/integrations`, a new `manage_integrations` permission held by
+  administrators), starting with qBittorrent's settings: its address (a LAN
+  address is fine), user, category and where its downloads are mounted.
+  Passwords are write-only: sealed with a key the server reads from
+  `TANGIBLE_SECRET_KEY_FILE` (`tangible secrets generate` makes one,
+  `tangible secrets rotate` moves to a new one) and never answered back,
+  logged or audited. Without a key the server runs and integrations cannot
+  hold a password. Diagnostics says whether a key is loaded and opens every
+  stored password. Database migration 0016 adds a table; it is additive.
 - Large uploads are sent in parts (`/api/v1/uploads`), so a dropped
   connection costs one part rather than the whole file. The Imports page
   uses parts for files over 64 MiB, shows how much has been sent, and, if

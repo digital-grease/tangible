@@ -167,6 +167,10 @@ pub struct DiagnosticsSettings {
     /// Whether operators may import from a URL (`TANGIBLE_URL_IMPORTS`), and
     /// whether plain http too.
     pub url_imports: Option<UrlImportSetting>,
+    /// The id of the key integration secrets are sealed with
+    /// (`TANGIBLE_SECRET_KEY_FILE`), when one is loaded. Not secret: a
+    /// digest's first bytes, used to tell keys apart.
+    pub secret_key_id: Option<String>,
 }
 
 /// How URL imports are set, when they are on (ADR 0016).
@@ -208,6 +212,9 @@ pub struct Facts {
     pub drives: Answer<Vec<DriveRecord>>,
     /// Recent failures, newest first.
     pub failures: Answer<Vec<Failure>>,
+    /// Stored integration secrets, counted by the id of the key that sealed
+    /// them.
+    pub sealed_secrets: Answer<Vec<(String, i64)>>,
 }
 
 /// Look at everything and judge it, now.
@@ -222,9 +229,10 @@ pub async fn collect(database: &Database, settings: &DiagnosticsSettings) -> Fac
     let database_answer = bounded(database.ping()).await.map(|()| ());
     // Once the database is known to be down, the queries that follow would
     // each wait out the timeout to say the same thing.
-    let (pending_migrations, workers, drives, failures) =
+    let (pending_migrations, workers, drives, failures, sealed_secrets) =
         if let Answer::Unavailable(reason) = &database_answer {
             (
+                skipped(reason),
                 skipped(reason),
                 skipped(reason),
                 skipped(reason),
@@ -240,6 +248,7 @@ pub async fn collect(database: &Database, settings: &DiagnosticsSettings) -> Fac
                     RECENT_FAILURES,
                 ))
                 .await,
+                bounded(tangible_db::integrations::secret_counts_by_key(pool)).await,
             )
         };
     let incoming = settings.storage_root.join(OBJECTS_DIR).join(INCOMING_DIR);
@@ -255,6 +264,7 @@ pub async fn collect(database: &Database, settings: &DiagnosticsSettings) -> Fac
         workers,
         drives,
         failures,
+        sealed_secrets,
     }
 }
 
@@ -323,7 +333,14 @@ pub fn assess(settings: &DiagnosticsSettings, facts: &Facts, now: OffsetDateTime
         },
         DiagnosticSection {
             title: "Settings".to_owned(),
-            checks: setting_checks(settings),
+            checks: {
+                let mut checks = setting_checks(settings);
+                checks.push(secret_check(
+                    settings.secret_key_id.as_deref(),
+                    &facts.sealed_secrets,
+                ));
+                checks
+            },
         },
     ];
     let status = sections
@@ -837,6 +854,49 @@ fn setting_checks(settings: &DiagnosticsSettings) -> Vec<DiagnosticCheck> {
     ]
 }
 
+/// Whether the integration secrets stored can be opened with the key held.
+fn secret_check(key_id: Option<&str>, sealed: &Answer<Vec<(String, i64)>>) -> DiagnosticCheck {
+    const NAME: &str = "Integration secrets";
+    let counts = match sealed {
+        Answer::Found(counts) => counts,
+        Answer::Unavailable(reason) => return check(NAME, CheckStatus::Warn, reason.clone()),
+    };
+    let total: i64 = counts.iter().map(|(_, n)| n).sum();
+    let elsewhere: i64 = counts
+        .iter()
+        .filter(|(id, _)| Some(id.as_str()) != key_id)
+        .map(|(_, n)| n)
+        .sum();
+    match (key_id, total, elsewhere) {
+        (None, 0, _) => check(
+            NAME,
+            CheckStatus::Ok,
+            "no key: integrations cannot hold a password until TANGIBLE_SECRET_KEY_FILE is set",
+        ),
+        (None, _, _) => check(
+            NAME,
+            CheckStatus::Problem,
+            format!(
+                "{total} stored and no key to open them: set TANGIBLE_SECRET_KEY_FILE to the key \
+                 they were sealed with"
+            ),
+        ),
+        (Some(_), _, 0) => check(
+            NAME,
+            CheckStatus::Ok,
+            format!("key loaded; {total} stored, all sealed with it"),
+        ),
+        (Some(_), _, _) => check(
+            NAME,
+            CheckStatus::Problem,
+            format!(
+                "{elsewhere} of {total} stored were sealed with another key: restore that key \
+                 file, run tangible secrets rotate with it as the old key, or enter them again"
+            ),
+        ),
+    }
+}
+
 /// The report as Markdown, for a terminal, a file, or an issue.
 #[must_use]
 pub fn markdown(report: &Diagnostics) -> String {
@@ -986,6 +1046,7 @@ mod tests {
             reports: ReportSettings::disabled(build()),
             decryption_allowed: false,
             url_imports: None,
+            secret_key_id: None,
         }
     }
 
@@ -1047,6 +1108,7 @@ mod tests {
             workers: Answer::Found(vec![one]),
             drives: Answer::Found(drives),
             failures: Answer::Found(Vec::new()),
+            sealed_secrets: Answer::Found(Vec::new()),
         }
     }
 
@@ -1333,6 +1395,46 @@ mod tests {
         assert_eq!(find(&report, "RomM export").status, CheckStatus::Problem);
         assert_eq!(find(&report, "Issue reports").detail, "turned off");
         assert_eq!(report.status, CheckStatus::Problem);
+    }
+
+    #[test]
+    fn integration_secrets_say_whether_the_key_opens_them() {
+        let mut settings = settings();
+        let mut facts = healthy();
+        let row = |settings: &DiagnosticsSettings, facts: &Facts| {
+            find(&assess(settings, facts, now()), "Integration secrets").clone()
+        };
+        let none = row(&settings, &facts);
+        assert_eq!(none.status, CheckStatus::Ok);
+        assert!(
+            none.detail.contains("TANGIBLE_SECRET_KEY_FILE"),
+            "{}",
+            none.detail
+        );
+
+        facts.sealed_secrets = Answer::Found(vec![("aaaaaaaaaaaaaaaa".to_owned(), 2)]);
+        assert_eq!(row(&settings, &facts).status, CheckStatus::Problem);
+
+        settings.secret_key_id = Some("aaaaaaaaaaaaaaaa".to_owned());
+        let held = row(&settings, &facts);
+        assert_eq!(held.status, CheckStatus::Ok);
+        assert_eq!(held.detail, "key loaded; 2 stored, all sealed with it");
+        assert!(
+            !held.detail.contains("aaaa"),
+            "the key id stays out of the report"
+        );
+
+        facts.sealed_secrets = Answer::Found(vec![
+            ("aaaaaaaaaaaaaaaa".to_owned(), 2),
+            ("bbbbbbbbbbbbbbbb".to_owned(), 1),
+        ]);
+        let mixed = row(&settings, &facts);
+        assert_eq!(mixed.status, CheckStatus::Problem);
+        assert!(
+            mixed.detail.starts_with("1 of 3 stored"),
+            "{}",
+            mixed.detail
+        );
     }
 
     #[test]

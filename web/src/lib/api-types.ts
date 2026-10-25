@@ -945,6 +945,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every integration.
+         * @description # Errors
+         *
+         *     `STORAGE_UNAVAILABLE` if they cannot be read.
+         */
+        get: operations["list_all"];
+        put?: never;
+        /**
+         * Make an integration.
+         * @description Make an integration. Secrets are write-only: sealed with the server's \
+         *                        secret key and never answered back.
+         */
+        post: operations["create_one"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/{integration_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One integration.
+         * @description # Errors
+         *
+         *     `NOT_FOUND`.
+         */
+        get: operations["get_one"];
+        put?: never;
+        post?: never;
+        /**
+         * Remove an integration and its secrets.
+         * @description # Errors
+         *
+         *     `NOT_FOUND`; `CONFLICT` for the RomM export's, or one imports refer to.
+         */
+        delete: operations["delete_one"];
+        options?: never;
+        head?: never;
+        /**
+         * Change an integration.
+         * @description Change an integration. Absent fields stay as they are; a secret set to \
+         *                        null is removed. Changing settings or secrets marks it unconfigured until \
+         *                        it is next tried.
+         */
+        patch: operations["update_one"];
+        trace?: never;
+    };
     "/api/v1/physical-copies": {
         parameters: {
             query?: never;
@@ -2121,6 +2182,23 @@ export interface components {
             /** @description Where beneath that root, as a relative path. */
             relative_path: string;
         };
+        /** @description What an administrator sends to make an integration. */
+        CreateIntegrationRequest: {
+            /** @description Whether it is in use; on by default. */
+            enabled?: boolean;
+            /** @description `qbittorrent`. */
+            kind: string;
+            /** @description A name for it, unique. */
+            name: string;
+            /** @description Its secrets, by field. Write-only. */
+            secrets?: {
+                [key: string]: string;
+            };
+            /** @description Its kind's settings. */
+            settings: {
+                [key: string]: unknown;
+            };
+        };
         /** @description A new title. */
         CreateTitleRequest: {
             /** @description What it is called. */
@@ -2826,6 +2904,41 @@ export interface components {
              */
             warnings: string[];
         };
+        /** @description Every integration. */
+        IntegrationList: {
+            /** @description By name. */
+            items: components["schemas"]["IntegrationView"][];
+            /**
+             * @description Whether this server holds a secret key, without which no secret can
+             *     be stored (`TANGIBLE_SECRET_KEY_FILE`).
+             */
+            secret_key_loaded: boolean;
+        };
+        /** @description An integration, with its secrets named and never shown. */
+        IntegrationView: {
+            /** @description Whether it is in use. */
+            enabled: boolean;
+            /** @description Its id. */
+            id: string;
+            /** @description Such as `qbittorrent`, or `romm` for the RomM export. */
+            kind: string;
+            /** @description Why it last failed, as a stable code. */
+            last_error_code?: string | null;
+            /** @description When it last worked. */
+            last_success_at?: string | null;
+            /** @description Kept by the server's own settings (the RomM export), not here. */
+            managed: boolean;
+            /** @description Its name. */
+            name: string;
+            /** @description Every secret its kind takes, and whether each is set. */
+            secrets: components["schemas"]["SecretFieldView"][];
+            /** @description Its settings. */
+            settings: {
+                [key: string]: unknown;
+            };
+            /** @description `unconfigured`, `ok`, `degraded`, `failing` or `disabled`. */
+            status: string;
+        };
         /**
          * @description What an operator sends to issue an enrollment token. Every field is
          *     optional; `{}` asks for the defaults.
@@ -3470,6 +3583,13 @@ export interface components {
             /** @description The platforms an edition may name. */
             platforms: components["schemas"]["PlatformView"][];
         };
+        /** @description A secret an integration takes. */
+        SecretFieldView: {
+            /** @description Its name, such as `password`. */
+            field: string;
+            /** @description Whether a value is stored. The value itself is never answered. */
+            set: boolean;
+        };
         /** @description The signed-in session. */
         SessionView: {
             /**
@@ -3627,6 +3747,24 @@ export interface components {
              * @description Its first present sector, counted from the start of the image.
              */
             start_lba: number;
+        };
+        /**
+         * @description What an administrator sends to change an integration. Absent fields stay
+         *     as they are.
+         */
+        UpdateIntegrationRequest: {
+            /** @description On or off. */
+            enabled?: boolean | null;
+            /** @description A new name. */
+            name?: string | null;
+            /** @description Secrets to set, or to remove with `null`, by field. Write-only. */
+            secrets?: {
+                [key: string]: string | null;
+            };
+            /** @description New settings, whole. */
+            settings?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * @description What an operator may change about a disc.
@@ -5721,6 +5859,202 @@ export interface operations {
             };
             /** @description Still running, or already succeeded */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_all: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every integration */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationList"];
+                };
+            };
+            /** @description Not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_one: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateIntegrationRequest"];
+            };
+        };
+        responses: {
+            /** @description Made */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationView"];
+                };
+            };
+            /** @description Name taken, or no secret key */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Something that will not do */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_one: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Integration identifier */
+                integration_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The integration */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationView"];
+                };
+            };
+            /** @description No such integration */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    delete_one: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Integration identifier */
+                integration_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such integration */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Managed, or still referred to */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    update_one: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Integration identifier */
+                integration_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateIntegrationRequest"];
+            };
+        };
+        responses: {
+            /** @description Changed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationView"];
+                };
+            };
+            /** @description No such integration */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Name taken, managed, or no secret key */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Something that will not do */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

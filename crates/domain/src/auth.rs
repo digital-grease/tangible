@@ -48,6 +48,13 @@ pub enum Permission {
     /// Administrators only: none of it is secret, but it describes the
     /// machine and its configuration rather than the library.
     Diagnose,
+    /// Configure integrations: download clients and their secrets
+    /// (ADR 0016).
+    ///
+    /// Administrators only: an integration names a machine on the network
+    /// and holds its password, and a download client's output becomes
+    /// imports.
+    ManageIntegrations,
 }
 
 impl Permission {
@@ -64,6 +71,7 @@ impl Permission {
             Self::ManageWorkers => "manage_workers",
             Self::ManageUsers => "manage_users",
             Self::Diagnose => "diagnose",
+            Self::ManageIntegrations => "manage_integrations",
         }
     }
 
@@ -73,9 +81,11 @@ impl Permission {
         match self {
             Self::Read => Role::Viewer,
             Self::Import | Self::ImportUrl | Self::Catalog | Self::Burn => Role::Operator,
-            Self::Erase | Self::ManageWorkers | Self::ManageUsers | Self::Diagnose => {
-                Role::Administrator
-            }
+            Self::Erase
+            | Self::ManageWorkers
+            | Self::ManageUsers
+            | Self::Diagnose
+            | Self::ManageIntegrations => Role::Administrator,
         }
     }
 }
@@ -168,6 +178,7 @@ mod tests {
             Permission::ManageWorkers,
             Permission::ManageUsers,
             Permission::Diagnose,
+            Permission::ManageIntegrations,
         ] {
             assert!(!Role::Viewer.allows(permission), "{permission:?}");
         }
@@ -187,6 +198,7 @@ mod tests {
         assert!(!Role::Operator.allows(Permission::ManageWorkers));
         assert!(!Role::Operator.allows(Permission::ManageUsers));
         assert!(!Role::Operator.allows(Permission::Diagnose));
+        assert!(!Role::Operator.allows(Permission::ManageIntegrations));
     }
 
     #[test]
@@ -199,6 +211,7 @@ mod tests {
             Permission::ManageWorkers,
             Permission::ManageUsers,
             Permission::Diagnose,
+            Permission::ManageIntegrations,
         ] {
             assert!(Role::Administrator.allows(permission), "{permission:?}");
         }

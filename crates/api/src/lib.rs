@@ -25,6 +25,7 @@ pub mod report;
 pub mod request_id;
 pub mod romm_export;
 pub mod routes;
+pub mod secrets;
 pub mod state;
 pub mod web;
 pub mod worker_auth;
@@ -132,6 +133,11 @@ pub const API_BASE: &str = "/api/v1";
         routes::rips::upload_rip_file,
         routes::rips::complete_drive_rip,
         routes::diagnostics::diagnostics_report,
+        routes::integrations::list_all,
+        routes::integrations::create_one,
+        routes::integrations::get_one,
+        routes::integrations::update_one,
+        routes::integrations::delete_one,
         routes::romm::romm_settings,
         routes::romm::get_edition_romm,
         routes::romm::set_edition_romm_route,
@@ -237,6 +243,11 @@ pub const API_BASE: &str = "/api/v1";
         diagnostics::DiagnosticSection,
         diagnostics::DiagnosticCheck,
         diagnostics::CheckStatus,
+        routes::integrations::IntegrationView,
+        routes::integrations::SecretFieldView,
+        routes::integrations::IntegrationList,
+        routes::integrations::CreateIntegrationRequest,
+        routes::integrations::UpdateIntegrationRequest,
         routes::romm::PlatformView,
         routes::romm::RommSettings,
         routes::romm::EditionRommView,
@@ -290,6 +301,7 @@ pub const API_BASE: &str = "/api/v1";
         (name = "reports", description = "Issue reports, prepared for the operator to review and send"),
         (name = "diagnostics", description = "The deployment's state as a checklist, for administrators"),
         (name = "rips", description = "Ripping the disc in a drive into the library"),
+        (name = "integrations", description = "Download clients and other services, configured by administrators"),
     ),
 )]
 pub struct ApiDoc;
@@ -412,6 +424,7 @@ pub fn router(state: ApiState) -> Router {
         .nest(API_BASE, routes::catalog::router())
         .nest(API_BASE, routes::workers::router())
         .nest(API_BASE, routes::erasures::router())
+        .nest(API_BASE, routes::integrations::router())
         .nest(API_BASE, routes::romm::router())
         .nest(API_BASE, routes::reports::router())
         .nest(API_BASE, routes::diagnostics::router())

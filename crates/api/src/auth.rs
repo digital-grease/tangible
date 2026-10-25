@@ -149,7 +149,8 @@ pub enum Access {
 
 use Access::{Public, Signed, SignedOrLeaseholder, Worker};
 use Permission::{
-    Burn, Catalog, Diagnose, Erase, Import, ImportUrl, ManageUsers, ManageWorkers, Read,
+    Burn, Catalog, Diagnose, Erase, Import, ImportUrl, ManageIntegrations, ManageUsers,
+    ManageWorkers, Read,
 };
 
 /// Every operation the server answers, and what it requires.
@@ -361,6 +362,24 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
     // Diagnostics describe the machine and its configuration.
     ("GET", "/api/v1/diagnostics", Signed(Diagnose)),
     ("GET", "/api/v1/diagnostics/report", Signed(Diagnose)),
+    // Integrations name machines on the network and hold their passwords.
+    ("GET", "/api/v1/integrations", Signed(ManageIntegrations)),
+    ("POST", "/api/v1/integrations", Signed(ManageIntegrations)),
+    (
+        "GET",
+        "/api/v1/integrations/{integration_id}",
+        Signed(ManageIntegrations),
+    ),
+    (
+        "PATCH",
+        "/api/v1/integrations/{integration_id}",
+        Signed(ManageIntegrations),
+    ),
+    (
+        "DELETE",
+        "/api/v1/integrations/{integration_id}",
+        Signed(ManageIntegrations),
+    ),
     ("GET", "/api/v1/romm", Signed(Read)),
     ("GET", "/api/v1/editions/{edition_id}/romm", Signed(Read)),
     ("PUT", "/api/v1/editions/{edition_id}/romm", Signed(Catalog)),

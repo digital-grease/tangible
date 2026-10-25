@@ -58,6 +58,7 @@ fn settings(root: &Path, reports: ReportSettings) -> DiagnosticsSettings {
         reports,
         decryption_allowed: false,
         url_imports: None,
+        secret_key_id: None,
     }
 }
 
