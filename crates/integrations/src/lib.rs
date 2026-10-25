@@ -10,5 +10,6 @@
 //! the outbound client every fetch of an address somebody supplied goes
 //! through (ADR 0016).
 
+pub mod fetch;
 pub mod outbound;
 pub mod romm;

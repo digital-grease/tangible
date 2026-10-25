@@ -865,6 +865,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/imports/url": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import a file from a URL the server fetches (ADR 0016).
+         * @description Import a file from a URL. The server fetches it, reaching only public addresses over https unless an administrator allowed more, and resumes an interrupted fetch. Off unless the administrator turned it on.
+         */
+        post: operations["url_import"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/imports/{import_id}": {
         parameters: {
             query?: never;
@@ -2629,6 +2649,10 @@ export interface components {
              * @description Largest upload the server will accept, in bytes.
              */
             max_upload_bytes: number;
+            /** @description Whether operators may import from a URL here (ADR 0016). */
+            url_imports: boolean;
+            /** @description Whether a URL import may use plain http. */
+            url_imports_allow_http: boolean;
             /**
              * @description Identifiers of the watched roots an administrator configured.
              *
@@ -2676,6 +2700,11 @@ export interface components {
             source_filename?: string | null;
             /** @description Where the bytes come from. */
             source_kind: string;
+            /**
+             * @description Where it came from, as it may be shown: a watched root and path, or a
+             *     URL without credentials, query or fragment.
+             */
+            source_reference?: string | null;
             /** @description Lifecycle state. */
             state: string;
             /** @description When it last changed. */
@@ -3510,6 +3539,26 @@ export interface components {
             status?: string | null;
             /** @description Where it is kept. */
             storage_location?: string | null;
+        };
+        /** @description What an operator sends to import from a URL (ADR 0016). */
+        UrlImportRequest: {
+            /**
+             * Format: int64
+             * @description The file's length in bytes, when known: checked likewise.
+             */
+            expected_bytes?: number | null;
+            /**
+             * @description The file's SHA-256, when the operator knows it: checked after the
+             *     fetch, and the import fails if it differs.
+             */
+            expected_sha256?: string | null;
+            /** @description What to call the file. Defaults to the URL's last path segment. */
+            filename?: string | null;
+            /**
+             * @description The file's address: `https`, or `http` where an administrator
+             *     allowed it; no username or password in it.
+             */
+            url: string;
         };
         /** @description A page of accounts. */
         UserList: {
@@ -5347,6 +5396,66 @@ export interface operations {
             };
             /** @description The filename is not usable */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Storage is not configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    url_import: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UrlImportRequest"];
+            };
+        };
+        responses: {
+            /** @description Queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportView"];
+                };
+            };
+            /** @description URL imports are off */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A URL that will not do, or one the server will not reach */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many URL imports for now */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

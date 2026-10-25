@@ -89,6 +89,15 @@ async fn harness() -> Harness {
 }
 
 async fn harness_with_limit(max_upload_bytes: u64) -> Harness {
+    harness_with(max_upload_bytes, None).await
+}
+
+/// A harness whose server imports from URLs with `outbound`, retrying a
+/// failed fetch at once rather than after the usual backoff.
+async fn harness_with(
+    max_upload_bytes: u64,
+    outbound: Option<tangible_integrations::outbound::OutboundClient>,
+) -> Harness {
     let queue = exclusive_queue().await;
     let url = std::env::var("TANGIBLE_TEST_DATABASE_URL")
         .or_else(|_| std::env::var("TANGIBLE_DATABASE_URL"))
@@ -122,6 +131,7 @@ async fn harness_with_limit(max_upload_bytes: u64) -> Harness {
         pipeline: pipeline.clone(),
         roots: roots.clone(),
         max_upload_bytes,
+        outbound: outbound.clone(),
     });
 
     let runner = ImportRunner::new(
@@ -132,6 +142,13 @@ async fn harness_with_limit(max_upload_bytes: u64) -> Harness {
             // each other's imports through a shared lease name.
             owner: format!("test-{}", uuid::Uuid::now_v7()),
             roots,
+            retry_backoff: if outbound.is_some() {
+                std::time::Duration::ZERO
+            } else {
+                ImportRunnerSettings::default().retry_backoff
+            },
+            outbound,
+            max_download_bytes: max_upload_bytes,
             ..ImportRunnerSettings::default()
         },
     );
@@ -788,4 +805,311 @@ async fn files_named_like_dvd_video_and_not_it_are_not_claimed() {
         manifest["classification"]["format"], "unknown",
         "{manifest}"
     );
+}
+
+// --- URL imports (ADR 0016) ---------------------------------------------------
+
+use tangible_integrations::outbound::{OutboundClient, OutboundPolicy};
+
+/// A one-file HTTP server on 127.0.0.1 serving `body` with a strong ETag,
+/// honouring `Range`. With `hang_up_first`, the first whole-file answer stops
+/// halfway. Records each request's head.
+async fn file_server(
+    body: Vec<u8>,
+    hang_up_first: bool,
+) -> (u16, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = std::sync::Arc::clone(&seen);
+    let body = std::sync::Arc::new(body);
+    let hung_up = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(!hang_up_first));
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let (log, body, hung_up) = (log.clone(), body.clone(), hung_up.clone());
+            tokio::spawn(async move {
+                let mut head = vec![0_u8; 8192];
+                let read = stream.read(&mut head).await.unwrap_or(0);
+                let head = String::from_utf8_lossy(&head[..read]).to_ascii_lowercase();
+                log.lock().unwrap().push(head.clone());
+                let start = head
+                    .lines()
+                    .find_map(|line| line.strip_prefix("range: bytes="))
+                    .and_then(|value| value.trim_end_matches('-').parse::<usize>().ok());
+                let mut out = match start {
+                    Some(start) => format!(
+                        "HTTP/1.1 206 Partial Content\r\ncontent-length: {}\r\n\
+                         content-range: bytes {start}-{}/{}\r\netag: \"v1\"\r\n\
+                         connection: close\r\n\r\n",
+                        body.len() - start,
+                        body.len() - 1,
+                        body.len()
+                    )
+                    .into_bytes(),
+                    None => format!(
+                        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\netag: \"v1\"\r\n\
+                         connection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .into_bytes(),
+                };
+                let from = start.unwrap_or(0);
+                if start.is_none() && !hung_up.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    out.extend(&body[..body.len() / 2]);
+                } else {
+                    out.extend(&body[from..]);
+                }
+                let _ = stream.write_all(&out).await;
+                let _ = stream.shutdown().await;
+            });
+        }
+    });
+    (port, seen)
+}
+
+/// URL imports on, reaching 127.0.0.1 over http on any port, as a test's
+/// local server needs; everything else as an operator's URL policy.
+fn local_outbound() -> OutboundClient {
+    let mut policy =
+        OutboundPolicy::for_operator_urls(true, vec!["127.0.0.1/32".parse().unwrap()], None);
+    policy.allow_any_port = true;
+    OutboundClient::new(policy, "tangible-test").unwrap()
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest as _;
+    hex::encode(sha2::Sha256::digest(bytes))
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn url_imports_are_off_unless_turned_on() {
+    let harness = harness().await;
+    let (_, sources) = harness.get("/api/v1/import-sources").await;
+    assert_eq!(sources["url_imports"], false, "{sources}");
+    let (status, refused) = harness
+        .post(
+            "/api/v1/imports/url",
+            json!({ "url": "https://example.com/disc.iso" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["code"], "URL_IMPORTS_OFF");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_url_import_is_fetched_checked_and_becomes_an_artifact() {
+    let harness = harness_with(64 * 1024 * 1024, Some(local_outbound())).await;
+    let image = iso_image("FETCHED", 32);
+    let (port, seen) = file_server(image.clone(), false).await;
+    let url = format!("http://127.0.0.1:{port}/files/disc.iso?token=secret-signature");
+
+    let (_, sources) = harness.get("/api/v1/import-sources").await;
+    assert_eq!(sources["url_imports"], true, "{sources}");
+    assert_eq!(sources["url_imports_allow_http"], true);
+
+    let (status, queued) = harness
+        .post(
+            "/api/v1/imports/url",
+            json!({ "url": url, "expected_sha256": sha256_hex(&image),
+                    "expected_bytes": image.len() }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{queued}");
+    assert_eq!(queued["source_kind"], "http_url");
+    assert_eq!(queued["source_filename"], "disc.iso");
+    assert_eq!(
+        queued["source_reference"],
+        format!("http://127.0.0.1:{port}/files/disc.iso"),
+        "shown without its query"
+    );
+    let import = queued["id"].as_str().unwrap().to_owned();
+
+    let settled = harness.drain_until_settled(&import).await;
+    assert_eq!(settled["state"], "complete", "{settled}");
+    assert_eq!(settled["bytes_received"], image.len());
+    assert_eq!(seen.lock().unwrap().len(), 1, "fetched once");
+    let artifact = settled["artifact_id"].as_str().unwrap();
+    let (_, manifest) = harness
+        .get(&format!("/api/v1/artifacts/{artifact}/manifest"))
+        .await;
+    assert_eq!(manifest["classification"]["format"], "iso", "{manifest}");
+    assert_eq!(manifest["origin"]["source_kind"], "http_url");
+    let published = manifest.to_string();
+    assert!(!published.contains("secret-signature"), "{published}");
+
+    let metadata: serde_json::Value = sqlx::query_scalar(
+        "SELECT metadata FROM audit_events
+         WHERE action = 'import.url_requested' AND target_id = $1",
+    )
+    .bind(&import)
+    .fetch_one(&harness.pool)
+    .await
+    .unwrap();
+    assert!(!metadata.to_string().contains("secret"), "{metadata}");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_interrupted_fetch_resumes_from_what_arrived() {
+    let harness = harness_with(64 * 1024 * 1024, Some(local_outbound())).await;
+    let image = iso_image("RESUMED", 64);
+    let (port, seen) = file_server(image.clone(), true).await;
+    let (status, queued) = harness
+        .post(
+            "/api/v1/imports/url",
+            json!({ "url": format!("http://127.0.0.1:{port}/disc.iso") }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{queued}");
+    let import = queued["id"].as_str().unwrap().to_owned();
+
+    // The first fetch is cut off halfway and fails, to be tried again.
+    harness.runner.step().await.unwrap();
+    let (_, first) = harness.get(&format!("/api/v1/imports/{import}")).await;
+    assert_eq!(first["state"], "failed_retryable", "{first}");
+    assert_eq!(first["error_code"], "IMPORT_DOWNLOAD_FAILED");
+    assert!(
+        !first["error_detail"]
+            .as_str()
+            .unwrap()
+            .contains("127.0.0.1"),
+        "the URL is not in the detail: {first}"
+    );
+    // The queue holds a retryable failure back for at least a second.
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+
+    let settled = harness.drain_until_settled(&import).await;
+    assert_eq!(settled["state"], "complete", "{settled}");
+    let requests = seen.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert!(
+        requests[1].contains(&format!("range: bytes={}-", image.len() / 2)),
+        "{}",
+        requests[1]
+    );
+    assert!(requests[1].contains("if-range: \"v1\""), "{}", requests[1]);
+    let artifact = settled["artifact_id"].as_str().unwrap();
+    let (_, manifest) = harness
+        .get(&format!("/api/v1/artifacts/{artifact}/manifest"))
+        .await;
+    assert_eq!(
+        manifest["components"][0]["content"]["sha256"],
+        sha256_hex(&image),
+        "the whole file, spliced correctly"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_fetched_file_that_is_not_what_was_expected_is_not_imported() {
+    let harness = harness_with(64 * 1024 * 1024, Some(local_outbound())).await;
+    let image = iso_image("WRONG", 32);
+    let (port, _) = file_server(image.clone(), false).await;
+    for (body, code) in [
+        (
+            json!({ "url": format!("http://127.0.0.1:{port}/a.iso"), "expected_sha256": "ab".repeat(32) }),
+            "IMPORT_HASH_MISMATCH",
+        ),
+        (
+            json!({ "url": format!("http://127.0.0.1:{port}/b.iso"), "expected_bytes": 1234 }),
+            "IMPORT_SIZE_MISMATCH",
+        ),
+    ] {
+        let (status, queued) = harness.post("/api/v1/imports/url", body).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{queued}");
+        let import = queued["id"].as_str().unwrap().to_owned();
+        let settled = harness.drain_until_settled(&import).await;
+        assert_eq!(settled["state"], "failed_terminal", "{settled}");
+        assert_eq!(settled["error_code"], code);
+        assert!(settled["artifact_id"].is_null());
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn the_server_will_not_fetch_from_its_own_network_and_says_so() {
+    // URL imports on, with the operator policy as deployed: public only.
+    let outbound = OutboundClient::new(
+        OutboundPolicy::for_operator_urls(false, Vec::new(), None),
+        "t",
+    )
+    .unwrap();
+    let harness = harness_with(64 * 1024 * 1024, Some(outbound)).await;
+    for url in [
+        "https://127.0.0.1/disc.iso",
+        "https://169.254.169.254/latest/meta-data/",
+        "https://[::1]/disc.iso",
+        "https://10.0.0.5/disc.iso",
+        "http://example.com/disc.iso",
+        "https://user:pass@example.com/disc.iso",
+        "https://example.com:8443/disc.iso",
+        "file:///etc/passwd",
+    ] {
+        let (status, refused) = harness
+            .post("/api/v1/imports/url", json!({ "url": url }))
+            .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{url}: {refused}");
+        assert_eq!(refused["code"], "IMPORT_SSRF_BLOCKED", "{url}");
+    }
+    let denied: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events
+         WHERE action = 'import.url_refused' AND outcome = 'denied' AND actor_id = $1",
+    )
+    .bind(&harness.session.user.username)
+    .fetch_one(&harness.pool)
+    .await
+    .unwrap();
+    assert_eq!(denied, 8);
+
+    for (body, field) in [
+        (json!({ "url": "not a url" }), "URL"),
+        (
+            json!({ "url": "https://example.com/x", "expected_sha256": "xyz" }),
+            "expected_sha256",
+        ),
+        (
+            json!({ "url": "https://example.com/x", "filename": "../x" }),
+            "filename",
+        ),
+    ] {
+        let (status, refused) = harness.post("/api/v1/imports/url", body).await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{field}: {refused}"
+        );
+        assert_eq!(refused["code"], "VALIDATION_FAILED", "{field}");
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn url_imports_are_rate_limited_per_account() {
+    let outbound = OutboundClient::new(
+        OutboundPolicy::for_operator_urls(false, Vec::new(), None),
+        "t",
+    )
+    .unwrap();
+    let harness = harness_with(64 * 1024 * 1024, Some(outbound)).await;
+    // Refused addresses count too: probing is what the limit is for.
+    for _ in 0..30 {
+        let (status, _) = harness
+            .post(
+                "/api/v1/imports/url",
+                json!({ "url": "https://127.0.0.1/x" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    let (status, limited) = harness
+        .post(
+            "/api/v1/imports/url",
+            json!({ "url": "https://127.0.0.1/x" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{limited}");
+    assert_eq!(limited["code"], "RATE_LIMITED");
 }

@@ -7,10 +7,12 @@
 
 //! Getting bytes into the library.
 //!
-//! Two ways in, and neither accepts a host path. An upload streams its body
+//! Three ways in, and none accepts a host path. An upload streams its body
 //! into a staging area and is queued already staged; a watched-folder import
 //! names a root an administrator configured and a relative path beneath it,
-//! and the runner copies it in.
+//! and the runner copies it in; a URL import (ADR 0016), where an
+//! administrator turned it on, names a URL the runner fetches through the
+//! outbound client, which reaches only what its policy allows.
 //!
 //! The API never takes a path from the caller because that is the one place
 //! where an untrusted string meets the filesystem. `WatchRoots` closes every
@@ -30,8 +32,9 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tangible_db::repositories::{
-    ImportCommandOutcome, ImportJobRecord, NewImportJob, cancel_import_job, create_import_job,
-    get_import_job, list_import_jobs, retry_import_job,
+    ImportCommandOutcome, ImportJobRecord, NewImportJob, cancel_import_job,
+    create_audited_import_job, create_import_job, get_import_job, list_import_jobs, record_denial,
+    retry_import_job,
 };
 use tangible_domain::{ImportJobId, ImportState, LogicalPath};
 use time::OffsetDateTime;
@@ -68,6 +71,9 @@ pub struct ImportView {
     pub source_kind: String,
     /// The filename as received, when one was recorded.
     pub source_filename: Option<String>,
+    /// Where it came from, as it may be shown: a watched root and path, or a
+    /// URL without credentials, query or fragment.
+    pub source_reference: Option<String>,
     /// Lifecycle state.
     pub state: String,
     /// Whether the import has finished, one way or another.
@@ -127,6 +133,11 @@ impl From<ImportJobRecord> for ImportView {
                 .get("filename")
                 .and_then(|value| value.as_str())
                 .map(ToOwned::to_owned),
+            source_reference: record
+                .source_descriptor
+                .get("reference")
+                .and_then(|value| value.as_str())
+                .map(ToOwned::to_owned),
             state: record.state.to_string(),
             is_settled: record.state.is_terminal(),
             bytes_expected: record.bytes_expected,
@@ -163,6 +174,10 @@ pub struct ImportSources {
     pub watch_roots: Vec<String>,
     /// Largest upload the server will accept, in bytes.
     pub max_upload_bytes: i64,
+    /// Whether operators may import from a URL here (ADR 0016).
+    pub url_imports: bool,
+    /// Whether a URL import may use plain http.
+    pub url_imports_allow_http: bool,
 }
 
 // --- requests ------------------------------------------------------------------
@@ -175,6 +190,28 @@ pub struct CreateImportRequest {
     /// Where beneath that root, as a relative path.
     pub relative_path: String,
 }
+
+/// What an operator sends to import from a URL (ADR 0016).
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UrlImportRequest {
+    /// The file's address: `https`, or `http` where an administrator
+    /// allowed it; no username or password in it.
+    pub url: String,
+    /// What to call the file. Defaults to the URL's last path segment.
+    #[serde(default)]
+    pub filename: Option<String>,
+    /// The file's SHA-256, when the operator knows it: checked after the
+    /// fetch, and the import fails if it differs.
+    #[serde(default)]
+    pub expected_sha256: Option<String>,
+    /// The file's length in bytes, when known: checked likewise.
+    #[serde(default)]
+    pub expected_bytes: Option<u64>,
+}
+
+/// Longest URL accepted.
+const MAX_URL_CHARS: usize = 4096;
 
 /// Query parameters for an upload.
 #[derive(Debug, Clone, Default, Deserialize, IntoParams)]
@@ -264,6 +301,11 @@ pub async fn list_sources(State(state): State<ApiState>) -> Result<Json<ImportSo
     Ok(Json(ImportSources {
         watch_roots: imports.roots.ids(),
         max_upload_bytes: i64::try_from(imports.max_upload_bytes).unwrap_or(i64::MAX),
+        url_imports: imports.outbound.is_some(),
+        url_imports_allow_http: imports
+            .outbound
+            .as_ref()
+            .is_some_and(|client| client.policy().allow_http),
     }))
 }
 
@@ -375,6 +417,199 @@ pub async fn create_import(
     // 202: the bytes are known-good and the job exists, but nothing has been
     // imported yet. 201 would claim a finished thing.
     Ok((StatusCode::ACCEPTED, Json(ImportView::from(job))).into_response())
+}
+
+/// Import a file from a URL the server fetches (ADR 0016).
+///
+/// Returns as soon as the job exists; the runner fetches, resuming after an
+/// interruption, then hashes and inspects as for any import.
+///
+/// # Errors
+///
+/// `URL_IMPORTS_OFF` unless an administrator turned URL imports on;
+/// `RATE_LIMITED` past the account's allowance; `VALIDATION_FAILED` for a
+/// URL, filename, digest or length that will not do; `IMPORT_SSRF_BLOCKED`
+/// for an address the server will not reach, which is audited.
+#[utoipa::path(
+    post,
+    path = "/api/v1/imports/url",
+    tag = "imports",
+    description = "Import a file from a URL. The server fetches it, reaching only public \
+                   addresses over https unless an administrator allowed more, and resumes \
+                   an interrupted fetch. Off unless the administrator turned it on.",
+    request_body = UrlImportRequest,
+    responses(
+        (status = 202, description = "Queued", body = ImportView),
+        (status = 409, description = "URL imports are off", body = Problem),
+        (status = 422, description = "A URL that will not do, or one the server will not reach", body = Problem),
+        (status = 429, description = "Too many URL imports for now", body = Problem),
+        (status = 503, description = "Storage is not configured", body = Problem),
+    ),
+)]
+pub async fn url_import(
+    State(state): State<ApiState>,
+    SignedIn(user): SignedIn,
+    Json(request): Json<UrlImportRequest>,
+) -> Result<axum::response::Response, Problem> {
+    use tangible_integrations::outbound::redacted;
+
+    let Some(imports) = state.imports() else {
+        return Err(unavailable("importing is not configured on this server"));
+    };
+    let Some(client) = &imports.outbound else {
+        return Err(Problem::new(
+            ErrorCode::UrlImportsOff,
+            "importing from a URL is turned off on this server; an administrator turns it on \
+             with TANGIBLE_URL_IMPORTS",
+        ));
+    };
+    let CheckedUrlImport {
+        url,
+        filename,
+        expected_sha256,
+    } = checked_url_import(&request, imports.max_upload_bytes)?;
+    let reference = redacted(&url);
+
+    if let Err(wait) = state.url_import_limiter().try_acquire(&user.username) {
+        return Ok(rate_limited(wait));
+    }
+    if let Err(refusal) = client.preflight(&url).await {
+        return Err(refuse_url(&state, &user.username, &reference, &refusal).await);
+    }
+
+    let mut descriptor = serde_json::json!({
+        "kind": "http_url",
+        // The whole URL, to fetch and resume with. Never shown, logged or
+        // put in a manifest: a signed URL's secret is in its query.
+        "url": url.as_str(),
+        "filename": filename.as_str(),
+        // What may be shown and published: no credentials, query or
+        // fragment.
+        "reference": reference,
+    });
+    if let Some(digest) = &expected_sha256 {
+        descriptor["expected_sha256"] = serde_json::json!(digest);
+    }
+    if let Some(bytes) = request.expected_bytes {
+        descriptor["expected_bytes"] = serde_json::json!(bytes);
+    }
+    let metadata = serde_json::json!({ "reference": reference });
+    let job = create_audited_import_job(
+        state.database().pool(),
+        NewImportJob {
+            id: ImportJobId::generate(),
+            source_kind: "http_url",
+            source_descriptor: &descriptor,
+            state: ImportState::Requested,
+            bytes_expected: request
+                .expected_bytes
+                .and_then(|bytes| i64::try_from(bytes).ok()),
+            bytes_received: 0,
+            created_by: &user.username,
+        },
+        "import.url_requested",
+        &metadata,
+    )
+    .await
+    .map_err(|error| {
+        tracing::error!(error = ?error, "could not queue a URL import");
+        unavailable("the import could not be queued")
+    })?;
+
+    tracing::info!(import_id = %job.id, source = %reference, "URL import queued");
+    Ok((StatusCode::ACCEPTED, Json(ImportView::from(job))).into_response())
+}
+
+/// A URL import request, checked.
+struct CheckedUrlImport {
+    url: tangible_integrations::outbound::Url,
+    filename: LogicalPath,
+    expected_sha256: Option<String>,
+}
+
+/// Check what a URL import asks for, before anything is fetched or audited.
+fn checked_url_import(
+    request: &UrlImportRequest,
+    max_bytes: u64,
+) -> Result<CheckedUrlImport, Problem> {
+    let invalid = |detail: &str| Problem::new(ErrorCode::ValidationFailed, detail.to_owned());
+    if request.url.chars().count() > MAX_URL_CHARS {
+        return Err(invalid("the URL is too long"));
+    }
+    let url = tangible_integrations::outbound::Url::parse(request.url.trim())
+        .map_err(|_| invalid("that is not a URL"))?;
+    let expected_sha256 = request
+        .expected_sha256
+        .as_deref()
+        .map(|digest| digest.trim().to_ascii_lowercase())
+        .map(|digest| {
+            (digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()))
+                .then_some(digest)
+                .ok_or_else(|| invalid("expected_sha256 must be 64 hexadecimal characters"))
+        })
+        .transpose()?;
+    if let Some(bytes) = request.expected_bytes
+        && bytes > max_bytes
+    {
+        return Err(invalid(&format!(
+            "expected_bytes is past this server's limit of {max_bytes} bytes"
+        )));
+    }
+    let filename = match request.filename.as_deref() {
+        Some(name) => staged_name(Some(name))?,
+        None => url
+            .path_segments()
+            .and_then(|mut segments| segments.next_back())
+            .filter(|segment| !segment.is_empty())
+            .and_then(|segment| staged_name(Some(segment)).ok())
+            .map_or_else(|| staged_name(Some("download.bin")), Ok)?,
+    };
+    Ok(CheckedUrlImport {
+        url,
+        filename,
+        expected_sha256,
+    })
+}
+
+/// A 429 saying when to try again.
+fn rate_limited(wait: std::time::Duration) -> axum::response::Response {
+    let mut response = Problem::new(
+        ErrorCode::RateLimited,
+        "too many URL imports from this account for now; try again later",
+    )
+    .into_response();
+    if let Ok(value) = axum::http::HeaderValue::from_str(&wait.as_secs().max(1).to_string()) {
+        response
+            .headers_mut()
+            .insert(axum::http::header::RETRY_AFTER, value);
+    }
+    response
+}
+
+/// Audit a URL import the server will not fetch, and say why.
+async fn refuse_url(
+    state: &ApiState,
+    username: &str,
+    reference: &str,
+    refusal: &tangible_integrations::outbound::Refusal,
+) -> Problem {
+    tracing::warn!(user = %username, source = %reference, %refusal, "URL import refused");
+    let metadata = serde_json::json!({
+        "reference": reference,
+        "reason": refusal.to_string(),
+    });
+    if let Err(error) = record_denial(
+        state.database().pool(),
+        username,
+        "import.url_refused",
+        "import_job",
+        &metadata,
+    )
+    .await
+    {
+        tracing::error!(error = ?error, "could not audit a refused URL import");
+    }
+    Problem::new(ErrorCode::ImportSsrfBlocked, refusal.to_string())
 }
 
 /// Upload a file and import it.
@@ -700,6 +935,7 @@ pub fn router() -> Router<ApiState> {
         .route("/import-sources", get(list_sources))
         .route("/imports", get(list_imports).post(create_import))
         .route("/imports/upload", post(upload_import))
+        .route("/imports/url", post(url_import))
         .route("/imports/{import_id}", get(get_import))
         .route("/imports/{import_id}/cancel", post(cancel_import))
         .route("/imports/{import_id}/retry", post(retry_import))

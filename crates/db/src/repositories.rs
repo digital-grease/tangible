@@ -2323,6 +2323,82 @@ pub async fn create_import_job(
     import_job_from_row(&row)
 }
 
+/// Record an import and an audit event for it, together: an import from a
+/// URL (ADR 0016) is never queued without its audit record.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn create_audited_import_job(
+    pool: &PgPool,
+    new: NewImportJob<'_>,
+    action: &str,
+    metadata: &serde_json::Value,
+) -> Result<ImportJobRecord, DbError> {
+    let mut tx = pool.begin().await.map_err(DbError::Query)?;
+    let row = sqlx::query(&format!(
+        "INSERT INTO import_jobs
+             (id, source_kind, source_descriptor_json, state, bytes_expected,
+              bytes_received, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING {IMPORT_JOB_COLUMNS}"
+    ))
+    .bind(new.id.as_uuid())
+    .bind(new.source_kind)
+    .bind(new.source_descriptor)
+    .bind(new.state.as_str())
+    .bind(new.bytes_expected)
+    .bind(new.bytes_received)
+    .bind(new.created_by)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
+    sqlx::query(
+        "INSERT INTO audit_events
+             (id, actor_type, actor_id, action, target_type, target_id, outcome, metadata)
+         VALUES ($1, 'user', $2, $3, 'import_job', $4, 'success', $5)",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(new.created_by)
+    .bind(action)
+    .bind(new.id.to_string())
+    .bind(metadata)
+    .execute(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
+    tx.commit().await.map_err(DbError::Query)?;
+    import_job_from_row(&row)
+}
+
+/// Record something a person was refused, such as a URL import naming an
+/// address the server will not reach.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn record_denial(
+    pool: &PgPool,
+    actor: &str,
+    action: &str,
+    target_type: &str,
+    metadata: &serde_json::Value,
+) -> Result<(), DbError> {
+    sqlx::query(
+        "INSERT INTO audit_events
+             (id, actor_type, actor_id, action, target_type, outcome, metadata)
+         VALUES ($1, 'user', $2, $3, $4, 'denied', $5)",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(actor)
+    .bind(action)
+    .bind(target_type)
+    .bind(metadata)
+    .execute(pool)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(())
+}
+
 /// One import.
 ///
 /// # Errors
@@ -2478,6 +2554,25 @@ pub async fn record_import_progress(
     .await
     .map_err(DbError::Query)?;
     Ok(result.rows_affected() > 0)
+}
+
+/// Record how many bytes an import expects, once its source has said.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn record_import_expected(
+    pool: &PgPool,
+    id: ImportJobId,
+    bytes_expected: i64,
+) -> Result<(), DbError> {
+    sqlx::query("UPDATE import_jobs SET bytes_expected = $2 WHERE id = $1")
+        .bind(id.as_uuid())
+        .bind(bytes_expected)
+        .execute(pool)
+        .await
+        .map_err(DbError::Query)?;
+    Ok(())
 }
 
 /// Record that an import produced an artifact.

@@ -102,6 +102,7 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
     }
 
     let pipeline = ImportPipeline::new(staging.clone(), objects.clone(), manifests.clone());
+    let outbound = url_import_client(serve)?;
     let auth = AuthSettings::for_public_url(&serve.public_url);
     warn_if_plain_http(auth, &serve.public_url);
     // Before anything waits on the database, so a mistyped address fails at
@@ -122,6 +123,7 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
             pipeline: pipeline.clone(),
             roots: roots.clone(),
             max_upload_bytes: serve.max_upload_bytes,
+            outbound: outbound.clone(),
         })
         .with_auth(auth)
         .with_reports(reports)
@@ -151,7 +153,7 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         engine,
     );
 
-    let imports = start_import_runner(database, pipeline, roots);
+    let imports = start_import_runner(database, pipeline, roots, outbound, serve.max_upload_bytes);
 
     let listener = tokio::net::TcpListener::bind(serve.bind)
         .await
@@ -222,6 +224,53 @@ async fn open_library(
 
 /// Start the import runner.
 ///
+/// The client URL imports fetch with, when they are turned on (ADR 0016).
+///
+/// A setting that does not parse stops the server: an allowlist that was
+/// meant and silently ignored would refuse what the administrator allowed,
+/// and a proxy ignored would send fetches straight out.
+fn url_import_client(
+    serve: &ServeConfig,
+) -> Result<Option<tangible_integrations::outbound::OutboundClient>> {
+    use tangible_integrations::outbound::{Cidr, OutboundClient, OutboundPolicy};
+
+    let allowed = serve
+        .outbound_allow
+        .split(',')
+        .map(str::trim)
+        .filter(|block| !block.is_empty())
+        .map(|block| {
+            block.parse::<Cidr>().with_context(|| {
+                format!("TANGIBLE_OUTBOUND_ALLOW: {block} is not an address block")
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let proxy = serve
+        .outbound_proxy
+        .as_ref()
+        .map(tangible_domain::SecretString::expose)
+        .filter(|proxy| !proxy.trim().is_empty())
+        .map(|proxy| {
+            tangible_integrations::outbound::Url::parse(proxy)
+                .context("TANGIBLE_OUTBOUND_PROXY is not a URL")
+        })
+        .transpose()?;
+    if !serve.url_imports {
+        tracing::info!("importing from a URL is off (set TANGIBLE_URL_IMPORTS to turn it on)");
+        return Ok(None);
+    }
+    let policy = OutboundPolicy::for_operator_urls(serve.url_imports_allow_http, allowed, proxy);
+    tracing::info!(
+        allow_http = policy.allow_http,
+        allowed = ?policy.allowed.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        proxy = policy.proxy.is_some(),
+        "operators may import from a URL (TANGIBLE_URL_IMPORTS)"
+    );
+    let client = OutboundClient::new(policy, concat!("tangible/", env!("CARGO_PKG_VERSION")))
+        .context("building the client URL imports fetch with")?;
+    Ok(Some(client))
+}
+
 /// A background task rather than a separate process: one binary, one
 /// deployment, and the work is already leased in the database so a second
 /// server can be added without changing anything.
@@ -229,12 +278,16 @@ fn start_import_runner(
     database: Database,
     pipeline: ImportPipeline,
     roots: WatchRoots,
+    outbound: Option<tangible_integrations::outbound::OutboundClient>,
+    max_download_bytes: u64,
 ) -> Stoppable {
     let runner = ImportRunner::new(
         database,
         pipeline,
         ImportRunnerSettings {
             roots,
+            outbound,
+            max_download_bytes,
             ..ImportRunnerSettings::default()
         },
     );
@@ -356,6 +409,20 @@ fn diagnostics_settings(
         migrate_on_start: serve.migrate_on_start,
         reports,
         decryption_allowed: serve.allow_decryption,
+        url_imports: serve
+            .url_imports
+            .then(|| tangible_api::diagnostics::UrlImportSetting {
+                allow_http: serve.url_imports_allow_http,
+                allowed_blocks: serve
+                    .outbound_allow
+                    .split(',')
+                    .filter(|block| !block.trim().is_empty())
+                    .count(),
+                proxy: serve
+                    .outbound_proxy
+                    .as_ref()
+                    .is_some_and(|proxy| !proxy.expose().trim().is_empty()),
+            }),
     }
 }
 
@@ -781,7 +848,12 @@ mod tests {
     /// Variables whose value is a secret: a password inside a URL, a token.
     /// Their values must never appear in `--help`, which shows the live value
     /// of every variable that is set unless told not to.
-    const SECRET_ENV: &[&str] = &["TANGIBLE_DATABASE_URL", "TANGIBLE_ENROLLMENT_TOKEN"];
+    const SECRET_ENV: &[&str] = &[
+        "TANGIBLE_DATABASE_URL",
+        "TANGIBLE_ENROLLMENT_TOKEN",
+        // A proxy's URL may carry its username and password.
+        "TANGIBLE_OUTBOUND_PROXY",
+    ];
 
     /// Every other variable, each one looked at and found not to be secret.
     const PUBLIC_ENV: &[&str] = &[
@@ -796,6 +868,7 @@ mod tests {
         "TANGIBLE_LOG_JSON",
         "TANGIBLE_MAX_UPLOAD_BYTES",
         "TANGIBLE_MIGRATE_ON_START",
+        "TANGIBLE_OUTBOUND_ALLOW",
         "TANGIBLE_PUBLIC_URL",
         "TANGIBLE_REPORT_ISSUES_URL",
         "TANGIBLE_REPORT_SCRUB_ADDRESSES",
@@ -804,6 +877,8 @@ mod tests {
         "TANGIBLE_STAGING_ROOT",
         "TANGIBLE_STORAGE_KIND",
         "TANGIBLE_STORAGE_ROOT",
+        "TANGIBLE_URL_IMPORTS",
+        "TANGIBLE_URL_IMPORTS_ALLOW_HTTP",
         "TANGIBLE_WATCH_ROOTS",
         "TANGIBLE_WEB_ROOT",
         "TANGIBLE_WORKER_NAME",

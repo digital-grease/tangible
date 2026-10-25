@@ -7,14 +7,17 @@
     canCancel,
     canRetry,
     cancelImport,
+    importFromUrl,
     importFromWatchedRoot,
     importStateLabel,
     importStateMark,
     loadImportSources,
     loadImports,
     retryImport,
+    sourceLabel,
     transferFraction,
     uploadImport,
+    urlImportRequest,
     type ImportPage,
     type ImportSources,
   } from '$lib/imports';
@@ -30,6 +33,8 @@
   let files = $state<FileList | null>(null);
   let pathId = $state('');
   let relativePath = $state('');
+  let url = $state('');
+  let sha256 = $state('');
 
   let timer: ReturnType<typeof setInterval> | undefined;
 
@@ -97,6 +102,23 @@
       problem = result.problem;
     } else {
       relativePath = '';
+      await refresh();
+    }
+    busy = false;
+  }
+
+  async function importUrl(event: SubmitEvent) {
+    event.preventDefault();
+    if (busy) return;
+    busy = true;
+    problem = null;
+
+    const result = await importFromUrl(urlImportRequest(url, sha256));
+    if (result.kind === 'error') {
+      problem = result.problem;
+    } else {
+      url = '';
+      sha256 = '';
       await refresh();
     }
     busy = false;
@@ -190,6 +212,47 @@
   {/if}
 </section>
 
+<section aria-labelledby="url-heading">
+  <h2 id="url-heading">Import from a URL</h2>
+  {#if !sources?.url_imports}
+    <p>
+      Importing from a URL is turned off on this server. An administrator can turn it on with
+      <code>TANGIBLE_URL_IMPORTS=true</code>.
+    </p>
+  {:else}
+    <form onsubmit={importUrl}>
+      <p>
+        <label for="url">Address of the file</label><br />
+        <input
+          id="url"
+          type="url"
+          bind:value={url}
+          placeholder="https://example.org/disc.iso"
+          aria-describedby="url-hint"
+          required
+        />
+        <br />
+        <small id="url-hint"
+          >The server fetches it {sources.url_imports_allow_http
+            ? 'over https or http'
+            : 'over https'}, from public addresses unless an administrator allowed more, and picks
+          up where it left off if the connection drops. It is recorded without anything after a
+          <code>?</code>, which is where signed links keep their secret.</small
+        >
+      </p>
+      <p>
+        <label for="sha256">SHA-256, if you know it</label><br />
+        <input id="sha256" bind:value={sha256} spellcheck="false" autocomplete="off" />
+        <br />
+        <small>Checked after the download; a file that does not match is not imported.</small>
+      </p>
+      <button type="submit" disabled={busy || url.trim() === ''}>
+        {busy ? 'Working…' : 'Fetch and import'}
+      </button>
+    </form>
+  {/if}
+</section>
+
 <section aria-labelledby="queue-heading">
   <h2 id="queue-heading">Recent imports</h2>
 
@@ -217,12 +280,17 @@
           {#each view.data.items as job (job.id)}
             <tr>
               <th scope="row">{job.source_filename ?? job.id.slice(0, 8)}</th>
-              <td>{job.source_kind.replace(/_/g, ' ')}</td>
+              <td>
+                {sourceLabel(job.source_kind)}
+                {#if job.source_kind === 'http_url' && job.source_reference}
+                  <br /><small class="reference">{job.source_reference}</small>
+                {/if}
+              </td>
               <td>
                 <!-- A symbol carries the status alongside any styling, so it
                      is never communicated by colour alone. -->
                 <span aria-hidden="true">{importStateMark(job.state)}</span>
-                {importStateLabel(job.state)}
+                {importStateLabel(job.state, job.source_kind)}
                 {#if transferFraction(job) !== null}
                   <progress max="100" value={(transferFraction(job) ?? 0) * 100}></progress>
                 {/if}
@@ -295,6 +363,7 @@
     font-weight: 600;
   }
   input:not([type]),
+  input[type='url'],
   select {
     padding: 0.4rem;
     min-width: min(28rem, 100%);
@@ -317,5 +386,8 @@
   progress {
     display: block;
     width: 8rem;
+  }
+  .reference {
+    overflow-wrap: anywhere;
   }
 </style>

@@ -6,13 +6,16 @@ import {
   canCancel,
   canRetry,
   cancelImport,
+  importFromUrl,
   importFromWatchedRoot,
   importStateLabel,
   importStateMark,
   loadImportSources,
   loadImports,
   retryImport,
+  sourceLabel,
   transferFraction,
+  urlImportRequest,
   type ImportView,
 } from './imports';
 
@@ -222,5 +225,35 @@ describe('progress', () => {
     expect(
       transferFraction(job({ state: 'acquiring', bytes_expected: 100, bytes_received: 250 })),
     ).toBe(1);
+  });
+
+  it('asks the server to fetch a URL, sending a digest only when one was typed', async () => {
+    const recorded: Recorded[] = [];
+    const fetcher = stubFetch(
+      { '/api/v1/imports/url': { status: 202, body: { id: 'i1', state: 'requested' } } },
+      recorded,
+    );
+    const result = await importFromUrl(
+      urlImportRequest('  https://example.org/d.iso ', ''),
+      fetcher,
+    );
+    expect(result.kind).toBe('ready');
+    expect(recorded[0]).toMatchObject({
+      path: '/api/v1/imports/url',
+      method: 'POST',
+      body: { url: 'https://example.org/d.iso' },
+    });
+    expect(urlImportRequest('https://x/y', ' AB CD ')).toEqual({
+      url: 'https://x/y',
+      expected_sha256: 'abcd',
+    });
+  });
+
+  it('says where an import came from, and that a URL is downloading', () => {
+    expect(sourceLabel('http_url')).toBe('URL');
+    expect(sourceLabel('watch_folder')).toBe('Watched folder');
+    expect(sourceLabel('something_new')).toBe('something new');
+    expect(importStateLabel('acquiring', 'http_url')).toBe('Downloading');
+    expect(importStateLabel('acquiring', 'watch_folder')).toBe('Copying in');
   });
 });

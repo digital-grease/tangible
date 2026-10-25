@@ -2423,6 +2423,7 @@ dependencies = [
  "tangible-db",
  "tangible-domain",
  "tangible-image",
+ "tangible-integrations",
  "tangible-storage",
  "tokio",
  "tracing",

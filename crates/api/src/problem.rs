@@ -88,6 +88,12 @@ pub enum ErrorCode {
     /// A rip asked for redumper, and the drive's worker does not have it
     /// (ADR 0015).
     CdEngineUnavailable,
+    /// Importing from a URL is turned off on this server (ADR 0016).
+    UrlImportsOff,
+    /// A URL import names an address the server will not reach: a private
+    /// or reserved network, a refused scheme or port, a URL carrying
+    /// credentials (ADR 0016, SECURITY.md 3.5).
+    ImportSsrfBlocked,
     /// Anything unanticipated.
     Internal,
 }
@@ -116,6 +122,8 @@ impl ErrorCode {
             Self::DecryptionOff => "DECRYPTION_OFF",
             Self::EncryptedNoDecryption => "ENCRYPTED_NO_DECRYPTION",
             Self::CdEngineUnavailable => tangible_domain::rip::CD_ENGINE_UNAVAILABLE,
+            Self::UrlImportsOff => "URL_IMPORTS_OFF",
+            Self::ImportSsrfBlocked => "IMPORT_SSRF_BLOCKED",
             Self::Internal => "INTERNAL",
         }
     }
@@ -137,9 +145,10 @@ impl ErrorCode {
             // server will not act on it; or it named something that does not
             // exist. None of them is a syntax error, which is what 400 would
             // claim.
-            Self::ManifestInvalid | Self::ValidationFailed | Self::ReferenceNotFound => {
-                StatusCode::UNPROCESSABLE_ENTITY
-            }
+            Self::ManifestInvalid
+            | Self::ValidationFailed
+            | Self::ReferenceNotFound
+            | Self::ImportSsrfBlocked => StatusCode::UNPROCESSABLE_ENTITY,
             // Worker routes only ever answer 401: they have no notion of an
             // authenticated-but-unauthorised caller. Operator routes answer
             // 403 when the account is known and its role is not enough.
@@ -152,7 +161,8 @@ impl ErrorCode {
             | Self::NotRetryable
             | Self::DecryptionOff
             | Self::EncryptedNoDecryption
-            | Self::CdEngineUnavailable => StatusCode::CONFLICT,
+            | Self::CdEngineUnavailable
+            | Self::UrlImportsOff => StatusCode::CONFLICT,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -180,6 +190,8 @@ impl ErrorCode {
             Self::DecryptionOff => "Decryption is turned off",
             Self::EncryptedNoDecryption => "The drive's worker cannot decrypt",
             Self::CdEngineUnavailable => "The drive's worker does not have that CD engine",
+            Self::UrlImportsOff => "Importing from a URL is turned off",
+            Self::ImportSsrfBlocked => "The server will not fetch from that address",
             Self::Internal => "Internal error",
         }
     }
@@ -328,6 +340,8 @@ mod tests {
             ErrorCode::DecryptionOff,
             ErrorCode::EncryptedNoDecryption,
             ErrorCode::CdEngineUnavailable,
+            ErrorCode::UrlImportsOff,
+            ErrorCode::ImportSsrfBlocked,
             ErrorCode::Internal,
         ];
         let mut seen = std::collections::BTreeSet::new();

@@ -119,6 +119,17 @@ may change between minor versions, and the release notes say how.
   redumper they also show the disc's write offset, whether the drive was
   treated as generic (with a hint to ask for cdrdao if its rips go wrong),
   and how many samples were read again.
+- Operators can import a file from a URL, where an administrator turns it on
+  (`TANGIBLE_URL_IMPORTS=true`): "Import from a URL" on the Imports page, or
+  `POST /api/v1/imports/url`. The server fetches it into staging, picks up
+  where it left off if the connection drops, checks an optional SHA-256 and
+  length, and imports it like an upload. It reaches only public addresses
+  over https unless the administrator allows plain http or lists private
+  blocks (`TANGIBLE_URL_IMPORTS_ALLOW_HTTP`, `TANGIBLE_OUTBOUND_ALLOW`), and
+  a proxy only when one is named (`TANGIBLE_OUTBOUND_PROXY`). Requests are
+  audited, refused ones included, limited to 30 an hour per account, and the
+  address is recorded without its query string. A new permission,
+  `import_url`, goes with the operator role. Diagnostics shows the setting.
 - A worker refuses a rip it has no room for before reading anything
   (`INSUFFICIENT_SPACE`, saying how much it needs and has), rather than
   failing when its disk fills an hour in. It counts what each way of

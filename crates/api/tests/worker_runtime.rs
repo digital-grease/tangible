@@ -125,6 +125,7 @@ async fn server_with(decryption_allowed: bool) -> Server {
             pipeline: pipeline.clone(),
             roots: WatchRoots::new(std::collections::BTreeMap::new()),
             max_upload_bytes: 64 * 1024 * 1024,
+            outbound: None,
         })
         .with_decryption_allowed(decryption_allowed);
     let handle = tokio::spawn(async move {

@@ -2736,6 +2736,83 @@
         ]
       }
     },
+    "/api/v1/imports/url": {
+      "post": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Import a file from a URL the server fetches (ADR 0016).",
+        "description": "Import a file from a URL. The server fetches it, reaching only public addresses over https unless an administrator allowed more, and resumes an interrupted fetch. Off unless the administrator turned it on.",
+        "operationId": "url_import",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UrlImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "URL imports are off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A URL that will not do, or one the server will not reach",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many URL imports for now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Storage is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/imports/{import_id}": {
       "get": {
         "tags": [
@@ -7404,13 +7481,23 @@
         "description": "Where imports may be taken from.",
         "required": [
           "watch_roots",
-          "max_upload_bytes"
+          "max_upload_bytes",
+          "url_imports",
+          "url_imports_allow_http"
         ],
         "properties": {
           "max_upload_bytes": {
             "type": "integer",
             "format": "int64",
             "description": "Largest upload the server will accept, in bytes."
+          },
+          "url_imports": {
+            "type": "boolean",
+            "description": "Whether operators may import from a URL here (ADR 0016)."
+          },
+          "url_imports_allow_http": {
+            "type": "boolean",
+            "description": "Whether a URL import may use plain http."
           },
           "watch_roots": {
             "type": "array",
@@ -7510,6 +7597,13 @@
           "source_kind": {
             "type": "string",
             "description": "Where the bytes come from."
+          },
+          "source_reference": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where it came from, as it may be shown: a watched root and path, or a\nURL without credentials, query or fragment."
           },
           "state": {
             "type": "string",
@@ -9375,6 +9469,43 @@
             "description": "Where it is kept."
           }
         }
+      },
+      "UrlImportRequest": {
+        "type": "object",
+        "description": "What an operator sends to import from a URL (ADR 0016).",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "expected_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The file's length in bytes, when known: checked likewise.",
+            "minimum": 0
+          },
+          "expected_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The file's SHA-256, when the operator knows it: checked after the\nfetch, and the import fails if it differs."
+          },
+          "filename": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What to call the file. Defaults to the URL's last path segment."
+          },
+          "url": {
+            "type": "string",
+            "description": "The file's address: `https`, or `http` where an administrator\nallowed it; no username or password in it."
+          }
+        },
+        "additionalProperties": false
       },
       "UserList": {
         "type": "object",

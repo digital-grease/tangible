@@ -148,7 +148,9 @@ pub enum Access {
 }
 
 use Access::{Public, Signed, SignedOrLeaseholder, Worker};
-use Permission::{Burn, Catalog, Diagnose, Erase, Import, ManageUsers, ManageWorkers, Read};
+use Permission::{
+    Burn, Catalog, Diagnose, Erase, Import, ImportUrl, ManageUsers, ManageWorkers, Read,
+};
 
 /// Every operation the server answers, and what it requires.
 ///
@@ -222,6 +224,7 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
     ("GET", "/api/v1/imports", Signed(Read)),
     ("POST", "/api/v1/imports", Signed(Import)),
     ("POST", "/api/v1/imports/upload", Signed(Import)),
+    ("POST", "/api/v1/imports/url", Signed(ImportUrl)),
     ("GET", "/api/v1/imports/{import_id}", Signed(Read)),
     ("POST", "/api/v1/imports/{import_id}/cancel", Signed(Import)),
     ("POST", "/api/v1/imports/{import_id}/retry", Signed(Import)),
@@ -871,6 +874,71 @@ impl LoginLimiter {
     }
 }
 
+/// URL imports allowed per account within [`URL_IMPORT_WINDOW`] (ADR 0016).
+pub const URL_IMPORTS_ALLOWED: u32 = 30;
+
+/// The window URL imports are counted over.
+pub const URL_IMPORT_WINDOW: Duration = Duration::from_secs(60 * 60);
+
+/// Counts an action per account over a fixed window, such as URL imports.
+///
+/// In memory, like [`LoginLimiter`], and for the same reason. Bounded: past
+/// [`LOGIN_TRACKED_NAMES`] accounts, expired counts are dropped first.
+#[derive(Debug, Clone)]
+pub struct ActionLimiter {
+    allowed: u32,
+    window: Duration,
+    counts: Arc<Mutex<HashMap<String, (u32, Instant)>>>,
+}
+
+impl ActionLimiter {
+    /// At most `allowed` actions per account in each `window`.
+    #[must_use]
+    pub fn new(allowed: u32, window: Duration) -> Self {
+        Self {
+            allowed,
+            window,
+            counts: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// The limiter for URL imports.
+    #[must_use]
+    pub fn url_imports() -> Self {
+        Self::new(URL_IMPORTS_ALLOWED, URL_IMPORT_WINDOW)
+    }
+
+    /// Count one action by `who`, or say how long until another is allowed.
+    ///
+    /// # Errors
+    ///
+    /// How long to wait, when the account has used its allowance.
+    pub fn try_acquire(&self, who: &str) -> Result<(), Duration> {
+        let Ok(mut counts) = self.counts.lock() else {
+            return Ok(());
+        };
+        if counts.len() >= LOGIN_TRACKED_NAMES {
+            let window = self.window;
+            counts.retain(|_, (_, since)| since.elapsed() < window);
+        }
+        let entry = counts.entry(who.to_owned()).or_insert((0, Instant::now()));
+        if entry.1.elapsed() >= self.window {
+            *entry = (0, Instant::now());
+        }
+        if entry.0 >= self.allowed {
+            return Err(self.window.saturating_sub(entry.1.elapsed()));
+        }
+        entry.0 += 1;
+        Ok(())
+    }
+}
+
+impl Default for ActionLimiter {
+    fn default() -> Self {
+        Self::url_imports()
+    }
+}
+
 // --- response headers ----------------------------------------------------------
 
 /// Headers every response carries.
@@ -1102,6 +1170,22 @@ mod tests {
         );
         limiter.record_success("alice");
         assert!(limiter.retry_after("alice").is_none());
+    }
+
+    #[test]
+    fn an_action_limiter_allows_its_count_per_account_and_then_says_when() {
+        let limiter = ActionLimiter::new(3, Duration::from_secs(60));
+        for _ in 0..3 {
+            assert!(limiter.try_acquire("alice").is_ok());
+        }
+        let wait = limiter.try_acquire("alice").expect_err("used up");
+        assert!(wait <= Duration::from_secs(60) && wait > Duration::ZERO);
+        assert!(limiter.try_acquire("bob").is_ok(), "per account");
+        // A window that has passed starts again.
+        let quick = ActionLimiter::new(1, Duration::ZERO);
+        assert!(quick.try_acquire("alice").is_ok());
+        assert!(quick.try_acquire("alice").is_ok());
+        assert_eq!(ActionLimiter::url_imports().allowed, URL_IMPORTS_ALLOWED);
     }
 
     #[test]

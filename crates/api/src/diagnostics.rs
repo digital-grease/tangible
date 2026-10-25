@@ -164,6 +164,20 @@ pub struct DiagnosticsSettings {
     pub reports: ReportSettings,
     /// Whether rips may decrypt (`TANGIBLE_ALLOW_DECRYPTION`).
     pub decryption_allowed: bool,
+    /// Whether operators may import from a URL (`TANGIBLE_URL_IMPORTS`), and
+    /// whether plain http too.
+    pub url_imports: Option<UrlImportSetting>,
+}
+
+/// How URL imports are set, when they are on (ADR 0016).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UrlImportSetting {
+    /// Plain http allowed as well as https.
+    pub allow_http: bool,
+    /// How many address blocks an administrator allowed although private.
+    pub allowed_blocks: usize,
+    /// Whether fetches go through a proxy.
+    pub proxy: bool,
 }
 
 /// What the database said, or why it said nothing.
@@ -787,6 +801,31 @@ fn setting_checks(settings: &DiagnosticsSettings) -> Vec<DiagnosticCheck> {
             },
         ),
         check(
+            "URL imports",
+            CheckStatus::Ok,
+            &match settings.url_imports {
+                None => "off".to_owned(),
+                Some(setting) => format!(
+                    "on: {}, {}{}",
+                    if setting.allow_http {
+                        "https and http"
+                    } else {
+                        "https only"
+                    },
+                    match setting.allowed_blocks {
+                        0 => "public addresses only".to_owned(),
+                        1 => "public addresses and 1 allowed block".to_owned(),
+                        n => format!("public addresses and {n} allowed blocks"),
+                    },
+                    if setting.proxy {
+                        ", through a proxy"
+                    } else {
+                        ""
+                    }
+                ),
+            },
+        ),
+        check(
             "Migrate on start",
             CheckStatus::Ok,
             if settings.migrate_on_start {
@@ -946,6 +985,7 @@ mod tests {
             migrate_on_start: false,
             reports: ReportSettings::disabled(build()),
             decryption_allowed: false,
+            url_imports: None,
         }
     }
 
@@ -1293,6 +1333,37 @@ mod tests {
         assert_eq!(find(&report, "RomM export").status, CheckStatus::Problem);
         assert_eq!(find(&report, "Issue reports").detail, "turned off");
         assert_eq!(report.status, CheckStatus::Problem);
+    }
+
+    #[test]
+    fn url_imports_say_how_far_they_reach() {
+        let mut settings = settings();
+        let facts = healthy();
+        assert_eq!(
+            find(&assess(&settings, &facts, now()), "URL imports").detail,
+            "off"
+        );
+        settings.url_imports = Some(UrlImportSetting {
+            allow_http: false,
+            allowed_blocks: 0,
+            proxy: false,
+        });
+        assert_eq!(
+            find(&assess(&settings, &facts, now()), "URL imports").detail,
+            "on: https only, public addresses only"
+        );
+        settings.url_imports = Some(UrlImportSetting {
+            allow_http: true,
+            allowed_blocks: 2,
+            proxy: true,
+        });
+        let report = assess(&settings, &facts, now());
+        let row = find(&report, "URL imports");
+        assert_eq!(
+            row.detail,
+            "on: https and http, public addresses and 2 allowed blocks, through a proxy"
+        );
+        assert_eq!(row.status, CheckStatus::Ok);
     }
 
     #[test]

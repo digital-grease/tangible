@@ -18,19 +18,31 @@
 //! never will be. A retryable failure is held off with a backoff rather than
 //! retried immediately, because an import that fails in milliseconds would
 //! otherwise spin as fast as the database can answer.
+//!
+//! Two sources have bytes to fetch before anything else can happen: a
+//! watched folder, copied in, and a URL (ADR 0016), fetched through the
+//! outbound client and resumed after an interruption from what is already in
+//! staging.
 
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use sha2::{Digest as _, Sha256};
 use tangible_db::repositories::{
     ImportJobRecord, claim_next_import_job, complete_import_job, fail_import_job,
-    record_import_progress,
+    record_import_expected, record_import_progress,
 };
 use tangible_db::{Database, DbError};
 use tangible_domain::{ImportState, LogicalPath};
+use tangible_integrations::fetch::{Fetched, Progress, Resume, fetch_to_file};
+use tangible_integrations::outbound::{OutboundClient, Url};
 use tangible_storage::{IngestLimits, ManifestStoreError, StagingError, StorageError, WatchRoots};
+use tokio::io::AsyncReadExt as _;
 
 use crate::catalog;
-use crate::import::{ImportCheckpoint, ImportError, ImportPipeline, ImportRequest};
+use crate::import::{
+    DownloadCheckpoint, ImportCheckpoint, ImportError, ImportPipeline, ImportRequest,
+};
 
 /// How the runner behaves.
 #[derive(Debug, Clone)]
@@ -50,6 +62,11 @@ pub struct ImportRunnerSettings {
     pub limits: IngestLimits,
     /// Directories an administrator has said may be imported from.
     pub roots: WatchRoots,
+    /// What URL imports fetch with, when they are turned on. `None` fails
+    /// any URL import still queued from when they were on.
+    pub outbound: Option<OutboundClient>,
+    /// The largest file a URL import fetches.
+    pub max_download_bytes: u64,
 }
 
 impl Default for ImportRunnerSettings {
@@ -63,6 +80,8 @@ impl Default for ImportRunnerSettings {
             // None configured is the safe default: with no roots, no
             // watched-folder import can name a path at all.
             roots: WatchRoots::default(),
+            outbound: None,
+            max_download_bytes: 64 * 1024 * 1024 * 1024,
         }
     }
 }
@@ -203,13 +222,12 @@ impl ImportRunner {
         // upload arrives already staged; a watched folder has to be copied in,
         // because the operator's directory is not the staging area and an
         // import must never consume the original in place.
-        if job.source_kind == "watch_folder" && checkpoint.state == ImportState::Requested {
-            self.record(&job, ImportState::Acquiring, &checkpoint).await;
-            if let Err((code, detail, retryable)) = self.acquire(&job).await {
-                tracing::warn!(import_id = %job.id, code, detail, "acquisition failed");
-                self.fail(&job, retryable, code, &detail).await;
-                return;
-            }
+        if checkpoint.state == ImportState::Requested
+            && let Err((code, detail, retryable)) = self.bring_in(&job, &mut checkpoint).await
+        {
+            tracing::warn!(import_id = %job.id, code, detail, "acquisition failed");
+            self.fail(&job, retryable, code, &detail).await;
+            return;
         }
 
         // Say that work has begun before doing any, so a queue an operator is
@@ -292,6 +310,27 @@ impl ImportRunner {
                 self.fail(&job, retryable, failure_code(&error), &error.to_string())
                     .await;
             }
+        }
+    }
+
+    /// Bring a source's bytes into staging, for the sources that have not
+    /// delivered them yet: a watched folder is copied, a URL fetched. An
+    /// upload, or a rip, arrives already staged.
+    async fn bring_in(
+        &self,
+        job: &ImportJobRecord,
+        checkpoint: &mut ImportCheckpoint,
+    ) -> Result<(), Failure> {
+        match job.source_kind.as_str() {
+            "watch_folder" => {
+                self.record(job, ImportState::Acquiring, checkpoint).await;
+                self.acquire(job).await
+            }
+            "http_url" => {
+                self.record(job, ImportState::Acquiring, checkpoint).await;
+                self.download(job, checkpoint).await
+            }
+            _ => Ok(()),
         }
     }
 
@@ -391,6 +430,173 @@ impl ImportRunner {
         Ok(())
     }
 
+    /// Fetch a URL import's file into its staging area, resuming from what
+    /// an earlier attempt left there, then check it against the length and
+    /// SHA-256 the operator gave, if they gave them.
+    ///
+    /// The URL itself is never logged or put in a failure's detail: a signed
+    /// URL's secret is in its query.
+    async fn download(
+        &self,
+        job: &ImportJobRecord,
+        checkpoint: &mut ImportCheckpoint,
+    ) -> Result<(), Failure> {
+        let invalid = |what: &str| ("IMPORT_DESCRIPTOR_INVALID", what.to_owned(), false);
+        let Some(client) = &self.settings.outbound else {
+            return Err((
+                "URL_IMPORTS_OFF",
+                "importing from a URL is turned off on this server".to_owned(),
+                false,
+            ));
+        };
+        let url = descriptor_string(&job.source_descriptor, "url")
+            .and_then(|text| Url::parse(&text).ok())
+            .ok_or_else(|| invalid("no usable url"))?;
+        let filename = descriptor_string(&job.source_descriptor, "filename")
+            .ok_or_else(|| invalid("no filename"))?;
+        let logical = LogicalPath::parse(&filename).map_err(|_| invalid("an unusable filename"))?;
+        let area = self
+            .pipeline
+            .open_area(job.id)
+            .await
+            .map_err(|error| ("IMPORT_STAGING_FAILED", error.to_string(), true))?;
+        let path = area
+            .prepare_parent(&logical)
+            .await
+            .map_err(|error| ("IMPORT_STAGING_FAILED", error.to_string(), true))?;
+
+        let fetched = self
+            .fetch_reporting(job, client, &url, &path, checkpoint)
+            .await?;
+        checkpoint.download = Some(DownloadCheckpoint {
+            validator: fetched.validator.clone(),
+            final_reference: Some(fetched.final_reference.clone()),
+            content_type: fetched.content_type.clone(),
+        });
+        check_expected(job, &path, fetched.bytes).await?;
+
+        tracing::info!(
+            import_id = %job.id,
+            bytes = fetched.bytes,
+            resumed_from = fetched.resumed_from,
+            source = %fetched.final_reference,
+            "fetched a URL import into staging"
+        );
+        self.record_fetch(job, checkpoint, ImportState::Staged, fetched.bytes)
+            .await;
+        Ok(())
+    }
+
+    /// Run the fetch, writing its progress and the validator a resume needs
+    /// to the job every two seconds, and once more however it ends: a fetch
+    /// cut off in its first seconds has not been reported yet.
+    async fn fetch_reporting(
+        &self,
+        job: &ImportJobRecord,
+        client: &OutboundClient,
+        url: &Url,
+        path: &std::path::Path,
+        checkpoint: &mut ImportCheckpoint,
+    ) -> Result<Fetched, Failure> {
+        let offset = tokio::fs::metadata(path).await.map_or(0, |m| m.len());
+        let resume = Resume {
+            offset,
+            validator: checkpoint
+                .download
+                .as_ref()
+                .and_then(|d| d.validator.clone()),
+        };
+        if offset > 0 {
+            tracing::info!(import_id = %job.id, offset, "resuming a URL import's fetch");
+        }
+
+        let latest: Arc<Mutex<Option<Snapshot>>> = Arc::new(Mutex::new(None));
+        let reported = Arc::clone(&latest);
+        let mut on_progress = move |progress: Progress<'_>| {
+            if let Ok(mut latest) = reported.lock() {
+                *latest = Some(Snapshot {
+                    bytes: progress.bytes,
+                    total: progress.total,
+                    validator: progress.validator.map(str::to_owned),
+                });
+            }
+        };
+        let fetch = fetch_to_file(
+            client,
+            url,
+            path,
+            Some(&resume),
+            self.settings.max_download_bytes,
+            &mut on_progress,
+        );
+        tokio::pin!(fetch);
+        let mut ticker = tokio::time::interval(Duration::from_secs(2));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut expected_recorded = false;
+        let fetched = loop {
+            tokio::select! {
+                fetched = &mut fetch => break fetched,
+                _ = ticker.tick() => {}
+            }
+            let snapshot = latest.lock().ok().and_then(|mut latest| latest.take());
+            if let Some(snapshot) = snapshot {
+                if let Some(total) = snapshot.total.and_then(|total| i64::try_from(total).ok())
+                    && !expected_recorded
+                {
+                    expected_recorded = true;
+                    let _ = record_import_expected(self.database.pool(), job.id, total).await;
+                }
+                let mut progress = checkpoint.clone();
+                progress.download = Some(DownloadCheckpoint {
+                    validator: snapshot.validator,
+                    ..progress.download.unwrap_or_default()
+                });
+                self.record_fetch(job, &progress, ImportState::Acquiring, snapshot.bytes)
+                    .await;
+            }
+        };
+        match fetched {
+            Ok(fetched) => Ok(fetched),
+            Err(error) => {
+                let snapshot = latest.lock().ok().and_then(|mut latest| latest.take());
+                if let Some(snapshot) = snapshot {
+                    checkpoint.download = Some(DownloadCheckpoint {
+                        validator: snapshot.validator,
+                        ..checkpoint.download.take().unwrap_or_default()
+                    });
+                }
+                let kept = tokio::fs::metadata(path).await.map_or(0, |m| m.len());
+                self.record_fetch(job, checkpoint, ImportState::Acquiring, kept)
+                    .await;
+                Err((error.code(), error.to_string(), error.retryable()))
+            }
+        }
+    }
+
+    /// Write a fetch's checkpoint and byte count to the job.
+    async fn record_fetch(
+        &self,
+        job: &ImportJobRecord,
+        checkpoint: &ImportCheckpoint,
+        state: ImportState,
+        bytes: u64,
+    ) {
+        let json = serde_json::to_value(checkpoint).ok();
+        if let Err(error) = record_import_progress(
+            self.database.pool(),
+            job.id,
+            state,
+            json.as_ref(),
+            None,
+            i64::try_from(bytes).ok(),
+            lease_seconds(self.settings.lease),
+        )
+        .await
+        {
+            tracing::warn!(import_id = %job.id, error = ?error, "could not record the fetch");
+        }
+    }
+
     async fn record(
         &self,
         job: &ImportJobRecord,
@@ -431,6 +637,68 @@ impl ImportRunner {
             tracing::error!(import_id = %job.id, error = ?error, "could not record the failure");
         }
     }
+}
+
+/// Why a stage failed: a stable code, a reason, and whether trying again
+/// could help.
+type Failure = (&'static str, String, bool);
+
+/// The latest progress a fetch reported.
+struct Snapshot {
+    bytes: u64,
+    total: Option<u64>,
+    validator: Option<String>,
+}
+
+/// Check a fetched file against the length and SHA-256 the operator gave,
+/// removing it when it is not what they said, so a retry fetches it again.
+async fn check_expected(
+    job: &ImportJobRecord,
+    path: &std::path::Path,
+    bytes: u64,
+) -> Result<(), Failure> {
+    if let Some(expected) = job
+        .source_descriptor
+        .get("expected_bytes")
+        .and_then(serde_json::Value::as_u64)
+        && expected != bytes
+    {
+        let _ = tokio::fs::remove_file(path).await;
+        return Err((
+            "IMPORT_SIZE_MISMATCH",
+            format!("expected {expected} bytes and received {bytes}"),
+            false,
+        ));
+    }
+    if let Some(expected) = descriptor_string(&job.source_descriptor, "expected_sha256") {
+        let actual = sha256_of(path)
+            .await
+            .map_err(|error| ("IMPORT_STAGING_FAILED", error.to_string(), true))?;
+        if actual != expected {
+            let _ = tokio::fs::remove_file(path).await;
+            return Err((
+                "IMPORT_HASH_MISMATCH",
+                format!("expected SHA-256 {expected} and received {actual}"),
+                false,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A staged file's SHA-256, in lowercase hex, read in pieces.
+async fn sha256_of(path: &std::path::Path) -> std::io::Result<String> {
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    loop {
+        let read = file.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hex::encode(hasher.finalize()))
 }
 
 fn lease_seconds(duration: Duration) -> i64 {

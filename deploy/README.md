@@ -213,6 +213,33 @@ A conversion needs room in the staging volume for a copy of the original and
 the CHD, briefly. Set `TANGIBLE_DERIVATION_ENGINE=none` to turn conversions
 off.
 
+## Importing from a URL
+
+Off unless you turn it on. With `TANGIBLE_URL_IMPORTS=true` in `.env` and a
+restart of the server, operators get "Import from a URL" on the Imports page
+(and `POST /api/v1/imports/url`): the server fetches the file into staging,
+resumes it if the connection drops, and imports it like an upload. An
+optional SHA-256 is checked before anything is imported.
+
+The server fetches only over https, only from public addresses, and only on
+ports 80 and 443. It refuses this machine, your LAN, the cloud metadata
+address and every other private or reserved range, checks every redirect the
+same way, and records the address without its query string, which is where
+signed links keep their secret. Each request is audited, a refused one
+included, and an account may ask for 30 an hour. To loosen it:
+
+- `TANGIBLE_URL_IMPORTS_ALLOW_HTTP=true` allows plain http as well.
+- `TANGIBLE_OUTBOUND_ALLOW=192.168.1.0/24,fd00::/8` lets fetches reach those
+  blocks although they are private. Only list what you mean: anyone who may
+  import can then make the server fetch from there.
+- `TANGIBLE_OUTBOUND_PROXY=http://proxy:3128` sends every fetch through a
+  proxy. The environment's `HTTP_PROXY` is never used. A proxy resolves names
+  itself, so it must block private addresses itself too. Treated as a secret,
+  since its URL may carry a username and password: never logged or shown.
+
+A file is fetched up to `TANGIBLE_MAX_UPLOAD_BYTES`. Diagnostics shows whether
+URL imports are on and how far they reach.
+
 ## Issue reports
 
 Tangible can turn a problem into a prefilled issue on its tracker. The

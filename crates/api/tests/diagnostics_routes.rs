@@ -57,6 +57,7 @@ fn settings(root: &Path, reports: ReportSettings) -> DiagnosticsSettings {
         migrate_on_start: false,
         reports,
         decryption_allowed: false,
+        url_imports: None,
     }
 }
 

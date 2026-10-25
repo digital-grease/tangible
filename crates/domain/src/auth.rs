@@ -21,6 +21,13 @@ pub enum Permission {
     Read,
     /// Import files into the library.
     Import,
+    /// Have the server fetch a file from a URL and import it (ADR 0016).
+    ///
+    /// Its own permission rather than part of [`Self::Import`]: it makes the
+    /// server reach out to an address somebody typed (SECURITY.md 5), so it
+    /// is named in the access table, audited and rate limited on its own.
+    /// Held by operators and administrators (owner, 2026-10-24).
+    ImportUrl,
     /// Create and edit catalog records: titles, editions, sets, discs, links.
     Catalog,
     /// Queue, cancel, retry and account for burns, and record checks on discs.
@@ -50,6 +57,7 @@ impl Permission {
         match self {
             Self::Read => "read",
             Self::Import => "import",
+            Self::ImportUrl => "import_url",
             Self::Catalog => "catalog",
             Self::Burn => "burn",
             Self::Erase => "erase",
@@ -64,7 +72,7 @@ impl Permission {
     pub const fn least_role(self) -> Role {
         match self {
             Self::Read => Role::Viewer,
-            Self::Import | Self::Catalog | Self::Burn => Role::Operator,
+            Self::Import | Self::ImportUrl | Self::Catalog | Self::Burn => Role::Operator,
             Self::Erase | Self::ManageWorkers | Self::ManageUsers | Self::Diagnose => {
                 Role::Administrator
             }
@@ -154,6 +162,7 @@ mod tests {
         assert!(Role::Viewer.allows(Permission::Read));
         for permission in [
             Permission::Import,
+            Permission::ImportUrl,
             Permission::Catalog,
             Permission::Burn,
             Permission::ManageWorkers,
@@ -169,6 +178,7 @@ mod tests {
         for permission in [
             Permission::Read,
             Permission::Import,
+            Permission::ImportUrl,
             Permission::Catalog,
             Permission::Burn,
         ] {

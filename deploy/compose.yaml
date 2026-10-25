@@ -46,6 +46,13 @@ services:
       # worker run from an image built to (deploy/README.md, "Ripping
       # encrypted discs"). Off unless set to true.
       TANGIBLE_ALLOW_DECRYPTION: ${TANGIBLE_ALLOW_DECRYPTION:-false}
+      # Whether operators may import a file from a URL the server fetches
+      # (deploy/README.md, "Importing from a URL"). Off unless set to true.
+      # Public addresses over https only, unless the next three say more.
+      TANGIBLE_URL_IMPORTS: ${TANGIBLE_URL_IMPORTS:-false}
+      TANGIBLE_URL_IMPORTS_ALLOW_HTTP: ${TANGIBLE_URL_IMPORTS_ALLOW_HTTP:-false}
+      TANGIBLE_OUTBOUND_ALLOW: ${TANGIBLE_OUTBOUND_ALLOW:-}
+      TANGIBLE_OUTBOUND_PROXY: ${TANGIBLE_OUTBOUND_PROXY:-}
       # RomM's roms directory, to show chosen games in RomM (deploy/README.md,
       # "Showing games in RomM"). Off unless set: uncomment this and the
       # matching volume below. Tangible writes only folders it marks as its

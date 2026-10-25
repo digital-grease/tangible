@@ -90,6 +90,9 @@ pub struct CommonConfig {
 }
 
 /// Settings for the HTTP server.
+// Each flag is a separate setting an administrator turns on or off by
+// environment variable; they are read one by one, not as one state.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Args)]
 pub struct ServeConfig {
     /// Address to bind.
@@ -216,6 +219,39 @@ pub struct ServeConfig {
         action = clap::ArgAction::Set
     )]
     pub allow_decryption: bool,
+
+    /// Let operators import a file from a URL the server fetches (ADR 0016).
+    /// Off unless set. Fetches reach only public addresses over https,
+    /// unless the settings below allow more.
+    #[arg(
+        long,
+        env = "TANGIBLE_URL_IMPORTS",
+        default_value_t = false,
+        action = clap::ArgAction::Set
+    )]
+    pub url_imports: bool,
+
+    /// Let URL imports use plain http as well as https.
+    #[arg(
+        long,
+        env = "TANGIBLE_URL_IMPORTS_ALLOW_HTTP",
+        default_value_t = false,
+        action = clap::ArgAction::Set
+    )]
+    pub url_imports_allow_http: bool,
+
+    /// Address blocks outbound fetches may reach although they are private or
+    /// reserved, comma-separated, such as `192.168.1.0/24,fd00::/8`. Empty by
+    /// default: only public addresses.
+    #[arg(long, env = "TANGIBLE_OUTBOUND_ALLOW", default_value = "")]
+    pub outbound_allow: String,
+
+    /// A proxy every outbound fetch goes through, when the deployment needs
+    /// one. The environment's `HTTP_PROXY` is never used. A proxy resolves
+    /// names itself, so it must enforce what Tangible then cannot. A secret:
+    /// its URL may carry a username and password.
+    #[arg(long, env = "TANGIBLE_OUTBOUND_PROXY", hide_env_values = true)]
+    pub outbound_proxy: Option<SecretString>,
 }
 
 /// Settings for `tangible doctor`.

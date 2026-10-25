@@ -35,7 +35,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
-use reqwest::Url;
+pub use reqwest::Url;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
 /// The most redirects one fetch follows.
@@ -238,7 +238,7 @@ impl fmt::Display for Cidr {
 }
 
 /// What an outbound fetch may reach.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct OutboundPolicy {
     /// Allow plain `http`. Off by default.
     pub allow_http: bool,
@@ -253,6 +253,19 @@ pub struct OutboundPolicy {
     pub allowed: Vec<Cidr>,
     /// A proxy to send everything through, when the deployment needs one.
     pub proxy: Option<Url>,
+}
+
+impl fmt::Debug for OutboundPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // A proxy's URL may carry its credentials; shown redacted.
+        f.debug_struct("OutboundPolicy")
+            .field("allow_http", &self.allow_http)
+            .field("allow_private_networks", &self.allow_private_networks)
+            .field("allow_any_port", &self.allow_any_port)
+            .field("allowed", &self.allowed)
+            .field("proxy", &self.proxy.as_ref().map(redacted))
+            .finish()
+    }
 }
 
 impl OutboundPolicy {
@@ -508,15 +521,26 @@ impl OutboundError {
             }
             source = current.source();
         }
-        Self::Transport(error)
+        // reqwest names the URL in its message; a signed URL's secret is in
+        // its query, and this message may be logged or shown.
+        Self::Transport(error.without_url())
     }
 }
 
 /// An HTTP client that reaches only what its policy allows.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OutboundClient {
     http: reqwest::Client,
     policy: Arc<OutboundPolicy>,
+    lookup: Arc<dyn Lookup>,
+}
+
+impl fmt::Debug for OutboundClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OutboundClient")
+            .field("policy", &self.policy)
+            .finish_non_exhaustive()
+    }
 }
 
 impl OutboundClient {
@@ -548,7 +572,10 @@ impl OutboundClient {
             .read_timeout(READ_TIMEOUT)
             .https_only(!policy.allow_http)
             .referer(false)
-            .dns_resolver(CheckingResolver::new(Arc::clone(&policy), lookup))
+            .dns_resolver(CheckingResolver::new(
+                Arc::clone(&policy),
+                Arc::clone(&lookup),
+            ))
             .redirect(reqwest::redirect::Policy::custom(move |attempt| {
                 if attempt.previous().len() > MAX_REDIRECTS {
                     return attempt.error(Refusal::TooManyRedirects);
@@ -574,7 +601,31 @@ impl OutboundClient {
                 .proxy(reqwest::Proxy::all(proxy.as_str()).map_err(OutboundError::Transport)?),
         };
         let http = builder.build().map_err(OutboundError::Transport)?;
-        Ok(Self { http, policy })
+        Ok(Self {
+            http,
+            policy,
+            lookup,
+        })
+    }
+
+    /// Check a URL as far as can be done before fetching it: the URL itself,
+    /// and, for a name, that it resolves to an address that may be reached.
+    /// For telling a person at once; the fetch checks again as it connects,
+    /// since a name may answer differently later.
+    ///
+    /// # Errors
+    ///
+    /// The [`Refusal`] saying why.
+    pub async fn preflight(&self, url: &Url) -> Result<(), Refusal> {
+        self.policy.check_url(url)?;
+        if let Some(url::Host::Domain(name)) = url.host()
+            && self.policy.proxy.is_none()
+        {
+            CheckingResolver::new(Arc::clone(&self.policy), Arc::clone(&self.lookup))
+                .allowed(name)
+                .await?;
+        }
+        Ok(())
     }
 
     /// The policy this client keeps to.
@@ -592,6 +643,21 @@ impl OutboundClient {
     pub fn get(&self, url: &Url) -> Result<reqwest::RequestBuilder, OutboundError> {
         self.policy.check_url(url).map_err(OutboundError::Refused)?;
         Ok(self.http.get(url.clone()))
+    }
+
+    /// Start a request by `method`, checked first, for an API an
+    /// administrator configured (a download client's, an S3 endpoint's).
+    ///
+    /// # Errors
+    ///
+    /// [`OutboundError::Refused`] for a URL the policy refuses.
+    pub fn request(
+        &self,
+        method: reqwest::Method,
+        url: &Url,
+    ) -> Result<reqwest::RequestBuilder, OutboundError> {
+        self.policy.check_url(url).map_err(OutboundError::Refused)?;
+        Ok(self.http.request(method, url.clone()))
     }
 
     /// Send a request built from [`Self::get`], classifying a refusal made
@@ -1009,6 +1075,22 @@ mod tests {
             ..OutboundPolicy::for_operator_urls(false, Vec::new(), None)
         };
         assert!(OutboundClient::new(policy, "tangible-test").is_ok());
+    }
+
+    #[test]
+    fn a_proxys_credentials_are_never_shown() {
+        let policy = OutboundPolicy {
+            proxy: Some(Url::parse("http://user:hunter2@proxy.internal:3128").unwrap()),
+            ..OutboundPolicy::default()
+        };
+        let shown = format!("{policy:?}");
+        assert!(
+            !shown.contains("hunter2") && !shown.contains("user:"),
+            "{shown}"
+        );
+        assert!(shown.contains("proxy.internal:3128"), "{shown}");
+        let client = OutboundClient::new(policy, "t").unwrap();
+        assert!(!format!("{client:?}").contains("hunter2"));
     }
 
     #[test]

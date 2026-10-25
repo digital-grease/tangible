@@ -102,6 +102,25 @@ pub struct ImportCheckpoint {
     pub warnings: Vec<String>,
     /// Detection evidence.
     pub evidence: Vec<String>,
+    /// How far a URL import's fetch has got, for resuming it (ADR 0016).
+    /// Absent for every other source, and from checkpoints written before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download: Option<DownloadCheckpoint>,
+}
+
+/// What a URL import's fetch needs to resume, and what it found.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DownloadCheckpoint {
+    /// What the server called the file: a strong `ETag` or `Last-Modified`.
+    #[serde(default)]
+    pub validator: Option<String>,
+    /// Where the bytes came from after redirects, without credentials, query
+    /// or fragment.
+    #[serde(default)]
+    pub final_reference: Option<String>,
+    /// The content type the server claimed. Recorded, never trusted.
+    #[serde(default)]
+    pub content_type: Option<String>,
 }
 
 impl Default for ImportCheckpoint {
@@ -114,6 +133,7 @@ impl Default for ImportCheckpoint {
             confidence: 0.0,
             warnings: Vec::new(),
             evidence: Vec::new(),
+            download: None,
         }
     }
 }

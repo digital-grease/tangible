@@ -15,6 +15,7 @@ export type ImportView = components['schemas']['ImportView'];
 export type ImportPage = components['schemas']['ImportPage'];
 export type ImportSources = components['schemas']['ImportSources'];
 export type CreateImportRequest = components['schemas']['CreateImportRequest'];
+export type UrlImportRequest = components['schemas']['UrlImportRequest'];
 
 function isProblem(value: unknown): value is Problem {
   return typeof value === 'object' && value !== null && 'code' in value && 'detail' in value;
@@ -86,6 +87,49 @@ export async function importFromWatchedRoot(
 }
 
 /**
+ * Have the server fetch a file from a URL and import it (ADR 0016). Only
+ * where an administrator turned URL imports on; the server refuses an
+ * address it will not reach, and says why.
+ */
+export async function importFromUrl(
+  body: UrlImportRequest,
+  fetcher: typeof fetch = apiFetch,
+): Promise<CommandResult<ImportView>> {
+  const result = await request<ImportView>(fetcher, '/api/v1/imports/url', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (isProblem(result)) return { kind: 'error', problem: result };
+  return { kind: 'ready', data: result };
+}
+
+/**
+ * What a URL import asks for: the URL, and the SHA-256 only when one was
+ * typed, lowercased, without spaces.
+ */
+export function urlImportRequest(url: string, sha256: string): UrlImportRequest {
+  const digest = sha256.replace(/\s+/g, '').toLowerCase();
+  return { url: url.trim(), ...(digest ? { expected_sha256: digest } : {}) };
+}
+
+/** Where an import came from, in words. */
+export function sourceLabel(sourceKind: string): string {
+  switch (sourceKind) {
+    case 'upload':
+      return 'Upload';
+    case 'watch_folder':
+      return 'Watched folder';
+    case 'http_url':
+      return 'URL';
+    case 'physical_drive':
+      return 'Ripped from a disc';
+    default:
+      return sourceKind.replace(/_/g, ' ');
+  }
+}
+
+/**
  * Upload a file and queue it for import.
  *
  * The file is sent as the request body rather than as multipart form data: it
@@ -145,12 +189,12 @@ export async function retryImport(
  * The states are the pipeline's; the words are the operator's. "Hashing" and
  * "inspecting" mean nothing to somebody who just dropped a file on a page.
  */
-export function importStateLabel(state: string): string {
+export function importStateLabel(state: string, sourceKind?: string): string {
   switch (state) {
     case 'requested':
       return 'Queued';
     case 'acquiring':
-      return 'Copying in';
+      return sourceKind === 'http_url' ? 'Downloading' : 'Copying in';
     case 'staged':
       return 'Ready to process';
     case 'hashing':

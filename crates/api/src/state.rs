@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tangible_db::Database;
 use tangible_storage::{ManifestStore, WatchRoots};
 
-use crate::auth::{AuthSettings, LoginLimiter};
+use crate::auth::{ActionLimiter, AuthSettings, LoginLimiter};
 use crate::derivation::Derivations;
 use crate::diagnostics::DiagnosticsSettings;
 use crate::import::ImportPipeline;
@@ -39,6 +39,8 @@ struct Inner {
     auth: AuthSettings,
     /// Failed sign-ins, shared by every clone of the state.
     login_limiter: LoginLimiter,
+    /// URL imports per account (ADR 0016), likewise shared.
+    url_import_limiter: ActionLimiter,
     /// The built web UI, when this server serves one.
     web: Option<WebUi>,
     /// The RomM export, when an export root is configured.
@@ -64,8 +66,12 @@ pub struct ImportContext {
     /// Empty is the safe default: with none configured, no watched-folder
     /// import can name a path at all.
     pub roots: WatchRoots,
-    /// Largest upload accepted, in bytes.
+    /// Largest upload accepted, in bytes. Also the largest file a URL
+    /// import fetches.
     pub max_upload_bytes: u64,
+    /// The client URL imports fetch with, when an administrator turned them
+    /// on (`TANGIBLE_URL_IMPORTS`, ADR 0016). `None` is off, the default.
+    pub outbound: Option<tangible_integrations::outbound::OutboundClient>,
 }
 
 impl ApiState {
@@ -79,6 +85,7 @@ impl ApiState {
                 imports: None,
                 auth: AuthSettings::default(),
                 login_limiter: LoginLimiter::default(),
+                url_import_limiter: ActionLimiter::url_imports(),
                 web: None,
                 romm: None,
                 derivations: None,
@@ -99,6 +106,7 @@ impl ApiState {
                 imports: None,
                 auth: AuthSettings::default(),
                 login_limiter: LoginLimiter::default(),
+                url_import_limiter: ActionLimiter::url_imports(),
                 web: None,
                 romm: None,
                 derivations: None,
@@ -236,6 +244,12 @@ impl ApiState {
     #[must_use]
     pub fn login_limiter(&self) -> &LoginLimiter {
         &self.inner.login_limiter
+    }
+
+    /// URL imports per account.
+    #[must_use]
+    pub fn url_import_limiter(&self) -> &ActionLimiter {
+        &self.inner.url_import_limiter
     }
 
     /// The manifest store, when a library root is configured.
