@@ -129,6 +129,8 @@ may change between minor versions, and the release notes say how.
   logged or audited. Without a key the server runs and integrations cannot
   hold a password. Diagnostics says whether a key is loaded and opens every
   stored password. Database migration 0016 adds a table; it is additive.
+  An Integrations page, for administrators, lists them and adds, edits or
+  removes a qBittorrent.
 - Large uploads are sent in parts (`/api/v1/uploads`), so a dropped
   connection costs one part rather than the whole file. The Imports page
   uses parts for files over 64 MiB, shows how much has been sent, and, if

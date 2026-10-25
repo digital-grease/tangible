@@ -129,6 +129,13 @@
           </li>
           <li>
             <a
+              href="/integrations"
+              aria-current={page.url.pathname === '/integrations' ? 'page' : undefined}
+              >Integrations</a
+            >
+          </li>
+          <li>
+            <a
               href="/diagnostics"
               aria-current={page.url.pathname === '/diagnostics' ? 'page' : undefined}
               >Diagnostics</a
