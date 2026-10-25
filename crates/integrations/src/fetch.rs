@@ -262,27 +262,36 @@ async fn write_body(
     let mut written = offset;
     on_progress(progress);
     let mut next_report = written + PROGRESS_EVERY;
-    loop {
-        let chunk = response
-            .chunk()
-            .await
-            .map_err(|error| FetchError::Transport(error.without_url()))?;
-        let Some(chunk) = chunk else { break };
-        written = written.saturating_add(chunk.len() as u64);
-        if written > max_bytes {
-            file.flush().await?;
-            return Err(FetchError::TooLarge { limit: max_bytes });
-        }
-        file.write_all(&chunk).await?;
-        if written >= next_report {
-            next_report = written + PROGRESS_EVERY;
-            on_progress(Progress {
-                bytes: written,
-                ..progress
-            });
+    let copied: Result<(), FetchError> = async {
+        loop {
+            let chunk = response
+                .chunk()
+                .await
+                .map_err(|error| FetchError::Transport(error.without_url()))?;
+            let Some(chunk) = chunk else { return Ok(()) };
+            written = written.saturating_add(chunk.len() as u64);
+            if written > max_bytes {
+                return Err(FetchError::TooLarge { limit: max_bytes });
+            }
+            file.write_all(&chunk).await?;
+            if written >= next_report {
+                next_report = written + PROGRESS_EVERY;
+                on_progress(Progress {
+                    bytes: written,
+                    ..progress
+                });
+            }
         }
     }
+    .await;
+    // Flushed however the copy ended. A tokio file finishes its last write
+    // in the background after it is dropped, so an interrupted fetch that
+    // returned without flushing left a file shorter than it would become:
+    // the retry then cut it to that length and appended, and the late write
+    // landing between the two doubled bytes. Seen as a test counting bytes
+    // kept failing under load, 2026-10-25.
     file.flush().await?;
+    copied?;
     file.sync_all().await?;
     Ok(written)
 }
