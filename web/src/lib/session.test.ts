@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   apiFetch,
   createUser,
+  loadUsers,
   rememberSession,
   roleLabel,
   safeNext,
@@ -226,6 +227,16 @@ describe('accounts', () => {
       stubFetch(201, { id: 'u1' }, recorded),
     );
     expect(recorded[0]).toMatchObject({ path: '/api/v1/users', method: 'POST' });
+  });
+
+  it('asks for the first page of accounts, then the one after a cursor', async () => {
+    const recorded: Recorded[] = [];
+    await loadUsers(stubFetch(200, { items: [] }, recorded));
+    await loadUsers(stubFetch(200, { items: [] }, recorded), 'dTEw+/=');
+    expect(recorded.map((call) => call.path)).toEqual([
+      '/api/v1/users',
+      '/api/v1/users?cursor=dTEw%2B%2F%3D',
+    ]);
   });
 
   it('labels roles in words', () => {

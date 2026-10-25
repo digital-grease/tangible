@@ -4207,16 +4207,53 @@
         "tags": [
           "accounts"
         ],
-        "summary": "Every account.",
-        "description": "# Errors\n\n`STORAGE_UNAVAILABLE` if accounts cannot be read.",
+        "summary": "A page of accounts, oldest first.",
+        "description": "List accounts, oldest first. Use `next_cursor` from the response to fetch the following page.",
         "operationId": "list_accounts",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum items to return. Clamped to [`MAX_LIMIT`].",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous response's `next_cursor`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Every account",
+            "description": "A page of accounts",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UserList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -9341,7 +9378,7 @@
       },
       "UserList": {
         "type": "object",
-        "description": "A list of accounts.",
+        "description": "A page of accounts.",
         "required": [
           "items"
         ],
@@ -9351,7 +9388,14 @@
             "items": {
               "$ref": "#/components/schemas/UserView"
             },
-            "description": "Every account, oldest first."
+            "description": "The accounts in this page, oldest first."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor for the next page, or null when this is the last."
           }
         }
       },

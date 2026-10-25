@@ -12,7 +12,7 @@
 //! exists, it refuses, so a server left on the setup page cannot be claimed
 //! by a second visitor after the owner has finished.
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -33,6 +33,7 @@ use crate::auth::{
     CurrentUser, NewSession, SignedIn, clear_cookie, hash_password, session_cookie_value,
     set_cookie, verify_password,
 };
+use crate::pagination::{Page, PageQuery};
 use crate::problem::{ErrorCode, Problem};
 use crate::state::ApiState;
 
@@ -118,11 +119,22 @@ impl From<&CurrentUser> for SessionView {
     }
 }
 
-/// A list of accounts.
+/// A page of accounts.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct UserList {
-    /// Every account, oldest first.
+    /// The accounts in this page, oldest first.
     pub items: Vec<UserView>,
+    /// Cursor for the next page, or null when this is the last.
+    pub next_cursor: Option<String>,
+}
+
+impl From<Page<UserView>> for UserList {
+    fn from(page: Page<UserView>) -> Self {
+        Self {
+            items: page.items,
+            next_cursor: page.next_cursor,
+        }
+    }
 }
 
 // --- requests ------------------------------------------------------------------
@@ -396,28 +408,49 @@ pub async fn sign_out(
 
 // --- accounts ------------------------------------------------------------------
 
-/// Every account.
+/// A page of accounts, oldest first.
 ///
 /// # Errors
 ///
+/// `INVALID_CURSOR` for a cursor this server did not issue, or
 /// `STORAGE_UNAVAILABLE` if accounts cannot be read.
 #[utoipa::path(
     get,
     path = "/api/v1/users",
     tag = "accounts",
+    description = "List accounts, oldest first. Use `next_cursor` from the response to \
+                   fetch the following page.",
+    params(PageQuery),
     responses(
-        (status = 200, description = "Every account", body = UserList),
+        (status = 200, description = "A page of accounts", body = UserList),
+        (status = 400, description = "Invalid cursor", body = Problem),
         (status = 403, description = "Not an administrator", body = Problem),
     ),
 )]
-pub async fn list_accounts(State(state): State<ApiState>) -> Result<Json<UserList>, Problem> {
-    let users = list_users(state.database().pool()).await.map_err(|error| {
+pub async fn list_accounts(
+    State(state): State<ApiState>,
+    Query(query): Query<PageQuery>,
+) -> Result<Json<UserList>, Problem> {
+    let limit = query.limit();
+    let after = query
+        .after()?
+        .map(|after| {
+            uuid::Uuid::parse_str(&after)
+                .map_err(|_| Problem::new(ErrorCode::InvalidCursor, "the cursor is not usable"))
+        })
+        .transpose()?;
+    let users = list_users(
+        state.database().pool(),
+        i64::try_from(limit).unwrap_or(i64::MAX),
+        after,
+    )
+    .await
+    .map_err(|error| {
         tracing::error!(error = ?error, "could not list accounts");
         unavailable("accounts could not be read")
     })?;
-    Ok(Json(UserList {
-        items: users.into_iter().map(UserView::from).collect(),
-    }))
+    let items = users.into_iter().map(UserView::from).collect();
+    Ok(Json(Page::new(items, limit, |user| user.id.clone()).into()))
 }
 
 /// Create an account.

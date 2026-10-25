@@ -3,6 +3,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import {
+    apiFetch,
     createUser,
     loadUsers,
     MIN_PASSWORD_CHARS,
@@ -13,7 +14,7 @@
 
   type View =
     | { kind: 'loading' }
-    | { kind: 'ready'; users: UserView[] }
+    | { kind: 'ready'; users: UserView[]; nextCursor: string | null }
     | { kind: 'forbidden' }
     | { kind: 'error'; problem: Problem };
 
@@ -25,11 +26,18 @@
   let refusal = $state<Problem | null>(null);
   let created = $state<UserView | null>(null);
   let submitting = $state(false);
+  let loadingMore = $state(false);
+  let moreProblem = $state<Problem | null>(null);
 
   async function refresh() {
     const result = await loadUsers();
+    moreProblem = null;
     if (result.kind === 'ok') {
-      view = { kind: 'ready', users: result.data.items };
+      view = {
+        kind: 'ready',
+        users: result.data.items,
+        nextCursor: result.data.next_cursor ?? null,
+      };
     } else if (result.problem.code === 'FORBIDDEN') {
       view = { kind: 'forbidden' };
     } else {
@@ -38,6 +46,26 @@
   }
 
   onMount(refresh);
+
+  async function loadMore() {
+    if (view.kind !== 'ready' || !view.nextCursor || loadingMore) return;
+    loadingMore = true;
+    moreProblem = null;
+    const next = await loadUsers(apiFetch, view.nextCursor);
+    loadingMore = false;
+    if (next.kind === 'error') {
+      // The accounts already shown stay; only the next page is missing.
+      moreProblem = next.problem;
+      return;
+    }
+    if (view.kind === 'ready') {
+      view = {
+        kind: 'ready',
+        users: [...view.users, ...next.data.items],
+        nextCursor: next.data.next_cursor ?? null,
+      };
+    }
+  }
 
   async function submit(event: SubmitEvent) {
     event.preventDefault();
@@ -100,6 +128,14 @@
         {/each}
       </tbody>
     </table>
+    {#if view.nextCursor}
+      <button type="button" onclick={loadMore} disabled={loadingMore}>
+        {loadingMore ? 'Loading…' : 'Show more accounts'}
+      </button>
+    {/if}
+    {#if moreProblem}
+      <p role="alert">Could not load more accounts: {moreProblem.detail}</p>
+    {/if}
   {/if}
 </section>
 

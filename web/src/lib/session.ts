@@ -217,9 +217,13 @@ export async function signOut(fetcher: typeof fetch = apiFetch): Promise<Result<
   return result;
 }
 
-/** Every account. Administrators only. */
-export function loadUsers(fetcher: typeof fetch = apiFetch): Promise<Result<UserList>> {
-  return apiCall(fetcher, '/api/v1/users');
+/** A page of accounts, oldest first: the first, or the one after `cursor`. Administrators only. */
+export function loadUsers(
+  fetcher: typeof fetch = apiFetch,
+  cursor?: string,
+): Promise<Result<UserList>> {
+  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+  return apiCall(fetcher, `/api/v1/users${query}`);
 }
 
 /** Create an account. Administrators only. */

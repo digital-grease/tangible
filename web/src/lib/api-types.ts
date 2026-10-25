@@ -1302,10 +1302,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Every account.
-         * @description # Errors
-         *
-         *     `STORAGE_UNAVAILABLE` if accounts cannot be read.
+         * A page of accounts, oldest first.
+         * @description List accounts, oldest first. Use `next_cursor` from the response to fetch the following page.
          */
         get: operations["list_accounts"];
         put?: never;
@@ -3513,10 +3511,12 @@ export interface components {
             /** @description Where it is kept. */
             storage_location?: string | null;
         };
-        /** @description A list of accounts. */
+        /** @description A page of accounts. */
         UserList: {
-            /** @description Every account, oldest first. */
+            /** @description The accounts in this page, oldest first. */
             items: components["schemas"]["UserView"][];
+            /** @description Cursor for the next page, or null when this is the last. */
+            next_cursor?: string | null;
         };
         /** @description An account, without anything that would sign anybody in. */
         UserView: {
@@ -6341,20 +6341,34 @@ export interface operations {
     };
     list_accounts: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Maximum items to return. Clamped to [`MAX_LIMIT`]. */
+                limit?: number | null;
+                /** @description Opaque cursor from a previous response's `next_cursor`. */
+                cursor?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Every account */
+            /** @description A page of accounts */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["UserList"];
+                };
+            };
+            /** @description Invalid cursor */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description Not an administrator */

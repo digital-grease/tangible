@@ -510,6 +510,59 @@ async fn each_role_gets_what_it_should_and_no_more() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
+async fn the_account_list_is_paged_oldest_first() {
+    let harness = harness().await;
+    let admin = support::administrator(&harness.pool).await;
+    let list = |uri: String| {
+        let cookie = admin.cookie();
+        let router = harness.router.clone();
+        async move { send(&router, "GET", &uri, Some(&cookie), None, None).await }
+    };
+
+    let first = list("/api/v1/users?limit=1".to_owned()).await;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.body);
+    assert_eq!(first.body["items"].as_array().unwrap().len(), 1);
+    let cursor = first.body["next_cursor"]
+        .as_str()
+        .expect("more than one account, so a cursor")
+        .to_owned();
+    let second = list(format!("/api/v1/users?limit=1&cursor={cursor}")).await;
+    assert_eq!(second.status, StatusCode::OK, "{}", second.body);
+    let (a, b) = (&first.body["items"][0], &second.body["items"][0]);
+    assert_ne!(a["id"], b["id"]);
+    assert!(
+        a["id"].as_str().unwrap() < b["id"].as_str().unwrap(),
+        "oldest first"
+    );
+
+    // Following the cursors reaches every account once, and ends.
+    let mut uri = "/api/v1/users?limit=500".to_owned();
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        let page = list(uri.clone()).await;
+        assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+        for user in page.body["items"].as_array().unwrap() {
+            assert!(
+                seen.insert(user["id"].as_str().unwrap().to_owned()),
+                "listed twice: {user}"
+            );
+        }
+        match page.body["next_cursor"].as_str() {
+            Some(cursor) => uri = format!("/api/v1/users?limit=500&cursor={cursor}"),
+            None => break,
+        }
+    }
+    assert!(seen.contains(&admin.user.id.to_string()));
+
+    for bad in ["not-base64!", "bm90LWEtdXVpZA"] {
+        let refused = list(format!("/api/v1/users?cursor={bad}")).await;
+        assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{bad}");
+        assert_eq!(refused.body["code"], "INVALID_CURSOR");
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn an_administrator_creates_accounts_that_can_sign_in() {
     let harness = harness().await;
     let admin = support::administrator(&harness.pool).await;
@@ -550,23 +603,32 @@ async fn an_administrator_creates_accounts_that_can_sign_in() {
         assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{bad}");
     }
 
-    let listed = send(
-        &harness.router,
-        "GET",
-        "/api/v1/users",
-        Some(&admin.cookie()),
-        None,
-        None,
-    )
-    .await;
-    assert_eq!(listed.status, StatusCode::OK);
-    assert!(
-        listed.body["items"]
+    // The list is paged, oldest first, and the database is shared with every
+    // earlier run: follow the cursors to the end rather than expect one page.
+    let mut found = false;
+    let mut uri = "/api/v1/users?limit=500".to_owned();
+    loop {
+        let listed = send(
+            &harness.router,
+            "GET",
+            &uri,
+            Some(&admin.cookie()),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(listed.status, StatusCode::OK, "{}", listed.body);
+        found |= listed.body["items"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|user| user["username"] == username)
-    );
+            .any(|user| user["username"] == username);
+        match listed.body["next_cursor"].as_str() {
+            Some(cursor) => uri = format!("/api/v1/users?limit=500&cursor={cursor}"),
+            None => break,
+        }
+    }
+    assert!(found, "the new account is listed");
 
     let (created_by,): (String,) =
         sqlx::query_as("SELECT created_by FROM users WHERE username = $1")

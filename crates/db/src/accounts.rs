@@ -194,15 +194,28 @@ pub async fn create_user(
     Ok(Ok(user))
 }
 
-/// Every account, oldest first.
+/// Up to `limit` accounts, oldest first, after the account `after` when it
+/// is given.
+///
+/// Keyset by identifier: accounts get UUIDv7 identifiers, which are time
+/// ordered, so "after this id" is a stable window while accounts are added.
 ///
 /// # Errors
 ///
 /// [`DbError::Query`] on a database failure.
-pub async fn list_users(pool: &PgPool) -> Result<Vec<UserRecord>, DbError> {
+pub async fn list_users(
+    pool: &PgPool,
+    limit: i64,
+    after: Option<uuid::Uuid>,
+) -> Result<Vec<UserRecord>, DbError> {
     let rows = sqlx::query(&format!(
-        "SELECT {USER_COLUMNS} FROM users ORDER BY created_at, id"
+        "SELECT {USER_COLUMNS} FROM users
+         WHERE ($1::uuid IS NULL OR id > $1)
+         ORDER BY id
+         LIMIT $2"
     ))
+    .bind(after)
+    .bind(limit)
     .fetch_all(pool)
     .await
     .map_err(DbError::Query)?;

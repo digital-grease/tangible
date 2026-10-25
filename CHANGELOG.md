@@ -155,6 +155,10 @@ may change between minor versions, and the release notes say how.
 
 ### Fixed
 
+- The account list is paged (`limit` and `cursor` on `GET /api/v1/users`,
+  `next_cursor` in the answer), like every other list, rather than sent
+  whole however many accounts there are. The Accounts page shows the first
+  50 and a "Show more accounts" button.
 - The block reader reads a DVD with direct I/O, around the page cache.
   Through the cache, the kernel read ahead of the sector asked for, so a
   refused sector a few dozen ahead made good ones fail and the error was
