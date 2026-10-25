@@ -178,6 +178,21 @@ pub struct ImportSources {
     pub url_imports: bool,
     /// Whether a URL import may use plain http.
     pub url_imports_allow_http: bool,
+    /// Download clients an administrator configured and turned on, which a
+    /// torrent can be handed to (`POST /integrations/{id}/jobs`). Names
+    /// only: their settings are administrators' business.
+    pub download_clients: Vec<DownloadClientView>,
+}
+
+/// A download client a torrent can be handed to.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct DownloadClientView {
+    /// The integration's id.
+    pub id: String,
+    /// Its name.
+    pub name: String,
+    /// Such as `qbittorrent`.
+    pub kind: String,
 }
 
 // --- requests ------------------------------------------------------------------
@@ -298,7 +313,25 @@ pub async fn list_sources(State(state): State<ApiState>) -> Result<Json<ImportSo
     let Some(imports) = state.imports() else {
         return Err(unavailable("importing is not configured on this server"));
     };
+    let download_clients = tangible_db::integrations::list_integrations(state.database().pool())
+        .await
+        .map_err(|error| {
+            tracing::error!(error = ?error, "integrations could not be read");
+            Problem::new(
+                ErrorCode::StorageUnavailable,
+                "integrations could not be read",
+            )
+        })?
+        .into_iter()
+        .filter(|record| record.enabled && record.kind == "qbittorrent")
+        .map(|record| DownloadClientView {
+            id: record.id.to_string(),
+            name: record.name,
+            kind: record.kind,
+        })
+        .collect();
     Ok(Json(ImportSources {
+        download_clients,
         watch_roots: imports.roots.ids(),
         max_upload_bytes: i64::try_from(imports.max_upload_bytes).unwrap_or(i64::MAX),
         url_imports: imports.outbound.is_some(),

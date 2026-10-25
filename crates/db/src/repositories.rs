@@ -2654,6 +2654,49 @@ pub async fn fail_import_job(
     Ok(result.rows_affected() > 0)
 }
 
+/// Hold an import in `acquiring` until its source is ready, such as a
+/// torrent still downloading: the lease is held for `wait_seconds` with no
+/// process behind it, so the job is claimed again then. Progress is written
+/// when known, and `problem` (a code and a detail) says why it is held when
+/// the source could not be asked; `None` clears it.
+///
+/// Returns whether the job was still there to hold: a job cancelled
+/// meanwhile is left as it is.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn wait_for_import_source(
+    pool: &PgPool,
+    id: ImportJobId,
+    bytes_received: Option<i64>,
+    bytes_expected: Option<i64>,
+    wait_seconds: i64,
+    problem: Option<(&str, &str)>,
+) -> Result<bool, DbError> {
+    let result = sqlx::query(
+        "UPDATE import_jobs
+         SET state = 'acquiring',
+             bytes_received = COALESCE($2, bytes_received),
+             bytes_expected = COALESCE($3, bytes_expected),
+             error_code = $5, error_detail = $6,
+             lease_owner = 'waiting-for-source',
+             lease_expires_at = now() + ($4::int * interval '1 second')
+         WHERE id = $1
+           AND state IN ('requested', 'acquiring', 'failed_retryable')",
+    )
+    .bind(id.as_uuid())
+    .bind(bytes_received.map(|bytes| bytes.max(0)))
+    .bind(bytes_expected.map(|bytes| bytes.max(0)))
+    .bind(lease_seconds(wait_seconds.max(1)))
+    .bind(problem.map(|(code, _)| code))
+    .bind(problem.map(|(_, detail)| detail))
+    .execute(pool)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(result.rows_affected() > 0)
+}
+
 /// Why an import command was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportCommandOutcome {

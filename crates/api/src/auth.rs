@@ -380,6 +380,17 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
         "/api/v1/integrations/{integration_id}",
         Signed(ManageIntegrations),
     ),
+    (
+        "POST",
+        "/api/v1/integrations/{integration_id}/test",
+        Signed(ManageIntegrations),
+    ),
+    // An operator hands a torrent they already have to a configured client.
+    (
+        "POST",
+        "/api/v1/integrations/{integration_id}/jobs",
+        Signed(Import),
+    ),
     ("GET", "/api/v1/romm", Signed(Read)),
     ("GET", "/api/v1/editions/{edition_id}/romm", Signed(Read)),
     ("PUT", "/api/v1/editions/{edition_id}/romm", Signed(Catalog)),

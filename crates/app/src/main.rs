@@ -82,6 +82,28 @@ async fn main() -> Result<()> {
     }
 }
 
+/// The watched roots configured, said at start.
+fn watched_roots(serve: &ServeConfig) -> WatchRoots {
+    let roots = WatchRoots::parse(&serve.watch_roots);
+    if roots.is_empty() {
+        tracing::info!(
+            "no watched roots configured; imports must be uploaded (set TANGIBLE_WATCH_ROOTS to add some)"
+        );
+    } else {
+        tracing::info!(roots = ?roots.ids(), "watched roots configured");
+    }
+    roots
+}
+
+/// Say at start when rips may decrypt.
+fn say_decryption(serve: &ServeConfig) {
+    if serve.allow_decryption {
+        tracing::info!(
+            "rips may decrypt encrypted discs, on workers that can (TANGIBLE_ALLOW_DECRYPTION)"
+        );
+    }
+}
+
 async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()> {
     // Lazy pool: the listener must come up even if PostgreSQL is still
     // starting, so that /readyz can report the problem instead of the
@@ -101,17 +123,12 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
 
     let (objects, manifests, staging) = open_library(serve).await?;
 
-    let roots = WatchRoots::parse(&serve.watch_roots);
-    if roots.is_empty() {
-        tracing::info!(
-            "no watched roots configured; imports must be uploaded (set TANGIBLE_WATCH_ROOTS to add some)"
-        );
-    } else {
-        tracing::info!(roots = ?roots.ids(), "watched roots configured");
-    }
+    let roots = watched_roots(serve);
+    say_decryption(serve);
 
     let pipeline = ImportPipeline::new(staging.clone(), objects.clone(), manifests.clone());
     let outbound = url_import_client(serve)?;
+    let integrations = integration_client(serve)?;
     let auth = AuthSettings::for_public_url(&serve.public_url);
     warn_if_plain_http(auth, &serve.public_url);
     // Before anything waits on the database, so a mistyped address fails at
@@ -119,7 +136,7 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
     let reports = report_settings(common, serve)?;
     warn_if_setup_needed(&database, &serve.public_url).await;
 
-    let secret_key = load_secret_key(serve)?;
+    let secret_key = load_secret_key(serve)?.map(Arc::new);
 
     let engine = derivation_engine(serve.derivation_engine).await;
     let diagnostics = diagnostics_settings(
@@ -127,7 +144,7 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         serve,
         reports.clone(),
         derivation_status(serve.derivation_engine, engine.as_deref()),
-        secret_key.as_ref(),
+        secret_key.as_deref(),
     );
 
     let state = ApiState::with_manifests(database.clone(), manifests.clone())
@@ -142,15 +159,11 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         .with_reports(reports)
         .with_diagnostics(diagnostics)
         .with_decryption_allowed(serve.allow_decryption);
-    let state = match secret_key {
-        Some(key) => state.with_secret_key(key),
+    let state = match &secret_key {
+        Some(key) => state.with_secret_key(Arc::clone(key)),
         None => state,
-    };
-    if serve.allow_decryption {
-        tracing::info!(
-            "rips may decrypt encrypted discs, on workers that can (TANGIBLE_ALLOW_DECRYPTION)"
-        );
     }
+    .with_integration_client(integrations.clone());
     let state = attach_web_ui(state, serve.web_root.as_deref()).await?;
     let (state, romm) = start_romm_export(
         state,
@@ -170,7 +183,18 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         engine,
     );
 
-    let imports = start_import_runner(database, pipeline, roots, outbound, serve.max_upload_bytes);
+    let imports = start_import_runner(
+        database,
+        pipeline,
+        ImportRunnerSettings {
+            roots,
+            outbound,
+            max_download_bytes: serve.max_upload_bytes,
+            integrations: Some(integrations),
+            secret_key,
+            ..ImportRunnerSettings::default()
+        },
+    );
 
     let listener = tokio::net::TcpListener::bind(serve.bind)
         .await
@@ -239,17 +263,19 @@ async fn open_library(
     Ok((objects, manifests, staging))
 }
 
-/// Start the import runner.
-///
-/// The client URL imports fetch with, when they are turned on (ADR 0016).
+/// The address blocks and proxy every outbound client keeps to
+/// (`TANGIBLE_OUTBOUND_ALLOW`, `TANGIBLE_OUTBOUND_PROXY`, ADR 0016).
 ///
 /// A setting that does not parse stops the server: an allowlist that was
 /// meant and silently ignored would refuse what the administrator allowed,
 /// and a proxy ignored would send fetches straight out.
-fn url_import_client(
+fn outbound_settings(
     serve: &ServeConfig,
-) -> Result<Option<tangible_integrations::outbound::OutboundClient>> {
-    use tangible_integrations::outbound::{Cidr, OutboundClient, OutboundPolicy};
+) -> Result<(
+    Vec<tangible_integrations::outbound::Cidr>,
+    Option<tangible_integrations::outbound::Url>,
+)> {
+    use tangible_integrations::outbound::Cidr;
 
     let allowed = serve
         .outbound_allow
@@ -272,6 +298,16 @@ fn url_import_client(
                 .context("TANGIBLE_OUTBOUND_PROXY is not a URL")
         })
         .transpose()?;
+    Ok((allowed, proxy))
+}
+
+/// The client URL imports fetch with, when they are turned on (ADR 0016).
+fn url_import_client(
+    serve: &ServeConfig,
+) -> Result<Option<tangible_integrations::outbound::OutboundClient>> {
+    use tangible_integrations::outbound::{OutboundClient, OutboundPolicy};
+
+    let (allowed, proxy) = outbound_settings(serve)?;
     if !serve.url_imports {
         tracing::info!("importing from a URL is off (set TANGIBLE_URL_IMPORTS to turn it on)");
         return Ok(None);
@@ -288,26 +324,31 @@ fn url_import_client(
     Ok(Some(client))
 }
 
+/// The client integrations (download clients) are reached with: addresses
+/// an administrator configured, so private networks, any port and plain
+/// http are allowed, and loopback and link-local only by an allowed block.
+fn integration_client(
+    serve: &ServeConfig,
+) -> Result<tangible_integrations::outbound::OutboundClient> {
+    use tangible_integrations::outbound::{OutboundClient, OutboundPolicy};
+
+    let (allowed, proxy) = outbound_settings(serve)?;
+    OutboundClient::new(
+        OutboundPolicy::for_integrations(allowed, proxy),
+        concat!("tangible/", env!("CARGO_PKG_VERSION")),
+    )
+    .context("building the client integrations are reached with")
+}
+
 /// A background task rather than a separate process: one binary, one
 /// deployment, and the work is already leased in the database so a second
 /// server can be added without changing anything.
 fn start_import_runner(
     database: Database,
     pipeline: ImportPipeline,
-    roots: WatchRoots,
-    outbound: Option<tangible_integrations::outbound::OutboundClient>,
-    max_download_bytes: u64,
+    settings: ImportRunnerSettings,
 ) -> Stoppable {
-    let runner = ImportRunner::new(
-        database,
-        pipeline,
-        ImportRunnerSettings {
-            roots,
-            outbound,
-            max_download_bytes,
-            ..ImportRunnerSettings::default()
-        },
-    );
+    let runner = ImportRunner::new(database, pipeline, settings);
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(runner.run(async {
         let _ = stopped.await;

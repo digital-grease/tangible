@@ -240,6 +240,49 @@ included, and an account may ask for 30 an hour. To loosen it:
 A file is fetched up to `TANGIBLE_MAX_UPLOAD_BYTES`. Diagnostics shows whether
 URL imports are on and how far they reach.
 
+## Sending torrents to qBittorrent
+
+Tangible can hand a torrent you already have (a `.torrent` file or a magnet
+link) to a qBittorrent you run, and import it when it finishes. It adds the
+torrent to one category and nothing else, never searches for anything, never
+asks qBittorrent to run a script, and never removes a torrent or its data:
+seeding and cleaning up stay qBittorrent's business.
+
+1. Give Tangible's server read-only access to the category's download
+   folder. If qBittorrent saves `tangible` torrents to `/downloads/tangible`
+   in its own container, and that is `/srv/torrents/tangible` on the host,
+   add to the server in `compose.yaml`:
+
+   ```yaml
+       volumes:
+         - /srv/torrents/tangible:/var/lib/tangible/torrents:ro
+   ```
+
+   and name it as a watched root in `.env`:
+   `TANGIBLE_WATCH_ROOTS=torrents=/var/lib/tangible/torrents`.
+2. Make an integration secret key (below), so the WebUI password can be
+   stored.
+3. As an administrator, add the qBittorrent on the Integrations page: its
+   WebUI address, a user and password, the category, the download folder as
+   qBittorrent sees it (`/downloads/tangible`), and the watched root
+   (`torrents`). `POST /api/v1/integrations/{id}/test` signs in and records
+   the WebUI's API version.
+4. Hand it a torrent with `POST /api/v1/integrations/{id}/jobs`,
+   `{"magnet": "magnet:?xt=urn:btih:..."}` or `{"torrent": "<base64>"}`;
+   operators may.
+
+A LAN address is fine. The address must use the port qBittorrent's WebUI
+itself listens on: with its host header validation on (the default), a
+request to a remapped port is turned away before the password is looked at.
+A qBittorrent on this machine's loopback address is reached only if you list
+it in `TANGIBLE_OUTBOUND_ALLOW` (such as `127.0.0.1/32`).
+
+While a torrent downloads, its import waits in `acquiring` with its
+progress. If qBittorrent cannot be reached, or the password is wrong, the
+import waits and says why, and the integration shows as failing. A torrent
+qBittorrent reports in error, removes, or keeps outside the category's
+folder ends the import.
+
 ## Integration secrets
 
 Download clients (qBittorrent, and SABnzbd and NZBGet later) sign in with a

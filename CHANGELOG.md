@@ -119,6 +119,17 @@ may change between minor versions, and the release notes say how.
   redumper they also show the disc's write offset, whether the drive was
   treated as generic (with a hint to ask for cdrdao if its rips go wrong),
   and how many samples were read again.
+- Operators can hand a torrent they already have, a `.torrent` file or a
+  magnet link, to a qBittorrent an administrator configured
+  (`POST /api/v1/integrations/{id}/jobs`). Tangible adds it to its category
+  and nothing else, follows it by infohash, and imports it through a watched
+  root when it finishes; it never searches, runs a script, or removes the
+  torrent or its data. The import waits in `acquiring` with its progress
+  while the torrent downloads, and says why while qBittorrent cannot be
+  asked. `POST /api/v1/integrations/{id}/test` signs in and records the
+  client's version. `GET /api/v1/import-sources` lists the clients operators
+  may use. Database migration 0017 adds a table and a column; it is
+  additive. Tested against qBittorrent 5.1.2.
 - Administrators can configure integrations through the API
   (`/api/v1/integrations`, a new `manage_integrations` permission held by
   administrators), starting with qBittorrent's settings: its address (a LAN

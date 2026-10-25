@@ -61,6 +61,9 @@ struct Inner {
     /// (`TANGIBLE_SECRET_KEY_FILE`, ADR 0016). Without one, integrations
     /// work but no secret can be stored or opened.
     secret_key: Option<Arc<SecretKey>>,
+    /// What integrations (download clients) are reached with: the
+    /// integrations policy, private networks allowed (ADR 0016).
+    integration_client: Option<tangible_integrations::outbound::OutboundClient>,
 }
 
 /// What the import routes need beyond the database.
@@ -104,6 +107,7 @@ impl ApiState {
                 diagnostics: None,
                 decryption_allowed: false,
                 secret_key: None,
+                integration_client: None,
             }),
         }
     }
@@ -127,6 +131,7 @@ impl ApiState {
                 diagnostics: None,
                 decryption_allowed: false,
                 secret_key: None,
+                integration_client: None,
             }),
         }
     }
@@ -214,9 +219,9 @@ impl ApiState {
 
     /// Seal and open integration secrets with `key`.
     #[must_use]
-    pub fn with_secret_key(self, key: SecretKey) -> Self {
+    pub fn with_secret_key(self, key: impl Into<Arc<SecretKey>>) -> Self {
         let mut inner = (*self.inner).clone();
-        inner.secret_key = Some(Arc::new(key));
+        inner.secret_key = Some(key.into());
         Self {
             inner: Arc::new(inner),
         }
@@ -226,6 +231,25 @@ impl ApiState {
     #[must_use]
     pub fn secret_key(&self) -> Option<&SecretKey> {
         self.inner.secret_key.as_deref()
+    }
+
+    /// Reach integrations with `client`.
+    #[must_use]
+    pub fn with_integration_client(
+        self,
+        client: tangible_integrations::outbound::OutboundClient,
+    ) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.integration_client = Some(client);
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// What integrations are reached with, when this server reaches them.
+    #[must_use]
+    pub fn integration_client(&self) -> Option<&tangible_integrations::outbound::OutboundClient> {
+        self.inner.integration_client.as_ref()
     }
 
     /// Whether rips may decrypt.

@@ -97,6 +97,21 @@ pub enum ErrorCode {
     /// A secret was sent and the server holds no key to seal it with
     /// (`TANGIBLE_SECRET_KEY_FILE`, ADR 0016).
     SecretKeyMissing,
+    /// An integration is turned off, of another kind than asked for, or the
+    /// server reaches no integrations.
+    IntegrationOff,
+    /// An integration's stored settings no longer read.
+    IntegrationMisconfigured,
+    /// An integration's stored password does not open with the server's key.
+    IntegrationSecretUnreadable,
+    /// An integration's client could not be reached.
+    IntegrationUnreachable,
+    /// An integration's client refused to sign in.
+    IntegrationAuthFailed,
+    /// An integration's client answered with something unusable.
+    IntegrationBadResponse,
+    /// An integration's address is one the server will not reach.
+    IntegrationAddressRefused,
     /// The server has too little free space for what was asked, such as an
     /// upload of this size.
     InsufficientSpace,
@@ -131,6 +146,13 @@ impl ErrorCode {
             Self::UrlImportsOff => "URL_IMPORTS_OFF",
             Self::ImportSsrfBlocked => "IMPORT_SSRF_BLOCKED",
             Self::SecretKeyMissing => "SECRET_KEY_MISSING",
+            Self::IntegrationOff => "INTEGRATION_OFF",
+            Self::IntegrationMisconfigured => "INTEGRATION_MISCONFIGURED",
+            Self::IntegrationSecretUnreadable => "INTEGRATION_SECRET_UNREADABLE",
+            Self::IntegrationUnreachable => "INTEGRATION_UNREACHABLE",
+            Self::IntegrationAuthFailed => "INTEGRATION_AUTH_FAILED",
+            Self::IntegrationBadResponse => "INTEGRATION_BAD_RESPONSE",
+            Self::IntegrationAddressRefused => "INTEGRATION_ADDRESS_REFUSED",
             Self::InsufficientSpace => "INSUFFICIENT_SPACE",
             Self::Internal => "INTERNAL",
         }
@@ -156,7 +178,8 @@ impl ErrorCode {
             Self::ManifestInvalid
             | Self::ValidationFailed
             | Self::ReferenceNotFound
-            | Self::ImportSsrfBlocked => StatusCode::UNPROCESSABLE_ENTITY,
+            | Self::ImportSsrfBlocked
+            | Self::IntegrationAddressRefused => StatusCode::UNPROCESSABLE_ENTITY,
             // Worker routes only ever answer 401: they have no notion of an
             // authenticated-but-unauthorised caller. Operator routes answer
             // 403 when the account is known and its role is not enough.
@@ -171,7 +194,15 @@ impl ErrorCode {
             | Self::EncryptedNoDecryption
             | Self::CdEngineUnavailable
             | Self::UrlImportsOff
-            | Self::SecretKeyMissing => StatusCode::CONFLICT,
+            | Self::SecretKeyMissing
+            | Self::IntegrationOff
+            | Self::IntegrationMisconfigured
+            | Self::IntegrationSecretUnreadable => StatusCode::CONFLICT,
+            // The server is a gateway to the client here: the request was
+            // fine, and what stands behind it failed.
+            Self::IntegrationUnreachable
+            | Self::IntegrationAuthFailed
+            | Self::IntegrationBadResponse => StatusCode::BAD_GATEWAY,
             Self::InsufficientSpace => StatusCode::INSUFFICIENT_STORAGE,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -203,6 +234,13 @@ impl ErrorCode {
             Self::UrlImportsOff => "Importing from a URL is turned off",
             Self::ImportSsrfBlocked => "The server will not fetch from that address",
             Self::SecretKeyMissing => "The server holds no secret key",
+            Self::IntegrationOff => "The integration is not in use",
+            Self::IntegrationMisconfigured => "The integration's settings no longer read",
+            Self::IntegrationSecretUnreadable => "The integration's password does not open",
+            Self::IntegrationUnreachable => "The download client could not be reached",
+            Self::IntegrationAuthFailed => "The download client refused to sign in",
+            Self::IntegrationBadResponse => "The download client answered unexpectedly",
+            Self::IntegrationAddressRefused => "The server will not reach that address",
             Self::InsufficientSpace => "Not enough free space",
             Self::Internal => "Internal error",
         }
@@ -355,6 +393,13 @@ mod tests {
             ErrorCode::UrlImportsOff,
             ErrorCode::ImportSsrfBlocked,
             ErrorCode::SecretKeyMissing,
+            ErrorCode::IntegrationOff,
+            ErrorCode::IntegrationMisconfigured,
+            ErrorCode::IntegrationSecretUnreadable,
+            ErrorCode::IntegrationUnreachable,
+            ErrorCode::IntegrationAuthFailed,
+            ErrorCode::IntegrationBadResponse,
+            ErrorCode::IntegrationAddressRefused,
             ErrorCode::InsufficientSpace,
             ErrorCode::Internal,
         ];

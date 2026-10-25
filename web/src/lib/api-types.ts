@@ -1006,6 +1006,49 @@ export interface paths {
         patch: operations["update_one"];
         trace?: never;
     };
+    "/api/v1/integrations/{integration_id}/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Hand a torrent to a download client.
+         * @description Hand a torrent the operator already has, a magnet link or a .torrent file (base64), to a qBittorrent integration, in its category. An import follows it by infohash and brings it into the library when it finishes. Tangible never searches, and never removes the torrent or its data. Submitting one again is safe: the existing import is answered.
+         */
+        post: operations["submit_job"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/{integration_id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Try an integration: sign in and ask the client's API version.
+         * @description # Errors
+         *
+         *     `NOT_FOUND`; `INTEGRATION_OFF` and the like when it cannot be tried at
+         *     all. A client that fails is a result, `ok: false`, not an error.
+         */
+        post: operations["test_one"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/physical-copies": {
         parameters: {
             query?: never;
@@ -2486,6 +2529,15 @@ export interface components {
             /** @description The volume label read from an image of it. */
             volume_label?: string | null;
         };
+        /** @description A download client a torrent can be handed to. */
+        DownloadClientView: {
+            /** @description The integration's id. */
+            id: string;
+            /** @description Such as `qbittorrent`. */
+            kind: string;
+            /** @description Its name. */
+            name: string;
+        };
         /** @description Every drive. */
         DriveList: {
             /** @description By worker, then by drive. */
@@ -2832,6 +2884,12 @@ export interface components {
         /** @description Where imports may be taken from. */
         ImportSources: {
             /**
+             * @description Download clients an administrator configured and turned on, which a
+             *     torrent can be handed to (`POST /integrations/{id}/jobs`). Names
+             *     only: their settings are administrators' business.
+             */
+            download_clients: components["schemas"]["DownloadClientView"][];
+            /**
              * Format: int64
              * @description Largest upload the server will accept, in bytes.
              */
@@ -2904,6 +2962,23 @@ export interface components {
              */
             warnings: string[];
         };
+        /** @description A torrent handed to a download client, and the import following it. */
+        IntegrationJobView: {
+            /** @description What it became, when already imported. */
+            artifact_id?: string | null;
+            /** @description The import that brings it into the library when it finishes. */
+            import_id: string;
+            /** @description The torrent's infohash, which the import follows it by. */
+            infohash: string;
+            /** @description The integration. */
+            integration_id: string;
+            /**
+             * @description `created`; `resubmitted` when an earlier import of it ended without
+             *     an artifact; `already_active` when one is still going;
+             *     `already_imported` when it is in the library.
+             */
+            outcome: string;
+        };
         /** @description Every integration. */
         IntegrationList: {
             /** @description By name. */
@@ -2914,8 +2989,21 @@ export interface components {
              */
             secret_key_loaded: boolean;
         };
+        /** @description How trying an integration went. */
+        IntegrationTestView: {
+            /** @description The client's API version, when it answered. */
+            api_version?: string | null;
+            /** @description Why not, in words. */
+            detail?: string | null;
+            /** @description Why not, as a stable code. */
+            error_code?: string | null;
+            /** @description Whether it signed in and answered. */
+            ok: boolean;
+        };
         /** @description An integration, with its secrets named and never shown. */
         IntegrationView: {
+            /** @description The client's API version, as last seen. */
+            client_version?: string | null;
             /** @description Whether it is in use. */
             enabled: boolean;
             /** @description Its id. */
@@ -3617,6 +3705,16 @@ export interface components {
         SetupStatus: {
             /** @description True until the first administrator exists. */
             needed: boolean;
+        };
+        /**
+         * @description A torrent the operator already has, for a download client to fetch.
+         *     Exactly one of the two.
+         */
+        SubmitTorrentRequest: {
+            /** @description A magnet link. */
+            magnet?: string | null;
+            /** @description A `.torrent` file, base64. */
+            torrent?: string | null;
         };
         /** @description A page of titles. */
         TitlePage: {
@@ -6055,6 +6153,119 @@ export interface operations {
             };
             /** @description Something that will not do */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    submit_job: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Integration identifier */
+                integration_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmitTorrentRequest"];
+            };
+        };
+        responses: {
+            /** @description Handed over before */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationJobView"];
+                };
+            };
+            /** @description Handed over; an import follows it */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationJobView"];
+                };
+            };
+            /** @description No such integration */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Turned off, misconfigured, or held under another category */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not a usable torrent or magnet link */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The client failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    test_one: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Integration identifier */
+                integration_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description How it went */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationTestView"];
+                };
+            };
+            /** @description No such integration */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description It cannot be tried */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

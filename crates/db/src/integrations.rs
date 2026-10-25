@@ -36,6 +36,8 @@ pub struct IntegrationRecord {
     pub last_success_at: Option<OffsetDateTime>,
     /// Why it last failed, as a stable code.
     pub last_error_code: Option<String>,
+    /// The client's API version, as last seen.
+    pub client_version: Option<String>,
     /// The secrets it holds, by field name.
     pub secret_fields: Vec<String>,
     /// When it was made.
@@ -83,7 +85,7 @@ pub enum IntegrationOutcome {
 }
 
 const COLUMNS: &str = "i.id, i.kind, i.name, i.enabled, i.configuration_json, i.status,
-     i.last_success_at, i.last_error_code, i.created_at, i.updated_at,
+     i.last_success_at, i.last_error_code, i.client_version, i.created_at, i.updated_at,
      COALESCE((SELECT array_agg(s.field ORDER BY s.field) FROM integration_secrets s
                WHERE s.integration_id = i.id), '{}') AS secret_fields";
 
@@ -98,6 +100,7 @@ fn from_row(row: &sqlx::postgres::PgRow) -> Result<IntegrationRecord, DbError> {
         status: row.try_get("status").map_err(get)?,
         last_success_at: row.try_get("last_success_at").map_err(get)?,
         last_error_code: row.try_get("last_error_code").map_err(get)?,
+        client_version: row.try_get("client_version").map_err(get)?,
         secret_fields: row.try_get("secret_fields").map_err(get)?,
         created_at: row.try_get("created_at").map_err(get)?,
         updated_at: row.try_get("updated_at").map_err(get)?,
@@ -538,4 +541,207 @@ pub async fn secret_counts_by_key(pool: &PgPool) -> Result<Vec<(String, i64)>, D
             ))
         })
         .collect()
+}
+
+/// A job to hand a download client: the import it feeds is made with it.
+pub struct NewIntegrationJob<'a> {
+    /// The integration.
+    pub integration_id: uuid::Uuid,
+    /// The client's identity for it, such as a torrent's infohash.
+    pub client_job_id: &'a str,
+    /// The import's source kind, such as `qbittorrent_job`.
+    pub source_kind: &'a str,
+    /// The import's descriptor.
+    pub descriptor: &'a serde_json::Value,
+    /// Who submitted it.
+    pub actor: &'a str,
+}
+
+/// What a submission came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Submitted {
+    /// A new job, and its import.
+    Created {
+        /// The import.
+        import_id: uuid::Uuid,
+    },
+    /// Submitted before, and its import ended without an artifact: a new
+    /// import takes over.
+    Resubmitted {
+        /// The new import.
+        import_id: uuid::Uuid,
+    },
+    /// Submitted before, and its import is still going.
+    AlreadyActive {
+        /// That import.
+        import_id: uuid::Uuid,
+    },
+    /// Submitted before, and imported.
+    AlreadyImported {
+        /// That import.
+        import_id: uuid::Uuid,
+        /// What it made.
+        artifact_id: Option<uuid::Uuid>,
+    },
+}
+
+/// Record a job handed to a download client, with the import that follows
+/// it and an audit event, together. A job the client already had from an
+/// earlier submission is found, not doubled.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn submit_integration_job(
+    pool: &PgPool,
+    new: &NewIntegrationJob<'_>,
+) -> Result<Submitted, DbError> {
+    let mut tx = pool.begin().await.map_err(DbError::Query)?;
+    let existing = sqlx::query(
+        "SELECT j.id, j.import_job_id, i.state, i.artifact_id
+         FROM integration_jobs j JOIN import_jobs i ON i.id = j.import_job_id
+         WHERE j.integration_id = $1 AND j.client_job_id = $2
+         FOR UPDATE OF j",
+    )
+    .bind(new.integration_id)
+    .bind(new.client_job_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
+    let replacing = match existing {
+        None => None,
+        Some(row) => {
+            let job_id: uuid::Uuid = row.try_get("id").map_err(DbError::Query)?;
+            let import_id: uuid::Uuid = row.try_get("import_job_id").map_err(DbError::Query)?;
+            let state: String = row.try_get("state").map_err(DbError::Query)?;
+            match state.as_str() {
+                "complete" => {
+                    let artifact_id = row.try_get("artifact_id").map_err(DbError::Query)?;
+                    tx.rollback().await.map_err(DbError::Query)?;
+                    return Ok(Submitted::AlreadyImported {
+                        import_id,
+                        artifact_id,
+                    });
+                }
+                "failed_terminal" | "canceled" | "quarantined" => Some(job_id),
+                _ => {
+                    tx.rollback().await.map_err(DbError::Query)?;
+                    return Ok(Submitted::AlreadyActive { import_id });
+                }
+            }
+        }
+    };
+    let import_id = uuid::Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO import_jobs (id, source_kind, source_descriptor_json, state, created_by)
+         VALUES ($1, $2, $3, 'requested', $4)",
+    )
+    .bind(import_id)
+    .bind(new.source_kind)
+    .bind(new.descriptor)
+    .bind(new.actor)
+    .execute(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
+    match replacing {
+        None => {
+            sqlx::query(
+                "INSERT INTO integration_jobs
+                     (id, integration_id, client_job_id, import_job_id, created_by)
+                 VALUES ($1, $2, $3, $4, $5)",
+            )
+            .bind(uuid::Uuid::now_v7())
+            .bind(new.integration_id)
+            .bind(new.client_job_id)
+            .bind(import_id)
+            .bind(new.actor)
+            .execute(&mut *tx)
+            .await
+            .map_err(DbError::Query)?;
+        }
+        Some(job_id) => {
+            sqlx::query(
+                "UPDATE integration_jobs SET import_job_id = $2, client_state = NULL
+                 WHERE id = $1",
+            )
+            .bind(job_id)
+            .bind(import_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(DbError::Query)?;
+        }
+    }
+    audit(
+        &mut tx,
+        new.actor,
+        "integration.job_submitted",
+        new.integration_id,
+        &serde_json::json!({
+            "client_job_id": new.client_job_id,
+            "import_id": import_id,
+            "resubmitted": replacing.is_some(),
+        }),
+    )
+    .await?;
+    tx.commit().await.map_err(DbError::Query)?;
+    Ok(if replacing.is_some() {
+        Submitted::Resubmitted { import_id }
+    } else {
+        Submitted::Created { import_id }
+    })
+}
+
+/// Record how talking to an integration's client went: working, with the
+/// version it gave, or failing with a stable code.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn record_integration_health(
+    pool: &PgPool,
+    id: uuid::Uuid,
+    outcome: Result<Option<&str>, &str>,
+) -> Result<(), DbError> {
+    let query = match outcome {
+        Ok(version) => sqlx::query(
+            "UPDATE integrations SET status = 'ok', last_success_at = now(),
+                 last_error_code = NULL, client_version = COALESCE($2, client_version),
+                 updated_at = now()
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(version),
+        Err(code) => sqlx::query(
+            "UPDATE integrations SET status = 'failing', last_error_code = $2,
+                 updated_at = now()
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(code),
+    };
+    query.execute(pool).await.map_err(DbError::Query)?;
+    Ok(())
+}
+
+/// Record the client's last word on the job feeding `import_id`.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn record_integration_job_state(
+    pool: &PgPool,
+    import_id: uuid::Uuid,
+    client_state: &str,
+) -> Result<(), DbError> {
+    let state: String = client_state.chars().take(64).collect();
+    sqlx::query(
+        "UPDATE integration_jobs SET client_state = $2
+         WHERE import_job_id = $1 AND client_state IS DISTINCT FROM $2",
+    )
+    .bind(import_id)
+    .bind(state)
+    .execute(pool)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(())
 }

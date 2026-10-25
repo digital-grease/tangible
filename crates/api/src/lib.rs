@@ -14,6 +14,7 @@ pub mod burn_report;
 pub mod catalog;
 pub mod derivation;
 pub mod diagnostics;
+pub mod download_clients;
 pub mod error_report;
 pub mod format_report;
 pub mod health;
@@ -138,6 +139,8 @@ pub const API_BASE: &str = "/api/v1";
         routes::integrations::get_one,
         routes::integrations::update_one,
         routes::integrations::delete_one,
+        routes::integrations::submit_job,
+        routes::integrations::test_one,
         routes::romm::romm_settings,
         routes::romm::get_edition_romm,
         routes::romm::set_edition_romm_route,
@@ -248,6 +251,10 @@ pub const API_BASE: &str = "/api/v1";
         routes::integrations::IntegrationList,
         routes::integrations::CreateIntegrationRequest,
         routes::integrations::UpdateIntegrationRequest,
+        routes::integrations::SubmitTorrentRequest,
+        routes::integrations::IntegrationJobView,
+        routes::imports::DownloadClientView,
+        routes::integrations::IntegrationTestView,
         routes::romm::PlatformView,
         routes::romm::RommSettings,
         routes::romm::EditionRommView,

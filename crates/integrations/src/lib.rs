@@ -12,5 +12,7 @@
 
 pub mod fetch;
 pub mod outbound;
+pub mod qbittorrent;
 pub mod romm;
 pub mod settings;
+pub mod torrent;

@@ -85,17 +85,19 @@ impl QbittorrentSettings {
     /// # Errors
     ///
     /// [`SettingsError`] saying what will not do. `known_roots` are the
-    /// watched roots this server has.
+    /// watched roots this server has; `policy` is what integrations are
+    /// reached under, so the blocks an administrator allowed count.
     pub fn checked(
         value: &serde_json::Value,
         known_roots: &[String],
+        policy: &OutboundPolicy,
     ) -> Result<Self, SettingsError> {
         let refuse = |what: &str| SettingsError(what.to_owned());
         let settings: Self = serde_json::from_value(value.clone())
             .map_err(|error| SettingsError(format!("the settings do not fit: {error}")))?;
         let url =
             Url::parse(settings.base_url.trim()).map_err(|_| refuse("base_url is not a URL"))?;
-        OutboundPolicy::for_integrations(Vec::new(), None)
+        policy
             .check_url(&url)
             .map_err(|refusal| SettingsError(format!("base_url will not be reached: {refusal}")))?;
         if url.query().is_some() || url.fragment().is_some() {
@@ -162,10 +164,11 @@ pub fn checked_settings(
     kind: ConfigurableKind,
     value: &serde_json::Value,
     known_roots: &[String],
+    policy: &OutboundPolicy,
 ) -> Result<serde_json::Value, SettingsError> {
     match kind {
         ConfigurableKind::Qbittorrent => {
-            let settings = QbittorrentSettings::checked(value, known_roots)?;
+            let settings = QbittorrentSettings::checked(value, known_roots, policy)?;
             serde_json::to_value(settings).map_err(|error| {
                 SettingsError(format!("the settings could not be stored: {error}"))
             })
@@ -182,6 +185,10 @@ mod tests {
         vec!["downloads".to_owned()]
     }
 
+    fn policy() -> OutboundPolicy {
+        OutboundPolicy::for_integrations(Vec::new(), None)
+    }
+
     fn good() -> serde_json::Value {
         serde_json::json!({
             "base_url": "http://192.168.1.13:8080",
@@ -193,7 +200,8 @@ mod tests {
 
     #[test]
     fn good_settings_are_stored_tidied() {
-        let stored = checked_settings(ConfigurableKind::Qbittorrent, &good(), &roots()).unwrap();
+        let stored =
+            checked_settings(ConfigurableKind::Qbittorrent, &good(), &roots(), &policy()).unwrap();
         assert_eq!(
             stored,
             serde_json::json!({
@@ -235,10 +243,34 @@ mod tests {
             (with("local_root", "elsewhere".into()), "local_root"),
             (with("password", "hunter2".into()), "do not fit"),
         ] {
-            let error = checked_settings(ConfigurableKind::Qbittorrent, &settings, &roots())
-                .expect_err("refused");
+            let error = checked_settings(
+                ConfigurableKind::Qbittorrent,
+                &settings,
+                &roots(),
+                &policy(),
+            )
+            .expect_err("refused");
             assert!(error.0.contains(says), "{settings}: {error}");
         }
+    }
+
+    #[test]
+    fn an_allowed_block_lets_a_loopback_client_through() {
+        let mut settings = good();
+        settings["base_url"] = "http://127.0.0.1:8080/".into();
+        assert!(
+            checked_settings(
+                ConfigurableKind::Qbittorrent,
+                &settings,
+                &roots(),
+                &policy()
+            )
+            .is_err()
+        );
+        let allowed = OutboundPolicy::for_integrations(vec!["127.0.0.1/32".parse().unwrap()], None);
+        assert!(
+            checked_settings(ConfigurableKind::Qbittorrent, &settings, &roots(), &allowed).is_ok()
+        );
     }
 
     #[test]

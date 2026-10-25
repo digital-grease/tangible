@@ -3242,6 +3242,162 @@
         ]
       }
     },
+    "/api/v1/integrations/{integration_id}/jobs": {
+      "post": {
+        "tags": [
+          "integrations"
+        ],
+        "summary": "Hand a torrent to a download client.",
+        "description": "Hand a torrent the operator already has, a magnet link or a .torrent file (base64), to a qBittorrent integration, in its category. An import follows it by infohash and brings it into the library when it finishes. Tangible never searches, and never removes the torrent or its data. Submitting one again is safe: the existing import is answered.",
+        "operationId": "submit_job",
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "description": "Integration identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitTorrentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Handed over before",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationJobView"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Handed over; an import follows it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationJobView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such integration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Turned off, misconfigured, or held under another category",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not a usable torrent or magnet link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The client failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/integrations/{integration_id}/test": {
+      "post": {
+        "tags": [
+          "integrations"
+        ],
+        "summary": "Try an integration: sign in and ask the client's API version.",
+        "description": "# Errors\n\n`NOT_FOUND`; `INTEGRATION_OFF` and the like when it cannot be tried at\nall. A client that fails is a result, `ok: false`, not an error.",
+        "operationId": "test_one",
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "description": "Integration identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "How it went",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationTestView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such integration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It cannot be tried",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/physical-copies": {
       "get": {
         "tags": [
@@ -7347,6 +7503,29 @@
           }
         }
       },
+      "DownloadClientView": {
+        "type": "object",
+        "description": "A download client a torrent can be handed to.",
+        "required": [
+          "id",
+          "name",
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The integration's id."
+          },
+          "kind": {
+            "type": "string",
+            "description": "Such as `qbittorrent`."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          }
+        }
+      },
       "DriveList": {
         "type": "object",
         "description": "Every drive.",
@@ -8140,9 +8319,17 @@
           "watch_roots",
           "max_upload_bytes",
           "url_imports",
-          "url_imports_allow_http"
+          "url_imports_allow_http",
+          "download_clients"
         ],
         "properties": {
+          "download_clients": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DownloadClientView"
+            },
+            "description": "Download clients an administrator configured and turned on, which a\ntorrent can be handed to (`POST /integrations/{id}/jobs`). Names\nonly: their settings are administrators' business."
+          },
           "max_upload_bytes": {
             "type": "integer",
             "format": "int64",
@@ -8279,6 +8466,41 @@
           }
         }
       },
+      "IntegrationJobView": {
+        "type": "object",
+        "description": "A torrent handed to a download client, and the import following it.",
+        "required": [
+          "integration_id",
+          "infohash",
+          "import_id",
+          "outcome"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it became, when already imported."
+          },
+          "import_id": {
+            "type": "string",
+            "description": "The import that brings it into the library when it finishes."
+          },
+          "infohash": {
+            "type": "string",
+            "description": "The torrent's infohash, which the import follows it by."
+          },
+          "integration_id": {
+            "type": "string",
+            "description": "The integration."
+          },
+          "outcome": {
+            "type": "string",
+            "description": "`created`; `resubmitted` when an earlier import of it ended without\nan artifact; `already_active` when one is still going;\n`already_imported` when it is in the library."
+          }
+        }
+      },
       "IntegrationList": {
         "type": "object",
         "description": "Every integration.",
@@ -8300,6 +8522,40 @@
           }
         }
       },
+      "IntegrationTestView": {
+        "type": "object",
+        "description": "How trying an integration went.",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "api_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The client's API version, when it answered."
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why not, in words."
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why not, as a stable code."
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "Whether it signed in and answered."
+          }
+        }
+      },
       "IntegrationView": {
         "type": "object",
         "description": "An integration, with its secrets named and never shown.",
@@ -8314,6 +8570,13 @@
           "managed"
         ],
         "properties": {
+          "client_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The client's API version, as last seen."
+          },
           "enabled": {
             "type": "boolean",
             "description": "Whether it is in use."
@@ -9955,6 +10218,27 @@
             "description": "True until the first administrator exists."
           }
         }
+      },
+      "SubmitTorrentRequest": {
+        "type": "object",
+        "description": "A torrent the operator already has, for a download client to fetch.\nExactly one of the two.",
+        "properties": {
+          "magnet": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A magnet link."
+          },
+          "torrent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A `.torrent` file, base64."
+          }
+        },
+        "additionalProperties": false
       },
       "TitlePage": {
         "type": "object",
