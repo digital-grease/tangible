@@ -6,6 +6,9 @@
 //! Integrations may submit a user-selected job to a client the operator
 //! already runs. They must never turn Tangible into a release-search platform.
 //!
-//! In place: exporting games to a RomM library as a managed folder view.
+//! In place: exporting games to a RomM library as a managed folder view, and
+//! the outbound client every fetch of an address somebody supplied goes
+//! through (ADR 0016).
 
+pub mod outbound;
 pub mod romm;
