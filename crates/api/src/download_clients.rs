@@ -10,10 +10,11 @@ use tangible_db::Database;
 use tangible_db::integrations::{IntegrationRecord, sealed_secret};
 use tangible_domain::SecretString;
 use tangible_integrations::download::{ClientError, JobStatus};
+use tangible_integrations::nzbget::NzbgetClient;
 use tangible_integrations::outbound::{OutboundClient, Url};
 use tangible_integrations::qbittorrent::QbittorrentClient;
 use tangible_integrations::sabnzbd::SabnzbdClient;
-use tangible_integrations::settings::{QbittorrentSettings, SabnzbdSettings};
+use tangible_integrations::settings::{NzbgetSettings, QbittorrentSettings, SabnzbdSettings};
 use tangible_integrations::torrent::Infohash;
 
 use crate::secrets::{Sealed, SecretKey};
@@ -50,6 +51,8 @@ pub enum DownloadClient {
     Qbittorrent(QbittorrentClient),
     /// SABnzbd.
     Sabnzbd(SabnzbdClient),
+    /// NZBGet.
+    Nzbget(NzbgetClient),
 }
 
 /// Where a client files Tangible's downloads, and where they are read from.
@@ -70,6 +73,7 @@ impl DownloadClient {
         match self {
             Self::Qbittorrent(_) => "qBittorrent",
             Self::Sabnzbd(_) => "SABnzbd",
+            Self::Nzbget(_) => "NZBGet",
         }
     }
 
@@ -79,11 +83,13 @@ impl DownloadClient {
         match self {
             Self::Qbittorrent(_) => "qbittorrent_job",
             Self::Sabnzbd(_) => "sabnzbd_job",
+            Self::Nzbget(_) => "nzbget_job",
         }
     }
 
     /// Where the client's job `id` stands (a torrent's infohash, a SABnzbd
-    /// `nzo_id`), or `None` when the client has no such job.
+    /// `nzo_id`, an NZBGet NZBID), or `None` when the client has no such
+    /// job.
     ///
     /// # Errors
     ///
@@ -100,6 +106,10 @@ impl DownloadClient {
                     .map(|torrent| JobStatus::new(torrent.phase(), &torrent.state)))
             }
             Self::Sabnzbd(client) => client.job(id).await,
+            Self::Nzbget(client) => match id.parse::<i64>() {
+                Ok(nzbid) => client.job(nzbid).await,
+                Err(_) => Ok(None),
+            },
         }
     }
 
@@ -120,6 +130,15 @@ impl DownloadClient {
                 let categories = client.categories().await?;
                 Ok((version, categories.iter().any(|c| c == category)))
             }
+            Self::Nzbget(client) => {
+                let version = client.version().await?;
+                let categories = client.categories().await?;
+                // NZBGet matches category names regardless of case.
+                Ok((
+                    version,
+                    categories.iter().any(|c| c.eq_ignore_ascii_case(category)),
+                ))
+            }
         }
     }
 }
@@ -130,8 +149,8 @@ impl DownloadClient {
 ///
 /// [`OpenError`]: `INTEGRATION_OFF` for one turned off, of a kind that is
 /// not a download client, or on a server that reaches no integrations;
-/// `INTEGRATION_MISCONFIGURED` for settings that no longer read or a
-/// SABnzbd without its API key; `SECRET_KEY_MISSING` or
+/// `INTEGRATION_MISCONFIGURED` for settings that no longer read, a SABnzbd
+/// without its API key or an NZBGet without its password; `SECRET_KEY_MISSING` or
 /// `INTEGRATION_SECRET_UNREADABLE` for a secret that cannot be opened;
 /// `STORAGE_UNAVAILABLE` for a database failure.
 pub async fn open_client(
@@ -140,7 +159,7 @@ pub async fn open_client(
     key: Option<&SecretKey>,
     record: &IntegrationRecord,
 ) -> Result<(DownloadClient, Folders), OpenError> {
-    if !matches!(record.kind.as_str(), "qbittorrent" | "sabnzbd") {
+    if !matches!(record.kind.as_str(), "qbittorrent" | "sabnzbd" | "nzbget") {
         return Err(OpenError::new(
             "INTEGRATION_OFF",
             format!("{} is not a download client", record.name),
@@ -161,57 +180,112 @@ pub async fn open_client(
             "this server reaches no integrations",
         ));
     };
-    let misconfigured = || {
+    let opener = Opener {
+        database,
+        http,
+        key,
+        record,
+    };
+    match record.kind.as_str() {
+        "qbittorrent" => opener.qbittorrent().await,
+        "sabnzbd" => opener.sabnzbd().await,
+        _ => opener.nzbget().await,
+    }
+}
+
+/// What opening one integration's client takes.
+struct Opener<'a> {
+    database: &'a Database,
+    http: &'a OutboundClient,
+    key: Option<&'a SecretKey>,
+    record: &'a IntegrationRecord,
+}
+
+impl Opener<'_> {
+    fn misconfigured(&self) -> OpenError {
         OpenError::new(
             "INTEGRATION_MISCONFIGURED",
             format!(
                 "{}'s settings no longer read; an administrator can save them again",
-                record.name
+                self.record.name
             ),
         )
-    };
-    let parse_url = |text: &str| Url::parse(text).map_err(|_| misconfigured());
-    if record.kind == "qbittorrent" {
-        let settings: QbittorrentSettings =
-            serde_json::from_value(record.configuration.clone()).map_err(|_| misconfigured())?;
-        let password = secret(database, key, record, "password").await?;
-        let client = QbittorrentClient::new(
-            http.clone(),
-            parse_url(&settings.base_url)?,
-            &settings.username,
-            password,
-        );
-        return Ok((
-            DownloadClient::Qbittorrent(client),
-            Folders {
-                category: settings.category,
-                client_path: settings.client_path,
-                local_root: settings.local_root,
-            },
-        ));
     }
-    let settings: SabnzbdSettings =
-        serde_json::from_value(record.configuration.clone()).map_err(|_| misconfigured())?;
-    let api_key = secret(database, key, record, "api_key")
-        .await?
-        .ok_or_else(|| {
+
+    fn settings<T: serde::de::DeserializeOwned>(&self) -> Result<T, OpenError> {
+        serde_json::from_value(self.record.configuration.clone()).map_err(|_| self.misconfigured())
+    }
+
+    fn url(&self, text: &str) -> Result<Url, OpenError> {
+        Url::parse(text).map_err(|_| self.misconfigured())
+    }
+
+    async fn secret(&self, field: &str) -> Result<Option<SecretString>, OpenError> {
+        secret(self.database, self.key, self.record, field).await
+    }
+
+    /// A secret the client cannot work without.
+    async fn required_secret(&self, field: &str, what: &str) -> Result<SecretString, OpenError> {
+        self.secret(field).await?.ok_or_else(|| {
             OpenError::new(
                 "INTEGRATION_MISCONFIGURED",
                 format!(
-                    "{} has no API key; an administrator can set one",
-                    record.name
+                    "{} has no {what}; an administrator can set one",
+                    self.record.name
                 ),
             )
-        })?;
-    let client = SabnzbdClient::new(http.clone(), parse_url(&settings.base_url)?, api_key);
-    Ok((
-        DownloadClient::Sabnzbd(client),
-        Folders {
-            category: settings.category,
-            client_path: settings.client_path,
-            local_root: settings.local_root,
-        },
-    ))
+        })
+    }
+
+    async fn qbittorrent(&self) -> Result<(DownloadClient, Folders), OpenError> {
+        let settings: QbittorrentSettings = self.settings()?;
+        let client = QbittorrentClient::new(
+            self.http.clone(),
+            self.url(&settings.base_url)?,
+            &settings.username,
+            self.secret("password").await?,
+        );
+        Ok((
+            DownloadClient::Qbittorrent(client),
+            folders(settings.category, settings.client_path, settings.local_root),
+        ))
+    }
+
+    async fn sabnzbd(&self) -> Result<(DownloadClient, Folders), OpenError> {
+        let settings: SabnzbdSettings = self.settings()?;
+        let client = SabnzbdClient::new(
+            self.http.clone(),
+            self.url(&settings.base_url)?,
+            self.required_secret("api_key", "API key").await?,
+        );
+        Ok((
+            DownloadClient::Sabnzbd(client),
+            folders(settings.category, settings.client_path, settings.local_root),
+        ))
+    }
+
+    async fn nzbget(&self) -> Result<(DownloadClient, Folders), OpenError> {
+        let settings: NzbgetSettings = self.settings()?;
+        let client = NzbgetClient::new(
+            self.http.clone(),
+            self.url(&settings.base_url)?,
+            &settings.username,
+            self.required_secret("password", "password").await?,
+        )
+        .map_err(|_| self.misconfigured())?;
+        Ok((
+            DownloadClient::Nzbget(client),
+            folders(settings.category, settings.client_path, settings.local_root),
+        ))
+    }
+}
+
+const fn folders(category: String, client_path: String, local_root: String) -> Folders {
+    Folders {
+        category,
+        client_path,
+        local_root,
+    }
 }
 
 /// An integration's secret `field`, opened, if one is stored.

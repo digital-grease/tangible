@@ -366,7 +366,7 @@ pub async fn create_one(
     let kind = ConfigurableKind::parse(&request.kind).ok_or_else(|| {
         Problem::new(
             ErrorCode::ValidationFailed,
-            "kind must be qbittorrent or sabnzbd; others are not configurable yet",
+            "kind must be qbittorrent, sabnzbd or nzbget; others are not configurable yet",
         )
     })?;
     let name = checked_name(&request.name)?;

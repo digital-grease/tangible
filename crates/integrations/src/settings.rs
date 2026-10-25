@@ -8,8 +8,8 @@
 //! paths fail to parse into. Its secrets (a password, an API key) are not
 //! settings: they are named here, entered separately, and stored sealed.
 //!
-//! qBittorrent (docs/plans/acquisition.md A4) and SABnzbd (A5) so far.
-//! NZBGet and S3 follow in their own phases.
+//! qBittorrent (docs/plans/acquisition.md A4), SABnzbd and NZBGet (A5) so
+//! far. S3 follows in its own phase.
 
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +22,8 @@ pub enum ConfigurableKind {
     Qbittorrent,
     /// A SABnzbd's API.
     Sabnzbd,
+    /// An NZBGet's JSON-RPC API.
+    Nzbget,
 }
 
 impl ConfigurableKind {
@@ -31,6 +33,7 @@ impl ConfigurableKind {
         match kind {
             "qbittorrent" => Some(Self::Qbittorrent),
             "sabnzbd" => Some(Self::Sabnzbd),
+            "nzbget" => Some(Self::Nzbget),
             _ => None,
         }
     }
@@ -41,6 +44,7 @@ impl ConfigurableKind {
         match self {
             Self::Qbittorrent => "qbittorrent",
             Self::Sabnzbd => "sabnzbd",
+            Self::Nzbget => "nzbget",
         }
     }
 
@@ -48,7 +52,7 @@ impl ConfigurableKind {
     #[must_use]
     pub const fn secret_fields(self) -> &'static [&'static str] {
         match self {
-            Self::Qbittorrent => &["password"],
+            Self::Qbittorrent | Self::Nzbget => &["password"],
             Self::Sabnzbd => &["api_key"],
         }
     }
@@ -145,6 +149,51 @@ impl SabnzbdSettings {
             base_url: checked_base_url(&settings.base_url, policy)?,
             category: checked_category(settings.category)?,
             client_path: checked_client_path(&settings.client_path, "SABnzbd")?,
+            local_root: checked_local_root(settings.local_root, known_roots)?,
+        })
+    }
+}
+
+/// How an NZBGet integration reaches its client and its client's downloads.
+/// Its password is a secret, not a setting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NzbgetSettings {
+    /// NZBGet's address, such as `http://192.168.1.13:6789/`.
+    pub base_url: String,
+    /// The control user (`ControlUsername`), or one with the same rights.
+    pub username: String,
+    /// The category Tangible adds NZBs under. It must exist in NZBGet:
+    /// NZBGet files an unknown one under that name, outside the folder a
+    /// category of its own would have.
+    #[serde(default = "default_category")]
+    pub category: String,
+    /// Where NZBGet puts that category's finished downloads, as NZBGet sees
+    /// it: an absolute path, such as `/downloads/completed/tangible`.
+    pub client_path: String,
+    /// The watched root on this server where the same folder is mounted,
+    /// read-only, by its id in `TANGIBLE_WATCH_ROOTS`.
+    pub local_root: String,
+}
+
+impl NzbgetSettings {
+    /// Check settings an administrator sent, answering them as they are
+    /// stored.
+    ///
+    /// # Errors
+    ///
+    /// As [`QbittorrentSettings::checked`].
+    pub fn checked(
+        value: &serde_json::Value,
+        known_roots: &[String],
+        policy: &OutboundPolicy,
+    ) -> Result<Self, SettingsError> {
+        let settings: Self = parsed(value)?;
+        Ok(Self {
+            base_url: checked_base_url(&settings.base_url, policy)?,
+            username: checked_username(&settings.username)?,
+            category: checked_category(settings.category)?,
+            client_path: checked_client_path(&settings.client_path, "NZBGet")?,
             local_root: checked_local_root(settings.local_root, known_roots)?,
         })
     }
@@ -247,6 +296,7 @@ pub fn checked_settings(
             stored(&QbittorrentSettings::checked(value, known_roots, policy)?)
         }
         ConfigurableKind::Sabnzbd => stored(&SabnzbdSettings::checked(value, known_roots, policy)?),
+        ConfigurableKind::Nzbget => stored(&NzbgetSettings::checked(value, known_roots, policy)?),
     }
 }
 
@@ -391,7 +441,12 @@ mod tests {
             Some(ConfigurableKind::Sabnzbd)
         );
         assert_eq!(ConfigurableKind::Sabnzbd.secret_fields(), ["api_key"]);
-        for other in ["romm", "nzbget", "s3", ""] {
+        assert_eq!(
+            ConfigurableKind::parse("nzbget"),
+            Some(ConfigurableKind::Nzbget)
+        );
+        assert_eq!(ConfigurableKind::Nzbget.secret_fields(), ["password"]);
+        for other in ["romm", "webhook", "s3", ""] {
             assert_eq!(ConfigurableKind::parse(other), None, "{other}");
         }
         assert_eq!(ConfigurableKind::Qbittorrent.secret_fields(), ["password"]);

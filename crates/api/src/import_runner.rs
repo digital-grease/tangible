@@ -378,7 +378,7 @@ impl ImportRunner {
                     .await
                     .map(|()| Acquired::Ready)
             }
-            "qbittorrent_job" | "sabnzbd_job" => self.follow_download(job).await,
+            "qbittorrent_job" | "sabnzbd_job" | "nzbget_job" => self.follow_download(job).await,
             // An upload sent in parts may name the length and digest its
             // sender expects; checked before anything is hashed or kept.
             "upload" if job.source_descriptor.get("expected_bytes").is_some() => {
@@ -388,8 +388,8 @@ impl ImportRunner {
         }
     }
 
-    /// Ask the client after its job: a torrent by infohash, a SABnzbd job
-    /// by its id. Still downloading, or the client unreachable or
+    /// Ask the client after its job: a torrent by infohash, a SABnzbd or
+    /// NZBGet job by its id. Still downloading, or the client unreachable or
     /// misconfigured: held, and asked again in a while, saying why when
     /// something is wrong. Finished: its path is mapped from the client's
     /// download folder onto the watched root it is mounted at, and copied in

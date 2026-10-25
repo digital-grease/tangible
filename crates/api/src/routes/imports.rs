@@ -191,8 +191,8 @@ pub struct DownloadClientView {
     pub id: String,
     /// Its name.
     pub name: String,
-    /// `qbittorrent` (takes a torrent or magnet link) or `sabnzbd` (takes
-    /// an NZB).
+    /// `qbittorrent` (takes a torrent or magnet link), or `sabnzbd` or
+    /// `nzbget` (take an NZB).
     pub kind: String,
 }
 
@@ -325,7 +325,7 @@ pub async fn list_sources(State(state): State<ApiState>) -> Result<Json<ImportSo
         })?
         .into_iter()
         .filter(|record| {
-            record.enabled && matches!(record.kind.as_str(), "qbittorrent" | "sabnzbd")
+            record.enabled && matches!(record.kind.as_str(), "qbittorrent" | "sabnzbd" | "nzbget")
         })
         .map(|record| DownloadClientView {
             id: record.id.to_string(),

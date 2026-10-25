@@ -7,7 +7,7 @@
 
 //! Handing a job the operator already has to a download client (ADR 0016,
 //! docs/plans/acquisition.md A4 and A5): a torrent or magnet link to
-//! qBittorrent, an NZB to SABnzbd. Tangible names the job itself (a
+//! qBittorrent, an NZB to SABnzbd or NZBGet. Tangible names the job itself (a
 //! torrent's infohash, an NZB's SHA-256) before the client is asked
 //! anything, so a job submitted again is found rather than doubled, adds it
 //! to the integration's category with nothing else (no save path, rename or
@@ -112,7 +112,9 @@ impl Submission {
         if given != 1 {
             return Err(refuse(match client {
                 DownloadClient::Qbittorrent(_) => "send either magnet or torrent, and nothing else",
-                DownloadClient::Sabnzbd(_) => "send an nzb, and nothing else",
+                DownloadClient::Sabnzbd(_) | DownloadClient::Nzbget(_) => {
+                    "send an nzb, and nothing else"
+                }
             }));
         }
         match (client, request) {
@@ -140,7 +142,7 @@ impl Submission {
                 Ok(Self::Torrent(bytes, hash))
             }
             (
-                DownloadClient::Sabnzbd(_),
+                DownloadClient::Sabnzbd(_) | DownloadClient::Nzbget(_),
                 SubmitJobRequest {
                     nzb: Some(text), ..
                 },
@@ -152,9 +154,10 @@ impl Submission {
             (DownloadClient::Qbittorrent(_), _) => Err(refuse(
                 "a qBittorrent takes a magnet link or a .torrent file, not an NZB",
             )),
-            (DownloadClient::Sabnzbd(_), _) => Err(refuse(
-                "SABnzbd takes an NZB, not a magnet link or a .torrent file",
-            )),
+            (DownloadClient::Sabnzbd(_) | DownloadClient::Nzbget(_), _) => Err(refuse(format!(
+                "{} takes an NZB, not a magnet link or a .torrent file",
+                client.name()
+            ))),
         }
     }
 
@@ -238,6 +241,34 @@ async fn hand_over(
             match client.add(bytes, &filename, &folders.category).await {
                 Ok(Some(nzo_id)) => Ok(nzo_id),
                 Ok(None) => Err(refuse("SABnzbd could not read the NZB")),
+                Err(error) => Err(failed(error).await),
+            }
+        }
+        (DownloadClient::Nzbget(client), Submission::Nzb(bytes, nzb)) => {
+            let categories = match client.categories().await {
+                Ok(categories) => categories,
+                Err(error) => return Err(failed(error).await),
+            };
+            // NZBGet matches category names regardless of case.
+            if !categories
+                .iter()
+                .any(|category| category.eq_ignore_ascii_case(&folders.category))
+            {
+                note_health(state, id, Err("INTEGRATION_MISCONFIGURED")).await;
+                return Err(Problem::new(
+                    ErrorCode::IntegrationMisconfigured,
+                    format!(
+                        "NZBGet has no category {}; add it under Settings, Categories, or NZBGet \
+                         files the download under that name, outside the folder a category of \
+                         its own would have",
+                        folders.category
+                    ),
+                ));
+            }
+            let filename = format!("{}.nzb", nzb.job_name());
+            match client.append(bytes, &filename, &folders.category).await {
+                Ok(Some(nzbid)) => Ok(nzbid.to_string()),
+                Ok(None) => Err(refuse("NZBGet refused the NZB")),
                 Err(error) => Err(failed(error).await),
             }
         }
@@ -344,6 +375,7 @@ pub async fn submit_job(
     let prefix = match client {
         DownloadClient::Qbittorrent(_) => "qbittorrent",
         DownloadClient::Sabnzbd(_) => "sabnzbd",
+        DownloadClient::Nzbget(_) => "nzbget",
     };
     let descriptor = serde_json::json!({
         "integration_id": id,

@@ -7,6 +7,9 @@ license.workspace = true
 publish = false
 
 [dependencies]
+# An NZB goes to NZBGet base64 in its JSON-RPC append. The same version the
+# API crate uses.
+base64 = "0.23.1"
 hex = "0.4.3"
 # The outbound client (ADR 0016): the same reqwest the worker already uses,
 # with rustls, and its own resolver.

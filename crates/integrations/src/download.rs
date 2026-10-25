@@ -150,7 +150,21 @@ pub fn relative_to(client_path: &str, content_path: &str) -> Option<String> {
 /// [`ClientError`] for a failed read, a body too large, or one not UTF-8.
 pub async fn read_text(
     client: &'static str,
+    response: reqwest::Response,
+) -> Result<String, ClientError> {
+    read_text_within(client, response, MAX_BODY_BYTES).await
+}
+
+/// A response body as text, read up to `max` bytes, for an answer known to
+/// run larger than most (a client's whole history).
+///
+/// # Errors
+///
+/// As [`read_text`].
+pub async fn read_text_within(
+    client: &'static str,
     mut response: reqwest::Response,
+    max: usize,
 ) -> Result<String, ClientError> {
     let mut body = Vec::new();
     while let Some(chunk) = response
@@ -161,10 +175,10 @@ pub async fn read_text(
             detail: error.without_url().to_string(),
         })?
     {
-        if body.len() + chunk.len() > MAX_BODY_BYTES {
+        if body.len() + chunk.len() > max {
             return Err(ClientError::bad(
                 client,
-                format!("the answer was larger than {MAX_BODY_BYTES} bytes"),
+                format!("the answer was larger than {max} bytes"),
             ));
         }
         body.extend_from_slice(&chunk);

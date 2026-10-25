@@ -2541,8 +2541,8 @@ export interface components {
             /** @description The integration's id. */
             id: string;
             /**
-             * @description `qbittorrent` (takes a torrent or magnet link) or `sabnzbd` (takes
-             *     an NZB).
+             * @description `qbittorrent` (takes a torrent or magnet link), or `sabnzbd` or
+             *     `nzbget` (take an NZB).
              */
             kind: string;
             /** @description Its name. */

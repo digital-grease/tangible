@@ -1,8 +1,13 @@
 // SPDX-FileCopyrightText: 2026 digitalgrease
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! NZBs handed to SABnzbd and imported when they finish
+//! NZBs handed to SABnzbd or NZBGet and imported when they finish
 //! (docs/plans/acquisition.md A5), through the real router and runner.
+//!
+//! NZBGet, further down, is a fake JSON-RPC endpoint speaking what was
+//! recorded from NZBGet 25.3 in fixtures/tool-output/nzbget: basic
+//! authentication, 401 for a wrong password, an NZBID for every append,
+//! listgroups then history.
 //!
 //! SABnzbd is a fake on 127.0.0.1 speaking the part of its API Tangible
 //! uses, as recorded from SABnzbd 4.5.3 in fixtures/tool-output/sabnzbd:
@@ -729,4 +734,349 @@ async fn a_real_sabnzbd_download_is_imported() {
     }
     assert_eq!(done["state"], "complete", "{done}");
     assert_eq!(done["source_kind"], "sabnzbd_job");
+}
+
+// --- NZBGet -------------------------------------------------------------------
+
+const NZBGET_USER: &str = "tangible";
+const NZBGET_PASSWORD: &str = "the-right-password";
+
+/// What the fake NZBGet holds.
+#[derive(Default)]
+struct FakeNzbget {
+    categories: Vec<String>,
+    /// Jobs in the queue, by NZBID, as listgroups entries.
+    queue: HashMap<i64, Value>,
+    /// Jobs in history, by NZBID, as history entries.
+    history: HashMap<i64, Value>,
+    /// The params of the appends it took.
+    appends: Vec<Value>,
+    /// What the next append answers, when not a new NZBID.
+    refuse: bool,
+}
+
+type SharedNzbget = Arc<Mutex<FakeNzbget>>;
+
+async fn jsonrpc(
+    State(fake): State<SharedNzbget>,
+    headers: HeaderMap,
+    axum::Json(call): axum::Json<Value>,
+) -> impl IntoResponse {
+    use base64::Engine as _;
+    let expected = format!(
+        "Basic {}",
+        base64::engine::general_purpose::STANDARD
+            .encode(format!("{NZBGET_USER}:{NZBGET_PASSWORD}"))
+    );
+    if headers.get("authorization").and_then(|v| v.to_str().ok()) != Some(expected.as_str()) {
+        return (StatusCode::UNAUTHORIZED, "").into_response();
+    }
+    let mut fake = fake.lock().unwrap();
+    let reply = |result: Value| axum::Json(json!({ "version": "1.1", "id": 1, "result": result }));
+    match call["method"].as_str().unwrap_or_default() {
+        "version" => reply(json!("25.3")).into_response(),
+        "config" => {
+            let mut options = vec![json!({ "Name": "ControlPassword", "Value": "never-kept" })];
+            for (n, name) in fake.categories.iter().enumerate() {
+                options.push(json!({ "Name": format!("Category{}.Name", n + 1), "Value": name }));
+            }
+            reply(json!(options)).into_response()
+        }
+        "append" => {
+            fake.appends.push(call["params"].clone());
+            if fake.refuse {
+                return reply(json!(0)).into_response();
+            }
+            let id = i64::try_from(fake.appends.len()).unwrap();
+            fake.queue.insert(
+                id,
+                json!({ "NZBID": id, "Status": "QUEUED", "FileSizeLo": 300_000, "FileSizeHi": 0,
+                        "RemainingSizeLo": 100_000, "RemainingSizeHi": 0 }),
+            );
+            reply(json!(id)).into_response()
+        }
+        "listgroups" => {
+            reply(json!(fake.queue.values().cloned().collect::<Vec<_>>())).into_response()
+        }
+        "history" => {
+            reply(json!(fake.history.values().cloned().collect::<Vec<_>>())).into_response()
+        }
+        _ => axum::Json(json!({ "version": "1.1", "id": 1,
+            "error": { "name": "JSONRPCError", "code": 1, "message": "Invalid procedure" } }))
+        .into_response(),
+    }
+}
+
+async fn fake_nzbget() -> (SocketAddr, SharedNzbget) {
+    let fake: SharedNzbget = Arc::new(Mutex::new(FakeNzbget {
+        // NZBGet matches category names regardless of case.
+        categories: vec!["Movies".to_owned(), "Tangible".to_owned()],
+        ..FakeNzbget::default()
+    }));
+    let app = axum::Router::new()
+        .route("/jsonrpc", axum::routing::post(jsonrpc))
+        .with_state(Arc::clone(&fake));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (address, fake)
+}
+
+impl Harness {
+    /// An NZBGet integration pointing at `base_url`.
+    async fn nzbget_at(
+        &self,
+        base_url: &str,
+        user: &str,
+        password: &str,
+        client_path: &str,
+    ) -> String {
+        let (status, made) = self
+            .send(
+                &self.admin,
+                Method::POST,
+                "/api/v1/integrations",
+                Some(json!({
+                    "kind": "nzbget",
+                    "name": format!("nzbget-{}", uuid::Uuid::now_v7().simple()),
+                    "settings": {
+                        "base_url": base_url,
+                        "username": user,
+                        "client_path": client_path,
+                        "local_root": "downloads",
+                    },
+                    "secrets": { "password": password },
+                })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{made}");
+        made["id"].as_str().unwrap().to_owned()
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+#[allow(clippy::too_many_lines)]
+async fn an_nzb_is_handed_to_nzbget_and_imported_when_it_succeeds() {
+    let harness = harness().await;
+    let (address, fake) = fake_nzbget().await;
+    let integration = harness
+        .nzbget_at(
+            &format!("http://{address}/"),
+            NZBGET_USER,
+            NZBGET_PASSWORD,
+            "/downloads/completed/tangible",
+        )
+        .await;
+    let nzb = unique_nzb();
+    let (status, job) = harness
+        .submit(&integration, json!({ "nzb": base64(&nzb) }))
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    let identity = job["identity"].as_str().unwrap().to_owned();
+    let nzbid = job["client_job_id"].as_str().unwrap().to_owned();
+    let import_id = job["import_id"].as_str().unwrap().to_owned();
+    {
+        let fake = fake.lock().unwrap();
+        let params = &fake.appends[0];
+        assert_eq!(params[0], format!("tangible-{}.nzb", &identity[..12]));
+        assert_eq!(params[1], base64(&nzb), "the NZB itself, base64");
+        assert_eq!(params[2], "tangible");
+        assert_eq!(params[5], false, "not paused");
+        assert_eq!(params[8], "FORCE", "Tangible decides what is a repeat");
+        assert_eq!(params[9], json!([]), "no post-processing parameters");
+    }
+
+    // Queued: held in acquiring with its progress.
+    harness.drain().await;
+    let held = harness.import(&import_id).await;
+    assert_eq!(held["state"], "acquiring", "{held}");
+    assert_eq!(held["bytes_expected"], 300_000);
+    assert_eq!(held["bytes_received"], 200_000);
+
+    let (status, again) = harness
+        .submit(&integration, json!({ "nzb": base64(&nzb) }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["outcome"], "already_active");
+    assert_eq!(fake.lock().unwrap().appends.len(), 1);
+
+    // Succeeded: its folder copied in from the watched root.
+    let folder = harness
+        .downloads
+        .join(format!("tangible-{}", &identity[..12]));
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(folder.join("disc.iso"), iso_image()).unwrap();
+    {
+        let mut fake = fake.lock().unwrap();
+        let id: i64 = nzbid.parse().unwrap();
+        fake.queue.remove(&id);
+        fake.history.insert(
+            id,
+            json!({ "NZBID": id, "Status": "SUCCESS/ALL", "FinalDir": "",
+                    "DestDir": format!("/downloads/completed/tangible/tangible-{}", &identity[..12]),
+                    "FileSizeLo": 65536, "FileSizeHi": 0 }),
+        );
+    }
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    harness.drain().await;
+    let done = harness.import(&import_id).await;
+    assert_eq!(done["state"], "complete", "{done}");
+    assert_eq!(done["source_kind"], "nzbget_job");
+    assert_eq!(done["source_reference"], format!("nzbget:{nzbid}"));
+    assert!(
+        folder.join("disc.iso").exists(),
+        "the client's copy is left"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn nzbget_failures_and_refusals_say_why() {
+    let harness = harness().await;
+    let (address, fake) = fake_nzbget().await;
+    let base = format!("http://{address}/");
+    let integration = harness
+        .nzbget_at(
+            &base,
+            NZBGET_USER,
+            NZBGET_PASSWORD,
+            "/downloads/completed/tangible",
+        )
+        .await;
+
+    // A job NZBGet failed ends the import with NZBGet's status.
+    let (status, job) = harness
+        .submit(&integration, json!({ "nzb": base64(&unique_nzb()) }))
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    {
+        let mut fake = fake.lock().unwrap();
+        let id: i64 = job["client_job_id"].as_str().unwrap().parse().unwrap();
+        fake.queue.remove(&id);
+        fake.history.insert(
+            id,
+            json!({ "NZBID": id, "Status": "FAILURE/UNPACK", "DestDir": "/downloads/intermediate/x" }),
+        );
+    }
+    harness.drain().await;
+    let ended = harness.import(job["import_id"].as_str().unwrap()).await;
+    assert_eq!(ended["state"], "failed_terminal", "{ended}");
+    assert_eq!(ended["error_code"], "INTEGRATION_JOB_FAILED");
+    assert!(
+        ended["error_detail"]
+            .as_str()
+            .unwrap()
+            .contains("FAILURE/UNPACK")
+    );
+
+    // Refused by NZBGet.
+    fake.lock().unwrap().refuse = true;
+    let (status, problem) = harness
+        .submit(&integration, json!({ "nzb": base64(&unique_nzb()) }))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{problem}");
+    fake.lock().unwrap().refuse = false;
+
+    // No such category: nothing appended, and Test says so.
+    fake.lock().unwrap().categories = vec!["Movies".to_owned()];
+    let before = fake.lock().unwrap().appends.len();
+    let (status, problem) = harness
+        .submit(&integration, json!({ "nzb": base64(&unique_nzb()) }))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{problem}");
+    assert_eq!(problem["code"], "INTEGRATION_MISCONFIGURED");
+    assert_eq!(fake.lock().unwrap().appends.len(), before);
+    let (_, tried) = harness
+        .send(
+            &harness.admin,
+            Method::POST,
+            &format!("/api/v1/integrations/{integration}/test"),
+            None,
+        )
+        .await;
+    assert_eq!(tried["ok"], false, "{tried}");
+    assert_eq!(tried["api_version"], "25.3");
+
+    // A wrong password is NZBGet's refusal, and never repeated back.
+    let wrong = harness
+        .nzbget_at(
+            &base,
+            NZBGET_USER,
+            "a-wrong-password",
+            "/downloads/completed/tangible",
+        )
+        .await;
+    let (status, problem) = harness
+        .submit(&wrong, json!({ "nzb": base64(&unique_nzb()) }))
+        .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{problem}");
+    assert_eq!(problem["code"], "INTEGRATION_AUTH_FAILED");
+    assert!(!problem.to_string().contains("a-wrong-password"));
+
+    // A torrent is not for NZBGet.
+    let (status, problem) = harness
+        .submit(&integration, json!({ "magnet": "magnet:?xt=urn:btih:abc" }))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{problem}");
+    assert!(
+        problem["detail"]
+            .as_str()
+            .unwrap()
+            .contains("NZBGet takes an NZB")
+    );
+}
+
+/// Against a real NZBGet, when one is named: the probe NZB, which its news
+/// server can serve, downloaded and imported end to end.
+///
+/// `TANGIBLE_TEST_NZBGET_URL`, `_USER`, `_PASSWORD`, `_CLIENT_PATH` (the
+/// `tangible` category's finished folder as NZBGet sees it) and
+/// `_DOWNLOADS` (the same folder here). Skips without them.
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_real_nzbget_download_is_imported() {
+    let vars = [
+        "TANGIBLE_TEST_NZBGET_URL",
+        "TANGIBLE_TEST_NZBGET_USER",
+        "TANGIBLE_TEST_NZBGET_PASSWORD",
+        "TANGIBLE_TEST_NZBGET_CLIENT_PATH",
+        "TANGIBLE_TEST_NZBGET_DOWNLOADS",
+    ]
+    .map(|name| std::env::var(name).ok());
+    let [
+        Some(url),
+        Some(user),
+        Some(password),
+        Some(client_path),
+        Some(downloads),
+    ] = vars
+    else {
+        eprintln!(
+            "skipping: set TANGIBLE_TEST_NZBGET_URL, _USER, _PASSWORD, _CLIENT_PATH and _DOWNLOADS"
+        );
+        return;
+    };
+    let harness = harness_with(Some(PathBuf::from(&downloads))).await;
+    let integration = harness
+        .nzbget_at(&url, &user, &password, &client_path)
+        .await;
+    let (status, job) = harness
+        .submit(&integration, json!({ "nzb": base64(&probe_nzb()) }))
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    let import_id = job["import_id"].as_str().unwrap().to_owned();
+    let mut done = Value::Null;
+    for _ in 0..30 {
+        harness.drain().await;
+        done = harness.import(&import_id).await;
+        if done["state"] != "acquiring" && done["state"] != "requested" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+    }
+    assert_eq!(done["state"], "complete", "{done}");
+    assert_eq!(done["source_kind"], "nzbget_job");
 }

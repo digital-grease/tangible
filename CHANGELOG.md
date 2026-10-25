@@ -119,6 +119,10 @@ may change between minor versions, and the release notes say how.
   redumper they also show the disc's write offset, whether the drive was
   treated as generic (with a hint to ask for cdrdao if its rips go wrong),
   and how many samples were read again.
+- NZBGet too (`kind` `nzbget`, with a user and password): an NZB is
+  appended to its category, which must exist, with no post-processing
+  parameters, and imported when NZBGet reports success. Tested against
+  NZBGet 25.3.
 - Operators can hand an NZB they already have to a SABnzbd an administrator
   configured (`kind` `sabnzbd`, with an API key), through the same
   `POST /api/v1/integrations/{id}/jobs` (`{"nzb": "<base64>"}`). The

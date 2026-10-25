@@ -309,6 +309,26 @@ script, and never removes a job or its files.
 Use SABnzbd's IP address, or add its host name to `host_whitelist` in its
 special settings: SABnzbd turns away host names it does not know.
 
+## Sending NZBs to NZBGet
+
+The same as SABnzbd above, with NZBGet's own words:
+
+1. In NZBGet, add a category (Settings, Categories), `tangible` by default.
+   NZBGet takes a category name it does not know and files the download
+   under it, outside the folder a category of its own would have, so
+   Tangible refuses to add anything until it exists.
+2. Mount its finished folder (`DestDir`, plus the category's folder) read-only
+   into Tangible's server and name it in `TANGIBLE_WATCH_ROOTS`.
+3. Add it with `POST /api/v1/integrations`: `kind` `nzbget`, its address,
+   the control user (`username`), the category, `client_path`,
+   `local_root`, and the control password as the `password` secret. A
+   restricted user cannot read the categories, and an add-only user cannot
+   follow a job.
+
+Tangible appends with no post-processing parameters and NZBGet's duplicate
+check off, since it keeps its own; a script you set on the category is
+yours, and runs as you set it.
+
 ## Integration secrets
 
 Download clients (qBittorrent, and SABnzbd and NZBGet later) sign in with a
