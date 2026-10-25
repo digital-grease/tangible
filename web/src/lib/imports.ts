@@ -24,6 +24,23 @@ export type IntegrationJobView = components['schemas']['IntegrationJobView'];
 /** The largest `.torrent` the server takes, as it says in its own limit. */
 export const MAX_TORRENT_BYTES = 8 * 1024 * 1024;
 
+/** The largest NZB the server takes, as it says in its own limit. */
+export const MAX_NZB_BYTES = 16 * 1024 * 1024;
+
+/** The download client an import's source kind names, in words, if any. */
+export function clientOfSource(sourceKind: string): string | null {
+  switch (sourceKind) {
+    case 'qbittorrent_job':
+      return 'qBittorrent';
+    case 'sabnzbd_job':
+      return 'SABnzbd';
+    case 'nzbget_job':
+      return 'NZBGet';
+    default:
+      return null;
+  }
+}
+
 function isProblem(value: unknown): value is Problem {
   return typeof value === 'object' && value !== null && 'code' in value && 'detail' in value;
 }
@@ -168,17 +185,26 @@ export async function torrentRequest(
   return link ? { magnet: link } : null;
 }
 
-/** What handing over a torrent came to, in words. */
-export function torrentOutcome(job: IntegrationJobView, client: string): string {
+/**
+ * What an NZB submission sends: the file, base64. `null` when there is no
+ * file, or it is past the server's limit.
+ */
+export async function nzbRequest(file: File | null | undefined): Promise<SubmitJobRequest | null> {
+  if (!file || file.size > MAX_NZB_BYTES) return null;
+  return { nzb: toBase64(new Uint8Array(await file.arrayBuffer())) };
+}
+
+/** What handing a job over came to, in words. */
+export function jobOutcome(job: IntegrationJobView, client: string): string {
   switch (job.outcome) {
     case 'created':
       return `Handed to ${client}. The import below follows it and brings it in when it finishes.`;
     case 'resubmitted':
       return `Handed to ${client} again; a new import follows it.`;
     case 'already_active':
-      return `${client} already has this torrent, and its import is under way below.`;
+      return `${client} already has this, and its import is under way below.`;
     case 'already_imported':
-      return 'This torrent is already in the library.';
+      return 'This is already in the library.';
     default:
       return `Handed to ${client}.`;
   }
@@ -194,7 +220,9 @@ export function sourceLabel(sourceKind: string): string {
     case 'http_url':
       return 'URL';
     case 'qbittorrent_job':
-      return 'qBittorrent';
+    case 'sabnzbd_job':
+    case 'nzbget_job':
+      return clientOfSource(sourceKind) ?? sourceKind;
     case 'physical_drive':
       return 'Ripped from a disc';
     default:
@@ -416,13 +444,13 @@ export function importStateLabel(
   switch (state) {
     case 'requested':
       return 'Queued';
-    case 'acquiring':
-      // A torrent import waits in acquiring while the client downloads, and
-      // says why when the client cannot be asked.
-      if (sourceKind === 'qbittorrent_job') {
-        return errorCode ? 'Waiting for qBittorrent' : 'Downloading in qBittorrent';
-      }
+    case 'acquiring': {
+      // A download client's import waits in acquiring while the client
+      // works, and says why when the client cannot be asked.
+      const client = clientOfSource(sourceKind ?? '');
+      if (client) return errorCode ? `Waiting for ${client}` : `Downloading in ${client}`;
       return sourceKind === 'http_url' ? 'Downloading' : 'Copying in';
+    }
     case 'staged':
       return 'Ready to process';
     case 'hashing':

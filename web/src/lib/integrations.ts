@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 digitalgrease
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Integrations, for administrators (ADR 0016): download clients and the
-// settings they need. A password is sent and never comes back; a view says
-// only whether one is set.
+// Integrations, for administrators (ADR 0016): download clients (qBittorrent,
+// SABnzbd, NZBGet) and the settings they need. A password or API key is sent
+// and never comes back; a view says only whether one is set.
 
 import type { components } from './api-types';
 import { apiCall, apiFetch, type Problem, type Result } from './session';
@@ -54,10 +54,15 @@ export function testIntegration(
   return apiCall(fetcher, `/api/v1/integrations/${encodeURIComponent(id)}/test`, 'POST');
 }
 
+/** What a client's reported version is a version of. */
+export function versionLabel(kind: string): string {
+  return kind === 'qbittorrent' ? 'WebUI API' : 'version';
+}
+
 /** How trying an integration went, in words. */
-export function testOutcome(name: string, test: IntegrationTestView): string {
+export function testOutcome(name: string, test: IntegrationTestView, kind = 'qbittorrent'): string {
   if (test.ok) {
-    return `${name} signed in${test.api_version ? `; WebUI API ${test.api_version}` : ''}.`;
+    return `${name} signed in${test.api_version ? `; ${versionLabel(kind)} ${test.api_version}` : ''}.`;
   }
   return `${name} did not work: ${test.detail ?? test.error_code ?? 'no reason given'}`;
 }
@@ -112,29 +117,96 @@ function fieldLabel(field: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-/** What the qBittorrent form holds. The password is never filled in from the server. */
-export type QbittorrentForm = {
+/** The download clients an administrator can set up here. */
+export type ClientKind = 'qbittorrent' | 'sabnzbd' | 'nzbget';
+
+/** The kinds, in the order offered. */
+export const CLIENT_KINDS: ClientKind[] = ['qbittorrent', 'sabnzbd', 'nzbget'];
+
+/** Whether an integration's kind has a form here. */
+export function isClientKind(kind: string): kind is ClientKind {
+  return (CLIENT_KINDS as string[]).includes(kind);
+}
+
+/** What differs between the kinds' forms. */
+export type ClientWording = {
+  /** The secret's field on the server. */
+  secretField: 'password' | 'api_key';
+  /** The secret's label. */
+  secretLabel: string;
+  /** Whether it takes a user name, and the label. */
+  usernameLabel: string | null;
+  /** Its address's label. */
+  addressLabel: string;
+  /** An example address. */
+  addressExample: string;
+  /** An example finished-download folder, as the client sees it. */
+  folderExample: string;
+  /** What a job is handed over as. */
+  takes: string;
+};
+
+/** How a kind's form reads. */
+export function clientWording(kind: ClientKind): ClientWording {
+  switch (kind) {
+    case 'qbittorrent':
+      return {
+        secretField: 'password',
+        secretLabel: 'WebUI password',
+        usernameLabel: 'WebUI user',
+        addressLabel: 'WebUI address',
+        addressExample: 'http://192.168.1.13:8080/',
+        folderExample: '/downloads/tangible',
+        takes: 'a .torrent file or a magnet link',
+      };
+    case 'sabnzbd':
+      return {
+        secretField: 'api_key',
+        secretLabel: 'API key',
+        usernameLabel: null,
+        addressLabel: 'SABnzbd address',
+        addressExample: 'http://192.168.1.13:8080/',
+        folderExample: '/downloads/complete/tangible',
+        takes: 'an NZB',
+      };
+    case 'nzbget':
+      return {
+        secretField: 'password',
+        secretLabel: 'Control password',
+        usernameLabel: 'Control user',
+        addressLabel: 'NZBGet address',
+        addressExample: 'http://192.168.1.13:6789/',
+        folderExample: '/downloads/completed/tangible',
+        takes: 'an NZB',
+      };
+  }
+}
+
+/** What the form holds. The secret is never filled in from the server. */
+export type ClientForm = {
+  kind: ClientKind;
   name: string;
   enabled: boolean;
   baseUrl: string;
   username: string;
-  password: string;
-  /** Editing only: remove the stored password. */
-  clearPassword: boolean;
+  secret: string;
+  /** Editing only: remove the stored secret. */
+  clearSecret: boolean;
   category: string;
   clientPath: string;
   localRoot: string;
 };
 
-/** An empty form, with the server's defaults. */
-export function emptyQbittorrentForm(roots: string[]): QbittorrentForm {
+/** An empty form for `kind`, with the server's defaults. */
+export function emptyClientForm(kind: ClientKind, roots: string[]): ClientForm {
   return {
+    kind,
     name: '',
     enabled: true,
     baseUrl: '',
     username: '',
-    password: '',
-    clearPassword: false,
+    secret: '',
+    clearSecret: false,
     category: 'tangible',
     clientPath: '',
     localRoot: roots.length === 1 ? (roots[0] ?? '') : '',
@@ -146,55 +218,59 @@ function text(settings: Record<string, unknown>, key: string): string {
   return typeof value === 'string' ? value : '';
 }
 
-/** A form filled from an integration, to edit it. The password stays empty. */
-export function qbittorrentFormFrom(view: IntegrationView): QbittorrentForm {
+/** A form filled from an integration, to edit it. The secret stays empty. */
+export function clientFormFrom(view: IntegrationView & { kind: ClientKind }): ClientForm {
   return {
+    kind: view.kind,
     name: view.name,
     enabled: view.enabled,
     baseUrl: text(view.settings, 'base_url'),
     username: text(view.settings, 'username'),
-    password: '',
-    clearPassword: false,
+    secret: '',
+    clearSecret: false,
     category: text(view.settings, 'category') || 'tangible',
     clientPath: text(view.settings, 'client_path'),
     localRoot: text(view.settings, 'local_root'),
   };
 }
 
-function qbittorrentSettings(form: QbittorrentForm): Record<string, unknown> {
-  return {
+function clientSettings(form: ClientForm): Record<string, unknown> {
+  const settings: Record<string, unknown> = {
     base_url: form.baseUrl.trim(),
-    username: form.username.trim(),
     category: form.category.trim() || 'tangible',
     client_path: form.clientPath.trim(),
     local_root: form.localRoot,
   };
+  // SABnzbd takes no user, and refuses a settings field it does not know.
+  if (clientWording(form.kind).usernameLabel !== null) settings.username = form.username.trim();
+  return settings;
 }
 
-/** The request that makes a qBittorrent integration from the form. */
-export function createQbittorrentRequest(form: QbittorrentForm): CreateIntegrationRequest {
+/** The request that makes an integration from the form. */
+export function createClientRequest(form: ClientForm): CreateIntegrationRequest {
   const request: CreateIntegrationRequest = {
-    kind: 'qbittorrent',
+    kind: form.kind,
     name: form.name.trim(),
     enabled: form.enabled,
-    settings: qbittorrentSettings(form),
+    settings: clientSettings(form),
   };
-  if (form.password !== '') request.secrets = { password: form.password };
+  if (form.secret !== '') request.secrets = { [clientWording(form.kind).secretField]: form.secret };
   return request;
 }
 
 /**
- * The request that changes a qBittorrent integration. An empty password
- * keeps the stored one; asking to clear it sends `null`.
+ * The request that changes an integration. An empty secret keeps the stored
+ * one; asking to clear it sends `null`.
  */
-export function updateQbittorrentRequest(form: QbittorrentForm): UpdateIntegrationRequest {
+export function updateClientRequest(form: ClientForm): UpdateIntegrationRequest {
+  const field = clientWording(form.kind).secretField;
   const request: UpdateIntegrationRequest = {
     name: form.name.trim(),
     enabled: form.enabled,
-    settings: qbittorrentSettings(form),
+    settings: clientSettings(form),
   };
-  if (form.clearPassword) request.secrets = { password: null };
-  else if (form.password !== '') request.secrets = { password: form.password };
+  if (form.clearSecret) request.secrets = { [field]: null };
+  else if (form.secret !== '') request.secrets = { [field]: form.secret };
   return request;
 }
 
@@ -202,9 +278,9 @@ export function updateQbittorrentRequest(form: QbittorrentForm): UpdateIntegrati
 export function integrationRefusal(problem: Problem): string {
   if (problem.code === 'SECRET_KEY_MISSING') {
     return (
-      'This server holds no secret key, so it cannot store a password. Set ' +
+      'This server holds no secret key, so it cannot store a password or API key. Set ' +
       'TANGIBLE_SECRET_KEY_FILE and restart it (deploy/README.md, "Integration secrets"), ' +
-      'or save this without a password for now.'
+      'or save this without one for now.'
     );
   }
   return problem.detail;

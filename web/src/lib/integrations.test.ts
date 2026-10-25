@@ -3,17 +3,20 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  createQbittorrentRequest,
+  clientFormFrom,
+  clientWording,
+  createClientRequest,
   deleteIntegration,
-  emptyQbittorrentForm,
+  emptyClientForm,
+  isClientKind,
   integrationRefusal,
   integrationStatusLabel,
   kindLabel,
-  qbittorrentFormFrom,
   secretsLabel,
   testIntegration,
   testOutcome,
-  updateQbittorrentRequest,
+  updateClientRequest,
+  versionLabel,
   type IntegrationView,
 } from './integrations';
 import type { Problem } from './session';
@@ -58,23 +61,23 @@ describe('integration labels', () => {
   });
 });
 
-describe('the qBittorrent form', () => {
+describe('the download client form', () => {
   it('starts with the defaults, picking the only watched root', () => {
-    expect(emptyQbittorrentForm(['downloads']).localRoot).toBe('downloads');
-    expect(emptyQbittorrentForm(['a', 'b']).localRoot).toBe('');
-    expect(emptyQbittorrentForm([]).category).toBe('tangible');
+    expect(emptyClientForm('qbittorrent', ['downloads']).localRoot).toBe('downloads');
+    expect(emptyClientForm('sabnzbd', ['a', 'b']).localRoot).toBe('');
+    expect(emptyClientForm('nzbget', []).category).toBe('tangible');
   });
 
-  it('makes an integration, sending a password only when one was typed', () => {
+  it('makes a qBittorrent, sending a password only when one was typed', () => {
     const form = {
-      ...emptyQbittorrentForm(['downloads']),
+      ...emptyClientForm('qbittorrent', ['downloads']),
       name: ' NAS ',
       baseUrl: ' http://nas:8080 ',
       username: 'tangible',
       clientPath: '/downloads/tangible',
       category: '',
     };
-    expect(createQbittorrentRequest(form)).toEqual({
+    expect(createClientRequest(form)).toEqual({
       kind: 'qbittorrent',
       name: 'NAS',
       enabled: true,
@@ -86,22 +89,66 @@ describe('the qBittorrent form', () => {
         local_root: 'downloads',
       },
     });
-    expect(createQbittorrentRequest({ ...form, password: ' secret ' }).secrets).toEqual({
+    expect(createClientRequest({ ...form, secret: ' secret ' }).secrets).toEqual({
       password: ' secret ',
     });
   });
 
-  it('edits an integration without ever holding its password', () => {
-    const form = qbittorrentFormFrom(qbittorrent());
-    expect(form.password).toBe('');
+  it('makes a SABnzbd with no user and an API key', () => {
+    const form = {
+      ...emptyClientForm('sabnzbd', ['downloads']),
+      name: 'SAB',
+      baseUrl: 'http://nas:8080/sabnzbd',
+      username: 'left over from another kind',
+      clientPath: '/downloads/complete/tangible',
+      secret: 'k',
+    };
+    const request = createClientRequest(form);
+    expect(request.kind).toBe('sabnzbd');
+    expect(request.settings).not.toHaveProperty('username');
+    expect(request.secrets).toEqual({ api_key: 'k' });
+  });
+
+  it('makes an NZBGet with a control user and password', () => {
+    const request = createClientRequest({
+      ...emptyClientForm('nzbget', ['downloads']),
+      name: 'NZBGet',
+      baseUrl: 'http://nas:6789/',
+      username: 'nzbget',
+      clientPath: '/downloads/completed/tangible',
+      secret: 'p',
+    });
+    expect(request.kind).toBe('nzbget');
+    expect(request.settings).toMatchObject({ username: 'nzbget' });
+    expect(request.secrets).toEqual({ password: 'p' });
+  });
+
+  it('edits an integration without ever holding its secret', () => {
+    const form = clientFormFrom({ ...qbittorrent(), kind: 'qbittorrent' });
+    expect(form.secret).toBe('');
     expect(form.baseUrl).toBe('http://192.168.1.13:8080/');
-    expect(updateQbittorrentRequest(form).secrets).toBeUndefined();
-    expect(updateQbittorrentRequest({ ...form, password: 'new' }).secrets).toEqual({
+    expect(updateClientRequest(form).secrets).toBeUndefined();
+    expect(updateClientRequest({ ...form, secret: 'new' }).secrets).toEqual({
       password: 'new',
     });
-    expect(
-      updateQbittorrentRequest({ ...form, password: 'ignored', clearPassword: true }).secrets,
-    ).toEqual({ password: null });
+    expect(updateClientRequest({ ...form, secret: 'ignored', clearSecret: true }).secrets).toEqual({
+      password: null,
+    });
+    const sab = clientFormFrom({
+      ...qbittorrent({ kind: 'sabnzbd', secrets: [{ field: 'api_key', set: true }] }),
+      kind: 'sabnzbd',
+    });
+    expect(updateClientRequest({ ...sab, clearSecret: true }).secrets).toEqual({ api_key: null });
+  });
+
+  it('words each kind, and knows which kinds have a form', () => {
+    expect(clientWording('qbittorrent').secretLabel).toBe('WebUI password');
+    expect(clientWording('sabnzbd').usernameLabel).toBeNull();
+    expect(clientWording('nzbget').usernameLabel).toBe('Control user');
+    expect(isClientKind('nzbget')).toBe(true);
+    expect(isClientKind('romm')).toBe(false);
+    expect(versionLabel('qbittorrent')).toBe('WebUI API');
+    expect(versionLabel('sabnzbd')).toBe('version');
   });
 
   it('says what to do when the server has no key', () => {
@@ -136,6 +183,9 @@ describe('trying an integration', () => {
   it('says how it went', () => {
     expect(testOutcome('NAS', { ok: true, api_version: '2.11.4' })).toBe(
       'NAS signed in; WebUI API 2.11.4.',
+    );
+    expect(testOutcome('SAB', { ok: true, api_version: '4.5.3' }, 'sabnzbd')).toBe(
+      'SAB signed in; version 4.5.3.',
     );
     expect(
       testOutcome('NAS', {

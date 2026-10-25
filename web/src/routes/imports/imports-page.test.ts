@@ -223,6 +223,49 @@ describe('Imports page, sending a torrent to a download client', () => {
     expect(JSON.parse(sent?.body ?? '{}')).toEqual({ torrent: 'ZGUA/w==' });
   });
 
+  it('sends an .nzb to a Usenet client and lists its import in words', async () => {
+    const sab = { id: 's1', name: 'SAB', kind: 'sabnzbd' };
+    const asked = server({
+      '/api/v1/import-sources': sources(false, [NAS, sab]),
+      '/api/v1/imports': {
+        status: 200,
+        body: {
+          items: [
+            torrentImport({
+              id: 'n1',
+              source_kind: 'sabnzbd_job',
+              source_reference: 'sabnzbd:SABnzbd_nzo_x',
+            }),
+          ],
+        },
+      },
+      'POST /api/v1/integrations/s1/jobs': {
+        status: 202,
+        body: {
+          integration_id: 's1',
+          identity: 'a'.repeat(64),
+          client_job_id: 'SABnzbd_nzo_x',
+          import_id: 'n1',
+          outcome: 'created',
+          artifact_id: null,
+        },
+      },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    render(ImportsPage);
+    await fireEvent.change(await screen.findByLabelText('Client'), { target: { value: 's1' } });
+    expect(screen.queryByLabelText('or a magnet link')).toBeNull();
+    const nzb = new File([new Uint8Array([60, 110, 122, 98])], 'x.nzb');
+    await fireEvent.change(screen.getByLabelText('.nzb file'), { target: { files: [nzb] } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Send to SAB' }));
+    expect(await screen.findByText(/Handed to SAB/)).toBeTruthy();
+    const sent = asked.find((call) => call.method === 'POST');
+    expect(sent?.url).toBe('/api/v1/integrations/s1/jobs');
+    expect(JSON.parse(sent?.body ?? '{}')).toEqual({ nzb: 'PG56Yg==' });
+    expect(await screen.findByText('Downloading in SABnzbd')).toBeTruthy();
+    expect(screen.getByText('sabnzbd:SABnzbd_nzo_x')).toBeTruthy();
+  });
+
   it('says an import is waiting when the client cannot be asked', async () => {
     server({
       '/api/v1/import-sources': sources(false, [NAS]),

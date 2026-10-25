@@ -191,7 +191,7 @@ describe('Integrations page', () => {
     await fill('WebUI password', 'hunter2');
     await fill('Download folder, as qBittorrent sees it', '/downloads');
     await fireEvent.click(screen.getByRole('button', { name: 'Add qBittorrent' }));
-    const alert = await screen.findByText(/save this without a password/);
+    const alert = await screen.findByText(/save this without one/);
     expect(alert.textContent).toContain('TANGIBLE_SECRET_KEY_FILE');
     expect((screen.getByLabelText('WebUI password') as HTMLInputElement).value).toBe('');
     expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('NAS');
@@ -231,6 +231,69 @@ describe('Integrations page', () => {
     expect(asked.some((a) => a.method === 'POST' && a.url.endsWith('/test'))).toBe(true);
     expect(await screen.findByText('WebUI API 2.11.4')).toBeTruthy();
     expect(screen.getByText('Working')).toBeTruthy();
+  });
+
+  it('adds a SABnzbd, which takes an API key and no user', async () => {
+    const asked = server({
+      'GET /api/v1/integrations': [list([]), list([])],
+      'GET /api/v1/import-sources': sources,
+      'POST /api/v1/integrations': { status: 201, body: nas({ kind: 'sabnzbd', name: 'SAB' }) },
+    });
+    render(IntegrationsPage);
+    await screen.findByText(/No integrations yet/);
+    await fireEvent.change(screen.getByLabelText('Kind'), { target: { value: 'sabnzbd' } });
+    expect(screen.queryByLabelText('WebUI user')).toBeNull();
+    expect(screen.getByText(/It must exist in SABnzbd first/)).toBeTruthy();
+    await fill('Name', 'SAB');
+    await fill('SABnzbd address', 'http://192.168.1.13:8080/sabnzbd');
+    await fill('API key', 'the-key');
+    await fill('Download folder, as SABnzbd sees it', '/downloads/complete/tangible');
+    await fireEvent.click(screen.getByRole('button', { name: 'Add SABnzbd' }));
+    expect(await screen.findByText('Added SAB.')).toBeTruthy();
+    const post = asked.find((a) => a.method === 'POST');
+    expect(post?.body).toEqual({
+      kind: 'sabnzbd',
+      name: 'SAB',
+      enabled: true,
+      settings: {
+        base_url: 'http://192.168.1.13:8080/sabnzbd',
+        category: 'tangible',
+        client_path: '/downloads/complete/tangible',
+        local_root: 'downloads',
+      },
+      secrets: { api_key: 'the-key' },
+    });
+    expect((screen.getByLabelText('API key') as HTMLInputElement).value).toBe('');
+  });
+
+  it('edits and tests an NZBGet like any client', async () => {
+    const nzbget = nas({
+      id: 'n1',
+      kind: 'nzbget',
+      name: 'Usenet',
+      settings: {
+        base_url: 'http://192.168.1.13:6789/',
+        username: 'nzbget',
+        category: 'tangible',
+        client_path: '/downloads/completed/tangible',
+        local_root: 'downloads',
+      },
+      client_version: '25.3',
+    });
+    server({
+      'GET /api/v1/integrations': [list([nzbget]), list([nzbget])],
+      'GET /api/v1/import-sources': sources,
+      'POST /api/v1/integrations/n1/test': { status: 200, body: { ok: true, api_version: '25.3' } },
+    });
+    render(IntegrationsPage);
+    expect(await screen.findByText('version 25.3')).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: 'Test Usenet' }));
+    expect(await screen.findByText(/Usenet signed in; version 25.3/)).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: 'Edit Usenet' }));
+    expect(screen.queryByLabelText('Kind')).toBeNull();
+    expect((screen.getByLabelText('Control user') as HTMLInputElement).value).toBe('nzbget');
+    expect((screen.getByLabelText('Control password') as HTMLInputElement).value).toBe('');
+    expect(screen.getByLabelText('Remove the stored password')).toBeTruthy();
   });
 
   it('tells anyone else it is for administrators', async () => {

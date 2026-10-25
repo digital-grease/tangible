@@ -296,15 +296,14 @@ script, and never removes a job or its files.
    folder, as for qBittorrent above: mount it, and name it in
    `TANGIBLE_WATCH_ROOTS`.
 3. Make an integration secret key (below), so the API key can be stored.
-4. As an administrator, add the SABnzbd with `POST /api/v1/integrations`
-   (the Integrations page gains a form for it soon): `kind` `sabnzbd`, its
-   address, the category, the finished folder as SABnzbd sees it
-   (`client_path`), the watched root (`local_root`), and its API key
-   (Config, General) as the `api_key` secret.
-   `POST /api/v1/integrations/{id}/test` checks the key and the category.
-5. Hand it an NZB with `POST /api/v1/integrations/{id}/jobs`,
-   `{"nzb": "<base64>"}`; operators may. The same NZB again is answered with
-   the import already made, and not downloaded twice.
+4. As an administrator, add it on the Integrations page, as kind SABnzbd:
+   its address, the category, the finished folder as SABnzbd sees it, the
+   watched root, and its API key (Config, General). "Test" checks the key
+   and the category.
+5. Operators send it an `.nzb` under "Send to a download client" on the
+   Imports page. The same NZB again is answered with the import already
+   made, and not downloaded twice. (The API is
+   `POST /api/v1/integrations/{id}/jobs`, `{"nzb": "<base64>"}`.)
 
 Use SABnzbd's IP address, or add its host name to `host_whitelist` in its
 special settings: SABnzbd turns away host names it does not know.
@@ -319,11 +318,11 @@ The same as SABnzbd above, with NZBGet's own words:
    Tangible refuses to add anything until it exists.
 2. Mount its finished folder (`DestDir`, plus the category's folder) read-only
    into Tangible's server and name it in `TANGIBLE_WATCH_ROOTS`.
-3. Add it with `POST /api/v1/integrations`: `kind` `nzbget`, its address,
-   the control user (`username`), the category, `client_path`,
-   `local_root`, and the control password as the `password` secret. A
-   restricted user cannot read the categories, and an add-only user cannot
-   follow a job.
+3. Add it on the Integrations page, as kind NZBGet: its address, the
+   control user and password, the category, the finished folder as NZBGet
+   sees it, and the watched root. A restricted user cannot read the
+   categories, and an add-only user cannot follow a job. Operators send it
+   an `.nzb` from the Imports page, as for SABnzbd.
 
 Tangible appends with no post-processing parameters and NZBGet's duplicate
 check off, since it keeps its own; a script you set on the category is

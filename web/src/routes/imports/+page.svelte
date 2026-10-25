@@ -5,6 +5,7 @@
   import { onDestroy, onMount } from 'svelte';
   import {
     canCancel,
+    clientOfSource,
     canRetry,
     cancelImport,
     importFromUrl,
@@ -16,8 +17,10 @@
     retryImport,
     sendTorrent,
     sourceLabel,
-    torrentOutcome,
+    jobOutcome,
+    nzbRequest,
     torrentRequest,
+    MAX_NZB_BYTES,
     MAX_TORRENT_BYTES,
     transferFraction,
     PARTS_ABOVE_BYTES,
@@ -45,12 +48,17 @@
   let clientId = $state('');
   let magnet = $state('');
   let torrentFiles = $state<FileList | null>(null);
+  let nzbFiles = $state<FileList | null>(null);
   let handedOver = $state<string | null>(null);
   let torrentRefusal = $state<string | null>(null);
 
-  /** The clients a torrent can go to. */
-  const torrentClients = $derived(
-    (sources?.download_clients ?? []).filter((client) => client.kind === 'qbittorrent'),
+  /** The download clients a job can go to. */
+  const clients = $derived(sources?.download_clients ?? []);
+  const chosenClient = $derived(clients.find((client) => client.id === clientId));
+  /** SABnzbd and NZBGet take an NZB; qBittorrent a torrent or magnet link. */
+  const takesNzb = $derived(chosenClient !== undefined && chosenClient.kind !== 'qbittorrent');
+  const nothingChosen = $derived(
+    takesNzb ? !nzbFiles?.length : !torrentFiles?.length && magnet.trim() === '',
   );
 
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -79,7 +87,7 @@
     if (found.kind === 'ready') {
       sources = found.data;
       pathId = found.data.watch_roots[0] ?? '';
-      clientId = found.data.download_clients.find((c) => c.kind === 'qbittorrent')?.id ?? '';
+      clientId = found.data.download_clients[0]?.id ?? '';
     }
     await refresh();
     timer = setInterval(refresh, RECONCILE_MS);
@@ -156,13 +164,21 @@
     problem = null;
     handedOver = null;
     torrentRefusal = null;
-    const client = torrentClients.find((candidate) => candidate.id === clientId);
+    const client = chosenClient;
     if (!client) return;
-    const body = await torrentRequest(magnet, torrentFiles?.[0]);
+    const body = takesNzb
+      ? await nzbRequest(nzbFiles?.[0])
+      : await torrentRequest(magnet, torrentFiles?.[0]);
     if (!body) {
-      torrentRefusal = torrentFiles?.[0]
-        ? `A .torrent file is at most ${formatBytes(MAX_TORRENT_BYTES)}.`
-        : 'Choose a .torrent file or paste a magnet link.';
+      if (takesNzb) {
+        torrentRefusal = nzbFiles?.[0]
+          ? `An NZB is at most ${formatBytes(MAX_NZB_BYTES)}.`
+          : 'Choose an .nzb file.';
+      } else {
+        torrentRefusal = torrentFiles?.[0]
+          ? `A .torrent file is at most ${formatBytes(MAX_TORRENT_BYTES)}.`
+          : 'Choose a .torrent file or paste a magnet link.';
+      }
       return;
     }
     busy = true;
@@ -170,9 +186,10 @@
     if (result.kind === 'error') {
       problem = result.problem;
     } else {
-      handedOver = torrentOutcome(result.data, client.name);
+      handedOver = jobOutcome(result.data, client.name);
       magnet = '';
       torrentFiles = null;
+      nzbFiles = null;
       await refresh();
     }
     busy = false;
@@ -320,63 +337,66 @@
 </section>
 
 <section aria-labelledby="torrent-heading">
-  <h2 id="torrent-heading">Send a torrent to a download client</h2>
-  {#if torrentClients.length === 0}
+  <h2 id="torrent-heading">Send to a download client</h2>
+  {#if clients.length === 0}
     <p>
-      No download client is set up. An administrator can add a qBittorrent on the
+      No download client is set up. An administrator can add qBittorrent, SABnzbd or NZBGet on the
       <a href="/integrations">Integrations</a> page.
     </p>
   {:else}
     <form onsubmit={sendToClient}>
       <p>
         <small
-          >For a torrent you already have. It is added to the client's Tangible category and
-          imported here when it finishes; seeding, and anything else, stay the client's business.
-          Tangible never searches for anything.</small
+          >For a torrent or an NZB you already have. It is added to the client's Tangible category
+          and imported here when it finishes; seeding, cleaning up and anything else stay the
+          client's business. Tangible never searches for anything.</small
         >
       </p>
-      {#if torrentClients.length > 1}
+      {#if clients.length > 1}
         <p>
           <label for="client">Client</label><br />
           <select id="client" bind:value={clientId}>
-            {#each torrentClients as client (client.id)}
+            {#each clients as client (client.id)}
               <option value={client.id}>{client.name}</option>
             {/each}
           </select>
         </p>
       {/if}
-      <p>
-        <label for="torrent-file">.torrent file</label><br />
-        <input
-          id="torrent-file"
-          type="file"
-          accept=".torrent,application/x-bittorrent"
-          bind:files={torrentFiles}
-        />
-      </p>
-      <p>
-        <label for="magnet">or a magnet link</label><br />
-        <input
-          id="magnet"
-          bind:value={magnet}
-          placeholder="magnet:?xt=urn:btih:…"
-          spellcheck="false"
-          autocomplete="off"
-          disabled={!!torrentFiles?.length}
-        />
-      </p>
+      {#if takesNzb}
+        <p>
+          <label for="nzb-file">.nzb file</label><br />
+          <input id="nzb-file" type="file" accept=".nzb,application/x-nzb" bind:files={nzbFiles} />
+        </p>
+      {:else}
+        <p>
+          <label for="torrent-file">.torrent file</label><br />
+          <input
+            id="torrent-file"
+            type="file"
+            accept=".torrent,application/x-bittorrent"
+            bind:files={torrentFiles}
+          />
+        </p>
+        <p>
+          <label for="magnet">or a magnet link</label><br />
+          <input
+            id="magnet"
+            bind:value={magnet}
+            placeholder="magnet:?xt=urn:btih:…"
+            spellcheck="false"
+            autocomplete="off"
+            disabled={!!torrentFiles?.length}
+          />
+        </p>
+      {/if}
       <div role="alert">
         {#if torrentRefusal}<p>{torrentRefusal}</p>{/if}
       </div>
       <div aria-live="polite">
         {#if handedOver}<p>{handedOver}</p>{/if}
       </div>
-      <button type="submit" disabled={busy || (!torrentFiles?.length && magnet.trim() === '')}>
-        {busy
-          ? 'Working…'
-          : `Send to ${
-              torrentClients.find((client) => client.id === clientId)?.name ?? 'the client'
-            }`}
+      <button type="submit" disabled={busy || nothingChosen}>
+        {busy ? 'Working…' : `Send to ${chosenClient?.name ?? 'the client'}`}
       </button>
     </form>
   {/if}
@@ -411,7 +431,7 @@
               <th scope="row">{job.source_filename ?? job.id.slice(0, 8)}</th>
               <td>
                 {sourceLabel(job.source_kind)}
-                {#if (job.source_kind === 'http_url' || job.source_kind === 'qbittorrent_job') && job.source_reference}
+                {#if (job.source_kind === 'http_url' || clientOfSource(job.source_kind)) && job.source_reference}
                   <br /><small class="reference">{job.source_reference}</small>
                 {/if}
               </td>

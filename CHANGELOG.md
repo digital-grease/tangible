@@ -119,6 +119,10 @@ may change between minor versions, and the release notes say how.
   redumper they also show the disc's write offset, whether the drive was
   treated as generic (with a hint to ask for cdrdao if its rips go wrong),
   and how many samples were read again.
+- The Integrations page sets up SABnzbd and NZBGet as well as qBittorrent,
+  and tests and edits all three; the Imports page sends an `.nzb` to a
+  Usenet client as it sends a torrent to qBittorrent, and names their
+  imports ("Downloading in SABnzbd").
 - NZBGet too (`kind` `nzbget`, with a user and password): an NZB is
   appended to its category, which must exist, with no post-processing
   parameters, and imported when NZBGet reports success. Tested against

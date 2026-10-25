@@ -16,8 +16,11 @@ import {
   sendTorrent,
   sourceLabel,
   toBase64,
-  torrentOutcome,
+  clientOfSource,
+  jobOutcome,
+  nzbRequest,
   torrentRequest,
+  MAX_NZB_BYTES,
   MAX_TORRENT_BYTES,
   transferFraction,
   uploadInParts,
@@ -394,6 +397,13 @@ describe('torrents for a download client', () => {
       'Waiting for qBittorrent',
     );
     expect(importStateLabel('acquiring', 'http_url', 'X')).toBe('Downloading');
+    expect(sourceLabel('sabnzbd_job')).toBe('SABnzbd');
+    expect(sourceLabel('nzbget_job')).toBe('NZBGet');
+    expect(importStateLabel('acquiring', 'nzbget_job')).toBe('Downloading in NZBGet');
+    expect(importStateLabel('acquiring', 'sabnzbd_job', 'INTEGRATION_AUTH_FAILED')).toBe(
+      'Waiting for SABnzbd',
+    );
+    expect(clientOfSource('upload')).toBeNull();
   });
 
   it('writes bytes as base64, however many', () => {
@@ -410,6 +420,10 @@ describe('torrents for a download client', () => {
     expect(await torrentRequest('   ', undefined)).toBeNull();
     const huge = { size: MAX_TORRENT_BYTES + 1 } as File;
     expect(await torrentRequest('', huge)).toBeNull();
+    const nzb = new File([new Uint8Array([60, 110, 122, 98])], 'x.nzb');
+    expect(await nzbRequest(nzb)).toEqual({ nzb: 'PG56Yg==' });
+    expect(await nzbRequest(null)).toBeNull();
+    expect(await nzbRequest({ size: MAX_NZB_BYTES + 1 } as File)).toBeNull();
   });
 
   it('says what handing over came to', () => {
@@ -421,10 +435,10 @@ describe('torrents for a download client', () => {
       outcome: 'created',
       artifact_id: null,
     };
-    expect(torrentOutcome(job, 'NAS')).toMatch(/^Handed to NAS\./);
-    expect(torrentOutcome({ ...job, outcome: 'already_active' }, 'NAS')).toMatch(/under way/);
-    expect(torrentOutcome({ ...job, outcome: 'already_imported' }, 'NAS')).toMatch(/library/);
-    expect(torrentOutcome({ ...job, outcome: 'resubmitted' }, 'NAS')).toMatch(/again/);
+    expect(jobOutcome(job, 'NAS')).toMatch(/^Handed to NAS\./);
+    expect(jobOutcome({ ...job, outcome: 'already_active' }, 'NAS')).toMatch(/under way/);
+    expect(jobOutcome({ ...job, outcome: 'already_imported' }, 'NAS')).toMatch(/library/);
+    expect(jobOutcome({ ...job, outcome: 'resubmitted' }, 'NAS')).toMatch(/again/);
   });
 
   it('posts to the integration, escaped', async () => {
