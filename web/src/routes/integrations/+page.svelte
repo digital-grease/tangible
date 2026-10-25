@@ -18,6 +18,8 @@
     loadIntegrations,
     qbittorrentFormFrom,
     secretsLabel,
+    testIntegration,
+    testOutcome,
     updateIntegration,
     updateQbittorrentRequest,
     type IntegrationView,
@@ -41,6 +43,10 @@
   let submitting = $state(false);
   let refusal = $state<string | null>(null);
   let done = $state<string | null>(null);
+
+  /** The integration being tried, and what trying said. */
+  let testing = $state<string | null>(null);
+  let tested = $state<{ id: string; text: string; ok: boolean } | null>(null);
 
   /** Removing is a second, deliberate action. */
   let confirmingRemove = $state<string | null>(null);
@@ -100,6 +106,22 @@
     done = editing ? `Saved ${result.data.name}.` : `Added ${result.data.name}.`;
     editing = null;
     form = emptyQbittorrentForm(roots ?? []);
+    await refresh();
+  }
+
+  async function test(item: IntegrationView) {
+    testing = item.id;
+    tested = null;
+    const result = await testIntegration(item.id);
+    testing = null;
+    tested =
+      result.kind === 'ok'
+        ? { id: item.id, text: testOutcome(item.name, result.data), ok: result.data.ok }
+        : {
+            id: item.id,
+            text: `${item.name} could not be tried: ${result.problem.detail}`,
+            ok: false,
+          };
     await refresh();
   }
 
@@ -175,6 +197,7 @@
               <td>
                 {integrationStatusLabel(item)}
                 {#if item.last_error_code}<br /><small>{item.last_error_code}</small>{/if}
+                {#if item.client_version}<br /><small>WebUI API {item.client_version}</small>{/if}
               </td>
               <td>{secretsLabel(item)}</td>
               <td>{when(item.last_success_at)}</td>
@@ -193,6 +216,15 @@
                     <ErrorPanel problem={removeProblem} area="import" refusal />
                   {/if}
                 {:else}
+                  {#if item.kind === 'qbittorrent'}
+                    <button
+                      type="button"
+                      onclick={() => test(item)}
+                      disabled={testing !== null || !item.enabled}
+                      aria-label={`Test ${item.name}`}
+                      >{testing === item.id ? 'Testing…' : 'Test'}</button
+                    >
+                  {/if}
                   <button
                     type="button"
                     onclick={() => startEditing(item)}
@@ -218,6 +250,9 @@
 
 <div aria-live="polite">
   {#if done}<p>{done}</p>{/if}
+  {#if tested}
+    <p><strong>{tested.ok ? 'Working.' : 'Not working.'}</strong> {tested.text}</p>
+  {/if}
 </div>
 
 {#if view.kind === 'ready'}

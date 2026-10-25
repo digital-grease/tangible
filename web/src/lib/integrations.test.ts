@@ -11,6 +11,8 @@ import {
   kindLabel,
   qbittorrentFormFrom,
   secretsLabel,
+  testIntegration,
+  testOutcome,
   updateQbittorrentRequest,
   type IntegrationView,
 } from './integrations';
@@ -127,5 +129,35 @@ describe('the qBittorrent form', () => {
     const result = await deleteIntegration('a/b', fetcher);
     expect(result.kind).toBe('ok');
     expect(seen).toEqual(['DELETE /api/v1/integrations/a%2Fb']);
+  });
+});
+
+describe('trying an integration', () => {
+  it('says how it went', () => {
+    expect(testOutcome('NAS', { ok: true, api_version: '2.11.4' })).toBe(
+      'NAS signed in; WebUI API 2.11.4.',
+    );
+    expect(
+      testOutcome('NAS', {
+        ok: false,
+        error_code: 'INTEGRATION_AUTH_FAILED',
+        detail: 'qBittorrent refused to sign in: the user name or password is wrong',
+      }),
+    ).toBe('NAS did not work: qBittorrent refused to sign in: the user name or password is wrong');
+  });
+
+  it('posts to the integration, escaped', async () => {
+    const seen: string[] = [];
+    const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
+      seen.push(`${init?.method} ${String(input)}`);
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        json: async () => ({ ok: true }),
+      } as Response;
+    }) as typeof fetch;
+    await testIntegration('a/b', fetcher);
+    expect(seen).toEqual(['POST /api/v1/integrations/a%2Fb/test']);
   });
 });

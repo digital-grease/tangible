@@ -265,11 +265,10 @@ seeding and cleaning up stay qBittorrent's business.
 3. As an administrator, add the qBittorrent on the Integrations page: its
    WebUI address, a user and password, the category, the download folder as
    qBittorrent sees it (`/downloads/tangible`), and the watched root
-   (`torrents`). `POST /api/v1/integrations/{id}/test` signs in and records
-   the WebUI's API version.
-4. Hand it a torrent with `POST /api/v1/integrations/{id}/jobs`,
-   `{"magnet": "magnet:?xt=urn:btih:..."}` or `{"torrent": "<base64>"}`;
-   operators may.
+   (`torrents`). "Test" signs in and shows the WebUI's API version.
+4. Operators hand it a torrent under "Send a torrent to a download client" on
+   the Imports page: a `.torrent` file or a magnet link. (The API is
+   `POST /api/v1/integrations/{id}/jobs`.)
 
 A LAN address is fine. The address must use the port qBittorrent's WebUI
 itself listens on: with its host header validation on (the default), a
@@ -277,9 +276,10 @@ request to a remapped port is turned away before the password is looked at.
 A qBittorrent on this machine's loopback address is reached only if you list
 it in `TANGIBLE_OUTBOUND_ALLOW` (such as `127.0.0.1/32`).
 
-While a torrent downloads, its import waits in `acquiring` with its
-progress. If qBittorrent cannot be reached, or the password is wrong, the
-import waits and says why, and the integration shows as failing. A torrent
+While a torrent downloads, its import shows "Downloading in qBittorrent" with
+its progress. If qBittorrent cannot be reached, or the password is wrong, the
+import shows "Waiting for qBittorrent" and why, and the integration shows as
+failing. A torrent
 qBittorrent reports in error, removes, or keeps outside the category's
 folder ends the import.
 

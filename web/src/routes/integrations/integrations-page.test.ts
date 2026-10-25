@@ -213,6 +213,26 @@ describe('Integrations page', () => {
     expect(await screen.findByText(/No integrations yet/)).toBeTruthy();
   });
 
+  it('tries a client and says how it went', async () => {
+    const asked = server({
+      'GET /api/v1/integrations': [
+        list([nas()]),
+        list([nas({ status: 'ok', client_version: '2.11.4' })]),
+      ],
+      'GET /api/v1/import-sources': sources,
+      'POST /api/v1/integrations/i1/test': {
+        status: 200,
+        body: { ok: true, api_version: '2.11.4' },
+      },
+    });
+    render(IntegrationsPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Test NAS' }));
+    expect(await screen.findByText(/NAS signed in; WebUI API 2.11.4/)).toBeTruthy();
+    expect(asked.some((a) => a.method === 'POST' && a.url.endsWith('/test'))).toBe(true);
+    expect(await screen.findByText('WebUI API 2.11.4')).toBeTruthy();
+    expect(screen.getByText('Working')).toBeTruthy();
+  });
+
   it('tells anyone else it is for administrators', async () => {
     server({
       'GET /api/v1/integrations': problem(403, 'FORBIDDEN', 'administrators only'),

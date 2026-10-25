@@ -12,6 +12,7 @@ export type IntegrationView = components['schemas']['IntegrationView'];
 export type IntegrationList = components['schemas']['IntegrationList'];
 export type CreateIntegrationRequest = components['schemas']['CreateIntegrationRequest'];
 export type UpdateIntegrationRequest = components['schemas']['UpdateIntegrationRequest'];
+export type IntegrationTestView = components['schemas']['IntegrationTestView'];
 
 /** Every integration, and whether the server can store a password. */
 export function loadIntegrations(
@@ -43,6 +44,22 @@ export function deleteIntegration(
   fetcher: typeof fetch = apiFetch,
 ): Promise<Result<undefined>> {
   return apiCall(fetcher, `/api/v1/integrations/${encodeURIComponent(id)}`, 'DELETE');
+}
+
+/** Try an integration: sign in and ask the client's API version. */
+export function testIntegration(
+  id: string,
+  fetcher: typeof fetch = apiFetch,
+): Promise<Result<IntegrationTestView>> {
+  return apiCall(fetcher, `/api/v1/integrations/${encodeURIComponent(id)}/test`, 'POST');
+}
+
+/** How trying an integration went, in words. */
+export function testOutcome(name: string, test: IntegrationTestView): string {
+  if (test.ok) {
+    return `${name} signed in${test.api_version ? `; WebUI API ${test.api_version}` : ''}.`;
+  }
+  return `${name} did not work: ${test.detail ?? test.error_code ?? 'no reason given'}`;
 }
 
 /** A kind in words. */

@@ -14,7 +14,11 @@
     loadImportSources,
     loadImports,
     retryImport,
+    sendTorrent,
     sourceLabel,
+    torrentOutcome,
+    torrentRequest,
+    MAX_TORRENT_BYTES,
     transferFraction,
     PARTS_ABOVE_BYTES,
     uploadImport,
@@ -38,6 +42,11 @@
   let relativePath = $state('');
   let url = $state('');
   let sha256 = $state('');
+  let clientId = $state('');
+  let magnet = $state('');
+  let torrentFiles = $state<FileList | null>(null);
+  let handedOver = $state<string | null>(null);
+  let torrentRefusal = $state<string | null>(null);
 
   let timer: ReturnType<typeof setInterval> | undefined;
 
@@ -65,6 +74,7 @@
     if (found.kind === 'ready') {
       sources = found.data;
       pathId = found.data.watch_roots[0] ?? '';
+      clientId = found.data.download_clients[0]?.id ?? '';
     }
     await refresh();
     timer = setInterval(refresh, RECONCILE_MS);
@@ -130,6 +140,34 @@
     } else {
       url = '';
       sha256 = '';
+      await refresh();
+    }
+    busy = false;
+  }
+
+  async function sendToClient(event: SubmitEvent) {
+    event.preventDefault();
+    if (busy || !sources) return;
+    problem = null;
+    handedOver = null;
+    torrentRefusal = null;
+    const client = sources.download_clients.find((candidate) => candidate.id === clientId);
+    if (!client) return;
+    const body = await torrentRequest(magnet, torrentFiles?.[0]);
+    if (!body) {
+      torrentRefusal = torrentFiles?.[0]
+        ? `A .torrent file is at most ${formatBytes(MAX_TORRENT_BYTES)}.`
+        : 'Choose a .torrent file or paste a magnet link.';
+      return;
+    }
+    busy = true;
+    const result = await sendTorrent(client.id, body);
+    if (result.kind === 'error') {
+      problem = result.problem;
+    } else {
+      handedOver = torrentOutcome(result.data, client.name);
+      magnet = '';
+      torrentFiles = null;
       await refresh();
     }
     busy = false;
@@ -276,6 +314,70 @@
   {/if}
 </section>
 
+<section aria-labelledby="torrent-heading">
+  <h2 id="torrent-heading">Send a torrent to a download client</h2>
+  {#if !sources || sources.download_clients.length === 0}
+    <p>
+      No download client is set up. An administrator can add a qBittorrent on the
+      <a href="/integrations">Integrations</a> page.
+    </p>
+  {:else}
+    <form onsubmit={sendToClient}>
+      <p>
+        <small
+          >For a torrent you already have. It is added to the client's Tangible category and
+          imported here when it finishes; seeding, and anything else, stay the client's business.
+          Tangible never searches for anything.</small
+        >
+      </p>
+      {#if sources.download_clients.length > 1}
+        <p>
+          <label for="client">Client</label><br />
+          <select id="client" bind:value={clientId}>
+            {#each sources.download_clients as client (client.id)}
+              <option value={client.id}>{client.name}</option>
+            {/each}
+          </select>
+        </p>
+      {/if}
+      <p>
+        <label for="torrent-file">.torrent file</label><br />
+        <input
+          id="torrent-file"
+          type="file"
+          accept=".torrent,application/x-bittorrent"
+          bind:files={torrentFiles}
+        />
+      </p>
+      <p>
+        <label for="magnet">or a magnet link</label><br />
+        <input
+          id="magnet"
+          bind:value={magnet}
+          placeholder="magnet:?xt=urn:btih:…"
+          spellcheck="false"
+          autocomplete="off"
+          disabled={!!torrentFiles?.length}
+        />
+      </p>
+      <div role="alert">
+        {#if torrentRefusal}<p>{torrentRefusal}</p>{/if}
+      </div>
+      <div aria-live="polite">
+        {#if handedOver}<p>{handedOver}</p>{/if}
+      </div>
+      <button type="submit" disabled={busy || (!torrentFiles?.length && magnet.trim() === '')}>
+        {busy
+          ? 'Working…'
+          : `Send to ${
+              sources.download_clients.find((client) => client.id === clientId)?.name ??
+              'the client'
+            }`}
+      </button>
+    </form>
+  {/if}
+</section>
+
 <section aria-labelledby="queue-heading">
   <h2 id="queue-heading">Recent imports</h2>
 
@@ -305,7 +407,7 @@
               <th scope="row">{job.source_filename ?? job.id.slice(0, 8)}</th>
               <td>
                 {sourceLabel(job.source_kind)}
-                {#if job.source_kind === 'http_url' && job.source_reference}
+                {#if (job.source_kind === 'http_url' || job.source_kind === 'qbittorrent_job') && job.source_reference}
                   <br /><small class="reference">{job.source_reference}</small>
                 {/if}
               </td>
@@ -313,7 +415,7 @@
                 <!-- A symbol carries the status alongside any styling, so it
                      is never communicated by colour alone. -->
                 <span aria-hidden="true">{importStateMark(job.state)}</span>
-                {importStateLabel(job.state, job.source_kind)}
+                {importStateLabel(job.state, job.source_kind, job.error_code)}
                 {#if transferFraction(job) !== null}
                   <progress max="100" value={(transferFraction(job) ?? 0) * 100}></progress>
                 {/if}

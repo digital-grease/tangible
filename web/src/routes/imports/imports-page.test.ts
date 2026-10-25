@@ -35,7 +35,10 @@ function server(routes: Record<string, Reply>): Asked[] {
   return asked;
 }
 
-function sources(urlImports: boolean) {
+function sources(
+  urlImports: boolean,
+  downloadClients: { id: string; name: string; kind: string }[] = [],
+) {
   return {
     status: 200,
     body: {
@@ -43,6 +46,7 @@ function sources(urlImports: boolean) {
       max_upload_bytes: 1024,
       url_imports: urlImports,
       url_imports_allow_http: false,
+      download_clients: downloadClients,
     },
   };
 }
@@ -127,5 +131,114 @@ describe('Imports page, importing from a URL', () => {
     await fireEvent.input(address, { target: { value: 'https://10.0.0.5/disc.iso' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Fetch and import' }));
     expect(await screen.findByText(/private network address/)).toBeTruthy();
+  });
+});
+
+const NAS = { id: 'q1', name: 'NAS', kind: 'qbittorrent' };
+const HASH = '23760839656b18c262361c3019426c1e717b7310';
+
+function torrentImport(overrides: Record<string, unknown> = {}) {
+  return {
+    ...DOWNLOADING,
+    id: 't1',
+    source_kind: 'qbittorrent_job',
+    source_filename: null,
+    source_reference: `qbittorrent:${HASH}`,
+    bytes_expected: 300000,
+    bytes_received: 150000,
+    ...overrides,
+  };
+}
+
+describe('Imports page, sending a torrent to a download client', () => {
+  it('points to the Integrations page where there is no client', async () => {
+    server({
+      '/api/v1/import-sources': sources(false),
+      '/api/v1/imports': { status: 200, body: { items: [] } },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    render(ImportsPage);
+    expect(await screen.findByText(/No download client is set up/)).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Integrations' }).getAttribute('href')).toBe(
+      '/integrations',
+    );
+    expect(screen.queryByLabelText('or a magnet link')).toBeNull();
+  });
+
+  it('hands a magnet link over and says what happens next', async () => {
+    const asked = server({
+      '/api/v1/import-sources': sources(false, [NAS]),
+      '/api/v1/imports': { status: 200, body: { items: [torrentImport()] } },
+      'POST /api/v1/integrations/q1/jobs': {
+        status: 202,
+        body: {
+          integration_id: 'q1',
+          infohash: HASH,
+          import_id: 't1',
+          outcome: 'created',
+          artifact_id: null,
+        },
+      },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    render(ImportsPage);
+    const magnet = await screen.findByLabelText('or a magnet link');
+    await fireEvent.input(magnet, { target: { value: `  magnet:?xt=urn:btih:${HASH}  ` } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Send to NAS' }));
+    expect(await screen.findByText(/Handed to NAS/)).toBeTruthy();
+    const sent = asked.find((call) => call.method === 'POST');
+    expect(sent?.url).toBe('/api/v1/integrations/q1/jobs');
+    expect(JSON.parse(sent?.body ?? '{}')).toEqual({ magnet: `magnet:?xt=urn:btih:${HASH}` });
+    expect(await screen.findByText('Downloading in qBittorrent')).toBeTruthy();
+    expect(screen.getByText('qBittorrent')).toBeTruthy();
+    expect(screen.getByText(`qbittorrent:${HASH}`)).toBeTruthy();
+  });
+
+  it('sends a chosen .torrent file as base64', async () => {
+    const asked = server({
+      '/api/v1/import-sources': sources(false, [NAS]),
+      '/api/v1/imports': { status: 200, body: { items: [] } },
+      'POST /api/v1/integrations/q1/jobs': {
+        status: 200,
+        body: {
+          integration_id: 'q1',
+          infohash: HASH,
+          import_id: 't1',
+          outcome: 'already_imported',
+          artifact_id: 'a1',
+        },
+      },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    render(ImportsPage);
+    const input = await screen.findByLabelText('.torrent file');
+    const file = new File([new Uint8Array([100, 101, 0, 255])], 'x.torrent');
+    await fireEvent.change(input, { target: { files: [file] } });
+    expect((screen.getByLabelText('or a magnet link') as HTMLInputElement).disabled).toBe(true);
+    await fireEvent.click(screen.getByRole('button', { name: 'Send to NAS' }));
+    expect(await screen.findByText(/already in the library/)).toBeTruthy();
+    const sent = asked.find((call) => call.method === 'POST');
+    expect(JSON.parse(sent?.body ?? '{}')).toEqual({ torrent: 'ZGUA/w==' });
+  });
+
+  it('says an import is waiting when the client cannot be asked', async () => {
+    server({
+      '/api/v1/import-sources': sources(false, [NAS]),
+      '/api/v1/imports': {
+        status: 200,
+        body: {
+          items: [
+            torrentImport({
+              error_code: 'INTEGRATION_UNREACHABLE',
+              error_detail: 'qBittorrent could not be reached: connection refused',
+            }),
+          ],
+        },
+      },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    render(ImportsPage);
+    expect(await screen.findByText('Waiting for qBittorrent')).toBeTruthy();
+    expect(screen.getByText(/could not be reached/)).toBeTruthy();
   });
 });

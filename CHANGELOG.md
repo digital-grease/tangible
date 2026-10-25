@@ -129,7 +129,11 @@ may change between minor versions, and the release notes say how.
   asked. `POST /api/v1/integrations/{id}/test` signs in and records the
   client's version. `GET /api/v1/import-sources` lists the clients operators
   may use. Database migration 0017 adds a table and a column; it is
-  additive. Tested against qBittorrent 5.1.2.
+  additive. Tested against qBittorrent 5.1.2. On the Imports page, "Send a
+  torrent to a download client" takes a `.torrent` file or a magnet link,
+  and a torrent's import reads "Downloading in qBittorrent" with its
+  progress, or "Waiting for qBittorrent" and why. The Integrations page
+  gains "Test", and shows the client's WebUI API version.
 - Administrators can configure integrations through the API
   (`/api/v1/integrations`, a new `manage_integrations` permission held by
   administrators), starting with qBittorrent's settings: its address (a LAN

@@ -13,7 +13,12 @@ import {
   loadImportSources,
   loadImports,
   retryImport,
+  sendTorrent,
   sourceLabel,
+  toBase64,
+  torrentOutcome,
+  torrentRequest,
+  MAX_TORRENT_BYTES,
   transferFraction,
   uploadInParts,
   uploadKey,
@@ -378,5 +383,62 @@ describe('uploads sent in parts', () => {
     expect(result.kind).toBe('error');
     expect(asked.filter((call) => call.path.endsWith('/parts/1'))).toHaveLength(3);
     expect(remembered.entries[uploadKey(file)]).toBe('u1');
+  });
+});
+
+describe('torrents for a download client', () => {
+  it('names the source and the waiting in words', () => {
+    expect(sourceLabel('qbittorrent_job')).toBe('qBittorrent');
+    expect(importStateLabel('acquiring', 'qbittorrent_job')).toBe('Downloading in qBittorrent');
+    expect(importStateLabel('acquiring', 'qbittorrent_job', 'INTEGRATION_OFF')).toBe(
+      'Waiting for qBittorrent',
+    );
+    expect(importStateLabel('acquiring', 'http_url', 'X')).toBe('Downloading');
+  });
+
+  it('writes bytes as base64, however many', () => {
+    expect(toBase64(new Uint8Array([]))).toBe('');
+    expect(toBase64(new Uint8Array([100, 101, 0, 255]))).toBe('ZGUA/w==');
+    const big = new Uint8Array(100_000).map((_, i) => i % 256);
+    expect(atob(toBase64(big)).length).toBe(100_000);
+  });
+
+  it('sends the file when there is one, else the magnet, else nothing', async () => {
+    const file = new File([new Uint8Array([1, 2, 3])], 'x.torrent');
+    expect(await torrentRequest('magnet:?xt=x', file)).toEqual({ torrent: 'AQID' });
+    expect(await torrentRequest('  magnet:?xt=x ', null)).toEqual({ magnet: 'magnet:?xt=x' });
+    expect(await torrentRequest('   ', undefined)).toBeNull();
+    const huge = { size: MAX_TORRENT_BYTES + 1 } as File;
+    expect(await torrentRequest('', huge)).toBeNull();
+  });
+
+  it('says what handing over came to', () => {
+    const job = {
+      integration_id: 'q1',
+      infohash: 'h',
+      import_id: 'i',
+      outcome: 'created',
+      artifact_id: null,
+    };
+    expect(torrentOutcome(job, 'NAS')).toMatch(/^Handed to NAS\./);
+    expect(torrentOutcome({ ...job, outcome: 'already_active' }, 'NAS')).toMatch(/under way/);
+    expect(torrentOutcome({ ...job, outcome: 'already_imported' }, 'NAS')).toMatch(/library/);
+    expect(torrentOutcome({ ...job, outcome: 'resubmitted' }, 'NAS')).toMatch(/again/);
+  });
+
+  it('posts to the integration, escaped', async () => {
+    const seen: string[] = [];
+    const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
+      seen.push(`${init?.method} ${String(input)} ${String(init?.body)}`);
+      return {
+        ok: true,
+        status: 202,
+        headers: new Headers(),
+        json: async () => ({ outcome: 'created' }),
+      } as Response;
+    }) as typeof fetch;
+    const result = await sendTorrent('a/b', { magnet: 'magnet:?xt=x' }, fetcher);
+    expect(result.kind).toBe('ready');
+    expect(seen).toEqual(['POST /api/v1/integrations/a%2Fb/jobs {"magnet":"magnet:?xt=x"}']);
   });
 });

@@ -17,6 +17,12 @@ export type ImportSources = components['schemas']['ImportSources'];
 export type CreateImportRequest = components['schemas']['CreateImportRequest'];
 export type UrlImportRequest = components['schemas']['UrlImportRequest'];
 export type UploadView = components['schemas']['UploadView'];
+export type DownloadClient = components['schemas']['DownloadClientView'];
+export type SubmitTorrentRequest = components['schemas']['SubmitTorrentRequest'];
+export type IntegrationJobView = components['schemas']['IntegrationJobView'];
+
+/** The largest `.torrent` the server takes, as it says in its own limit. */
+export const MAX_TORRENT_BYTES = 8 * 1024 * 1024;
 
 function isProblem(value: unknown): value is Problem {
   return typeof value === 'object' && value !== null && 'code' in value && 'detail' in value;
@@ -114,6 +120,70 @@ export function urlImportRequest(url: string, sha256: string): UrlImportRequest 
   return { url: url.trim(), ...(digest ? { expected_sha256: digest } : {}) };
 }
 
+/**
+ * Hand a torrent the operator already has to a download client (ADR 0016).
+ * The import that follows it is in the list once the client has it.
+ */
+export async function sendTorrent(
+  integrationId: string,
+  body: SubmitTorrentRequest,
+  fetcher: typeof fetch = apiFetch,
+): Promise<CommandResult<IntegrationJobView>> {
+  const result = await request<IntegrationJobView>(
+    fetcher,
+    `/api/v1/integrations/${encodeURIComponent(integrationId)}/jobs`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  );
+  if (isProblem(result)) return { kind: 'error', problem: result };
+  return { kind: 'ready', data: result };
+}
+
+/** Bytes as base64, in slices, so a large file does not overflow the stack. */
+export function toBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let start = 0; start < bytes.length; start += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(start, start + 0x8000));
+  }
+  return btoa(binary);
+}
+
+/**
+ * What a torrent submission sends: the `.torrent` file when one was chosen,
+ * otherwise the magnet link. `null` when there is neither, or the file is
+ * past the server's limit.
+ */
+export async function torrentRequest(
+  magnet: string,
+  file: File | null | undefined,
+): Promise<SubmitTorrentRequest | null> {
+  if (file) {
+    if (file.size > MAX_TORRENT_BYTES) return null;
+    return { torrent: toBase64(new Uint8Array(await file.arrayBuffer())) };
+  }
+  const link = magnet.trim();
+  return link ? { magnet: link } : null;
+}
+
+/** What handing over a torrent came to, in words. */
+export function torrentOutcome(job: IntegrationJobView, client: string): string {
+  switch (job.outcome) {
+    case 'created':
+      return `Handed to ${client}. The import below follows it and brings it in when it finishes.`;
+    case 'resubmitted':
+      return `Handed to ${client} again; a new import follows it.`;
+    case 'already_active':
+      return `${client} already has this torrent, and its import is under way below.`;
+    case 'already_imported':
+      return 'This torrent is already in the library.';
+    default:
+      return `Handed to ${client}.`;
+  }
+}
+
 /** Where an import came from, in words. */
 export function sourceLabel(sourceKind: string): string {
   switch (sourceKind) {
@@ -123,6 +193,8 @@ export function sourceLabel(sourceKind: string): string {
       return 'Watched folder';
     case 'http_url':
       return 'URL';
+    case 'qbittorrent_job':
+      return 'qBittorrent';
     case 'physical_drive':
       return 'Ripped from a disc';
     default:
@@ -336,11 +408,20 @@ export async function retryImport(
  * The states are the pipeline's; the words are the operator's. "Hashing" and
  * "inspecting" mean nothing to somebody who just dropped a file on a page.
  */
-export function importStateLabel(state: string, sourceKind?: string): string {
+export function importStateLabel(
+  state: string,
+  sourceKind?: string,
+  errorCode?: string | null,
+): string {
   switch (state) {
     case 'requested':
       return 'Queued';
     case 'acquiring':
+      // A torrent import waits in acquiring while the client downloads, and
+      // says why when the client cannot be asked.
+      if (sourceKind === 'qbittorrent_job') {
+        return errorCode ? 'Waiting for qBittorrent' : 'Downloading in qBittorrent';
+      }
       return sourceKind === 'http_url' ? 'Downloading' : 'Copying in';
     case 'staged':
       return 'Ready to process';
