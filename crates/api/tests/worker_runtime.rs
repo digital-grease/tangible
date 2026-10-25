@@ -344,6 +344,12 @@ impl Server {
         body["id"].as_str().expect("a job id").to_owned()
     }
 
+    /// Cancel queued burns, and imports any earlier run left claimable.
+    ///
+    /// The queues are shared with every earlier run: an import a killed run
+    /// queued is claimed by the next runner that steps, using up the steps a
+    /// test gives its own import, and failing against a staging directory
+    /// that is gone. Cancelled rather than deleted, as the import tests do.
     async fn drain_queue(&self) {
         sqlx::query(
             "UPDATE burn_jobs SET state = 'canceled', completed_at = now() WHERE state = 'queued'",
@@ -351,6 +357,14 @@ impl Server {
         .execute(&self.pool)
         .await
         .expect("drain");
+        sqlx::query(
+            "UPDATE import_jobs SET state = 'canceled', lease_owner = NULL, lease_expires_at = NULL
+             WHERE state IN ('requested', 'acquiring', 'staged', 'hashing', 'inspecting',
+                             'registering', 'failed_retryable')",
+        )
+        .execute(&self.pool)
+        .await
+        .expect("drain the import queue");
     }
 
     /// Wait for a job to settle, returning its final view.

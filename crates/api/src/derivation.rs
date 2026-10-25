@@ -605,30 +605,26 @@ impl DerivationRunner {
     where
         S: Future<Output = ()> + Send,
     {
-        let mut shutdown = Box::pin(shutdown);
-        loop {
-            let worked = tokio::select! {
-                () = &mut shutdown => {
-                    tracing::info!("derivation runner stopping");
-                    return;
+        crate::background::run_steps(
+            shutdown,
+            || async {
+                match self.step().await {
+                    Ok(worked) => worked,
+                    Err(error) => {
+                        tracing::error!(error = ?error, "the derivation queue could not be read");
+                        false
+                    }
                 }
-                worked = self.step() => worked,
-            };
-            let idle = match worked {
-                Ok(worked) => !worked,
-                Err(error) => {
-                    tracing::error!(error = ?error, "the derivation queue could not be read");
-                    true
-                }
-            };
-            if idle {
+            },
+            || async {
                 tokio::select! {
-                    () = &mut shutdown => return,
                     () = self.derivations.nudge.notified() => {}
                     () = tokio::time::sleep(self.settings.poll_interval) => {}
                 }
-            }
-        }
+            },
+        )
+        .await;
+        tracing::info!("derivation runner stopped");
     }
 
     /// Take one job and run it. Returns whether there was one.

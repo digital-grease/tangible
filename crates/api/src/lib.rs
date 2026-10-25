@@ -9,6 +9,7 @@
 //! generate.
 
 pub mod auth;
+pub mod background;
 pub mod burn_report;
 pub mod catalog;
 pub mod derivation;

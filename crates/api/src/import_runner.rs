@@ -118,31 +118,21 @@ impl ImportRunner {
     where
         S: Future<Output = ()> + Send,
     {
-        let mut shutdown = Box::pin(shutdown);
-        loop {
-            let step = self.step();
-            tokio::select! {
-                () = &mut shutdown => {
-                    tracing::info!("import runner stopping");
-                    return;
-                }
-                worked = step => {
-                    let idle = match worked {
-                        Ok(worked) => !worked,
-                        Err(error) => {
-                            tracing::error!(error = ?error, "the import queue could not be read");
-                            true
-                        }
-                    };
-                    if idle {
-                        tokio::select! {
-                            () = &mut shutdown => return,
-                            () = tokio::time::sleep(self.settings.poll_interval) => {}
-                        }
+        crate::background::run_steps(
+            shutdown,
+            || async {
+                match self.step().await {
+                    Ok(worked) => worked,
+                    Err(error) => {
+                        tracing::error!(error = ?error, "the import queue could not be read");
+                        false
                     }
                 }
-            }
-        }
+            },
+            || tokio::time::sleep(self.settings.poll_interval),
+        )
+        .await;
+        tracing::info!("import runner stopped");
     }
 
     /// Claim one import and run it. Returns whether there was any.
