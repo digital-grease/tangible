@@ -22,10 +22,9 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use tangible_domain::SecretString;
+use tangible_integrations::download::{ClientError, Phase};
 use tangible_integrations::outbound::{OutboundClient, OutboundPolicy, Url};
-use tangible_integrations::qbittorrent::{
-    Added, Phase, QbittorrentClient, QbittorrentError, TorrentSource,
-};
+use tangible_integrations::qbittorrent::{Added, QbittorrentClient, TorrentSource};
 use tangible_integrations::torrent::infohash_of_torrent;
 
 fn client(password: Option<&str>) -> Option<QbittorrentClient> {
@@ -102,7 +101,7 @@ async fn a_wrong_password_is_told_apart() {
         return;
     };
     let error = client.sign_in().await.expect_err("refused");
-    assert!(matches!(error, QbittorrentError::Auth(_)), "{error}");
+    assert!(matches!(error, ClientError::Auth { .. }), "{error}");
     assert_eq!(error.code(), "INTEGRATION_AUTH_FAILED");
     assert!(error.to_string().contains("wrong"), "{error}");
 }

@@ -48,6 +48,11 @@
   let handedOver = $state<string | null>(null);
   let torrentRefusal = $state<string | null>(null);
 
+  /** The clients a torrent can go to. */
+  const torrentClients = $derived(
+    (sources?.download_clients ?? []).filter((client) => client.kind === 'qbittorrent'),
+  );
+
   let timer: ReturnType<typeof setInterval> | undefined;
 
   /**
@@ -74,7 +79,7 @@
     if (found.kind === 'ready') {
       sources = found.data;
       pathId = found.data.watch_roots[0] ?? '';
-      clientId = found.data.download_clients[0]?.id ?? '';
+      clientId = found.data.download_clients.find((c) => c.kind === 'qbittorrent')?.id ?? '';
     }
     await refresh();
     timer = setInterval(refresh, RECONCILE_MS);
@@ -151,7 +156,7 @@
     problem = null;
     handedOver = null;
     torrentRefusal = null;
-    const client = sources.download_clients.find((candidate) => candidate.id === clientId);
+    const client = torrentClients.find((candidate) => candidate.id === clientId);
     if (!client) return;
     const body = await torrentRequest(magnet, torrentFiles?.[0]);
     if (!body) {
@@ -316,7 +321,7 @@
 
 <section aria-labelledby="torrent-heading">
   <h2 id="torrent-heading">Send a torrent to a download client</h2>
-  {#if !sources || sources.download_clients.length === 0}
+  {#if torrentClients.length === 0}
     <p>
       No download client is set up. An administrator can add a qBittorrent on the
       <a href="/integrations">Integrations</a> page.
@@ -330,11 +335,11 @@
           Tangible never searches for anything.</small
         >
       </p>
-      {#if sources.download_clients.length > 1}
+      {#if torrentClients.length > 1}
         <p>
           <label for="client">Client</label><br />
           <select id="client" bind:value={clientId}>
-            {#each sources.download_clients as client (client.id)}
+            {#each torrentClients as client (client.id)}
               <option value={client.id}>{client.name}</option>
             {/each}
           </select>
@@ -370,8 +375,7 @@
         {busy
           ? 'Working…'
           : `Send to ${
-              sources.download_clients.find((client) => client.id === clientId)?.name ??
-              'the client'
+              torrentClients.find((client) => client.id === clientId)?.name ?? 'the client'
             }`}
       </button>
     </form>

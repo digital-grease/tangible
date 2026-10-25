@@ -18,7 +18,7 @@ export type CreateImportRequest = components['schemas']['CreateImportRequest'];
 export type UrlImportRequest = components['schemas']['UrlImportRequest'];
 export type UploadView = components['schemas']['UploadView'];
 export type DownloadClient = components['schemas']['DownloadClientView'];
-export type SubmitTorrentRequest = components['schemas']['SubmitTorrentRequest'];
+export type SubmitJobRequest = components['schemas']['SubmitJobRequest'];
 export type IntegrationJobView = components['schemas']['IntegrationJobView'];
 
 /** The largest `.torrent` the server takes, as it says in its own limit. */
@@ -126,7 +126,7 @@ export function urlImportRequest(url: string, sha256: string): UrlImportRequest 
  */
 export async function sendTorrent(
   integrationId: string,
-  body: SubmitTorrentRequest,
+  body: SubmitJobRequest,
   fetcher: typeof fetch = apiFetch,
 ): Promise<CommandResult<IntegrationJobView>> {
   const result = await request<IntegrationJobView>(
@@ -159,7 +159,7 @@ export function toBase64(bytes: Uint8Array): string {
 export async function torrentRequest(
   magnet: string,
   file: File | null | undefined,
-): Promise<SubmitTorrentRequest | null> {
+): Promise<SubmitJobRequest | null> {
   if (file) {
     if (file.size > MAX_TORRENT_BYTES) return null;
     return { torrent: toBase64(new Uint8Array(await file.arrayBuffer())) };

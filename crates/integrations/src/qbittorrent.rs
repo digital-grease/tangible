@@ -35,11 +35,16 @@ use std::fmt;
 use serde::Deserialize;
 use tangible_domain::SecretString;
 
-use crate::outbound::{OutboundClient, OutboundError, Refusal, Url};
+use crate::download::{ClientError, Phase, multipart, read_text};
+use crate::outbound::{OutboundClient, OutboundError, Url};
 use crate::torrent::Infohash;
 
-/// The most of a response body read.
-const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
+/// The client, in words, for errors.
+const CLIENT: &str = "qBittorrent";
+
+fn outbound(error: OutboundError) -> ClientError {
+    ClientError::from_outbound(CLIENT, error)
+}
 
 /// What a torrent submission hands the client.
 pub enum TorrentSource<'a> {
@@ -57,43 +62,6 @@ pub enum Added {
     /// It declined: usually because it already has it. The caller asks
     /// after it by hash to tell.
     Declined,
-}
-
-/// Why the client could not be used.
-#[derive(Debug, thiserror::Error)]
-pub enum QbittorrentError {
-    /// The address is one the policy refuses.
-    #[error("the address will not be reached: {0}")]
-    Refused(Refusal),
-    /// Nothing answered, or the connection failed.
-    #[error("qBittorrent could not be reached: {0}")]
-    Unreachable(String),
-    /// Signing in failed.
-    #[error("qBittorrent refused to sign in: {0}")]
-    Auth(&'static str),
-    /// It answered with something Tangible cannot use.
-    #[error("qBittorrent answered unexpectedly: {0}")]
-    BadResponse(String),
-}
-
-impl QbittorrentError {
-    /// The stable code.
-    #[must_use]
-    pub const fn code(&self) -> &'static str {
-        match self {
-            Self::Refused(_) => "INTEGRATION_ADDRESS_REFUSED",
-            Self::Unreachable(_) => "INTEGRATION_UNREACHABLE",
-            Self::Auth(_) => "INTEGRATION_AUTH_FAILED",
-            Self::BadResponse(_) => "INTEGRATION_BAD_RESPONSE",
-        }
-    }
-
-    fn from_outbound(error: OutboundError) -> Self {
-        match error {
-            OutboundError::Refused(refusal) => Self::Refused(refusal),
-            OutboundError::Transport(error) => Self::Unreachable(error.to_string()),
-        }
-    }
 }
 
 /// One torrent, as much of it as Tangible reads.
@@ -125,27 +93,6 @@ pub struct TorrentStatus {
 
 const fn yes() -> bool {
     true
-}
-
-/// Where a torrent stands, for an import waiting on it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Phase {
-    /// Still coming: so many bytes of so many, once known.
-    Downloading {
-        /// Bytes it has.
-        done: Option<i64>,
-        /// Bytes it will have.
-        total: Option<i64>,
-    },
-    /// All there, at this path as the client sees it.
-    Complete {
-        /// Its `content_path`.
-        content_path: String,
-        /// Its size.
-        size: i64,
-    },
-    /// The client gave up on it, in this state.
-    Failed(String),
 }
 
 /// States in which a torrent's data is complete and resting.
@@ -185,29 +132,6 @@ impl TorrentStatus {
             total,
         }
     }
-}
-
-/// Where a path the client reported lies beneath its download folder, as a
-/// relative path to resolve under the watched root it is mounted at.
-///
-/// `None` for anything not strictly beneath `client_path`: another folder,
-/// the folder itself (which would import everything in it), an empty or
-/// relative path, or one with `.`, `..` or empty segments. The watched root
-/// checks the result again against the real filesystem.
-#[must_use]
-pub fn relative_to(client_path: &str, content_path: &str) -> Option<String> {
-    let base = client_path.trim_end_matches('/');
-    if !client_path.starts_with('/') || !content_path.starts_with('/') {
-        return None;
-    }
-    let rest = content_path.strip_prefix(base)?.strip_prefix('/')?;
-    let rest = rest.trim_end_matches('/');
-    let usable = !rest.is_empty()
-        && rest
-            .split('/')
-            .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
-        && !rest.chars().any(char::is_control);
-    usable.then(|| rest.to_owned())
 }
 
 /// A qBittorrent WebUI, signed in to on first use.
@@ -251,18 +175,18 @@ impl QbittorrentClient {
         }
     }
 
-    fn endpoint(&self, path: &str) -> Result<Url, QbittorrentError> {
+    fn endpoint(&self, path: &str) -> Result<Url, ClientError> {
         self.base
             .join(path)
-            .map_err(|_| QbittorrentError::BadResponse("the address cannot be joined".to_owned()))
+            .map_err(|_| ClientError::bad(CLIENT, "the address cannot be joined".to_owned()))
     }
 
     /// Sign in, if there is a password and no session yet.
     ///
     /// # Errors
     ///
-    /// [`QbittorrentError`].
-    pub async fn sign_in(&mut self) -> Result<(), QbittorrentError> {
+    /// [`ClientError`].
+    pub async fn sign_in(&mut self) -> Result<(), ClientError> {
         if self.session.is_some() {
             return Ok(());
         }
@@ -276,53 +200,52 @@ impl QbittorrentClient {
         let request = self
             .http
             .request(reqwest::Method::POST, &self.endpoint("api/v2/auth/login")?)
-            .map_err(QbittorrentError::from_outbound)?
+            .map_err(outbound)?
             .header("content-type", "application/x-www-form-urlencoded")
             .body(body);
-        let response = self
-            .http
-            .send(request)
-            .await
-            .map_err(QbittorrentError::from_outbound)?;
+        let response = self.http.send(request).await.map_err(outbound)?;
         let status = response.status();
         let session = session_cookie(response.headers());
-        let text = read_text(response).await?;
+        let text = read_text(CLIENT, response).await?;
         match (status.as_u16(), text.trim()) {
             (200, "Ok.") => {
                 self.session = Some(session.ok_or_else(|| {
-                    QbittorrentError::BadResponse("signed in without a session cookie".to_owned())
+                    ClientError::bad(CLIENT, "signed in without a session cookie".to_owned())
                 })?);
                 Ok(())
             }
-            (200, "Fails.") => Err(QbittorrentError::Auth("the user name or password is wrong")),
-            (401, _) => Err(QbittorrentError::Auth(
-                "it turned the request away before signing in; with host header validation \
-                 on, the WebUI address must use the port qBittorrent itself listens on",
+            (200, "Fails.") => Err(ClientError::Auth {
+                client: CLIENT,
+                reason: "the user name or password is wrong",
+            }),
+            (401, _) => Err(ClientError::Auth {
+                client: CLIENT,
+                reason: "it turned the request away before signing in; with host header \
+                         validation on, the WebUI address must use the port qBittorrent \
+                         itself listens on",
+            }),
+            (403, _) => Err(ClientError::Auth {
+                client: CLIENT,
+                reason: "it is refusing this address, possibly after too many failed sign-ins",
+            }),
+            (code, _) => Err(ClientError::bad(
+                CLIENT,
+                format!("signing in answered {code}"),
             )),
-            (403, _) => Err(QbittorrentError::Auth(
-                "it is refusing this address, possibly after too many failed sign-ins",
-            )),
-            (code, _) => Err(QbittorrentError::BadResponse(format!(
-                "signing in answered {code}"
-            ))),
         }
     }
 
     async fn call(
         &mut self,
-        request: impl Fn(&Self) -> Result<reqwest::RequestBuilder, QbittorrentError>,
-    ) -> Result<(u16, String), QbittorrentError> {
+        request: impl Fn(&Self) -> Result<reqwest::RequestBuilder, ClientError>,
+    ) -> Result<(u16, String), ClientError> {
         self.sign_in().await?;
         for attempt in 0..2 {
             let mut builder = request(self)?;
             if let Some(session) = &self.session {
                 builder = builder.header("cookie", format!("SID={}", session.expose()));
             }
-            let response = self
-                .http
-                .send(builder)
-                .await
-                .map_err(QbittorrentError::from_outbound)?;
+            let response = self.http.send(builder).await.map_err(outbound)?;
             let status = response.status().as_u16();
             if matches!(status, 401 | 403) {
                 // No session, or a stale one: sign in afresh, once.
@@ -331,27 +254,33 @@ impl QbittorrentClient {
                     self.sign_in().await?;
                     continue;
                 }
-                return Err(QbittorrentError::Auth(if self.password.is_some() {
-                    "it refused the session it gave"
-                } else {
-                    "it needs a password, and none is set"
-                }));
+                return Err(ClientError::Auth {
+                    client: CLIENT,
+                    reason: if self.password.is_some() {
+                        "it refused the session it gave"
+                    } else {
+                        "it needs a password, and none is set"
+                    },
+                });
             }
-            let text = read_text(response).await?;
+            let text = read_text(CLIENT, response).await?;
             return Ok((status, text));
         }
-        Err(QbittorrentError::Auth("it refused the session it gave"))
+        Err(ClientError::Auth {
+            client: CLIENT,
+            reason: "it refused the session it gave",
+        })
     }
 
     /// The WebUI API's version, such as `2.11.4`.
     ///
     /// # Errors
     ///
-    /// [`QbittorrentError`].
-    pub async fn api_version(&mut self) -> Result<String, QbittorrentError> {
+    /// [`ClientError`].
+    pub async fn api_version(&mut self) -> Result<String, ClientError> {
         let url = self.endpoint("api/v2/app/webapiVersion")?;
         let (status, text) = self
-            .call(|this| this.http.get(&url).map_err(QbittorrentError::from_outbound))
+            .call(|this| this.http.get(&url).map_err(outbound))
             .await?;
         let version = text.trim();
         let plausible = status == 200
@@ -361,9 +290,10 @@ impl QbittorrentClient {
         if plausible {
             Ok(version.to_owned())
         } else {
-            Err(QbittorrentError::BadResponse(format!(
-                "the API version request answered {status}; is this a qBittorrent WebUI?"
-            )))
+            Err(ClientError::bad(
+                CLIENT,
+                format!("the API version request answered {status}; is this a qBittorrent WebUI?"),
+            ))
         }
     }
 
@@ -373,12 +303,12 @@ impl QbittorrentClient {
     ///
     /// # Errors
     ///
-    /// [`QbittorrentError`].
+    /// [`ClientError`].
     pub async fn add(
         &mut self,
         source: &TorrentSource<'_>,
         category: &str,
-    ) -> Result<Added, QbittorrentError> {
+    ) -> Result<Added, ClientError> {
         let url = self.endpoint("api/v2/torrents/add")?;
         let (content_type, body) = add_body(source, category);
         let (status, text) = self
@@ -386,7 +316,7 @@ impl QbittorrentClient {
                 Ok(this
                     .http
                     .request(reqwest::Method::POST, &url)
-                    .map_err(QbittorrentError::from_outbound)?
+                    .map_err(outbound)?
                     .header("content-type", content_type.clone())
                     .body(body.clone()))
             })
@@ -394,9 +324,10 @@ impl QbittorrentClient {
         match (status, text.trim()) {
             (200, "Fails.") | (415, _) => Ok(Added::Declined),
             (200, _) => Ok(Added::Added),
-            (code, _) => Err(QbittorrentError::BadResponse(format!(
-                "adding the torrent answered {code}"
-            ))),
+            (code, _) => Err(ClientError::bad(
+                CLIENT,
+                format!("adding the torrent answered {code}"),
+            )),
         }
     }
 
@@ -404,20 +335,18 @@ impl QbittorrentClient {
     ///
     /// # Errors
     ///
-    /// [`QbittorrentError`].
-    pub async fn torrent(
-        &mut self,
-        hash: &Infohash,
-    ) -> Result<Option<TorrentStatus>, QbittorrentError> {
+    /// [`ClientError`].
+    pub async fn torrent(&mut self, hash: &Infohash) -> Result<Option<TorrentStatus>, ClientError> {
         let mut url = self.endpoint("api/v2/torrents/info")?;
         url.query_pairs_mut().append_pair("hashes", hash.as_str());
         let (status, text) = self
-            .call(|this| this.http.get(&url).map_err(QbittorrentError::from_outbound))
+            .call(|this| this.http.get(&url).map_err(outbound))
             .await?;
         if status != 200 {
-            return Err(QbittorrentError::BadResponse(format!(
-                "asking after the torrent answered {status}"
-            )));
+            return Err(ClientError::bad(
+                CLIENT,
+                format!("asking after the torrent answered {status}"),
+            ));
         }
         parse_torrents(&text).map(|torrents| {
             torrents
@@ -431,11 +360,11 @@ impl QbittorrentClient {
 ///
 /// # Errors
 ///
-/// [`QbittorrentError::BadResponse`] for an answer that is not a list of
+/// [`ClientError::BadResponse`] for an answer that is not a list of
 /// torrents.
-pub fn parse_torrents(text: &str) -> Result<Vec<TorrentStatus>, QbittorrentError> {
+pub fn parse_torrents(text: &str) -> Result<Vec<TorrentStatus>, ClientError> {
     serde_json::from_str(text)
-        .map_err(|_| QbittorrentError::BadResponse("the torrent list did not parse".to_owned()))
+        .map_err(|_| ClientError::bad(CLIENT, "the torrent list did not parse".to_owned()))
 }
 
 fn add_body(source: &TorrentSource<'_>, category: &str) -> (String, Vec<u8>) {
@@ -458,49 +387,14 @@ fn add_body(source: &TorrentSource<'_>, category: &str) -> (String, Vec<u8>) {
                 form.finish().into_bytes(),
             )
         }
-        TorrentSource::File(bytes) => {
-            // A boundary the file does not contain, checked rather than
-            // hoped for.
-            let mut counter = 0_u32;
-            let mut boundary = boundary_for(bytes, counter);
-            while bytes
-                .windows(boundary.len())
-                .any(|w| w == boundary.as_bytes())
-            {
-                counter += 1;
-                boundary = boundary_for(bytes, counter);
-            }
-            let mut body = Vec::with_capacity(bytes.len() + 1024);
-            for (name, value) in fields {
-                body.extend_from_slice(
-                    format!(
-                        "--{boundary}\r\ncontent-disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
-                    )
-                    .as_bytes(),
-                );
-            }
-            body.extend_from_slice(
-                format!(
-                    "--{boundary}\r\ncontent-disposition: form-data; name=\"torrents\"; \
-                     filename=\"submitted.torrent\"\r\ncontent-type: application/x-bittorrent\r\n\r\n"
-                )
-                .as_bytes(),
-            );
-            body.extend_from_slice(bytes);
-            body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-            (format!("multipart/form-data; boundary={boundary}"), body)
-        }
+        TorrentSource::File(bytes) => multipart(
+            &fields,
+            "torrents",
+            "submitted.torrent",
+            "application/x-bittorrent",
+            bytes,
+        ),
     }
-}
-
-/// A multipart boundary derived from the file and a counter.
-fn boundary_for(bytes: &[u8], counter: u32) -> String {
-    use sha2::{Digest as _, Sha256};
-    let digest = Sha256::new()
-        .chain_update(bytes)
-        .chain_update(counter.to_le_bytes())
-        .finalize();
-    format!("tangible-{}", hex::encode(&digest[..12]))
 }
 
 fn session_cookie(headers: &reqwest::header::HeaderMap) -> Option<SecretString> {
@@ -518,24 +412,6 @@ fn session_cookie(headers: &reqwest::header::HeaderMap) -> Option<SecretString> 
                     .all(|b| b.is_ascii_alphanumeric() || b"+/=-_.".contains(&b));
             usable.then(|| SecretString::from(value.to_owned()))
         })
-}
-
-async fn read_text(mut response: reqwest::Response) -> Result<String, QbittorrentError> {
-    let mut body = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|error| QbittorrentError::Unreachable(error.without_url().to_string()))?
-    {
-        if body.len() + chunk.len() > MAX_BODY_BYTES {
-            return Err(QbittorrentError::BadResponse(format!(
-                "the answer was larger than {MAX_BODY_BYTES} bytes"
-            )));
-        }
-        body.extend_from_slice(&chunk);
-    }
-    String::from_utf8(body)
-        .map_err(|_| QbittorrentError::BadResponse("the answer was not text".to_owned()))
 }
 
 #[cfg(test)]
@@ -633,35 +509,6 @@ mod tests {
         let mut no_path = status("stalledUP", 1.0, 0);
         no_path.content_path.clear();
         assert!(matches!(no_path.phase(), Phase::Downloading { .. }));
-    }
-
-    #[test]
-    fn a_reported_path_maps_only_from_strictly_beneath_the_download_folder() {
-        let base = "/downloads/tangible";
-        assert_eq!(
-            relative_to(base, "/downloads/tangible/disc.iso").as_deref(),
-            Some("disc.iso")
-        );
-        assert_eq!(
-            relative_to("/downloads/tangible/", "/downloads/tangible/Disc (CUE)/").as_deref(),
-            Some("Disc (CUE)")
-        );
-        assert_eq!(relative_to("/", "/disc.iso").as_deref(), Some("disc.iso"));
-        for outside in [
-            "/downloads/tangible",
-            "/downloads/tangible/",
-            "/downloads/tangiblex/disc.iso",
-            "/downloads/other/disc.iso",
-            "/downloads/tangible/../etc/passwd",
-            "/downloads/tangible/./disc.iso",
-            "/downloads/tangible//disc.iso",
-            "downloads/tangible/disc.iso",
-            "",
-            "/downloads/tangible/a\nb",
-        ] {
-            assert_eq!(relative_to(base, outside), None, "{outside:?}");
-        }
-        assert_eq!(relative_to("relative", "relative/x"), None);
     }
 
     #[test]

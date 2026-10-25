@@ -283,6 +283,32 @@ failing. A torrent
 qBittorrent reports in error, removes, or keeps outside the category's
 folder ends the import.
 
+## Sending NZBs to SABnzbd
+
+Tangible can hand an NZB you already have to a SABnzbd you run, and import
+the download when it completes. It never searches for anything, asks for no
+script, and never removes a job or its files.
+
+1. In SABnzbd, add a category (Config, Categories), `tangible` by default,
+   with its own folder. SABnzbd files a category it does not know under its
+   default one, so Tangible refuses to add anything until it exists.
+2. Give Tangible's server read-only access to that category's finished
+   folder, as for qBittorrent above: mount it, and name it in
+   `TANGIBLE_WATCH_ROOTS`.
+3. Make an integration secret key (below), so the API key can be stored.
+4. As an administrator, add the SABnzbd with `POST /api/v1/integrations`
+   (the Integrations page gains a form for it soon): `kind` `sabnzbd`, its
+   address, the category, the finished folder as SABnzbd sees it
+   (`client_path`), the watched root (`local_root`), and its API key
+   (Config, General) as the `api_key` secret.
+   `POST /api/v1/integrations/{id}/test` checks the key and the category.
+5. Hand it an NZB with `POST /api/v1/integrations/{id}/jobs`,
+   `{"nzb": "<base64>"}`; operators may. The same NZB again is answered with
+   the import already made, and not downloaded twice.
+
+Use SABnzbd's IP address, or add its host name to `host_whitelist` in its
+special settings: SABnzbd turns away host names it does not know.
+
 ## Integration secrets
 
 Download clients (qBittorrent, and SABnzbd and NZBGet later) sign in with a

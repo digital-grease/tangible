@@ -295,14 +295,14 @@ async fn what_will_not_do_is_refused_saying_why() {
     wrong_secret["secrets"] = json!({ "api_key": "x" });
     let mut empty_secret = qbittorrent(&unique("x"), None);
     empty_secret["secrets"] = json!({ "password": "" });
-    let mut sabnzbd = qbittorrent(&unique("x"), None);
-    sabnzbd["kind"] = json!("sabnzbd");
+    let mut webhook = qbittorrent(&unique("x"), None);
+    webhook["kind"] = json!("webhook");
     for (body, says) in [
         (bad_url, "base_url"),
         (bad_root, "local_root"),
         (wrong_secret, "api_key"),
         (empty_secret, "password"),
-        (sabnzbd, "kind"),
+        (webhook, "kind"),
         (qbittorrent("", None), "name"),
     ] {
         let (status, problem) = send(

@@ -10,9 +10,12 @@
 //! the outbound client every fetch of an address somebody supplied goes
 //! through (ADR 0016).
 
+pub mod download;
 pub mod fetch;
+pub mod nzb;
 pub mod outbound;
 pub mod qbittorrent;
 pub mod romm;
+pub mod sabnzbd;
 pub mod settings;
 pub mod torrent;

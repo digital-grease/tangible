@@ -179,8 +179,8 @@ pub struct ImportSources {
     /// Whether a URL import may use plain http.
     pub url_imports_allow_http: bool,
     /// Download clients an administrator configured and turned on, which a
-    /// torrent can be handed to (`POST /integrations/{id}/jobs`). Names
-    /// only: their settings are administrators' business.
+    /// torrent or NZB can be handed to (`POST /integrations/{id}/jobs`).
+    /// Names only: their settings are administrators' business.
     pub download_clients: Vec<DownloadClientView>,
 }
 
@@ -191,7 +191,8 @@ pub struct DownloadClientView {
     pub id: String,
     /// Its name.
     pub name: String,
-    /// Such as `qbittorrent`.
+    /// `qbittorrent` (takes a torrent or magnet link) or `sabnzbd` (takes
+    /// an NZB).
     pub kind: String,
 }
 
@@ -323,7 +324,9 @@ pub async fn list_sources(State(state): State<ApiState>) -> Result<Json<ImportSo
             )
         })?
         .into_iter()
-        .filter(|record| record.enabled && record.kind == "qbittorrent")
+        .filter(|record| {
+            record.enabled && matches!(record.kind.as_str(), "qbittorrent" | "sabnzbd")
+        })
         .map(|record| DownloadClientView {
             id: record.id.to_string(),
             name: record.name,

@@ -1016,8 +1016,13 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Hand a torrent to a download client.
-         * @description Hand a torrent the operator already has, a magnet link or a .torrent file (base64), to a qBittorrent integration, in its category. An import follows it by infohash and brings it into the library when it finishes. Tangible never searches, and never removes the torrent or its data. Submitting one again is safe: the existing import is answered.
+         * Hand a job to a download client.
+         * @description Hand a job the operator already has to a download client, in its \
+         *                        category: a magnet link or a .torrent file (base64) to qBittorrent, an NZB \
+         *                        (base64) to SABnzbd. An import follows it and brings it into the library \
+         *                        when it finishes. Tangible never searches, never asks for a script, and \
+         *                        never removes the job or its data. Submitting the same again is safe: the \
+         *                        existing import is answered, and the client is not asked twice.
          */
         post: operations["submit_job"];
         delete?: never;
@@ -1036,11 +1041,13 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Try an integration: sign in and ask the client's API version.
+         * Try an integration: sign in, ask the client's version, and check it has
+         *     the category.
          * @description # Errors
          *
          *     `NOT_FOUND`; `INTEGRATION_OFF` and the like when it cannot be tried at
-         *     all. A client that fails is a result, `ok: false`, not an error.
+         *     all. A client that fails, or lacks the category, is a result,
+         *     `ok: false`, not an error.
          */
         post: operations["test_one"];
         delete?: never;
@@ -2533,7 +2540,10 @@ export interface components {
         DownloadClientView: {
             /** @description The integration's id. */
             id: string;
-            /** @description Such as `qbittorrent`. */
+            /**
+             * @description `qbittorrent` (takes a torrent or magnet link) or `sabnzbd` (takes
+             *     an NZB).
+             */
             kind: string;
             /** @description Its name. */
             name: string;
@@ -2885,8 +2895,8 @@ export interface components {
         ImportSources: {
             /**
              * @description Download clients an administrator configured and turned on, which a
-             *     torrent can be handed to (`POST /integrations/{id}/jobs`). Names
-             *     only: their settings are administrators' business.
+             *     torrent or NZB can be handed to (`POST /integrations/{id}/jobs`).
+             *     Names only: their settings are administrators' business.
              */
             download_clients: components["schemas"]["DownloadClientView"][];
             /**
@@ -2962,14 +2972,22 @@ export interface components {
              */
             warnings: string[];
         };
-        /** @description A torrent handed to a download client, and the import following it. */
+        /** @description A job handed to a download client, and the import following it. */
         IntegrationJobView: {
             /** @description What it became, when already imported. */
             artifact_id?: string | null;
+            /**
+             * @description The client's own id for the job (the infohash, a SABnzbd `nzo_id`),
+             *     when it was handed over now.
+             */
+            client_job_id?: string | null;
+            /**
+             * @description How Tangible names the job: a torrent's infohash, or an NZB's
+             *     SHA-256. Submitting the same again finds this job.
+             */
+            identity: string;
             /** @description The import that brings it into the library when it finishes. */
             import_id: string;
-            /** @description The torrent's infohash, which the import follows it by. */
-            infohash: string;
             /** @description The integration. */
             integration_id: string;
             /**
@@ -3707,12 +3725,15 @@ export interface components {
             needed: boolean;
         };
         /**
-         * @description A torrent the operator already has, for a download client to fetch.
-         *     Exactly one of the two.
+         * @description A job the operator already has, for a download client to fetch: a
+         *     magnet link or `.torrent` for qBittorrent, an NZB for SABnzbd. Exactly
+         *     one.
          */
-        SubmitTorrentRequest: {
+        SubmitJobRequest: {
             /** @description A magnet link. */
             magnet?: string | null;
+            /** @description An NZB file, base64. */
+            nzb?: string | null;
             /** @description A `.torrent` file, base64. */
             torrent?: string | null;
         };
@@ -6174,7 +6195,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SubmitTorrentRequest"];
+                "application/json": components["schemas"]["SubmitJobRequest"];
             };
         };
         responses: {
@@ -6214,7 +6235,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Not a usable torrent or magnet link */
+            /** @description Not a usable file or link for this client */
             422: {
                 headers: {
                     [name: string]: unknown;

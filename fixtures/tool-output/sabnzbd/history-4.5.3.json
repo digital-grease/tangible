@@ -1,0 +1,128 @@
+{
+    "history": {
+        "total_size": "302 K",
+        "month_size": "302 K",
+        "week_size": "302 K",
+        "day_size": "302 K",
+        "slots": [
+            {
+                "completed": 1792960535,
+                "name": "missing",
+                "nzb_name": "missing.nzb",
+                "category": "tangible",
+                "pp": "D",
+                "script": "None",
+                "report": "",
+                "url": null,
+                "status": "Failed",
+                "nzo_id": "SABnzbd_nzo_r_no3t4f",
+                "storage": "/config/Downloads/incomplete/missing",
+                "path": "/config/Downloads/incomplete/missing",
+                "script_line": "",
+                "download_time": 0,
+                "postproc_time": 0,
+                "stage_log": [
+                    {
+                        "name": "Source",
+                        "actions": [
+                            "missing.nzb"
+                        ]
+                    },
+                    {
+                        "name": "Download",
+                        "actions": [
+                            "1 articles were missing",
+                            "Download failed - Not on your server(s) - https://sabnzbd.org/not-complete"
+                        ]
+                    }
+                ],
+                "downloaded": 0,
+                "completeness": null,
+                "fail_message": "Download failed - Not on your server(s) - https://sabnzbd.org/not-complete",
+                "url_info": "",
+                "bytes": 0,
+                "meta": null,
+                "series": null,
+                "md5sum": "2c8054648927dd3fefb2214c3f0c47f4",
+                "password": null,
+                "duplicate_key": null,
+                "archive": false,
+                "time_added": 1792960535,
+                "size": "0 B",
+                "action_line": "",
+                "loaded": false,
+                "retry": true
+            },
+            {
+                "completed": 1792960517,
+                "name": "probe",
+                "nzb_name": "probe.nzb",
+                "category": "tangible",
+                "pp": "D",
+                "script": "None",
+                "report": "",
+                "url": null,
+                "status": "Completed",
+                "nzo_id": "SABnzbd_nzo_s_6yxmis",
+                "storage": "/config/Downloads/complete/tangible/probe/probe.iso",
+                "path": "/config/Downloads/incomplete/probe",
+                "script_line": "",
+                "download_time": 0,
+                "postproc_time": 0,
+                "stage_log": [
+                    {
+                        "name": "Source",
+                        "actions": [
+                            "probe.nzb"
+                        ]
+                    },
+                    {
+                        "name": "Download",
+                        "actions": [
+                            ""
+                        ]
+                    },
+                    {
+                        "name": "Servers",
+                        "actions": [
+                            "probe=302 KB"
+                        ]
+                    },
+                    {
+                        "name": "Repair",
+                        "actions": [
+                            "Trying RAR renamer",
+                            "[probe] No par2 sets"
+                        ]
+                    },
+                    {
+                        "name": "Deobfuscate",
+                        "actions": [
+                            "Deobfuscate renamed 1 file(s)"
+                        ]
+                    }
+                ],
+                "downloaded": 300000,
+                "completeness": null,
+                "fail_message": "",
+                "url_info": "",
+                "bytes": 300000,
+                "meta": null,
+                "series": null,
+                "md5sum": "d130a9caf2c489c6221328c752f26ca7",
+                "password": null,
+                "duplicate_key": null,
+                "archive": false,
+                "time_added": 1792960516,
+                "size": "293 KB",
+                "action_line": "",
+                "loaded": false,
+                "retry": false
+            }
+        ],
+        "ppslots": 0,
+        "noofslots": 2,
+        "last_history_update": 10,
+        "version": "4.5.3"
+    }
+}

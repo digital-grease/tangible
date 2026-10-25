@@ -415,7 +415,8 @@ describe('torrents for a download client', () => {
   it('says what handing over came to', () => {
     const job = {
       integration_id: 'q1',
-      infohash: 'h',
+      identity: 'h',
+      client_job_id: 'h',
       import_id: 'i',
       outcome: 'created',
       artifact_id: null,

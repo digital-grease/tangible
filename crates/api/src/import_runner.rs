@@ -41,15 +41,14 @@ use tangible_db::repositories::{
 };
 use tangible_db::{Database, DbError};
 use tangible_domain::{ImportState, LogicalPath};
+use tangible_integrations::download::{Phase, relative_to};
 use tangible_integrations::fetch::{Fetched, Progress, Resume, fetch_to_file};
 use tangible_integrations::outbound::{OutboundClient, Url};
-use tangible_integrations::qbittorrent::{Phase, relative_to};
-use tangible_integrations::torrent::Infohash;
 use tangible_storage::{IngestLimits, ManifestStoreError, StagingError, StorageError, WatchRoots};
 use tokio::io::AsyncReadExt as _;
 
 use crate::catalog;
-use crate::download_clients::open_qbittorrent;
+use crate::download_clients::open_client;
 use crate::import::{
     DownloadCheckpoint, ImportCheckpoint, ImportError, ImportPipeline, ImportRequest,
 };
@@ -379,7 +378,7 @@ impl ImportRunner {
                     .await
                     .map(|()| Acquired::Ready)
             }
-            "qbittorrent_job" => self.follow_torrent(job).await,
+            "qbittorrent_job" | "sabnzbd_job" => self.follow_download(job).await,
             // An upload sent in parts may name the length and digest its
             // sender expects; checked before anything is hashed or kept.
             "upload" if job.source_descriptor.get("expected_bytes").is_some() => {
@@ -389,20 +388,21 @@ impl ImportRunner {
         }
     }
 
-    /// Ask qBittorrent after a torrent, by infohash. Still downloading, or
-    /// the client unreachable or misconfigured: held, and asked again in a
-    /// while, saying why when something is wrong. Finished: its path is
-    /// mapped from the client's download folder onto the watched root it is
-    /// mounted at, and copied in like a watched folder. The client's own
-    /// failure, a torrent removed from it, or a path outside the folder end
-    /// the import.
-    async fn follow_torrent(&self, job: &ImportJobRecord) -> Result<Acquired, Failure> {
+    /// Ask the client after its job: a torrent by infohash, a SABnzbd job
+    /// by its id. Still downloading, or the client unreachable or
+    /// misconfigured: held, and asked again in a while, saying why when
+    /// something is wrong. Finished: its path is mapped from the client's
+    /// download folder onto the watched root it is mounted at, and copied in
+    /// like a watched folder. The client's own failure, a job gone from it,
+    /// or a path outside the folder end the import.
+    async fn follow_download(&self, job: &ImportJobRecord) -> Result<Acquired, Failure> {
         let invalid = |what: &str| ("IMPORT_DESCRIPTOR_INVALID", what.to_owned(), false);
         let integration_id: uuid::Uuid = parsed(&job.source_descriptor, "integration_id")
             .ok_or_else(|| invalid("no integration_id"))?;
-        let hash = descriptor_string(&job.source_descriptor, "infohash")
-            .and_then(|text| Infohash::parse(&text))
-            .ok_or_else(|| invalid("no usable infohash"))?;
+        // `infohash` is where the first torrent imports kept it.
+        let client_job_id = descriptor_string(&job.source_descriptor, "client_job_id")
+            .or_else(|| descriptor_string(&job.source_descriptor, "infohash"))
+            .ok_or_else(|| invalid("no client_job_id"))?;
         let pool = self.database.pool();
         let record = get_integration(pool, integration_id)
             .await
@@ -410,18 +410,18 @@ impl ImportRunner {
             .ok_or_else(|| {
                 (
                     "INTEGRATION_MISSING",
-                    "the integration this torrent was handed to is gone".to_owned(),
+                    "the integration this job was handed to is gone".to_owned(),
                     false,
                 )
             })?;
-        let opened = open_qbittorrent(
+        let opened = open_client(
             &self.database,
             self.settings.integrations.as_ref(),
             self.settings.secret_key.as_deref(),
             &record,
         )
         .await;
-        let (mut client, settings) = match opened {
+        let (mut client, folders) = match opened {
             Ok(opened) => opened,
             // An administrator can put it right; until then the import waits.
             Err(error) => {
@@ -430,7 +430,8 @@ impl ImportRunner {
                     .await);
             }
         };
-        let status = match client.torrent(&hash).await {
+        let name = client.name();
+        let status = match client.job(&client_job_id).await {
             Ok(status) => {
                 let _ = record_integration_health(pool, integration_id, Ok(None)).await;
                 status
@@ -444,44 +445,43 @@ impl ImportRunner {
             }
         };
         let Some(status) = status else {
-            // A torrent added a moment ago may not be listed yet.
+            // A job added a moment ago may not be listed yet.
             let age = time::OffsetDateTime::now_utc() - job.created_at;
             if age < time::Duration::minutes(2) {
                 return Ok(self.hold(job, None, None, None).await);
             }
             return Err((
                 "INTEGRATION_JOB_MISSING",
-                "qBittorrent no longer has this torrent; it may have been removed there".to_owned(),
+                format!("{name} no longer has this job; it may have been removed there"),
                 false,
             ));
         };
         if let Err(error) =
             record_integration_job_state(pool, *job.id.as_uuid(), &status.state).await
         {
-            tracing::warn!(import_id = %job.id, error = ?error, "could not record the torrent's state");
+            tracing::warn!(import_id = %job.id, error = ?error, "could not record the job's state");
         }
-        match status.phase() {
+        match status.phase {
             Phase::Downloading { done, total } => Ok(self.hold(job, done, total, None).await),
             Phase::Failed(state) => Err((
                 "INTEGRATION_JOB_FAILED",
-                format!(
-                    "qBittorrent reports the torrent as {state}; put it right there, then retry"
-                ),
+                format!("{name} reports the job as {state}; put it right there, then retry"),
                 false,
             )),
             Phase::Complete { content_path, size } => {
-                let Some(relative) = relative_to(&settings.client_path, &content_path) else {
+                let Some(relative) = relative_to(&folders.client_path, &content_path) else {
                     return Err((
                         "INTEGRATION_PATH_OUTSIDE_ROOT",
-                        "qBittorrent keeps this torrent outside the integration's download folder \
-                         (client_path), so it cannot be read through the watched root"
-                            .to_owned(),
+                        format!(
+                            "{name} keeps this job outside the integration's download folder \
+                             (client_path), so it cannot be read through the watched root"
+                        ),
                         false,
                     ));
                 };
-                tracing::info!(import_id = %job.id, infohash = %hash, "the torrent finished; copying it in");
+                tracing::info!(import_id = %job.id, client = name, "the download finished; copying it in");
                 let _ = record_import_expected(pool, job.id, size).await;
-                self.copy_from_root(job, &settings.local_root, &relative)
+                self.copy_from_root(job, &folders.local_root, &relative)
                     .await
                     .map(|()| Acquired::Ready)
             }
@@ -764,12 +764,15 @@ impl ImportRunner {
                     expected_recorded = true;
                     let _ = record_import_expected(self.database.pool(), job.id, total).await;
                 }
-                let mut progress = checkpoint.clone();
-                progress.download = Some(DownloadCheckpoint {
+                // Kept in the checkpoint itself, not a copy: the snapshot is
+                // taken here, so a fetch failing after this finds none, and
+                // writing the checkpoint without the validator then lost
+                // the resume (the retry fetched the whole file again).
+                checkpoint.download = Some(DownloadCheckpoint {
                     validator: snapshot.validator,
-                    ..progress.download.unwrap_or_default()
+                    ..checkpoint.download.take().unwrap_or_default()
                 });
-                self.record_fetch(job, &progress, ImportState::Acquiring, snapshot.bytes)
+                self.record_fetch(job, checkpoint, ImportState::Acquiring, snapshot.bytes)
                     .await;
             }
         };

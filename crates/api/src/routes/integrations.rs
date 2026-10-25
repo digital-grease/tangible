@@ -24,24 +24,20 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tangible_db::integrations::{
     IntegrationChange, IntegrationOutcome, IntegrationRecord, NewIntegration, NewSecret,
-    ROMM_INTEGRATION_NAME, Submitted, create_integration, delete_integration, get_integration,
-    list_integrations, record_integration_health, submit_integration_job, update_integration,
+    ROMM_INTEGRATION_NAME, create_integration, delete_integration, get_integration,
+    list_integrations, record_integration_health, update_integration,
 };
 use tangible_domain::SecretString;
+use tangible_integrations::download::ClientError;
 use tangible_integrations::outbound::OutboundPolicy;
-use tangible_integrations::qbittorrent::{
-    Added, QbittorrentClient, QbittorrentError, TorrentSource,
-};
 use tangible_integrations::settings::{ConfigurableKind, checked_settings};
-use tangible_integrations::torrent::{
-    Infohash, MAX_TORRENT_BYTES, infohash_of_magnet, infohash_of_torrent,
-};
 use time::format_description::well_known::Rfc3339;
 use utoipa::ToSchema;
 
 use crate::auth::SignedIn;
-use crate::download_clients::{OpenError, open_qbittorrent};
+use crate::download_clients::{OpenError, open_client};
 use crate::problem::{ErrorCode, Problem};
+use crate::routes::integration_jobs;
 use crate::secrets::Sealed;
 use crate::state::ApiState;
 
@@ -174,14 +170,14 @@ pub struct UpdateIntegrationRequest {
     pub secrets: BTreeMap<String, Option<SecretString>>,
 }
 
-fn unavailable(what: &'static str) -> impl FnOnce(tangible_db::DbError) -> Problem {
+pub(crate) fn unavailable(what: &'static str) -> impl FnOnce(tangible_db::DbError) -> Problem {
     move |error| {
         tracing::error!(error = ?error, "{what}");
         Problem::new(ErrorCode::StorageUnavailable, what)
     }
 }
 
-fn parse_id(raw: &str) -> Result<uuid::Uuid, Problem> {
+pub(crate) fn parse_id(raw: &str) -> Result<uuid::Uuid, Problem> {
     uuid::Uuid::parse_str(raw)
         .map_err(|_| Problem::invalid_parameter("integration_id", "not a valid identifier"))
 }
@@ -370,7 +366,7 @@ pub async fn create_one(
     let kind = ConfigurableKind::parse(&request.kind).ok_or_else(|| {
         Problem::new(
             ErrorCode::ValidationFailed,
-            "kind must be qbittorrent; others are not configurable yet",
+            "kind must be qbittorrent or sabnzbd; others are not configurable yet",
         )
     })?;
     let name = checked_name(&request.name)?;
@@ -520,40 +516,6 @@ pub async fn delete_one(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// The largest body a torrent submission may have: a `.torrent` at its
-/// limit, written base64, with room for the JSON around it.
-const MAX_SUBMISSION_BYTES: usize = MAX_TORRENT_BYTES / 3 * 4 + 4096;
-
-/// A torrent the operator already has, for a download client to fetch.
-/// Exactly one of the two.
-#[derive(Debug, Clone, Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct SubmitTorrentRequest {
-    /// A magnet link.
-    #[serde(default)]
-    pub magnet: Option<String>,
-    /// A `.torrent` file, base64.
-    #[serde(default)]
-    pub torrent: Option<String>,
-}
-
-/// A torrent handed to a download client, and the import following it.
-#[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct IntegrationJobView {
-    /// The integration.
-    pub integration_id: String,
-    /// The torrent's infohash, which the import follows it by.
-    pub infohash: String,
-    /// The import that brings it into the library when it finishes.
-    pub import_id: String,
-    /// `created`; `resubmitted` when an earlier import of it ended without
-    /// an artifact; `already_active` when one is still going;
-    /// `already_imported` when it is in the library.
-    pub outcome: String,
-    /// What it became, when already imported.
-    pub artifact_id: Option<String>,
-}
-
 /// How trying an integration went.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct IntegrationTestView {
@@ -567,7 +529,7 @@ pub struct IntegrationTestView {
     pub detail: Option<String>,
 }
 
-fn open_problem(error: &OpenError) -> Problem {
+pub(crate) fn open_problem(error: &OpenError) -> Problem {
     let code = match error.code {
         "SECRET_KEY_MISSING" => ErrorCode::SecretKeyMissing,
         "INTEGRATION_MISCONFIGURED" => ErrorCode::IntegrationMisconfigured,
@@ -578,214 +540,35 @@ fn open_problem(error: &OpenError) -> Problem {
     Problem::new(code, error.detail.clone())
 }
 
-fn client_problem(error: &QbittorrentError) -> Problem {
+pub(crate) fn client_problem(error: &ClientError) -> Problem {
     let code = match error {
-        QbittorrentError::Refused(_) => ErrorCode::IntegrationAddressRefused,
-        QbittorrentError::Unreachable(_) => ErrorCode::IntegrationUnreachable,
-        QbittorrentError::Auth(_) => ErrorCode::IntegrationAuthFailed,
-        QbittorrentError::BadResponse(_) => ErrorCode::IntegrationBadResponse,
+        ClientError::Refused(_) => ErrorCode::IntegrationAddressRefused,
+        ClientError::Unreachable { .. } => ErrorCode::IntegrationUnreachable,
+        ClientError::Auth { .. } => ErrorCode::IntegrationAuthFailed,
+        ClientError::BadResponse { .. } => ErrorCode::IntegrationBadResponse,
     };
     Problem::new(code, error.to_string())
 }
 
 /// Note how talking to the client went; a failure to note it is only logged.
-async fn note_health(state: &ApiState, id: uuid::Uuid, outcome: Result<Option<&str>, &str>) {
+pub(crate) async fn note_health(
+    state: &ApiState,
+    id: uuid::Uuid,
+    outcome: Result<Option<&str>, &str>,
+) {
     if let Err(error) = record_integration_health(state.database().pool(), id, outcome).await {
         tracing::warn!(integration_id = %id, error = ?error, "could not record the integration's health");
     }
 }
 
-/// A torrent as submitted, owned.
-enum Submission {
-    Magnet(String),
-    File(Vec<u8>),
-}
-
-impl Submission {
-    fn source(&self) -> TorrentSource<'_> {
-        match self {
-            Self::Magnet(link) => TorrentSource::Magnet(link),
-            Self::File(bytes) => TorrentSource::File(bytes),
-        }
-    }
-}
-
-fn refuse(detail: impl Into<String>) -> Problem {
-    Problem::new(ErrorCode::ValidationFailed, detail)
-}
-
-/// The torrent a submission names, and its infohash.
-fn parse_submission(request: &SubmitTorrentRequest) -> Result<(Infohash, Submission), Problem> {
-    match (request.magnet.as_deref(), request.torrent.as_deref()) {
-        (Some(magnet), None) => {
-            let magnet = magnet.trim();
-            let hash = infohash_of_magnet(magnet).map_err(|error| refuse(error.to_string()))?;
-            Ok((hash, Submission::Magnet(magnet.to_owned())))
-        }
-        (None, Some(text)) => {
-            use base64::Engine as _;
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(text.trim())
-                .map_err(|_| refuse("torrent must be the .torrent file, base64"))?;
-            let hash = infohash_of_torrent(&bytes).map_err(|error| refuse(error.to_string()))?;
-            Ok((hash, Submission::File(bytes)))
-        }
-        _ => Err(refuse("send either magnet or torrent, not both")),
-    }
-}
-
-/// Add the torrent to the client, in `category`. A client that declines it
-/// must already have it, in that category, for the import to follow it.
-async fn hand_over(
-    state: &ApiState,
-    id: uuid::Uuid,
-    client: &mut QbittorrentClient,
-    category: &str,
-    source: &TorrentSource<'_>,
-    hash: &Infohash,
-) -> Result<(), Problem> {
-    let added = match client.add(source, category).await {
-        Ok(added) => added,
-        Err(error) => {
-            note_health(state, id, Err(error.code())).await;
-            return Err(client_problem(&error));
-        }
-    };
-    if added == Added::Declined {
-        match client.torrent(hash).await {
-            Ok(Some(torrent)) if torrent.category != category => {
-                note_health(state, id, Ok(None)).await;
-                return Err(Problem::new(
-                    ErrorCode::Conflict,
-                    "qBittorrent already has this torrent under another category; Tangible \
-                     follows only torrents in its own, so move it there in qBittorrent first",
-                ));
-            }
-            Ok(Some(_)) => {}
-            Ok(None) => {
-                note_health(state, id, Ok(None)).await;
-                return Err(refuse(
-                    "qBittorrent declined the torrent, and does not have it",
-                ));
-            }
-            Err(error) => {
-                note_health(state, id, Err(error.code())).await;
-                return Err(client_problem(&error));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Hand a torrent to a download client.
-///
-/// # Errors
-///
-/// `VALIDATION_FAILED` for a request or torrent that will not do;
-/// `NOT_FOUND`; `INTEGRATION_OFF`; `CONFLICT` when the client has the torrent
-/// under another category; the client's failures as `INTEGRATION_*`.
-#[utoipa::path(
-    post,
-    path = "/api/v1/integrations/{integration_id}/jobs",
-    tag = "integrations",
-    description = "Hand a torrent the operator already has, a magnet link or a .torrent file \
-                   (base64), to a qBittorrent integration, in its category. An import follows \
-                   it by infohash and brings it into the library when it finishes. Tangible \
-                   never searches, and never removes the torrent or its data. Submitting one \
-                   again is safe: the existing import is answered.",
-    params(("integration_id" = String, Path, description = "Integration identifier")),
-    request_body = SubmitTorrentRequest,
-    responses(
-        (status = 202, description = "Handed over; an import follows it", body = IntegrationJobView),
-        (status = 200, description = "Handed over before", body = IntegrationJobView),
-        (status = 404, description = "No such integration", body = Problem),
-        (status = 409, description = "Turned off, misconfigured, or held under another category", body = Problem),
-        (status = 422, description = "Not a usable torrent or magnet link", body = Problem),
-        (status = 502, description = "The client failed", body = Problem),
-    ),
-)]
-pub async fn submit_job(
-    State(state): State<ApiState>,
-    SignedIn(user): SignedIn,
-    Path(integration_id): Path<String>,
-    Json(request): Json<SubmitTorrentRequest>,
-) -> Result<axum::response::Response, Problem> {
-    let id = parse_id(&integration_id)?;
-    let (hash, submission) = parse_submission(&request)?;
-    let record = get_integration(state.database().pool(), id)
-        .await
-        .map_err(unavailable("the integration could not be read"))?
-        .ok_or_else(|| Problem::not_found("integration", &id.to_string()))?;
-    let (mut client, settings) = open_qbittorrent(
-        state.database(),
-        state.integration_client(),
-        state.secret_key(),
-        &record,
-    )
-    .await
-    .map_err(|error| open_problem(&error))?;
-
-    hand_over(
-        &state,
-        id,
-        &mut client,
-        &settings.category,
-        &submission.source(),
-        &hash,
-    )
-    .await?;
-    note_health(&state, id, Ok(None)).await;
-
-    let descriptor = serde_json::json!({
-        "integration_id": id,
-        "infohash": hash.as_str(),
-        "reference": format!("qbittorrent:{hash}"),
-    });
-    let submitted = submit_integration_job(
-        state.database().pool(),
-        &tangible_db::integrations::NewIntegrationJob {
-            integration_id: id,
-            client_job_id: hash.as_str(),
-            source_kind: "qbittorrent_job",
-            descriptor: &descriptor,
-            actor: &user.username,
-        },
-    )
-    .await
-    .map_err(unavailable("the torrent's import could not be recorded"))?;
-    let (status, outcome, import_id, artifact_id) = match submitted {
-        Submitted::Created { import_id } => (StatusCode::ACCEPTED, "created", import_id, None),
-        Submitted::Resubmitted { import_id } => {
-            (StatusCode::ACCEPTED, "resubmitted", import_id, None)
-        }
-        Submitted::AlreadyActive { import_id } => {
-            (StatusCode::OK, "already_active", import_id, None)
-        }
-        Submitted::AlreadyImported {
-            import_id,
-            artifact_id,
-        } => (StatusCode::OK, "already_imported", import_id, artifact_id),
-    };
-    tracing::info!(integration_id = %id, infohash = %hash, import_id = %import_id, outcome, "torrent handed to qBittorrent");
-    Ok((
-        status,
-        Json(IntegrationJobView {
-            integration_id: id.to_string(),
-            infohash: hash.to_string(),
-            import_id: import_id.to_string(),
-            outcome: outcome.to_owned(),
-            artifact_id: artifact_id.map(|id| id.to_string()),
-        }),
-    )
-        .into_response())
-}
-
-/// Try an integration: sign in and ask the client's API version.
+/// Try an integration: sign in, ask the client's version, and check it has
+/// the category.
 ///
 /// # Errors
 ///
 /// `NOT_FOUND`; `INTEGRATION_OFF` and the like when it cannot be tried at
-/// all. A client that fails is a result, `ok: false`, not an error.
+/// all. A client that fails, or lacks the category, is a result,
+/// `ok: false`, not an error.
 #[utoipa::path(
     post,
     path = "/api/v1/integrations/{integration_id}/test",
@@ -806,7 +589,7 @@ pub async fn test_one(
         .await
         .map_err(unavailable("the integration could not be read"))?
         .ok_or_else(|| Problem::not_found("integration", &id.to_string()))?;
-    let (mut client, _) = open_qbittorrent(
+    let (mut client, folders) = open_client(
         state.database(),
         state.integration_client(),
         state.secret_key(),
@@ -814,14 +597,27 @@ pub async fn test_one(
     )
     .await
     .map_err(|error| open_problem(&error))?;
-    let view = match client.api_version().await {
-        Ok(version) => {
+    let view = match client.version_and_category(&folders.category).await {
+        Ok((version, true)) => {
             note_health(&state, id, Ok(Some(&version))).await;
             IntegrationTestView {
                 ok: true,
                 api_version: Some(version),
                 error_code: None,
                 detail: None,
+            }
+        }
+        Ok((version, false)) => {
+            note_health(&state, id, Err("INTEGRATION_MISCONFIGURED")).await;
+            IntegrationTestView {
+                ok: false,
+                api_version: Some(version),
+                error_code: Some("INTEGRATION_MISCONFIGURED".to_owned()),
+                detail: Some(format!(
+                    "it has no category {}; add it, with its own folder, or the downloads are \
+                     filed under its default",
+                    folders.category
+                )),
             }
         }
         Err(error) => {
@@ -847,7 +643,9 @@ pub fn router() -> Router<ApiState> {
         )
         .route(
             "/integrations/{integration_id}/jobs",
-            post(submit_job).layer(DefaultBodyLimit::max(MAX_SUBMISSION_BYTES)),
+            post(integration_jobs::submit_job).layer(DefaultBodyLimit::max(
+                integration_jobs::MAX_SUBMISSION_BYTES,
+            )),
         )
         .route("/integrations/{integration_id}/test", post(test_one))
 }

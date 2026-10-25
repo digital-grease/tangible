@@ -119,6 +119,16 @@ may change between minor versions, and the release notes say how.
   redumper they also show the disc's write offset, whether the drive was
   treated as generic (with a hint to ask for cdrdao if its rips go wrong),
   and how many samples were read again.
+- Operators can hand an NZB they already have to a SABnzbd an administrator
+  configured (`kind` `sabnzbd`, with an API key), through the same
+  `POST /api/v1/integrations/{id}/jobs` (`{"nzb": "<base64>"}`). The
+  category must exist in SABnzbd, which is checked before anything is
+  added; no script is asked for; the same NZB submitted again is found
+  rather than downloaded twice. The import waits while SABnzbd downloads and
+  post-processes, and is imported through a watched root when it completes.
+  The job response now names the job by `identity` (an infohash or an NZB's
+  SHA-256) and the client's `client_job_id`, in place of `infohash`. Tested
+  against SABnzbd 4.5.3.
 - Operators can hand a torrent they already have, a `.torrent` file or a
   magnet link, to a qBittorrent an administrator configured
   (`POST /api/v1/integrations/{id}/jobs`). Tangible adds it to its category

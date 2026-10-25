@@ -173,7 +173,8 @@ describe('Imports page, sending a torrent to a download client', () => {
         status: 202,
         body: {
           integration_id: 'q1',
-          infohash: HASH,
+          identity: HASH,
+          client_job_id: HASH,
           import_id: 't1',
           outcome: 'created',
           artifact_id: null,
@@ -202,7 +203,8 @@ describe('Imports page, sending a torrent to a download client', () => {
         status: 200,
         body: {
           integration_id: 'q1',
-          infohash: HASH,
+          identity: HASH,
+          client_job_id: HASH,
           import_id: 't1',
           outcome: 'already_imported',
           artifact_id: 'a1',

@@ -435,7 +435,7 @@ async fn a_torrent_is_handed_over_followed_and_imported_when_it_finishes() {
         .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{job}");
     assert_eq!(job["outcome"], "created");
-    assert_eq!(job["infohash"], hash.as_str());
+    assert_eq!(job["identity"], hash.as_str());
     let import_id = job["import_id"].as_str().unwrap().to_owned();
     {
         let fake = harness.fake.lock().unwrap();
@@ -854,7 +854,7 @@ async fn a_real_qbittorrent_torrent_is_imported() {
         )
         .await;
     assert!(status.is_success(), "{job}");
-    assert_eq!(job["infohash"], hash.as_str());
+    assert_eq!(job["identity"], hash.as_str());
     let import_id = job["import_id"].as_str().unwrap().to_owned();
     let mut done = Value::Null;
     for _ in 0..30 {

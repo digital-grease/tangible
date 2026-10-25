@@ -11,6 +11,7 @@ pub mod derivations;
 pub mod diagnostics;
 pub mod erasures;
 pub mod imports;
+pub mod integration_jobs;
 pub mod integrations;
 pub mod physical_copies;
 pub mod reports;

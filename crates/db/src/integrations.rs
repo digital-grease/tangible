@@ -585,6 +585,44 @@ pub enum Submitted {
     },
 }
 
+/// What an earlier submission of the same job came to, when it still
+/// stands: its import under way, or done. `None` when there was none, or
+/// its import ended without an artifact, so the job may be handed over
+/// again. Asked before the client is: SABnzbd adds the same NZB twice.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn standing_integration_job(
+    pool: &PgPool,
+    integration_id: uuid::Uuid,
+    client_job_id: &str,
+) -> Result<Option<Submitted>, DbError> {
+    let row = sqlx::query(
+        "SELECT j.import_job_id, i.state, i.artifact_id
+         FROM integration_jobs j JOIN import_jobs i ON i.id = j.import_job_id
+         WHERE j.integration_id = $1 AND j.client_job_id = $2",
+    )
+    .bind(integration_id)
+    .bind(client_job_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(DbError::Query)?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let import_id: uuid::Uuid = row.try_get("import_job_id").map_err(DbError::Query)?;
+    let state: String = row.try_get("state").map_err(DbError::Query)?;
+    Ok(match state.as_str() {
+        "complete" => Some(Submitted::AlreadyImported {
+            import_id,
+            artifact_id: row.try_get("artifact_id").map_err(DbError::Query)?,
+        }),
+        "failed_terminal" | "canceled" | "quarantined" => None,
+        _ => Some(Submitted::AlreadyActive { import_id }),
+    })
+}
+
 /// Record a job handed to a download client, with the import that follows
 /// it and an audit event, together. A job the client already had from an
 /// earlier submission is found, not doubled.

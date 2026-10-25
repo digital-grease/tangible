@@ -224,12 +224,14 @@
                       aria-label={`Test ${item.name}`}
                       >{testing === item.id ? 'Testing…' : 'Test'}</button
                     >
+                    <!-- The form edits a qBittorrent; others are changed through
+                         the API until the page has a form for them. -->
+                    <button
+                      type="button"
+                      onclick={() => startEditing(item)}
+                      aria-label={`Edit ${item.name}`}>Edit</button
+                    >
                   {/if}
-                  <button
-                    type="button"
-                    onclick={() => startEditing(item)}
-                    aria-label={`Edit ${item.name}`}>Edit</button
-                  >
                   <button
                     type="button"
                     onclick={() => {

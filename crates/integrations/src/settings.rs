@@ -8,8 +8,8 @@
 //! paths fail to parse into. Its secrets (a password, an API key) are not
 //! settings: they are named here, entered separately, and stored sealed.
 //!
-//! Only qBittorrent so far (docs/plans/acquisition.md A4). SABnzbd, NZBGet
-//! and S3 follow in their own phases.
+//! qBittorrent (docs/plans/acquisition.md A4) and SABnzbd (A5) so far.
+//! NZBGet and S3 follow in their own phases.
 
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +20,8 @@ use crate::outbound::{OutboundPolicy, Url};
 pub enum ConfigurableKind {
     /// A qBittorrent instance's WebUI.
     Qbittorrent,
+    /// A SABnzbd's API.
+    Sabnzbd,
 }
 
 impl ConfigurableKind {
@@ -28,6 +30,7 @@ impl ConfigurableKind {
     pub fn parse(kind: &str) -> Option<Self> {
         match kind {
             "qbittorrent" => Some(Self::Qbittorrent),
+            "sabnzbd" => Some(Self::Sabnzbd),
             _ => None,
         }
     }
@@ -37,6 +40,7 @@ impl ConfigurableKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Qbittorrent => "qbittorrent",
+            Self::Sabnzbd => "sabnzbd",
         }
     }
 
@@ -45,6 +49,7 @@ impl ConfigurableKind {
     pub const fn secret_fields(self) -> &'static [&'static str] {
         match self {
             Self::Qbittorrent => &["password"],
+            Self::Sabnzbd => &["api_key"],
         }
     }
 }
@@ -92,67 +97,138 @@ impl QbittorrentSettings {
         known_roots: &[String],
         policy: &OutboundPolicy,
     ) -> Result<Self, SettingsError> {
-        let refuse = |what: &str| SettingsError(what.to_owned());
-        let settings: Self = serde_json::from_value(value.clone())
-            .map_err(|error| SettingsError(format!("the settings do not fit: {error}")))?;
-        let url =
-            Url::parse(settings.base_url.trim()).map_err(|_| refuse("base_url is not a URL"))?;
-        policy
-            .check_url(&url)
-            .map_err(|refusal| SettingsError(format!("base_url will not be reached: {refusal}")))?;
-        if url.query().is_some() || url.fragment().is_some() {
-            return Err(refuse("base_url must not have a query or fragment"));
-        }
-        if settings.username.trim().is_empty() || settings.username.len() > 200 {
-            return Err(refuse("username must be 1 to 200 characters"));
-        }
-        if settings.username.chars().any(char::is_control) {
-            return Err(refuse("username must not contain control characters"));
-        }
-        let category_ok = (1..=64).contains(&settings.category.len())
-            && settings
-                .category
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ' '));
-        if !category_ok {
-            return Err(refuse(
-                "category must be 1 to 64 letters, digits, spaces, '-', '_' or '.'",
-            ));
-        }
-        let path = settings.client_path.trim_end_matches('/');
-        let path_ok = path.starts_with('/')
-            && path.len() <= 1024
-            && !path
-                .split('/')
-                .any(|segment| segment == ".." || segment == ".")
-            && !path.chars().any(char::is_control);
-        if !path_ok {
-            return Err(refuse(
-                "client_path must be an absolute path as qBittorrent reports it, without . or ..",
-            ));
-        }
-        if !known_roots.contains(&settings.local_root) {
-            return Err(SettingsError(format!(
-                "local_root must be one of this server's watched roots ({})",
-                if known_roots.is_empty() {
-                    "none are configured; set TANGIBLE_WATCH_ROOTS".to_owned()
-                } else {
-                    known_roots.join(", ")
-                }
-            )));
-        }
+        let settings: Self = parsed(value)?;
         Ok(Self {
-            base_url: url.to_string(),
-            username: settings.username.trim().to_owned(),
-            category: settings.category,
-            client_path: if path.is_empty() {
-                "/".to_owned()
-            } else {
-                path.to_owned()
-            },
-            local_root: settings.local_root,
+            base_url: checked_base_url(&settings.base_url, policy)?,
+            username: checked_username(&settings.username)?,
+            category: checked_category(settings.category)?,
+            client_path: checked_client_path(&settings.client_path, "qBittorrent")?,
+            local_root: checked_local_root(settings.local_root, known_roots)?,
         })
     }
+}
+
+/// How a SABnzbd integration reaches its client and its client's downloads.
+/// Its API key is a secret, not a setting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SabnzbdSettings {
+    /// SABnzbd's address, with any URL base it is served under, such as
+    /// `http://192.168.1.13:8080/` or `http://nas/sabnzbd/`.
+    pub base_url: String,
+    /// The category Tangible adds NZBs under. It must exist in SABnzbd,
+    /// with its own folder: SABnzbd files an unknown one under the default.
+    #[serde(default = "default_category")]
+    pub category: String,
+    /// Where SABnzbd puts that category's finished downloads, as SABnzbd
+    /// sees it: an absolute path, such as `/downloads/complete/tangible`.
+    pub client_path: String,
+    /// The watched root on this server where the same folder is mounted,
+    /// read-only, by its id in `TANGIBLE_WATCH_ROOTS`.
+    pub local_root: String,
+}
+
+impl SabnzbdSettings {
+    /// Check settings an administrator sent, answering them as they are
+    /// stored.
+    ///
+    /// # Errors
+    ///
+    /// As [`QbittorrentSettings::checked`].
+    pub fn checked(
+        value: &serde_json::Value,
+        known_roots: &[String],
+        policy: &OutboundPolicy,
+    ) -> Result<Self, SettingsError> {
+        let settings: Self = parsed(value)?;
+        Ok(Self {
+            base_url: checked_base_url(&settings.base_url, policy)?,
+            category: checked_category(settings.category)?,
+            client_path: checked_client_path(&settings.client_path, "SABnzbd")?,
+            local_root: checked_local_root(settings.local_root, known_roots)?,
+        })
+    }
+}
+
+fn parsed<T: serde::de::DeserializeOwned>(value: &serde_json::Value) -> Result<T, SettingsError> {
+    serde_json::from_value(value.clone())
+        .map_err(|error| SettingsError(format!("the settings do not fit: {error}")))
+}
+
+fn refuse(what: &str) -> SettingsError {
+    SettingsError(what.to_owned())
+}
+
+/// A base URL the policy reaches, without a query or fragment, as stored.
+fn checked_base_url(text: &str, policy: &OutboundPolicy) -> Result<String, SettingsError> {
+    let url = Url::parse(text.trim()).map_err(|_| refuse("base_url is not a URL"))?;
+    policy
+        .check_url(&url)
+        .map_err(|refusal| SettingsError(format!("base_url will not be reached: {refusal}")))?;
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(refuse("base_url must not have a query or fragment"));
+    }
+    Ok(url.to_string())
+}
+
+fn checked_username(name: &str) -> Result<String, SettingsError> {
+    if name.trim().is_empty() || name.len() > 200 {
+        return Err(refuse("username must be 1 to 200 characters"));
+    }
+    if name.chars().any(char::is_control) {
+        return Err(refuse("username must not contain control characters"));
+    }
+    Ok(name.trim().to_owned())
+}
+
+fn checked_category(category: String) -> Result<String, SettingsError> {
+    let ok = (1..=64).contains(&category.len())
+        && category
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ' '));
+    if ok {
+        Ok(category)
+    } else {
+        Err(refuse(
+            "category must be 1 to 64 letters, digits, spaces, '-', '_' or '.'",
+        ))
+    }
+}
+
+/// An absolute path as the client reports it, without `.` or `..`, stored
+/// without a trailing slash.
+fn checked_client_path(path: &str, client: &str) -> Result<String, SettingsError> {
+    let path = path.trim_end_matches('/');
+    let ok = path.starts_with('/')
+        && path.len() <= 1024
+        && !path
+            .split('/')
+            .any(|segment| segment == ".." || segment == ".")
+        && !path.chars().any(char::is_control);
+    if !ok {
+        return Err(SettingsError(format!(
+            "client_path must be an absolute path as {client} reports it, without . or .."
+        )));
+    }
+    Ok(if path.is_empty() {
+        "/".to_owned()
+    } else {
+        path.to_owned()
+    })
+}
+
+fn checked_local_root(root: String, known_roots: &[String]) -> Result<String, SettingsError> {
+    if known_roots.contains(&root) {
+        return Ok(root);
+    }
+    Err(SettingsError(format!(
+        "local_root must be one of this server's watched roots ({})",
+        if known_roots.is_empty() {
+            "none are configured; set TANGIBLE_WATCH_ROOTS".to_owned()
+        } else {
+            known_roots.join(", ")
+        }
+    )))
 }
 
 /// Check settings for `kind`, answering them as stored.
@@ -168,12 +244,15 @@ pub fn checked_settings(
 ) -> Result<serde_json::Value, SettingsError> {
     match kind {
         ConfigurableKind::Qbittorrent => {
-            let settings = QbittorrentSettings::checked(value, known_roots, policy)?;
-            serde_json::to_value(settings).map_err(|error| {
-                SettingsError(format!("the settings could not be stored: {error}"))
-            })
+            stored(&QbittorrentSettings::checked(value, known_roots, policy)?)
         }
+        ConfigurableKind::Sabnzbd => stored(&SabnzbdSettings::checked(value, known_roots, policy)?),
     }
+}
+
+fn stored(settings: &impl Serialize) -> Result<serde_json::Value, SettingsError> {
+    serde_json::to_value(settings)
+        .map_err(|error| SettingsError(format!("the settings could not be stored: {error}")))
 }
 
 #[cfg(test)]
@@ -274,12 +353,45 @@ mod tests {
     }
 
     #[test]
+    fn sabnzbd_settings_take_no_user_and_are_checked_alike() {
+        let good = serde_json::json!({
+            "base_url": "http://192.168.1.13:8080/sabnzbd",
+            "client_path": "/downloads/complete/tangible/",
+            "local_root": "downloads",
+        });
+        assert_eq!(
+            checked_settings(ConfigurableKind::Sabnzbd, &good, &roots(), &policy()).unwrap(),
+            serde_json::json!({
+                "base_url": "http://192.168.1.13:8080/sabnzbd",
+                "category": "tangible",
+                "client_path": "/downloads/complete/tangible",
+                "local_root": "downloads",
+            })
+        );
+        let mut with_user = good.clone();
+        with_user["username"] = "admin".into();
+        let error = checked_settings(ConfigurableKind::Sabnzbd, &with_user, &roots(), &policy())
+            .expect_err("refused");
+        assert!(error.0.contains("do not fit"), "{error}");
+        let mut relative = good;
+        relative["client_path"] = "complete".into();
+        let error = checked_settings(ConfigurableKind::Sabnzbd, &relative, &roots(), &policy())
+            .expect_err("refused");
+        assert!(error.0.contains("as SABnzbd reports it"), "{error}");
+    }
+
+    #[test]
     fn only_known_kinds_are_configured_and_each_names_its_secrets() {
         assert_eq!(
             ConfigurableKind::parse("qbittorrent"),
             Some(ConfigurableKind::Qbittorrent)
         );
-        for other in ["romm", "sabnzbd", "s3", ""] {
+        assert_eq!(
+            ConfigurableKind::parse("sabnzbd"),
+            Some(ConfigurableKind::Sabnzbd)
+        );
+        assert_eq!(ConfigurableKind::Sabnzbd.secret_fields(), ["api_key"]);
+        for other in ["romm", "nzbget", "s3", ""] {
             assert_eq!(ConfigurableKind::parse(other), None, "{other}");
         }
         assert_eq!(ConfigurableKind::Qbittorrent.secret_fields(), ["password"]);
