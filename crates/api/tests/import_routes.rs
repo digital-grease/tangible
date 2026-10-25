@@ -132,6 +132,7 @@ async fn harness_with(
         roots: roots.clone(),
         max_upload_bytes,
         outbound: outbound.clone(),
+        upload_part_bytes: 4096,
     });
 
     let runner = ImportRunner::new(
@@ -1112,4 +1113,258 @@ async fn url_imports_are_rate_limited_per_account() {
         .await;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{limited}");
     assert_eq!(limited["code"], "RATE_LIMITED");
+}
+
+// --- uploads sent in parts (docs/plans/acquisition.md A3) --------------------
+
+impl Harness {
+    async fn send_part(
+        &self,
+        upload: &str,
+        part: u64,
+        bytes: &[u8],
+        digest: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut request = Request::builder()
+            .method("PUT")
+            .uri(format!("/api/v1/uploads/{upload}/parts/{part}"))
+            .header("content-type", "application/octet-stream")
+            .header("content-length", bytes.len());
+        if let Some(digest) = digest {
+            request = request.header("x-content-sha256", digest);
+        }
+        self.send(request.body(Body::from(bytes.to_vec())).expect("build"))
+            .await
+    }
+
+    async fn delete(&self, path: &str) -> (StatusCode, serde_json::Value) {
+        self.send(
+            Request::builder()
+                .method("DELETE")
+                .uri(path)
+                .body(Body::empty())
+                .expect("build"),
+        )
+        .await
+    }
+
+    /// Start an upload of `bytes`, answering its id.
+    async fn start_upload(&self, bytes: &[u8], extra: serde_json::Value) -> String {
+        let mut body = json!({ "filename": "disc.iso", "total_bytes": bytes.len() });
+        if let (Some(body), Some(extra)) = (body.as_object_mut(), extra.as_object()) {
+            body.extend(extra.clone());
+        }
+        let (status, started) = self.post("/api/v1/uploads", body).await;
+        assert_eq!(status, StatusCode::CREATED, "{started}");
+        assert_eq!(started["part_size"], 4096);
+        started["id"].as_str().unwrap().to_owned()
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_file_sent_in_parts_in_any_order_becomes_an_artifact() {
+    let harness = harness().await;
+    let image = iso_image("PARTS", 20); // 40,960 bytes: ten parts of 4096
+    let upload = harness
+        .start_upload(&image, json!({ "expected_sha256": sha256_hex(&image) }))
+        .await;
+    let parts: Vec<&[u8]> = image.chunks(4096).collect();
+    assert_eq!(parts.len(), 10);
+
+    // Backwards, with digests, and one part sent twice.
+    for (number, part) in parts.iter().enumerate().rev() {
+        let (status, view) = harness
+            .send_part(&upload, number as u64, part, Some(&sha256_hex(part)))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{number}: {view}");
+    }
+    let (status, _) = harness.send_part(&upload, 3, parts[3], None).await;
+    assert_eq!(status, StatusCode::OK, "a part sent again replaces itself");
+
+    let (_, view) = harness.get(&format!("/api/v1/uploads/{upload}")).await;
+    assert_eq!(view["part_count"], 10);
+    assert_eq!(
+        view["received_parts"],
+        json!([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+    );
+    assert_eq!(view["bytes_received"], image.len());
+    assert_eq!(view["state"], "open");
+
+    let (status, queued) = harness
+        .post(&format!("/api/v1/uploads/{upload}/complete"), json!({}))
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{queued}");
+    assert_eq!(
+        queued["id"],
+        upload.as_str(),
+        "the upload's id is the import's"
+    );
+    assert_eq!(queued["source_kind"], "upload");
+    // Completing again answers the same import.
+    let (status, again) = harness
+        .post(&format!("/api/v1/uploads/{upload}/complete"), json!({}))
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{again}");
+    assert_eq!(again["id"], upload.as_str());
+
+    let settled = harness.drain_until_settled(&upload).await;
+    assert_eq!(settled["state"], "complete", "{settled}");
+    let artifact = settled["artifact_id"].as_str().unwrap();
+    let (_, manifest) = harness
+        .get(&format!("/api/v1/artifacts/{artifact}/manifest"))
+        .await;
+    assert_eq!(manifest["classification"]["format"], "iso");
+    assert_eq!(
+        manifest["components"][0]["content"]["sha256"],
+        sha256_hex(&image)
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_upload_completes_only_whole_and_refuses_parts_that_are_not() {
+    let harness = harness().await;
+    let image = iso_image("HALF", 20);
+    let upload = harness.start_upload(&image, json!({})).await;
+    for number in [0_usize, 2] {
+        let start = number * 4096;
+        let (status, _) = harness
+            .send_part(&upload, number as u64, &image[start..start + 4096], None)
+            .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    let (status, refused) = harness
+        .post(&format!("/api/v1/uploads/{upload}/complete"), json!({}))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert!(
+        refused["detail"]
+            .as_str()
+            .unwrap()
+            .starts_with("8 part(s) still to send: 1, 3"),
+        "{refused}"
+    );
+
+    // The wrong length, the wrong digest, a part past the last.
+    let (status, refused) = harness.send_part(&upload, 1, &image[..100], None).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    let (status, refused) = harness
+        .send_part(&upload, 1, &image[4096..8192], Some(&"ab".repeat(32)))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert!(
+        refused["detail"]
+            .as_str()
+            .unwrap()
+            .starts_with("UPLOAD_MISMATCH")
+    );
+    let (status, _) = harness.send_part(&upload, 10, &image[..4096], None).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let (_, view) = harness.get(&format!("/api/v1/uploads/{upload}")).await;
+    assert_eq!(
+        view["received_parts"],
+        json!([0, 2]),
+        "nothing refused was recorded"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_upload_is_its_starters_alone() {
+    let harness = harness().await;
+    let image = iso_image("MINE", 20);
+    let upload = harness.start_upload(&image, json!({})).await;
+    let other = support::sign_in(&harness.pool, tangible_domain::Role::Operator).await;
+    let mut request = Request::builder()
+        .method("GET")
+        .uri(format!("/api/v1/uploads/{upload}"))
+        .body(Body::empty())
+        .unwrap();
+    other.apply(&mut request);
+    let (status, _) = harness.send(request).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let mut request = Request::builder()
+        .method("PUT")
+        .uri(format!("/api/v1/uploads/{upload}/parts/0"))
+        .header("content-length", 4096)
+        .body(Body::from(image[..4096].to_vec()))
+        .unwrap();
+    other.apply(&mut request);
+    let (status, _) = harness.send(request).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_upload_that_is_not_what_was_said_is_not_imported() {
+    let harness = harness().await;
+    let image = iso_image("SAID", 20);
+    let upload = harness
+        .start_upload(&image, json!({ "expected_sha256": "cd".repeat(32) }))
+        .await;
+    for (number, part) in image.chunks(4096).enumerate() {
+        harness.send_part(&upload, number as u64, part, None).await;
+    }
+    let (status, _) = harness
+        .post(&format!("/api/v1/uploads/{upload}/complete"), json!({}))
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let settled = harness.drain_until_settled(&upload).await;
+    assert_eq!(settled["state"], "failed_terminal", "{settled}");
+    assert_eq!(settled["error_code"], "IMPORT_HASH_MISMATCH");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn uploads_are_bounded_abandoned_on_request_and_expire_when_idle() {
+    let harness = harness_with_limit(50_000).await;
+    let (status, refused) = harness
+        .post(
+            "/api/v1/uploads",
+            json!({ "filename": "big.iso", "total_bytes": 60_000 }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{refused}");
+    for body in [
+        json!({ "filename": "../x.iso", "total_bytes": 10 }),
+        json!({ "filename": "x.iso", "total_bytes": 10, "expected_sha256": "nope" }),
+    ] {
+        let (status, refused) = harness.post("/api/v1/uploads", body).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    }
+
+    // Abandoned on request: its bytes go, and it cannot be completed.
+    let image = iso_image("GONE", 20);
+    let upload = harness.start_upload(&image, json!({})).await;
+    let staged = harness.dir.path().join("staging/imports").join(&upload);
+    assert!(staged.exists());
+    let (status, _) = harness.delete(&format!("/api/v1/uploads/{upload}")).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(!staged.exists(), "its bytes are removed");
+    let (status, _) = harness
+        .post(&format!("/api/v1/uploads/{upload}/complete"), json!({}))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    // Left idle past its expiry: abandoned by the runner, its bytes removed.
+    let idle = harness.start_upload(&image, json!({})).await;
+    sqlx::query("UPDATE uploads SET expires_at = now() - interval '1 minute' WHERE id = $1::uuid")
+        .bind(&idle)
+        .execute(&harness.pool)
+        .await
+        .unwrap();
+    while harness.runner.step().await.unwrap() {}
+    let (_, view) = harness.get(&format!("/api/v1/uploads/{idle}")).await;
+    assert_eq!(view["state"], "abandoned", "{view}");
+    assert!(
+        !harness
+            .dir
+            .path()
+            .join("staging/imports")
+            .join(&idle)
+            .exists()
+    );
+    let (status, _) = harness.send_part(&idle, 0, &image[..4096], None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
 }

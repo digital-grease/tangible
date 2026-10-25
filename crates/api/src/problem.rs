@@ -94,6 +94,9 @@ pub enum ErrorCode {
     /// or reserved network, a refused scheme or port, a URL carrying
     /// credentials (ADR 0016, SECURITY.md 3.5).
     ImportSsrfBlocked,
+    /// The server has too little free space for what was asked, such as an
+    /// upload of this size.
+    InsufficientSpace,
     /// Anything unanticipated.
     Internal,
 }
@@ -124,6 +127,7 @@ impl ErrorCode {
             Self::CdEngineUnavailable => tangible_domain::rip::CD_ENGINE_UNAVAILABLE,
             Self::UrlImportsOff => "URL_IMPORTS_OFF",
             Self::ImportSsrfBlocked => "IMPORT_SSRF_BLOCKED",
+            Self::InsufficientSpace => "INSUFFICIENT_SPACE",
             Self::Internal => "INTERNAL",
         }
     }
@@ -163,6 +167,7 @@ impl ErrorCode {
             | Self::EncryptedNoDecryption
             | Self::CdEngineUnavailable
             | Self::UrlImportsOff => StatusCode::CONFLICT,
+            Self::InsufficientSpace => StatusCode::INSUFFICIENT_STORAGE,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -192,6 +197,7 @@ impl ErrorCode {
             Self::CdEngineUnavailable => "The drive's worker does not have that CD engine",
             Self::UrlImportsOff => "Importing from a URL is turned off",
             Self::ImportSsrfBlocked => "The server will not fetch from that address",
+            Self::InsufficientSpace => "Not enough free space",
             Self::Internal => "Internal error",
         }
     }
@@ -342,6 +348,7 @@ mod tests {
             ErrorCode::CdEngineUnavailable,
             ErrorCode::UrlImportsOff,
             ErrorCode::ImportSsrfBlocked,
+            ErrorCode::InsufficientSpace,
             ErrorCode::Internal,
         ];
         let mut seen = std::collections::BTreeSet::new();

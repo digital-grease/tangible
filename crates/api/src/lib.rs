@@ -93,6 +93,11 @@ pub const API_BASE: &str = "/api/v1";
         routes::imports::get_import,
         routes::imports::cancel_import,
         routes::imports::retry_import,
+        routes::uploads::start_upload,
+        routes::uploads::show_upload,
+        routes::uploads::put_part,
+        routes::uploads::finish_upload,
+        routes::uploads::drop_upload,
         routes::physical_copies::list_copies,
         routes::physical_copies::get_copy,
         routes::physical_copies::update_copy,
@@ -183,6 +188,8 @@ pub const API_BASE: &str = "/api/v1";
         routes::imports::ImportSources,
         routes::imports::CreateImportRequest,
         routes::imports::UrlImportRequest,
+        routes::uploads::UploadView,
+        routes::uploads::CreateUploadRequest,
         routes::physical_copies::PhysicalCopyView,
         routes::physical_copies::PhysicalCopyPage,
         routes::physical_copies::PhysicalCopyDetail,
@@ -399,6 +406,7 @@ pub fn router(state: ApiState) -> Router {
         .nest(API_BASE, routes::artifacts::router())
         .nest(API_BASE, routes::burns::router())
         .nest(API_BASE, routes::imports::router())
+        .nest(API_BASE, routes::uploads::router())
         .nest(API_BASE, routes::physical_copies::router())
         .nest(API_BASE, routes::catalog::router())
         .nest(API_BASE, routes::workers::router())

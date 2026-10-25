@@ -28,6 +28,7 @@ pub mod manifest;
 pub mod report;
 pub mod rip;
 pub mod secret;
+pub mod upload;
 
 pub use burn::{BurnAttemptState, BurnJobState, BurnTransitionError};
 pub use digest::{DigestParseError, Sha256Digest};

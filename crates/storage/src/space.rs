@@ -77,8 +77,9 @@ async fn try_write(directory: &Path) -> bool {
     created
 }
 
-/// The filesystem's free and total bytes.
-fn space_of(directory: &Path) -> Option<Space> {
+/// The filesystem's free and total bytes, or `None` when it cannot be told.
+#[must_use]
+pub fn space_of(directory: &Path) -> Option<Space> {
     let stat = rustix::fs::statvfs(directory).ok()?;
     let unit = if stat.f_frsize > 0 {
         stat.f_frsize

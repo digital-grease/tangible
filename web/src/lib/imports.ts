@@ -16,6 +16,7 @@ export type ImportPage = components['schemas']['ImportPage'];
 export type ImportSources = components['schemas']['ImportSources'];
 export type CreateImportRequest = components['schemas']['CreateImportRequest'];
 export type UrlImportRequest = components['schemas']['UrlImportRequest'];
+export type UploadView = components['schemas']['UploadView'];
 
 function isProblem(value: unknown): value is Problem {
   return typeof value === 'object' && value !== null && 'code' in value && 'detail' in value;
@@ -151,6 +152,152 @@ export async function uploadImport(
   );
   if (isProblem(result)) return { kind: 'error', problem: result };
   return { kind: 'ready', data: result };
+}
+
+// --- uploads sent in parts ------------------------------------------------------
+
+/** Files larger than this are sent in parts, which survive a dropped connection. */
+export const PARTS_ABOVE_BYTES = 64 * 1024 * 1024;
+
+/** How many times one part is tried before the upload stops and says why. */
+const PART_ATTEMPTS = 3;
+
+/** Where an upload's id is remembered, so choosing the same file again resumes it. */
+export interface UploadMemory {
+  get(key: string): string | null;
+  set(key: string, value: string): void;
+  remove(key: string): void;
+}
+
+/**
+ * The browser's local storage, quietly forgetting where it is unavailable
+ * (a private window, blocked site data): the upload still works, it just
+ * cannot be resumed after a reload.
+ */
+export const browserMemory: UploadMemory = {
+  get(key) {
+    try {
+      return globalThis.localStorage?.getItem(key) ?? null;
+    } catch {
+      return null;
+    }
+  },
+  set(key, value) {
+    try {
+      globalThis.localStorage?.setItem(key, value);
+    } catch {
+      // Not remembered; nothing else changes.
+    }
+  },
+  remove(key) {
+    try {
+      globalThis.localStorage?.removeItem(key);
+    } catch {
+      // Nothing to forget.
+    }
+  },
+};
+
+/** What identifies a file across reloads: its name, size and modification time. */
+export function uploadKey(file: File): string {
+  return `tangible.upload:${file.name}:${file.size}:${file.lastModified}`;
+}
+
+/**
+ * A part's SHA-256, or nothing where the browser cannot compute one: Web
+ * Crypto exists only over https and on localhost. The server hashes every
+ * part either way.
+ */
+export async function partDigest(bytes: ArrayBuffer): Promise<string | undefined> {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) return undefined;
+  try {
+    const digest = new Uint8Array(await subtle.digest('SHA-256', bytes));
+    return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return undefined;
+  }
+}
+
+/** An upload of this file to carry on with, if one is remembered and still open. */
+async function resumable(
+  file: File,
+  fetcher: typeof fetch,
+  memory: UploadMemory,
+): Promise<UploadView | null> {
+  const id = memory.get(uploadKey(file));
+  if (!id) return null;
+  const found = await request<UploadView>(fetcher, `/api/v1/uploads/${encodeURIComponent(id)}`);
+  if (!isProblem(found) && found.state === 'open' && found.total_bytes === file.size) {
+    return found;
+  }
+  memory.remove(uploadKey(file));
+  return null;
+}
+
+/**
+ * Upload a file in parts and queue its import, carrying on with an upload of
+ * the same file the page started before, if there is one.
+ *
+ * Each part is tried up to three times. `onProgress` hears the bytes the
+ * server has, after each part.
+ */
+export async function uploadInParts(
+  file: File,
+  onProgress: (sent: number, total: number) => void,
+  fetcher: typeof fetch = apiFetch,
+  memory: UploadMemory = browserMemory,
+): Promise<CommandResult<ImportView>> {
+  let upload = await resumable(file, fetcher, memory);
+  if (!upload) {
+    const started = await request<UploadView>(fetcher, '/api/v1/uploads', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ filename: file.name, total_bytes: file.size }),
+    });
+    if (isProblem(started)) return { kind: 'error', problem: started };
+    upload = started;
+    memory.set(uploadKey(file), upload.id);
+  }
+
+  let sent = upload.bytes_received;
+  onProgress(sent, file.size);
+  for (let part = 0; part < upload.part_count; part++) {
+    if (upload.received_parts.includes(part)) continue;
+    const start = part * upload.part_size;
+    const bytes = await file
+      .slice(start, Math.min(start + upload.part_size, file.size))
+      .arrayBuffer();
+    const digest = await partDigest(bytes);
+    let outcome: UploadView | Problem = transportProblem('the part was not sent');
+    for (let attempt = 0; attempt < PART_ATTEMPTS; attempt++) {
+      outcome = await request<UploadView>(
+        fetcher,
+        `/api/v1/uploads/${encodeURIComponent(upload.id)}/parts/${part}`,
+        {
+          method: 'PUT',
+          headers: {
+            'content-type': 'application/octet-stream',
+            ...(digest ? { 'x-content-sha256': digest } : {}),
+          },
+          body: bytes,
+        },
+      );
+      if (!isProblem(outcome)) break;
+    }
+    if (isProblem(outcome)) return { kind: 'error', problem: outcome };
+    sent = outcome.bytes_received;
+    onProgress(sent, file.size);
+  }
+
+  const queued = await request<ImportView>(
+    fetcher,
+    `/api/v1/uploads/${encodeURIComponent(upload.id)}/complete`,
+    { method: 'POST' },
+  );
+  if (isProblem(queued)) return { kind: 'error', problem: queued };
+  memory.remove(uploadKey(file));
+  return { kind: 'ready', data: queued };
 }
 
 /** Stop an import. */

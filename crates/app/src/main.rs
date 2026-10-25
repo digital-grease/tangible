@@ -124,6 +124,7 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
             roots: roots.clone(),
             max_upload_bytes: serve.max_upload_bytes,
             outbound: outbound.clone(),
+            upload_part_bytes: tangible_domain::upload::PART_BYTES,
         })
         .with_auth(auth)
         .with_reports(reports)

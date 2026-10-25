@@ -2238,13 +2238,13 @@ pub struct ImportJobRecord {
 ///
 /// One list, used by the select and by the insert's `RETURNING`, so the two
 /// cannot drift into disagreeing about what an import job looks like.
-const IMPORT_JOB_COLUMNS: &str = "
+pub(crate) const IMPORT_JOB_COLUMNS: &str = "
     id, source_kind, source_descriptor_json, state, resume_stage, checkpoint_json,
     bytes_expected, bytes_received, artifact_id, error_code, error_detail,
     created_by, created_at, updated_at, completed_at
 ";
 
-fn import_job_from_row(row: &sqlx::postgres::PgRow) -> Result<ImportJobRecord, DbError> {
+pub(crate) fn import_job_from_row(row: &sqlx::postgres::PgRow) -> Result<ImportJobRecord, DbError> {
     let state: String = row.try_get("state").map_err(DbError::Query)?;
     Ok(ImportJobRecord {
         id: ImportJobId::from_uuid(row.try_get("id").map_err(DbError::Query)?),

@@ -161,6 +161,7 @@ impl ImportRunner {
         .await?
         else {
             self.settle_rips().await;
+            self.expire_uploads().await;
             return Ok(false);
         };
 
@@ -180,6 +181,23 @@ impl ImportRunner {
             }
             Ok(_) => {}
             Err(error) => tracing::warn!(error = ?error, "could not settle rips"),
+        }
+    }
+
+    /// Abandon uploads left idle past their expiry and remove what they sent.
+    async fn expire_uploads(&self) {
+        match tangible_db::uploads::expire_uploads(self.database.pool()).await {
+            Ok(expired) => {
+                for id in expired {
+                    let id = tangible_domain::ImportJobId::from_uuid(id);
+                    if let Err(error) = self.pipeline.discard(id).await {
+                        tracing::warn!(upload_id = %id, error = ?error, "could not remove an expired upload");
+                    } else {
+                        tracing::info!(upload_id = %id, "an idle upload expired and was removed");
+                    }
+                }
+            }
+            Err(error) => tracing::warn!(error = ?error, "could not expire idle uploads"),
         }
     }
 
@@ -330,8 +348,40 @@ impl ImportRunner {
                 self.record(job, ImportState::Acquiring, checkpoint).await;
                 self.download(job, checkpoint).await
             }
+            // An upload sent in parts may name the length and digest its
+            // sender expects; checked before anything is hashed or kept.
+            "upload" if job.source_descriptor.get("expected_bytes").is_some() => {
+                self.check_staged(job).await
+            }
             _ => Ok(()),
         }
+    }
+
+    /// Check a staged upload against what its sender said it would be.
+    async fn check_staged(&self, job: &ImportJobRecord) -> Result<(), Failure> {
+        let filename = descriptor_string(&job.source_descriptor, "filename").ok_or((
+            "IMPORT_DESCRIPTOR_INVALID",
+            "no filename".to_owned(),
+            false,
+        ))?;
+        let logical = LogicalPath::parse(&filename).map_err(|_| {
+            (
+                "IMPORT_DESCRIPTOR_INVALID",
+                "an unusable filename".to_owned(),
+                false,
+            )
+        })?;
+        let area = self
+            .pipeline
+            .open_area(job.id)
+            .await
+            .map_err(|error| ("IMPORT_STAGING_FAILED", error.to_string(), true))?;
+        let path = area
+            .prepare_parent(&logical)
+            .await
+            .map_err(|error| ("IMPORT_STAGING_FAILED", error.to_string(), true))?;
+        let bytes = tokio::fs::metadata(&path).await.map_or(0, |m| m.len());
+        check_expected(job, &path, bytes).await
     }
 
     /// Copy a watched-folder source into the job's staging area.

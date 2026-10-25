@@ -252,7 +252,7 @@ fn parse_import(raw: &str) -> Result<ImportJobId, Problem> {
 ///
 /// Kept pure and total: a filename arrives from a browser, and the only safe
 /// version of it is one that names a single file and nothing else.
-fn staged_name(filename: Option<&str>) -> Result<LogicalPath, Problem> {
+pub(crate) fn staged_name(filename: Option<&str>) -> Result<LogicalPath, Problem> {
     let name = filename.unwrap_or("upload.bin").trim();
     if name.is_empty() || name.len() > MAX_FILENAME {
         return Err(Problem::new(

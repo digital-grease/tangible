@@ -119,6 +119,13 @@ may change between minor versions, and the release notes say how.
   redumper they also show the disc's write offset, whether the drive was
   treated as generic (with a hint to ask for cdrdao if its rips go wrong),
   and how many samples were read again.
+- Large uploads are sent in parts (`/api/v1/uploads`), so a dropped
+  connection costs one part rather than the whole file. The Imports page
+  uses parts for files over 64 MiB, shows how much has been sent, and, if
+  the connection drops or the page is closed, carries on from where it
+  stopped when the same file is chosen again. Room for the whole file is
+  checked first; an upload left for a day is removed. Database migration
+  0015 adds two tables; it is additive.
 - Operators can import a file from a URL, where an administrator turns it on
   (`TANGIBLE_URL_IMPORTS=true`): "Import from a URL" on the Imports page, or
   `POST /api/v1/imports/url`. The server fetches it into staging, picks up

@@ -4279,6 +4279,328 @@
         ]
       }
     },
+    "/api/v1/uploads": {
+      "post": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Start an upload sent in parts.",
+        "description": "Start an upload sent in parts. The answer names the part size; send \\\n                   each part with PUT /uploads/{id}/parts/{n}, ask which have arrived \\\n                   with GET, and complete it to queue the import.",
+        "operationId": "start_upload",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUploadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadView"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Larger than this server accepts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A filename or digest that will not do",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many uploads started for now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "507": {
+            "description": "Not enough room in staging",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/uploads/{upload_id}": {
+      "get": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "An upload of yours, and which parts have arrived.",
+        "description": "# Errors\n\n`NOT_FOUND` for an upload that does not exist or is not yours.",
+        "operationId": "show_upload",
+        "parameters": [
+          {
+            "name": "upload_id",
+            "in": "path",
+            "description": "Upload identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The upload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such upload of yours",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Abandon an upload, removing what it sent.",
+        "description": "# Errors\n\n`NOT_FOUND`; `CONFLICT` once it is completed.",
+        "operationId": "drop_upload",
+        "parameters": [
+          {
+            "name": "upload_id",
+            "in": "path",
+            "description": "Upload identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Abandoned"
+          },
+          "404": {
+            "description": "No such upload of yours",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already completed or abandoned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/uploads/{upload_id}/complete": {
+      "post": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Complete an upload whose parts have all arrived, and queue its import.",
+        "description": "Repeating it answers the same import.\n\n# Errors\n\n`NOT_FOUND`; `CONFLICT` for an upload abandoned, or with parts still to\nsend, which the detail lists.",
+        "operationId": "finish_upload",
+        "parameters": [
+          {
+            "name": "upload_id",
+            "in": "path",
+            "description": "Upload identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Import queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such upload of yours",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Parts missing, or no longer open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/uploads/{upload_id}/parts/{part_number}": {
+      "put": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Send one part.",
+        "description": "Send part n (from 0) as the body: exactly the part's length, with \\\n                   Content-Length, and the part's SHA-256 in X-Content-SHA256 when the \\\n                   client can compute it. A part sent again replaces itself.",
+        "operationId": "put_part",
+        "parameters": [
+          {
+            "name": "upload_id",
+            "in": "path",
+            "description": "Upload identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "part_number",
+            "in": "path",
+            "description": "Part number, from 0",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The part's bytes",
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Received",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such upload of yours",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The upload is no longer open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A part that will not do",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/users": {
       "get": {
         "tags": [
@@ -6094,6 +6416,34 @@
             "description": "What it sorts as. Defaults to the display title."
           }
         }
+      },
+      "CreateUploadRequest": {
+        "type": "object",
+        "description": "What a client sends to start an upload.",
+        "required": [
+          "filename",
+          "total_bytes"
+        ],
+        "properties": {
+          "expected_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The whole file's SHA-256, when known: checked before it is imported."
+          },
+          "filename": {
+            "type": "string",
+            "description": "What to call the file: one name, no directories."
+          },
+          "total_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The whole file's length.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
       },
       "CreateUserRequest": {
         "type": "object",
@@ -9467,6 +9817,72 @@
               "null"
             ],
             "description": "Where it is kept."
+          }
+        }
+      },
+      "UploadView": {
+        "type": "object",
+        "description": "An upload sent in parts.",
+        "required": [
+          "id",
+          "filename",
+          "total_bytes",
+          "part_size",
+          "part_count",
+          "received_parts",
+          "bytes_received",
+          "state",
+          "expires_at"
+        ],
+        "properties": {
+          "bytes_received": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes in those parts.",
+            "minimum": 0
+          },
+          "expires_at": {
+            "type": "string",
+            "description": "When it is abandoned if no part arrives before then."
+          },
+          "filename": {
+            "type": "string",
+            "description": "The file's name."
+          },
+          "id": {
+            "type": "string",
+            "description": "Its id, also the import's once completed."
+          },
+          "part_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many parts there are.",
+            "minimum": 0
+          },
+          "part_size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Every part's length but the last's.",
+            "minimum": 0
+          },
+          "received_parts": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "description": "The parts that have arrived, numbered from 0."
+          },
+          "state": {
+            "type": "string",
+            "description": "`open`, `completed` or `abandoned`."
+          },
+          "total_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The whole file's length.",
+            "minimum": 0
           }
         }
       },

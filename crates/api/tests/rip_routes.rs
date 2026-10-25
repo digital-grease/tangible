@@ -100,6 +100,7 @@ async fn harness_with(decryption_allowed: bool) -> Harness {
             roots: WatchRoots::new(BTreeMap::new()),
             max_upload_bytes: 64 * 1024 * 1024,
             outbound: None,
+            upload_part_bytes: tangible_domain::upload::PART_BYTES,
         })
         .with_decryption_allowed(decryption_allowed);
     let runner = ImportRunner::new(

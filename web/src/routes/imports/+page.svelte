@@ -16,7 +16,9 @@
     retryImport,
     sourceLabel,
     transferFraction,
+    PARTS_ABOVE_BYTES,
     uploadImport,
+    uploadInParts,
     urlImportRequest,
     type ImportPage,
     type ImportSources,
@@ -31,6 +33,7 @@
   let reportsOn = $state(false);
 
   let files = $state<FileList | null>(null);
+  let uploaded = $state<{ sent: number; total: number } | null>(null);
   let pathId = $state('');
   let relativePath = $state('');
   let url = $state('');
@@ -78,11 +81,19 @@
     busy = true;
     problem = null;
 
-    const result = await uploadImport(file);
+    // A large file goes in parts, so a dropped connection costs one part and
+    // choosing the same file again carries on.
+    const result =
+      file.size > PARTS_ABOVE_BYTES
+        ? await uploadInParts(file, (sent, total) => {
+            uploaded = { sent, total };
+          })
+        : await uploadImport(file);
     if (result.kind === 'error') {
       problem = result.problem;
     } else {
       files = null;
+      uploaded = null;
       await refresh();
     }
     busy = false;
@@ -165,7 +176,19 @@
     </p>
     {#if sources}
       <p>
-        <small>This server accepts uploads up to {formatBytes(sources.max_upload_bytes)}.</small>
+        <small
+          >This server accepts uploads up to {formatBytes(sources.max_upload_bytes)}. Files over {formatBytes(
+            PARTS_ABOVE_BYTES,
+          )} are sent in parts: if the connection drops or the page is closed, choose the same file again
+          and the upload carries on from where it stopped.</small
+        >
+      </p>
+    {/if}
+    {#if uploaded}
+      <p aria-live="polite">
+        <progress max={uploaded.total} value={uploaded.sent} aria-label="Upload progress"
+        ></progress>
+        Sent {formatBytes(uploaded.sent)} of {formatBytes(uploaded.total)}
       </p>
     {/if}
     <button type="submit" disabled={busy || !files?.length}>

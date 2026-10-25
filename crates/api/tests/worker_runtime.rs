@@ -126,6 +126,7 @@ async fn server_with(decryption_allowed: bool) -> Server {
             roots: WatchRoots::new(std::collections::BTreeMap::new()),
             max_upload_bytes: 64 * 1024 * 1024,
             outbound: None,
+            upload_part_bytes: tangible_domain::upload::PART_BYTES,
         })
         .with_decryption_allowed(decryption_allowed);
     let handle = tokio::spawn(async move {

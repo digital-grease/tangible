@@ -1314,6 +1314,103 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start an upload sent in parts.
+         * @description Start an upload sent in parts. The answer names the part size; send \
+         *                        each part with PUT /uploads/{id}/parts/{n}, ask which have arrived \
+         *                        with GET, and complete it to queue the import.
+         */
+        post: operations["start_upload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/uploads/{upload_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * An upload of yours, and which parts have arrived.
+         * @description # Errors
+         *
+         *     `NOT_FOUND` for an upload that does not exist or is not yours.
+         */
+        get: operations["show_upload"];
+        put?: never;
+        post?: never;
+        /**
+         * Abandon an upload, removing what it sent.
+         * @description # Errors
+         *
+         *     `NOT_FOUND`; `CONFLICT` once it is completed.
+         */
+        delete: operations["drop_upload"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/uploads/{upload_id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Complete an upload whose parts have all arrived, and queue its import.
+         * @description Repeating it answers the same import.
+         *
+         *     # Errors
+         *
+         *     `NOT_FOUND`; `CONFLICT` for an upload abandoned, or with parts still to
+         *     send, which the detail lists.
+         */
+        post: operations["finish_upload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/uploads/{upload_id}/parts/{part_number}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Send one part.
+         * @description Send part n (from 0) as the body: exactly the part's length, with \
+         *                        Content-Length, and the part's SHA-256 in X-Content-SHA256 when the \
+         *                        client can compute it. A part sent again replaces itself.
+         */
+        put: operations["put_part"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users": {
         parameters: {
             query?: never;
@@ -2037,6 +2134,18 @@ export interface components {
             release_year?: number | null;
             /** @description What it sorts as. Defaults to the display title. */
             sort_title?: string | null;
+        };
+        /** @description What a client sends to start an upload. */
+        CreateUploadRequest: {
+            /** @description The whole file's SHA-256, when known: checked before it is imported. */
+            expected_sha256?: string | null;
+            /** @description What to call the file: one name, no directories. */
+            filename: string;
+            /**
+             * Format: int64
+             * @description The whole file's length.
+             */
+            total_bytes: number;
         };
         /** @description An account to create. */
         CreateUserRequest: {
@@ -3539,6 +3648,39 @@ export interface components {
             status?: string | null;
             /** @description Where it is kept. */
             storage_location?: string | null;
+        };
+        /** @description An upload sent in parts. */
+        UploadView: {
+            /**
+             * Format: int64
+             * @description Bytes in those parts.
+             */
+            bytes_received: number;
+            /** @description When it is abandoned if no part arrives before then. */
+            expires_at: string;
+            /** @description The file's name. */
+            filename: string;
+            /** @description Its id, also the import's once completed. */
+            id: string;
+            /**
+             * Format: int64
+             * @description How many parts there are.
+             */
+            part_count: number;
+            /**
+             * Format: int64
+             * @description Every part's length but the last's.
+             */
+            part_size: number;
+            /** @description The parts that have arrived, numbered from 0. */
+            received_parts: number[];
+            /** @description `open`, `completed` or `abandoned`. */
+            state: string;
+            /**
+             * Format: int64
+             * @description The whole file's length.
+             */
+            total_bytes: number;
         };
         /** @description What an operator sends to import from a URL (ADR 0016). */
         UrlImportRequest: {
@@ -6438,6 +6580,235 @@ export interface operations {
                 };
             };
             /** @description No such title, or an unusable name */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    start_upload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description Started */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadView"];
+                };
+            };
+            /** @description Larger than this server accepts */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A filename or digest that will not do */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many uploads started for now */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not enough room in staging */
+            507: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    show_upload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Upload identifier */
+                upload_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The upload */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadView"];
+                };
+            };
+            /** @description No such upload of yours */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    drop_upload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Upload identifier */
+                upload_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Abandoned */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such upload of yours */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Already completed or abandoned */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    finish_upload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Upload identifier */
+                upload_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Import queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportView"];
+                };
+            };
+            /** @description No such upload of yours */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Parts missing, or no longer open */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    put_part: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Upload identifier */
+                upload_id: string;
+                /** @description Part number, from 0 */
+                part_number: number;
+            };
+            cookie?: never;
+        };
+        /** @description The part's bytes */
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description Received */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadView"];
+                };
+            };
+            /** @description No such upload of yours */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The upload is no longer open */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A part that will not do */
             422: {
                 headers: {
                     [name: string]: unknown;

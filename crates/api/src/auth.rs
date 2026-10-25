@@ -225,6 +225,20 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
     ("POST", "/api/v1/imports", Signed(Import)),
     ("POST", "/api/v1/imports/upload", Signed(Import)),
     ("POST", "/api/v1/imports/url", Signed(ImportUrl)),
+    // Uploads sent in parts: each is its starter's alone.
+    ("POST", "/api/v1/uploads", Signed(Import)),
+    ("GET", "/api/v1/uploads/{upload_id}", Signed(Import)),
+    ("DELETE", "/api/v1/uploads/{upload_id}", Signed(Import)),
+    (
+        "PUT",
+        "/api/v1/uploads/{upload_id}/parts/{part_number}",
+        Signed(Import),
+    ),
+    (
+        "POST",
+        "/api/v1/uploads/{upload_id}/complete",
+        Signed(Import),
+    ),
     ("GET", "/api/v1/imports/{import_id}", Signed(Read)),
     ("POST", "/api/v1/imports/{import_id}/cancel", Signed(Import)),
     ("POST", "/api/v1/imports/{import_id}/retry", Signed(Import)),
@@ -930,6 +944,17 @@ impl ActionLimiter {
         }
         entry.0 += 1;
         Ok(())
+    }
+}
+
+/// Upload sessions allowed per account within [`URL_IMPORT_WINDOW`].
+pub const UPLOADS_ALLOWED: u32 = 60;
+
+impl ActionLimiter {
+    /// The limiter for starting uploads sent in parts.
+    #[must_use]
+    pub fn uploads() -> Self {
+        Self::new(UPLOADS_ALLOWED, URL_IMPORT_WINDOW)
     }
 }
 

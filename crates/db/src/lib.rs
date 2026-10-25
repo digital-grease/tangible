@@ -14,6 +14,7 @@ pub mod erasures;
 pub mod repositories;
 pub mod rips;
 pub mod romm;
+pub mod uploads;
 
 use std::time::Duration;
 

@@ -15,7 +15,11 @@ import {
   retryImport,
   sourceLabel,
   transferFraction,
+  uploadInParts,
+  uploadKey,
   urlImportRequest,
+  type UploadMemory,
+  type UploadView,
   type ImportView,
 } from './imports';
 
@@ -255,5 +259,124 @@ describe('progress', () => {
     expect(sourceLabel('something_new')).toBe('something new');
     expect(importStateLabel('acquiring', 'http_url')).toBe('Downloading');
     expect(importStateLabel('acquiring', 'watch_folder')).toBe('Copying in');
+  });
+});
+
+describe('uploads sent in parts', () => {
+  const file = new File([new Uint8Array(10).fill(7)], 'disc.iso', { lastModified: 1 });
+
+  function view(received: number[]): UploadView {
+    return {
+      id: 'u1',
+      filename: 'disc.iso',
+      total_bytes: 10,
+      part_size: 4,
+      part_count: 3,
+      received_parts: received,
+      bytes_received: received.reduce((sum, part) => sum + (part === 2 ? 2 : 4), 0),
+      state: 'open',
+      expires_at: '2026-10-26T00:00:00Z',
+    };
+  }
+
+  function memory(initial: Record<string, string> = {}): UploadMemory & {
+    entries: Record<string, string>;
+  } {
+    const entries = { ...initial };
+    return {
+      entries,
+      get: (key) => entries[key] ?? null,
+      set: (key, value) => {
+        entries[key] = value;
+      },
+      remove: (key) => {
+        delete entries[key];
+      },
+    };
+  }
+
+  /** A server that remembers which parts arrived. */
+  function server(start: number[], failPart?: number) {
+    const received = [...start];
+    const asked: { method: string; path: string; headers: Headers }[] = [];
+    const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input);
+      const method = init?.method ?? 'GET';
+      asked.push({ method, path, headers: new Headers(init?.headers) });
+      const reply = (status: number, body: unknown) =>
+        ({ ok: status < 300, status, json: async () => body }) as Response;
+      if (method === 'GET' && path === '/api/v1/uploads/u1') return reply(200, view(received));
+      if (method === 'GET') return reply(404, { code: 'NOT_FOUND', detail: 'no such upload' });
+      if (method === 'POST' && path === '/api/v1/uploads') return reply(201, view([]));
+      const part = /\/parts\/(\d+)$/.exec(path);
+      if (method === 'PUT' && part) {
+        const number = Number(part[1]);
+        if (number === failPart) {
+          return reply(503, {
+            code: 'STORAGE_UNAVAILABLE',
+            detail: 'the part could not be staged',
+          });
+        }
+        if (!received.includes(number)) received.push(number);
+        return reply(200, view(received));
+      }
+      if (method === 'POST' && path === '/api/v1/uploads/u1/complete') {
+        return reply(202, { ...job(), id: 'u1', state: 'staged' });
+      }
+      throw new Error(`unexpected ${method} ${path}`);
+    }) as typeof fetch;
+    return { fetcher, asked };
+  }
+
+  it('starts an upload, sends every part with its digest, and completes it', async () => {
+    const { fetcher, asked } = server([]);
+    const remembered = memory();
+    const progress: number[] = [];
+    const result = await uploadInParts(file, (sent) => progress.push(sent), fetcher, remembered);
+    expect(result.kind).toBe('ready');
+    expect(asked.map((call) => `${call.method} ${call.path}`)).toEqual([
+      'POST /api/v1/uploads',
+      'PUT /api/v1/uploads/u1/parts/0',
+      'PUT /api/v1/uploads/u1/parts/1',
+      'PUT /api/v1/uploads/u1/parts/2',
+      'POST /api/v1/uploads/u1/complete',
+    ]);
+    expect(asked[1]?.headers.get('x-content-sha256')).toMatch(/^[0-9a-f]{64}$/);
+    expect(progress).toEqual([0, 4, 8, 10]);
+    // Forgotten once complete.
+    expect(remembered.entries).toEqual({});
+  });
+
+  it('carries on with the upload the page started before, sending only what is missing', async () => {
+    const { fetcher, asked } = server([0, 1]);
+    const result = await uploadInParts(
+      file,
+      () => {},
+      fetcher,
+      memory({ [uploadKey(file)]: 'u1' }),
+    );
+    expect(result.kind).toBe('ready');
+    expect(asked.map((call) => `${call.method} ${call.path}`)).toEqual([
+      'GET /api/v1/uploads/u1',
+      'PUT /api/v1/uploads/u1/parts/2',
+      'POST /api/v1/uploads/u1/complete',
+    ]);
+  });
+
+  it('starts again when the remembered upload is gone', async () => {
+    const { fetcher, asked } = server([]);
+    const remembered = memory({ [uploadKey(file)]: 'gone' });
+    await uploadInParts(file, () => {}, fetcher, remembered);
+    expect(asked[0]?.path).toBe('/api/v1/uploads/gone');
+    expect(asked[1]).toMatchObject({ method: 'POST', path: '/api/v1/uploads' });
+  });
+
+  it('tries a failing part three times, then stops and keeps the upload to resume', async () => {
+    const { fetcher, asked } = server([], 1);
+    const remembered = memory();
+    const result = await uploadInParts(file, () => {}, fetcher, remembered);
+    expect(result.kind).toBe('error');
+    expect(asked.filter((call) => call.path.endsWith('/parts/1'))).toHaveLength(3);
+    expect(remembered.entries[uploadKey(file)]).toBe('u1');
   });
 });

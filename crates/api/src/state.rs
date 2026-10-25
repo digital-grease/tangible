@@ -41,6 +41,8 @@ struct Inner {
     login_limiter: LoginLimiter,
     /// URL imports per account (ADR 0016), likewise shared.
     url_import_limiter: ActionLimiter,
+    /// Uploads started per account, likewise shared.
+    upload_limiter: ActionLimiter,
     /// The built web UI, when this server serves one.
     web: Option<WebUi>,
     /// The RomM export, when an export root is configured.
@@ -72,6 +74,9 @@ pub struct ImportContext {
     /// The client URL imports fetch with, when an administrator turned them
     /// on (`TANGIBLE_URL_IMPORTS`, ADR 0016). `None` is off, the default.
     pub outbound: Option<tangible_integrations::outbound::OutboundClient>,
+    /// The part size uploads sent in parts use:
+    /// [`tangible_domain::upload::PART_BYTES`] except in tests.
+    pub upload_part_bytes: u64,
 }
 
 impl ApiState {
@@ -86,6 +91,7 @@ impl ApiState {
                 auth: AuthSettings::default(),
                 login_limiter: LoginLimiter::default(),
                 url_import_limiter: ActionLimiter::url_imports(),
+                upload_limiter: ActionLimiter::uploads(),
                 web: None,
                 romm: None,
                 derivations: None,
@@ -107,6 +113,7 @@ impl ApiState {
                 auth: AuthSettings::default(),
                 login_limiter: LoginLimiter::default(),
                 url_import_limiter: ActionLimiter::url_imports(),
+                upload_limiter: ActionLimiter::uploads(),
                 web: None,
                 romm: None,
                 derivations: None,
@@ -250,6 +257,12 @@ impl ApiState {
     #[must_use]
     pub fn url_import_limiter(&self) -> &ActionLimiter {
         &self.inner.url_import_limiter
+    }
+
+    /// Uploads started per account.
+    #[must_use]
+    pub fn upload_limiter(&self) -> &ActionLimiter {
+        &self.inner.upload_limiter
     }
 
     /// The manifest store, when a library root is configured.
