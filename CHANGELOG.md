@@ -30,6 +30,12 @@ may change between minor versions, and the release notes say how.
   than a grace period (7 days by default), with what removing them would
   free, plus leftover partial files, entries that are not stored files, and
   recorded files that are missing. Nothing is removed.
+- The web UI shows integrity: an artifact's page says whether its stored
+  files were last found intact or damaged, and "Verify now" (operators)
+  checks them and follows the check; the library list marks damaged
+  artifacts. A Storage page for administrators runs and withdraws full
+  scrubs, lists every check with what it found, and shows the collection
+  plan on request.
 
 - Groundwork for issue reports: text is scrubbed of credentials, paths,
   serial numbers, library file names and LAN addresses before anyone can

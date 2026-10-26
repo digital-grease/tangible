@@ -96,6 +96,11 @@
                    never communicated by colour alone. -->
               <span aria-hidden="true">{validationMark(artifact.validation_state)}</span>
               {validationLabel(artifact.validation_state)}
+              {#if artifact.integrity_state === 'damaged'}
+                <!-- Damage found by an integrity check outranks how the
+                     bytes looked when they arrived, so it is said here. -->
+                <br /><strong><span aria-hidden="true">✕</span> Damaged</strong>
+              {/if}
             </td>
           </tr>
         {/each}

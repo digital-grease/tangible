@@ -3,6 +3,7 @@
 <script lang="ts">
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import FormatReport from '$lib/components/FormatReport.svelte';
+  import Integrity from '$lib/components/Integrity.svelte';
   import { onMount } from 'svelte';
   import Lineage from '$lib/components/Lineage.svelte';
   import { page } from '$app/state';
@@ -35,6 +36,12 @@
   onMount(async () => {
     view = await loadArtifact(page.params.id ?? '');
   });
+
+  /** After a check ends, show what it found; keep the page if the reload fails. */
+  async function reload() {
+    const next = await loadArtifact(page.params.id ?? '');
+    if (next.kind === 'ready') view = next;
+  }
 </script>
 
 <svelte:head>
@@ -94,6 +101,13 @@
         that record what produced them.
       </p>
     </section>
+
+    <Integrity
+      artifactId={view.data.id}
+      integrityState={view.data.integrity_state}
+      checkedAt={view.data.integrity_checked_at}
+      onchecked={reload}
+    />
 
     {#if view.data.ripped}
       {@const ripped = view.data.ripped}

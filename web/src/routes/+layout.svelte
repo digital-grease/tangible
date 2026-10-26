@@ -135,6 +135,11 @@
             >
           </li>
           <li>
+            <a href="/storage" aria-current={page.url.pathname === '/storage' ? 'page' : undefined}
+              >Storage</a
+            >
+          </li>
+          <li>
             <a
               href="/diagnostics"
               aria-current={page.url.pathname === '/diagnostics' ? 'page' : undefined}

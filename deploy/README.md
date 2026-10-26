@@ -655,8 +655,11 @@ The server can queue a full scrub itself: set `TANGIBLE_SCRUB_INTERVAL_DAYS`
 to the number of days after one ends before the next is queued. It is off
 by default, because a full scrub reads every byte in the library and that
 load is yours to decide on. Turned on, the first is queued when the server
-starts. The API offers the same (`POST /api/v1/integrity-checks`, for
-administrators, and `POST /api/v1/artifacts/{id}/validate`, for operators).
+starts. The web UI offers the same: "Verify now" on an artifact's page,
+for operators, and the Storage page, for administrators, which runs and
+withdraws full scrubs and lists every check with what it found. So does the
+API (`POST /api/v1/integrity-checks`, for administrators, and
+`POST /api/v1/artifacts/{id}/validate`, for operators).
 
 What a check can find:
 
@@ -691,7 +694,8 @@ files left by uploads or imports that were interrupted, entries in the
 object tree that are not stored files, and files the catalogue records that
 are missing (`scrub` says which artifacts those belong to). `--limit` sets
 how many files it names, largest first; `--json` prints the same plan the
-API gives administrators (`GET /api/v1/storage/gc-plan`). If a manifest or
+API gives administrators (`GET /api/v1/storage/gc-plan`), which the Storage
+page shows when you ask for it. If a manifest or
 an import's checkpoint cannot be read, the plan says it is uncertain, since
 the unread one might name a listed file.
 

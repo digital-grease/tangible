@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2026 digitalgrease
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // @vitest-environment jsdom
-import { render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { forgetReportSettings } from '$lib/report';
+import { rememberSession } from '$lib/session';
 
 vi.mock('$app/state', () => ({ page: { params: { id: 'a1' } } }));
 
@@ -11,16 +12,28 @@ const { default: ArtifactPage } = await import('./[id]/+page.svelte');
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   forgetReportSettings();
+  rememberSession(null);
 });
 
-function serve(artifact: unknown) {
+type Reply = { status: number; body: unknown };
+
+/** The server: the artifact, its lineage, and any other routes by `METHOD url`. */
+function serve(artifact: unknown, routes: Record<string, Reply | (() => Reply)> = {}): string[] {
+  const asked: string[] = [];
   vi.stubGlobal(
     'fetch',
-    vi.fn(async (input: string | URL | Request) => {
+    vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
-      const reply =
-        url === '/api/v1/artifacts/a1'
+      const key = `${init?.method ?? 'GET'} ${url}`;
+      asked.push(key);
+      const route = routes[key];
+      const reply: Reply = route
+        ? typeof route === 'function'
+          ? route()
+          : route
+        : url === '/api/v1/artifacts/a1'
           ? { status: 200, body: artifact }
           : url === '/api/v1/artifacts/a1/lineage'
             ? { status: 200, body: { derivatives: [], jobs: [] } }
@@ -33,6 +46,7 @@ function serve(artifact: unknown) {
       } as Response;
     }),
   );
+  return asked;
 }
 
 function artifact(extra: Record<string, unknown> = {}) {
@@ -47,6 +61,7 @@ function artifact(extra: Record<string, unknown> = {}) {
     has_warnings: false,
     format_confidence: 1,
     source_kind: 'physical_drive',
+    integrity_state: 'unchecked',
     warnings: [],
     components: [],
     ...extra,
@@ -140,5 +155,97 @@ describe('Artifact page', () => {
     render(ArtifactPage);
     expect(await screen.findByRole('heading', { name: 'Summary' })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'Ripped from a disc' })).toBeNull();
+  });
+});
+
+function integrityCheck(extra: Record<string, unknown> = {}) {
+  return {
+    id: 'c1',
+    scope: 'artifact',
+    artifact_id: 'a1',
+    state: 'queued',
+    objects_total: null,
+    bytes_total: null,
+    objects_checked: 0,
+    bytes_checked: 0,
+    problems: [],
+    problem_count: 0,
+    created_by: 'alice',
+    created_at: '2026-10-25T12:00:00Z',
+    ...extra,
+  };
+}
+
+describe('Artifact integrity', () => {
+  it('says damage plainly, and that nothing was repaired', async () => {
+    serve(artifact({ integrity_state: 'damaged', integrity_checked_at: '2026-10-25T12:00:00Z' }));
+    render(ArtifactPage);
+    expect(await screen.findByRole('heading', { name: 'Integrity' })).toBeTruthy();
+    expect(screen.getByText(/Damaged: a stored file is missing or reads back wrong/)).toBeTruthy();
+    expect(screen.getByText('Nothing was repaired.')).toBeTruthy();
+  });
+
+  it('verifies on request and shows what the check found', async () => {
+    const asked = serve(artifact(), {
+      'POST /api/v1/artifacts/a1/validate': {
+        status: 200,
+        body: integrityCheck({
+          state: 'complete',
+          objects_total: 1,
+          bytes_total: 2048,
+          objects_checked: 1,
+          bytes_checked: 2048,
+          problem_count: 1,
+          problems: [{ kind: 'corrupt', sha256: 'ab'.repeat(32), detail: 'reads back as another' }],
+        }),
+      },
+    });
+    render(ArtifactPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Verify now' }));
+    expect(await screen.findByText('Done: 1 problem.')).toBeTruthy();
+    expect(screen.getByText(/Reads back as other bytes/)).toBeTruthy();
+    expect(screen.getByText('reads back as another')).toBeTruthy();
+    // The artifact is loaded again, to show what the check marked.
+    expect(asked.filter((key) => key === 'GET /api/v1/artifacts/a1')).toHaveLength(2);
+  });
+
+  it('follows a queued check to its end', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let polls = 0;
+    serve(artifact(), {
+      'POST /api/v1/artifacts/a1/validate': { status: 202, body: integrityCheck() },
+      'GET /api/v1/integrity-checks/c1': () => {
+        polls += 1;
+        return {
+          status: 200,
+          body:
+            polls === 1
+              ? integrityCheck({
+                  state: 'running',
+                  objects_total: 2,
+                  bytes_total: 4096,
+                  objects_checked: 1,
+                  bytes_checked: 2048,
+                })
+              : integrityCheck({ state: 'complete', objects_total: 2, bytes_total: 4096 }),
+        };
+      },
+    });
+    render(ArtifactPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Verify now' }));
+    expect(await screen.findByText('Waiting for its turn.')).toBeTruthy();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(await screen.findByText(/1 of 2 files/)).toBeTruthy();
+    expect(screen.getByRole('progressbar').getAttribute('value')).toBe('50');
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(await screen.findByText('Done: nothing wrong.')).toBeTruthy();
+  });
+
+  it('offers a viewer no button', async () => {
+    rememberSession({ role: 'viewer' } as Parameters<typeof rememberSession>[0]);
+    serve(artifact());
+    render(ArtifactPage);
+    expect(await screen.findByRole('heading', { name: 'Integrity' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Verify now' })).toBeNull();
   });
 });
