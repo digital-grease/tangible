@@ -8,8 +8,8 @@
 //! paths fail to parse into. Its secrets (a password, an API key) are not
 //! settings: they are named here, entered separately, and stored sealed.
 //!
-//! qBittorrent (docs/plans/acquisition.md A4), SABnzbd and NZBGet (A5) so
-//! far. S3 follows in its own phase.
+//! qBittorrent (docs/plans/acquisition.md A4), SABnzbd and NZBGet (A5), and
+//! S3-compatible storage (A6).
 
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +24,8 @@ pub enum ConfigurableKind {
     Sabnzbd,
     /// An NZBGet's JSON-RPC API.
     Nzbget,
+    /// An S3-compatible endpoint and the buckets operators may import from.
+    S3,
 }
 
 impl ConfigurableKind {
@@ -34,6 +36,7 @@ impl ConfigurableKind {
             "qbittorrent" => Some(Self::Qbittorrent),
             "sabnzbd" => Some(Self::Sabnzbd),
             "nzbget" => Some(Self::Nzbget),
+            "s3" => Some(Self::S3),
             _ => None,
         }
     }
@@ -45,6 +48,7 @@ impl ConfigurableKind {
             Self::Qbittorrent => "qbittorrent",
             Self::Sabnzbd => "sabnzbd",
             Self::Nzbget => "nzbget",
+            Self::S3 => "s3",
         }
     }
 
@@ -54,6 +58,7 @@ impl ConfigurableKind {
         match self {
             Self::Qbittorrent | Self::Nzbget => &["password"],
             Self::Sabnzbd => &["api_key"],
+            Self::S3 => &["access_key_id", "secret_access_key"],
         }
     }
 }
@@ -199,6 +204,93 @@ impl NzbgetSettings {
     }
 }
 
+/// How an S3 integration reaches its endpoint, and which buckets operators
+/// may import from. Its access key id and secret are secrets, not settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct S3Settings {
+    /// The endpoint, such as `https://s3.eu-west-1.amazonaws.com/` or a
+    /// self-hosted server's `http://192.168.1.13:8333/`.
+    pub endpoint: String,
+    /// The region signatures are made for.
+    #[serde(default = "default_region")]
+    pub region: String,
+    /// Buckets in the path (`host/bucket/key`), as self-hosted servers
+    /// usually want, rather than as a subdomain (`bucket.host/key`).
+    #[serde(default = "default_path_style")]
+    pub path_style: bool,
+    /// The buckets operators may import from; no other is ever asked for.
+    pub buckets: Vec<String>,
+}
+
+fn default_region() -> String {
+    "us-east-1".to_owned()
+}
+
+const fn default_path_style() -> bool {
+    true
+}
+
+/// Most buckets one S3 integration lists.
+const MAX_BUCKETS: usize = 50;
+
+impl S3Settings {
+    /// Check settings an administrator sent, answering them as they are
+    /// stored.
+    ///
+    /// # Errors
+    ///
+    /// [`SettingsError`] saying what will not do.
+    pub fn checked(
+        value: &serde_json::Value,
+        policy: &OutboundPolicy,
+    ) -> Result<Self, SettingsError> {
+        let settings: Self = parsed(value)?;
+        let endpoint = checked_base_url(&settings.endpoint, policy)
+            .map_err(|error| SettingsError(error.0.replace("base_url", "endpoint")))?;
+        let region = settings.region.trim().to_owned();
+        let region_ok = (1..=64).contains(&region.len())
+            && region
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+        if !region_ok {
+            return Err(refuse(
+                "region must be 1 to 64 lowercase letters, digits and '-', such as us-east-1",
+            ));
+        }
+        if !settings.path_style
+            && Url::parse(&endpoint)
+                .ok()
+                .is_some_and(|url| !matches!(url.host(), Some(url::Host::Domain(_))))
+        {
+            return Err(refuse(
+                "an endpoint given as an address needs path_style: a bucket cannot be a \
+                 subdomain of an address",
+            ));
+        }
+        if settings.buckets.is_empty() || settings.buckets.len() > MAX_BUCKETS {
+            return Err(SettingsError(format!(
+                "buckets must list 1 to {MAX_BUCKETS} buckets operators may import from"
+            )));
+        }
+        let mut buckets = Vec::with_capacity(settings.buckets.len());
+        for bucket in settings.buckets {
+            let bucket = bucket.trim().to_owned();
+            crate::s3::check_bucket(&bucket)
+                .map_err(|error| SettingsError(format!("{bucket}: {error}")))?;
+            if !buckets.contains(&bucket) {
+                buckets.push(bucket);
+            }
+        }
+        Ok(Self {
+            endpoint,
+            region,
+            path_style: settings.path_style,
+            buckets,
+        })
+    }
+}
+
 fn parsed<T: serde::de::DeserializeOwned>(value: &serde_json::Value) -> Result<T, SettingsError> {
     serde_json::from_value(value.clone())
         .map_err(|error| SettingsError(format!("the settings do not fit: {error}")))
@@ -297,6 +389,7 @@ pub fn checked_settings(
         }
         ConfigurableKind::Sabnzbd => stored(&SabnzbdSettings::checked(value, known_roots, policy)?),
         ConfigurableKind::Nzbget => stored(&NzbgetSettings::checked(value, known_roots, policy)?),
+        ConfigurableKind::S3 => stored(&S3Settings::checked(value, policy)?),
     }
 }
 
@@ -431,6 +524,48 @@ mod tests {
     }
 
     #[test]
+    fn s3_settings_are_checked_and_stored_tidied() {
+        let good = serde_json::json!({
+            "endpoint": "http://192.168.1.13:8333",
+            "buckets": [" discs ", "discs", "archive.2026"],
+        });
+        assert_eq!(
+            checked_settings(ConfigurableKind::S3, &good, &roots(), &policy()).unwrap(),
+            serde_json::json!({
+                "endpoint": "http://192.168.1.13:8333/",
+                "region": "us-east-1",
+                "path_style": true,
+                "buckets": ["discs", "archive.2026"],
+            })
+        );
+        let with = |field: &str, value: serde_json::Value| {
+            let mut settings = good.clone();
+            settings[field] = value;
+            settings
+        };
+        for (settings, says) in [
+            (with("endpoint", "http://127.0.0.1:8333".into()), "endpoint"),
+            (with("region", "US East".into()), "region"),
+            (with("buckets", serde_json::json!([])), "buckets"),
+            (
+                with("buckets", serde_json::json!(["Bad_Bucket"])),
+                "Bad_Bucket",
+            ),
+            (with("path_style", false.into()), "path_style"),
+            (with("client_path", "/x".into()), "do not fit"),
+        ] {
+            let error = checked_settings(ConfigurableKind::S3, &settings, &roots(), &policy())
+                .expect_err("refused");
+            assert!(error.0.contains(says), "{settings}: {error}");
+        }
+        let mut aws = good;
+        aws["endpoint"] = "https://s3.eu-west-1.amazonaws.com".into();
+        aws["path_style"] = false.into();
+        aws["region"] = "eu-west-1".into();
+        assert!(checked_settings(ConfigurableKind::S3, &aws, &roots(), &policy()).is_ok());
+    }
+
+    #[test]
     fn only_known_kinds_are_configured_and_each_names_its_secrets() {
         assert_eq!(
             ConfigurableKind::parse("qbittorrent"),
@@ -446,7 +581,12 @@ mod tests {
             Some(ConfigurableKind::Nzbget)
         );
         assert_eq!(ConfigurableKind::Nzbget.secret_fields(), ["password"]);
-        for other in ["romm", "webhook", "s3", ""] {
+        assert_eq!(ConfigurableKind::parse("s3"), Some(ConfigurableKind::S3));
+        assert_eq!(
+            ConfigurableKind::S3.secret_fields(),
+            ["access_key_id", "secret_access_key"]
+        );
+        for other in ["romm", "webhook", "peer_instance", ""] {
             assert_eq!(ConfigurableKind::parse(other), None, "{other}");
         }
         assert_eq!(ConfigurableKind::Qbittorrent.secret_fields(), ["password"]);

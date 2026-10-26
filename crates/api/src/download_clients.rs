@@ -13,8 +13,11 @@ use tangible_integrations::download::{ClientError, JobStatus};
 use tangible_integrations::nzbget::NzbgetClient;
 use tangible_integrations::outbound::{OutboundClient, Url};
 use tangible_integrations::qbittorrent::QbittorrentClient;
+use tangible_integrations::s3::S3Client;
 use tangible_integrations::sabnzbd::SabnzbdClient;
-use tangible_integrations::settings::{NzbgetSettings, QbittorrentSettings, SabnzbdSettings};
+use tangible_integrations::settings::{
+    NzbgetSettings, QbittorrentSettings, S3Settings, SabnzbdSettings,
+};
 use tangible_integrations::torrent::Infohash;
 
 use crate::secrets::{Sealed, SecretKey};
@@ -165,21 +168,7 @@ pub async fn open_client(
             format!("{} is not a download client", record.name),
         ));
     }
-    if !record.enabled {
-        return Err(OpenError::new(
-            "INTEGRATION_OFF",
-            format!(
-                "{} is turned off; an administrator can turn it on",
-                record.name
-            ),
-        ));
-    }
-    let Some(http) = http else {
-        return Err(OpenError::new(
-            "INTEGRATION_OFF",
-            "this server reaches no integrations",
-        ));
-    };
+    let http = in_use(record, http)?;
     let opener = Opener {
         database,
         http,
@@ -191,6 +180,52 @@ pub async fn open_client(
         "sabnzbd" => opener.sabnzbd().await,
         _ => opener.nzbget().await,
     }
+}
+
+/// A configured S3 integration's client and its settings, ready to use.
+///
+/// # Errors
+///
+/// As [`open_client`]; `INTEGRATION_MISCONFIGURED` too for one without its
+/// access key id or secret.
+pub async fn open_s3(
+    database: &Database,
+    http: Option<&OutboundClient>,
+    key: Option<&SecretKey>,
+    record: &IntegrationRecord,
+) -> Result<(S3Client, S3Settings), OpenError> {
+    if record.kind != "s3" {
+        return Err(OpenError::new(
+            "INTEGRATION_OFF",
+            format!("{} is not an S3 integration", record.name),
+        ));
+    }
+    let http = in_use(record, http)?;
+    Opener {
+        database,
+        http,
+        key,
+        record,
+    }
+    .s3()
+    .await
+}
+
+/// The integrations client, for an integration that is turned on.
+fn in_use<'a>(
+    record: &IntegrationRecord,
+    http: Option<&'a OutboundClient>,
+) -> Result<&'a OutboundClient, OpenError> {
+    if !record.enabled {
+        return Err(OpenError::new(
+            "INTEGRATION_OFF",
+            format!(
+                "{} is turned off; an administrator can turn it on",
+                record.name
+            ),
+        ));
+    }
+    http.ok_or_else(|| OpenError::new("INTEGRATION_OFF", "this server reaches no integrations"))
 }
 
 /// What opening one integration's client takes.
@@ -262,6 +297,25 @@ impl Opener<'_> {
             DownloadClient::Sabnzbd(client),
             folders(settings.category, settings.client_path, settings.local_root),
         ))
+    }
+
+    async fn s3(&self) -> Result<(S3Client, S3Settings), OpenError> {
+        let settings: S3Settings = self.settings()?;
+        let access_key_id = self
+            .required_secret("access_key_id", "access key id")
+            .await?;
+        let secret = self
+            .required_secret("secret_access_key", "secret access key")
+            .await?;
+        let client = S3Client::new(
+            self.http.clone(),
+            self.url(&settings.endpoint)?,
+            &settings.region,
+            settings.path_style,
+            &access_key_id,
+            &secret,
+        );
+        Ok((client, settings))
     }
 
     async fn nzbget(&self) -> Result<(DownloadClient, Folders), OpenError> {

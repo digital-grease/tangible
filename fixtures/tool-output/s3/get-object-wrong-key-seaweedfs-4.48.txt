@@ -1,0 +1,10 @@
+403
+Accept-Ranges: bytes
+Content-Length: 392
+Content-Type: application/xml
+Server: SeaweedFS 30GB 4.48
+Vary: Origin
+Connection: close
+-- body 392 bytes
+<?xml version="1.0" encoding="UTF-8"?>
+<Error><Code>SignatureDoesNotMatch</Code><Message>The request signature we calculated does not match the signature you provided. Check your key and signing method.</Message><Resource>/tangible-test/discs/Probe Disc.iso</Resource><RequestId>18E1E4CF839B86CD98537D69</RequestId><Key>discs/Probe Disc.iso</Key><BucketName>tangible-test</BucketName></Error>

@@ -137,9 +137,31 @@ jobs:
           --health-retries 10
     env:
       TANGIBLE_DATABASE_URL: postgres://tangible:tangible@localhost:5432/tangible
+      # An S3-compatible server for the S3 import tests: SeaweedFS's gateway,
+      # started below (a service cannot be given its command). Throwaway
+      # credentials for a throwaway container.
+      TANGIBLE_TEST_S3_ENDPOINT: http://127.0.0.1:8333/
+      TANGIBLE_TEST_S3_ACCESS_KEY: tangible-ci
+      TANGIBLE_TEST_S3_SECRET_KEY: tangible-ci-secret
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Start an S3-compatible server
+        run: |
+          printf '{"identities":[{"name":"ci","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","List","Write"]}]}' \
+            "$TANGIBLE_TEST_S3_ACCESS_KEY" "$TANGIBLE_TEST_S3_SECRET_KEY" > "$RUNNER_TEMP/s3.json"
+          docker run -d --name s3 -p 127.0.0.1:8333:8333 \
+            -v "$RUNNER_TEMP/s3.json:/etc/seaweedfs/s3.json:ro" \
+            chrislusf/seaweedfs:4.48@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d \
+            server -s3 -s3.config=/etc/seaweedfs/s3.json -s3.port=8333
+          for _ in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8333/ || true)
+            [ "$code" = "403" ] && exit 0
+            sleep 1
+          done
+          docker logs s3
+          exit 1
 
       - name: Migrations apply to an empty database
         run: cargo run --quiet -p tangible-app -- migrate

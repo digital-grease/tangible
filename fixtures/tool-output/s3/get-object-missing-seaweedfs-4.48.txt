@@ -1,0 +1,10 @@
+404
+Accept-Ranges: bytes
+Content-Length: 276
+Content-Type: application/xml
+Server: SeaweedFS 30GB 4.48
+Vary: Origin
+Connection: close
+-- body 276 bytes
+<?xml version="1.0" encoding="UTF-8"?>
+<Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message><Resource>/tangible-test/nope.iso</Resource><RequestId>18E1E4CF7F817F32F96747E5</RequestId><Key>nope.iso</Key><BucketName>tangible-test</BucketName></Error>

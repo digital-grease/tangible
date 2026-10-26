@@ -845,6 +845,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/imports/s3": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import an object from an S3-compatible bucket.
+         * @description Import an object from a bucket an S3 integration allows. The object is looked at first, and the import pinned to its version and size; the server then fetches it, resuming an interrupted fetch.
+         */
+        post: operations["s3_import"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/imports/upload": {
         parameters: {
             query?: never;
@@ -2904,6 +2924,11 @@ export interface components {
              * @description Largest upload the server will accept, in bytes.
              */
             max_upload_bytes: number;
+            /**
+             * @description S3 integrations an administrator configured and turned on, and the
+             *     buckets each allows (`POST /imports/s3`).
+             */
+            s3_sources: components["schemas"]["S3SourceView"][];
             /** @description Whether operators may import from a URL here (ADR 0016). */
             url_imports: boolean;
             /** @description Whether a URL import may use plain http. */
@@ -3688,6 +3713,31 @@ export interface components {
             configured: boolean;
             /** @description The platforms an edition may name. */
             platforms: components["schemas"]["PlatformView"][];
+        };
+        /** @description What an operator sends to import an object from S3. */
+        S3ImportRequest: {
+            /** @description One of the buckets it allows. */
+            bucket: string;
+            /**
+             * @description The file's SHA-256, when the operator knows it: checked after the
+             *     fetch, and the import fails if it differs.
+             */
+            expected_sha256?: string | null;
+            /** @description What to call the file. Defaults to the key's last segment. */
+            filename?: string | null;
+            /** @description The S3 integration. */
+            integration_id: string;
+            /** @description The object's key. */
+            key: string;
+        };
+        /** @description An S3 integration operators may import from. */
+        S3SourceView: {
+            /** @description The buckets it allows. */
+            buckets: string[];
+            /** @description The integration's id. */
+            id: string;
+            /** @description Its name. */
+            name: string;
         };
         /** @description A secret an integration takes. */
         SecretFieldView: {
@@ -5740,6 +5790,75 @@ export interface operations {
             };
             /** @description The path will not be resolved */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Storage is not configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    s3_import: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["S3ImportRequest"];
+            };
+        };
+        responses: {
+            /** @description Queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportView"];
+                };
+            };
+            /** @description No such integration */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The integration cannot be used */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Something that will not do, or no such object */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The endpoint failed */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

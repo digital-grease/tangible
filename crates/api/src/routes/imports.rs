@@ -182,6 +182,9 @@ pub struct ImportSources {
     /// torrent or NZB can be handed to (`POST /integrations/{id}/jobs`).
     /// Names only: their settings are administrators' business.
     pub download_clients: Vec<DownloadClientView>,
+    /// S3 integrations an administrator configured and turned on, and the
+    /// buckets each allows (`POST /imports/s3`).
+    pub s3_sources: Vec<crate::routes::s3_imports::S3SourceView>,
 }
 
 /// A download client a torrent can be handed to.
@@ -314,7 +317,7 @@ pub async fn list_sources(State(state): State<ApiState>) -> Result<Json<ImportSo
     let Some(imports) = state.imports() else {
         return Err(unavailable("importing is not configured on this server"));
     };
-    let download_clients = tangible_db::integrations::list_integrations(state.database().pool())
+    let integrations = tangible_db::integrations::list_integrations(state.database().pool())
         .await
         .map_err(|error| {
             tracing::error!(error = ?error, "integrations could not be read");
@@ -322,7 +325,21 @@ pub async fn list_sources(State(state): State<ApiState>) -> Result<Json<ImportSo
                 ErrorCode::StorageUnavailable,
                 "integrations could not be read",
             )
-        })?
+        })?;
+    let s3_sources = integrations
+        .iter()
+        .filter(|record| record.enabled && record.kind == "s3")
+        .map(|record| crate::routes::s3_imports::S3SourceView {
+            id: record.id.to_string(),
+            name: record.name.clone(),
+            buckets: serde_json::from_value::<tangible_integrations::settings::S3Settings>(
+                record.configuration.clone(),
+            )
+            .map(|settings| settings.buckets)
+            .unwrap_or_default(),
+        })
+        .collect();
+    let download_clients = integrations
         .into_iter()
         .filter(|record| {
             record.enabled && matches!(record.kind.as_str(), "qbittorrent" | "sabnzbd" | "nzbget")
@@ -335,6 +352,7 @@ pub async fn list_sources(State(state): State<ApiState>) -> Result<Json<ImportSo
         .collect();
     Ok(Json(ImportSources {
         download_clients,
+        s3_sources,
         watch_roots: imports.roots.ids(),
         max_upload_bytes: i64::try_from(imports.max_upload_bytes).unwrap_or(i64::MAX),
         url_imports: imports.outbound.is_some(),
@@ -972,6 +990,7 @@ pub fn router() -> Router<ApiState> {
         .route("/imports", get(list_imports).post(create_import))
         .route("/imports/upload", post(upload_import))
         .route("/imports/url", post(url_import))
+        .route("/imports/s3", post(crate::routes::s3_imports::s3_import))
         .route("/imports/{import_id}", get(get_import))
         .route("/imports/{import_id}/cancel", post(cancel_import))
         .route("/imports/{import_id}/retry", post(retry_import))

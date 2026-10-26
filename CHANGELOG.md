@@ -119,6 +119,14 @@ may change between minor versions, and the release notes say how.
   redumper they also show the disc's write offset, whether the drive was
   treated as generic (with a hint to ask for cdrdao if its rips go wrong),
   and how many samples were read again.
+- Operators can import an object from an S3-compatible bucket an
+  administrator configured (`kind` `s3`: endpoint, region, path style, the
+  buckets allowed, and an access key id and secret), with
+  `POST /api/v1/imports/s3` naming the integration, bucket and key. The
+  object is looked at first and the import pinned to its version and size;
+  the fetch resumes like a URL import. `GET /api/v1/import-sources` lists the
+  S3 integrations and their buckets. Requests are signed with `rusty-s3`.
+  Tested against SeaweedFS's S3 gateway, which CI now runs.
 - The Integrations page sets up SABnzbd and NZBGet as well as qBittorrent,
   and tests and edits all three; the Imports page sends an `.nzb` to a
   Usenet client as it sends a torrent to qBittorrent, and names their

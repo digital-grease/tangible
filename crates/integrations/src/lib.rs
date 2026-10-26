@@ -17,6 +17,7 @@ pub mod nzbget;
 pub mod outbound;
 pub mod qbittorrent;
 pub mod romm;
+pub mod s3;
 pub mod sabnzbd;
 pub mod settings;
 pub mod torrent;

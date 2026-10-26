@@ -42,6 +42,9 @@ workspace = true
 
 [dev-dependencies]
 async-trait = "0.1.91"
+# Makes the buckets and objects the S3 import tests read, signed the same
+# way the integrations crate signs.
+rusty-s3 = { version = "0.10.2", default-features = false, features = ["rustcrypto"] }
 reqwest = { version = "0.13.4", default-features = false, features = ["json"] }
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "uuid", "time"] }
 tempfile = "3.27.0"

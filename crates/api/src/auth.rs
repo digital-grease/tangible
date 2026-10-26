@@ -226,6 +226,8 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
     ("POST", "/api/v1/imports", Signed(Import)),
     ("POST", "/api/v1/imports/upload", Signed(Import)),
     ("POST", "/api/v1/imports/url", Signed(ImportUrl)),
+    // From a bucket an administrator configured and allowed.
+    ("POST", "/api/v1/imports/s3", Signed(Import)),
     // Uploads sent in parts: each is its starter's alone.
     ("POST", "/api/v1/uploads", Signed(Import)),
     ("GET", "/api/v1/uploads/{upload_id}", Signed(Import)),

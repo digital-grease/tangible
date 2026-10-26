@@ -366,7 +366,7 @@ pub async fn create_one(
     let kind = ConfigurableKind::parse(&request.kind).ok_or_else(|| {
         Problem::new(
             ErrorCode::ValidationFailed,
-            "kind must be qbittorrent, sabnzbd or nzbget; others are not configurable yet",
+            "kind must be qbittorrent, sabnzbd, nzbget or s3; others are not configurable yet",
         )
     })?;
     let name = checked_name(&request.name)?;
@@ -589,6 +589,9 @@ pub async fn test_one(
         .await
         .map_err(unavailable("the integration could not be read"))?
         .ok_or_else(|| Problem::not_found("integration", &id.to_string()))?;
+    if record.kind == "s3" {
+        return test_s3(&state, &record).await.map(Json);
+    }
     let (mut client, folders) = open_client(
         state.database(),
         state.integration_client(),
@@ -631,6 +634,47 @@ pub async fn test_one(
         }
     };
     Ok(Json(view))
+}
+
+/// Try an S3 integration: every bucket it allows must be there and open to
+/// its credentials.
+async fn test_s3(
+    state: &ApiState,
+    record: &tangible_db::integrations::IntegrationRecord,
+) -> Result<IntegrationTestView, Problem> {
+    use tangible_integrations::s3::ObjectError;
+    let (client, settings) = crate::download_clients::open_s3(
+        state.database(),
+        state.integration_client(),
+        state.secret_key(),
+        record,
+    )
+    .await
+    .map_err(|error| open_problem(&error))?;
+    for bucket in &settings.buckets {
+        let failed = match client.head_bucket(bucket).await {
+            Ok(()) => continue,
+            Err(ObjectError::Missing) => (
+                "INTEGRATION_MISCONFIGURED",
+                format!("bucket {bucket} is not there"),
+            ),
+            Err(ObjectError::Client(error)) => (error.code(), format!("bucket {bucket}: {error}")),
+        };
+        note_health(state, record.id, Err(failed.0)).await;
+        return Ok(IntegrationTestView {
+            ok: false,
+            api_version: None,
+            error_code: Some(failed.0.to_owned()),
+            detail: Some(failed.1),
+        });
+    }
+    note_health(state, record.id, Ok(None)).await;
+    Ok(IntegrationTestView {
+        ok: true,
+        api_version: None,
+        error_code: None,
+        detail: None,
+    })
 }
 
 /// The integration routes.

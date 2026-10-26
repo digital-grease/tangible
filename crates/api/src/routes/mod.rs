@@ -17,5 +17,6 @@ pub mod physical_copies;
 pub mod reports;
 pub mod rips;
 pub mod romm;
+pub mod s3_imports;
 pub mod uploads;
 pub mod workers;

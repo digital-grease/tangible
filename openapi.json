@@ -2654,6 +2654,93 @@
         ]
       }
     },
+    "/api/v1/imports/s3": {
+      "post": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Import an object from an S3-compatible bucket.",
+        "description": "Import an object from a bucket an S3 integration allows. The object is looked at first, and the import pinned to its version and size; the server then fetches it, resuming an interrupted fetch.",
+        "operationId": "s3_import",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/S3ImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such integration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The integration cannot be used",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Something that will not do, or no such object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The endpoint failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Storage is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/imports/upload": {
       "post": {
         "tags": [
@@ -8320,7 +8407,8 @@
           "max_upload_bytes",
           "url_imports",
           "url_imports_allow_http",
-          "download_clients"
+          "download_clients",
+          "s3_sources"
         ],
         "properties": {
           "download_clients": {
@@ -8334,6 +8422,13 @@
             "type": "integer",
             "format": "int64",
             "description": "Largest upload the server will accept, in bytes."
+          },
+          "s3_sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/S3SourceView"
+            },
+            "description": "S3 integrations an administrator configured and turned on, and the\nbuckets each allows (`POST /imports/s3`)."
           },
           "url_imports": {
             "type": "boolean",
@@ -10143,6 +10238,70 @@
               "$ref": "#/components/schemas/PlatformView"
             },
             "description": "The platforms an edition may name."
+          }
+        }
+      },
+      "S3ImportRequest": {
+        "type": "object",
+        "description": "What an operator sends to import an object from S3.",
+        "required": [
+          "integration_id",
+          "bucket",
+          "key"
+        ],
+        "properties": {
+          "bucket": {
+            "type": "string",
+            "description": "One of the buckets it allows."
+          },
+          "expected_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The file's SHA-256, when the operator knows it: checked after the\nfetch, and the import fails if it differs."
+          },
+          "filename": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What to call the file. Defaults to the key's last segment."
+          },
+          "integration_id": {
+            "type": "string",
+            "description": "The S3 integration."
+          },
+          "key": {
+            "type": "string",
+            "description": "The object's key."
+          }
+        },
+        "additionalProperties": false
+      },
+      "S3SourceView": {
+        "type": "object",
+        "description": "An S3 integration operators may import from.",
+        "required": [
+          "id",
+          "name",
+          "buckets"
+        ],
+        "properties": {
+          "buckets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The buckets it allows."
+          },
+          "id": {
+            "type": "string",
+            "description": "The integration's id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
           }
         }
       },

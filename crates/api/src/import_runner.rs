@@ -48,7 +48,7 @@ use tangible_storage::{IngestLimits, ManifestStoreError, StagingError, StorageEr
 use tokio::io::AsyncReadExt as _;
 
 use crate::catalog;
-use crate::download_clients::open_client;
+use crate::download_clients::{open_client, open_s3};
 use crate::import::{
     DownloadCheckpoint, ImportCheckpoint, ImportError, ImportPipeline, ImportRequest,
 };
@@ -379,6 +379,12 @@ impl ImportRunner {
                     .map(|()| Acquired::Ready)
             }
             "qbittorrent_job" | "sabnzbd_job" | "nzbget_job" => self.follow_download(job).await,
+            "s3_object" => {
+                self.record(job, ImportState::Acquiring, checkpoint).await;
+                self.download_s3(job, checkpoint)
+                    .await
+                    .map(|()| Acquired::Ready)
+            }
             // An upload sent in parts may name the length and digest its
             // sender expects; checked before anything is hashed or kept.
             "upload" if job.source_descriptor.get("expected_bytes").is_some() => {
@@ -670,6 +676,75 @@ impl ImportRunner {
         let url = descriptor_string(&job.source_descriptor, "url")
             .and_then(|text| Url::parse(&text).ok())
             .ok_or_else(|| invalid("no usable url"))?;
+        self.fetch_into_staging(job, checkpoint, client, &url).await
+    }
+
+    /// Fetch an S3 object into its import's staging area: a presigned GET,
+    /// made now and pinned to the version recorded when the import was
+    /// asked for, through the integrations client. Resumed, checked and
+    /// recorded exactly as a URL import.
+    async fn download_s3(
+        &self,
+        job: &ImportJobRecord,
+        checkpoint: &mut ImportCheckpoint,
+    ) -> Result<(), Failure> {
+        let invalid = |what: &str| ("IMPORT_DESCRIPTOR_INVALID", what.to_owned(), false);
+        let integration_id: uuid::Uuid = parsed(&job.source_descriptor, "integration_id")
+            .ok_or_else(|| invalid("no integration_id"))?;
+        let bucket = descriptor_string(&job.source_descriptor, "bucket")
+            .ok_or_else(|| invalid("no bucket"))?;
+        let key =
+            descriptor_string(&job.source_descriptor, "key").ok_or_else(|| invalid("no key"))?;
+        let version = descriptor_string(&job.source_descriptor, "version_id");
+        let record = get_integration(self.database.pool(), integration_id)
+            .await
+            .map_err(|error| ("STORAGE_UNAVAILABLE", error.to_string(), true))?
+            .ok_or_else(|| {
+                (
+                    "INTEGRATION_MISSING",
+                    "the S3 integration this import names is gone".to_owned(),
+                    false,
+                )
+            })?;
+        let Some(http) = self.settings.integrations.as_ref() else {
+            return Err((
+                "INTEGRATION_OFF",
+                "this server reaches no integrations".to_owned(),
+                true,
+            ));
+        };
+        let (client, settings) = open_s3(
+            &self.database,
+            Some(http),
+            self.settings.secret_key.as_deref(),
+            &record,
+        )
+        .await
+        .map_err(|error| (error.code, error.detail, true))?;
+        if !settings.buckets.contains(&bucket) {
+            return Err((
+                "INTEGRATION_MISCONFIGURED",
+                format!("the integration no longer allows bucket {bucket}"),
+                false,
+            ));
+        }
+        let url = client
+            .presigned_get(&bucket, &key, version.as_deref())
+            .map_err(|error| (error.code(), error.to_string(), false))?;
+        self.fetch_into_staging(job, checkpoint, http, &url).await
+    }
+
+    /// Fetch `url` with `client` into the import's staging area under its
+    /// recorded filename, resuming from what an earlier attempt left there,
+    /// then check it against the length and SHA-256 it should have.
+    async fn fetch_into_staging(
+        &self,
+        job: &ImportJobRecord,
+        checkpoint: &mut ImportCheckpoint,
+        client: &OutboundClient,
+        url: &Url,
+    ) -> Result<(), Failure> {
+        let invalid = |what: &str| ("IMPORT_DESCRIPTOR_INVALID", what.to_owned(), false);
         let filename = descriptor_string(&job.source_descriptor, "filename")
             .ok_or_else(|| invalid("no filename"))?;
         let logical = LogicalPath::parse(&filename).map_err(|_| invalid("an unusable filename"))?;
@@ -684,7 +759,7 @@ impl ImportRunner {
             .map_err(|error| ("IMPORT_STAGING_FAILED", error.to_string(), true))?;
 
         let fetched = self
-            .fetch_reporting(job, client, &url, &path, checkpoint)
+            .fetch_reporting(job, client, url, &path, checkpoint)
             .await?;
         checkpoint.download = Some(DownloadCheckpoint {
             validator: fetched.validator.clone(),

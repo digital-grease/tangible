@@ -328,6 +328,34 @@ Tangible appends with no post-processing parameters and NZBGet's duplicate
 check off, since it keeps its own; a script you set on the category is
 yours, and runs as you set it.
 
+## Importing from S3-compatible storage
+
+Operators can import an object from a bucket you allow on an S3-compatible
+service (AWS S3, or a self-hosted one such as SeaweedFS or Garage). Tangible
+only reads: it asks what an object is and fetches it, never lists, writes or
+deletes.
+
+1. Make credentials that may read the buckets you mean to allow, and nothing
+   else.
+2. Make an integration secret key (below), so they can be stored.
+3. As an administrator, add it with `POST /api/v1/integrations` (the
+   Integrations page gains a form for it soon): `kind` `s3`, the `endpoint`,
+   the `region` (default `us-east-1`), `path_style` (true for most
+   self-hosted servers; false for AWS's newer buckets), the `buckets`
+   operators may import from, and the `access_key_id` and
+   `secret_access_key` secrets. `POST /api/v1/integrations/{id}/test` checks
+   every bucket.
+4. Operators import with `POST /api/v1/imports/s3`, naming the integration,
+   a bucket and the object's key.
+
+An endpoint on your LAN is fine; one on this machine's loopback address only
+if listed in `TANGIBLE_OUTBOUND_ALLOW`. The import is pinned to the version
+and size the object had when it was asked for. In a bucket with versioning,
+writing the key again meanwhile does not change what is imported. In one
+without, a rewrite of a different size fails the import, and one of the same
+size is not noticed: give the SHA-256 when you need to be sure of the
+content.
+
 ## Integration secrets
 
 Download clients (qBittorrent, and SABnzbd and NZBGet later) sign in with a

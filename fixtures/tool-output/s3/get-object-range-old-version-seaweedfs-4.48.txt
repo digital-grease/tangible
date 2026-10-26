@@ -1,0 +1,16 @@
+206
+Accept-Ranges: bytes
+Content-Length: 100000
+Content-Range: bytes 100000-199999/200000
+Content-Type: application/x-www-form-urlencoded
+Etag: "369c1020dae7a4e19c8902523d9f21bc"
+Last-Modified: Sun, 25 Oct 2026 22:01:29 GMT
+Seaweed-X-Amz-ETag: 369c1020dae7a4e19c8902523d9f21bc
+Seaweed-X-Amz-Noncurrent-Since-Ns: 1792965689646208229
+Seaweed-X-Amz-Owner: tangible
+Seaweed-X-Amz-Version-Id: 671e1b347fafd65204f75730e006feb7
+Server: SeaweedFS 30GB 4.48
+Vary: Origin
+X-Amz-Version-Id: 671e1b347fafd65204f75730e006feb7
+Connection: close
+-- body 100000 bytes
