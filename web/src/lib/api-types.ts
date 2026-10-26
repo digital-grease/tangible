@@ -176,6 +176,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/artifacts/{artifact_id}/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check one artifact: every object it names read back against its digest,
+         *     and its manifest against the catalogue.
+         * @description Check an artifact's stored bytes: every object it names is read back and \
+         *                        compared with its digest, and its manifest with the catalogue. Returns \
+         *                        the check at once; the server reads in the background. Nothing found is \
+         *                        repaired.
+         */
+        post: operations["validate_artifact"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/burn-attempts/{attempt_id}": {
         parameters: {
             query?: never;
@@ -1076,6 +1100,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrity-checks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Integrity checks, newest first.
+         * @description # Errors
+         *
+         *     `INVALID_CURSOR` for a cursor this server did not issue.
+         */
+        get: operations["list_all_checks"];
+        put?: never;
+        /**
+         * Check the whole library: every object read back against its digest.
+         * @description Check every stored object against its digest: a full scrub, reading every \
+         *                        byte the library holds. One runs at a time; asking while one is queued or \
+         *                        running answers that one.
+         */
+        post: operations["request_scrub"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrity-checks/{check_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One integrity check, and how far it has got.
+         * @description # Errors
+         *
+         *     `NOT_FOUND`.
+         */
+        get: operations["get_one_check"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrity-checks/{check_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Withdraw a check. One already ended is answered as it is.
+         * @description # Errors
+         *
+         *     `NOT_FOUND`.
+         */
+        post: operations["cancel_one_check"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/physical-copies": {
         parameters: {
             query?: never;
@@ -1811,6 +1907,13 @@ export interface components {
             has_warnings: boolean;
             /** @description Opaque identifier. */
             id: string;
+            /** @description When that check finished. */
+            integrity_checked_at?: string | null;
+            /**
+             * @description What the last integrity check covering every object of it found:
+             *     `unchecked`, `intact` or `damaged` (docs/plans/storage-integrity.md).
+             */
+            integrity_state: string;
             /** @description Filename as received, when one was recorded. */
             source_filename?: string | null;
             /**
@@ -3070,6 +3173,75 @@ export interface components {
             /** @description `unconfigured`, `ok`, `degraded`, `failing` or `disabled`. */
             status: string;
         };
+        /** @description A page of checks, newest first. */
+        IntegrityCheckPage: {
+            /** @description The checks. */
+            items: components["schemas"]["IntegrityCheckView"][];
+            /** @description Cursor for the next page, or null when this is the last. */
+            next_cursor?: string | null;
+        };
+        /** @description An integrity check. */
+        IntegrityCheckView: {
+            /** @description The artifact, for a check of one. */
+            artifact_id?: string | null;
+            /**
+             * Format: int64
+             * @description How many bytes it has read.
+             */
+            bytes_checked: number;
+            /**
+             * Format: int64
+             * @description How many bytes it reads, once counted.
+             */
+            bytes_total?: number | null;
+            /** @description When it ended. */
+            completed_at?: string | null;
+            /** @description When it was asked for. */
+            created_at: string;
+            /** @description Who asked: a username, or `scheduler`. */
+            created_by: string;
+            /** @description Why it failed, for one that did. */
+            error_code?: string | null;
+            /** @description Why, in words. */
+            error_detail?: string | null;
+            /** @description Its id. */
+            id: string;
+            /**
+             * Format: int64
+             * @description How many objects it has read.
+             */
+            objects_checked: number;
+            /**
+             * Format: int64
+             * @description How many objects it reads, once counted.
+             */
+            objects_total?: number | null;
+            /**
+             * Format: int32
+             * @description How many problems it found in all.
+             */
+            problem_count: number;
+            /** @description What it found, the first thousand. */
+            problems: components["schemas"]["IntegrityProblemView"][];
+            /** @description `artifact` or `all`. */
+            scope: string;
+            /** @description When it started. */
+            started_at?: string | null;
+            /** @description `queued`, `running`, `complete`, `failed` or `canceled`. */
+            state: string;
+        };
+        /** @description A problem a check found. */
+        IntegrityProblemView: {
+            /** @description What was found, in words. */
+            detail: string;
+            /**
+             * @description `missing`, `corrupt`, `size_mismatch`, `unreadable`,
+             *     `manifest_mismatch` or `manifest_unreadable`.
+             */
+            kind: string;
+            /** @description The object, for a problem with one. */
+            sha256?: string | null;
+        };
         /**
          * @description What an operator sends to issue an enrollment token. Every field is
          *     optional; `{}` asks for the defaults.
@@ -3429,6 +3601,14 @@ export interface components {
              *     or more. Full can take an hour.
              */
             mode: string;
+        };
+        /** @description What an administrator sends to check the whole library. */
+        RequestIntegrityCheck: {
+            /**
+             * @description `all`: every object the library holds. A check of one artifact is
+             *     asked for with `POST /artifacts/{id}/validate`.
+             */
+            scope: string;
         };
         /**
          * @description What an operator sends to rip the disc in a drive. Every field is
@@ -4392,6 +4572,47 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description No such artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    validate_artifact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Artifact identifier */
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A check of it is already under way */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrityCheckView"];
+                };
+            };
+            /** @description Queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrityCheckView"];
+                };
             };
             /** @description No such artifact */
             404: {
@@ -6406,6 +6627,137 @@ export interface operations {
             };
             /** @description It cannot be tried */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_all_checks: {
+        parameters: {
+            query?: {
+                /** @description Maximum items to return. Clamped to [`MAX_LIMIT`]. */
+                limit?: number | null;
+                /** @description Opaque cursor from a previous response's `next_cursor`. */
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Checks, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrityCheckPage"];
+                };
+            };
+        };
+    };
+    request_scrub: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestIntegrityCheck"];
+            };
+        };
+        responses: {
+            /** @description A full scrub is already under way */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrityCheckView"];
+                };
+            };
+            /** @description Queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrityCheckView"];
+                };
+            };
+            /** @description A scope other than all */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_one_check: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Check identifier */
+                check_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The check */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrityCheckView"];
+                };
+            };
+            /** @description No such check */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    cancel_one_check: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Check identifier */
+                check_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Withdrawn, or already ended */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrityCheckView"];
+                };
+            };
+            /** @description No such check */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

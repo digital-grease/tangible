@@ -115,6 +115,10 @@ uuid_id!(
     BurnJobId
 );
 uuid_id!(
+    /// Identifies one integrity check: of an artifact, or of everything.
+    IntegrityCheckId
+);
+uuid_id!(
     /// Identifies a single execution attempt of a burn job. A job may have
     /// several attempts; only one may be active per drive.
     BurnAttemptId

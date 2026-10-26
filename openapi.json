@@ -509,6 +509,64 @@
         ]
       }
     },
+    "/api/v1/artifacts/{artifact_id}/validate": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Check one artifact: every object it names read back against its digest,\nand its manifest against the catalogue.",
+        "description": "Check an artifact's stored bytes: every object it names is read back and \\\n                   compared with its digest, and its manifest with the catalogue. Returns \\\n                   the check at once; the server reads in the background. Nothing found is \\\n                   repaired.",
+        "operationId": "validate_artifact",
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "description": "Artifact identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A check of it is already under way",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrityCheckView"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrityCheckView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/burn-attempts/{attempt_id}": {
       "get": {
         "tags": [
@@ -3485,6 +3543,211 @@
         ]
       }
     },
+    "/api/v1/integrity-checks": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Integrity checks, newest first.",
+        "description": "# Errors\n\n`INVALID_CURSOR` for a cursor this server did not issue.",
+        "operationId": "list_all_checks",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum items to return. Clamped to [`MAX_LIMIT`].",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous response's `next_cursor`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Checks, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrityCheckPage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Check the whole library: every object read back against its digest.",
+        "description": "Check every stored object against its digest: a full scrub, reading every \\\n                   byte the library holds. One runs at a time; asking while one is queued or \\\n                   running answers that one.",
+        "operationId": "request_scrub",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestIntegrityCheck"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "A full scrub is already under way",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrityCheckView"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrityCheckView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A scope other than all",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/integrity-checks/{check_id}": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "One integrity check, and how far it has got.",
+        "description": "# Errors\n\n`NOT_FOUND`.",
+        "operationId": "get_one_check",
+        "parameters": [
+          {
+            "name": "check_id",
+            "in": "path",
+            "description": "Check identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrityCheckView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/integrity-checks/{check_id}/cancel": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Withdraw a check. One already ended is answered as it is.",
+        "description": "# Errors\n\n`NOT_FOUND`.",
+        "operationId": "cancel_one_check",
+        "parameters": [
+          {
+            "name": "check_id",
+            "in": "path",
+            "description": "Check identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Withdrawn, or already ended",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrityCheckView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/physical-copies": {
       "get": {
         "tags": [
@@ -5876,7 +6139,8 @@
           "validation_state",
           "component_count",
           "total_bytes",
-          "has_warnings"
+          "has_warnings",
+          "integrity_state"
         ],
         "properties": {
           "artifact_kind": {
@@ -5899,6 +6163,17 @@
           "id": {
             "type": "string",
             "description": "Opaque identifier."
+          },
+          "integrity_checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When that check finished."
+          },
+          "integrity_state": {
+            "type": "string",
+            "description": "What the last integrity check covering every object of it found:\n`unchecked`, `intact` or `damaged` (docs/plans/storage-integrity.md)."
           },
           "source_filename": {
             "type": [
@@ -8734,6 +9009,164 @@
           }
         }
       },
+      "IntegrityCheckPage": {
+        "type": "object",
+        "description": "A page of checks, newest first.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrityCheckView"
+            },
+            "description": "The checks."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor for the next page, or null when this is the last."
+          }
+        }
+      },
+      "IntegrityCheckView": {
+        "type": "object",
+        "description": "An integrity check.",
+        "required": [
+          "id",
+          "scope",
+          "state",
+          "objects_checked",
+          "bytes_checked",
+          "problems",
+          "problem_count",
+          "created_by",
+          "created_at"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The artifact, for a check of one."
+          },
+          "bytes_checked": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many bytes it has read."
+          },
+          "bytes_total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How many bytes it reads, once counted."
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it ended."
+          },
+          "created_at": {
+            "type": "string",
+            "description": "When it was asked for."
+          },
+          "created_by": {
+            "type": "string",
+            "description": "Who asked: a username, or `scheduler`."
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it failed, for one that did."
+          },
+          "error_detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why, in words."
+          },
+          "id": {
+            "type": "string",
+            "description": "Its id."
+          },
+          "objects_checked": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many objects it has read."
+          },
+          "objects_total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How many objects it reads, once counted."
+          },
+          "problem_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many problems it found in all."
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrityProblemView"
+            },
+            "description": "What it found, the first thousand."
+          },
+          "scope": {
+            "type": "string",
+            "description": "`artifact` or `all`."
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it started."
+          },
+          "state": {
+            "type": "string",
+            "description": "`queued`, `running`, `complete`, `failed` or `canceled`."
+          }
+        }
+      },
+      "IntegrityProblemView": {
+        "type": "object",
+        "description": "A problem a check found.",
+        "required": [
+          "kind",
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string",
+            "description": "What was found, in words."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`missing`, `corrupt`, `size_mismatch`, `unreadable`,\n`manifest_mismatch` or `manifest_unreadable`."
+          },
+          "sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The object, for a problem with one."
+          }
+        }
+      },
       "IssueEnrollmentRequest": {
         "type": "object",
         "description": "What an operator sends to issue an enrollment token. Every field is\noptional; `{}` asks for the defaults.",
@@ -9536,6 +9969,20 @@
           "mode": {
             "type": "string",
             "description": "`quick`, which does only what makes the disc writable again, or\n`full`, which writes over the whole disc. Quick is fast on a CD-RW;\nsome drives erase a whole DVD-RW either way, which takes half an hour\nor more. Full can take an hour."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RequestIntegrityCheck": {
+        "type": "object",
+        "description": "What an administrator sends to check the whole library.",
+        "required": [
+          "scope"
+        ],
+        "properties": {
+          "scope": {
+            "type": "string",
+            "description": "`all`: every object the library holds. A check of one artifact is\nasked for with `POST /artifacts/{id}/validate`."
           }
         },
         "additionalProperties": false

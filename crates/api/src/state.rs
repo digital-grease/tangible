@@ -64,6 +64,8 @@ struct Inner {
     /// What integrations (download clients) are reached with: the
     /// integrations policy, private networks allowed (ADR 0016).
     integration_client: Option<tangible_integrations::outbound::OutboundClient>,
+    /// Wakes the integrity runner, when this server runs one.
+    integrity: Option<crate::integrity::Integrity>,
 }
 
 /// What the import routes need beyond the database.
@@ -108,6 +110,7 @@ impl ApiState {
                 decryption_allowed: false,
                 secret_key: None,
                 integration_client: None,
+                integrity: None,
             }),
         }
     }
@@ -132,6 +135,7 @@ impl ApiState {
                 decryption_allowed: false,
                 secret_key: None,
                 integration_client: None,
+                integrity: None,
             }),
         }
     }
@@ -250,6 +254,22 @@ impl ApiState {
     #[must_use]
     pub fn integration_client(&self) -> Option<&tangible_integrations::outbound::OutboundClient> {
         self.inner.integration_client.as_ref()
+    }
+
+    /// Wake `integrity`'s runner when a check is asked for.
+    #[must_use]
+    pub fn with_integrity(self, integrity: crate::integrity::Integrity) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.integrity = Some(integrity);
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// The integrity runner's handle, when this server runs one.
+    #[must_use]
+    pub fn integrity(&self) -> Option<&crate::integrity::Integrity> {
+        self.inner.integrity.as_ref()
     }
 
     /// Whether rips may decrypt.

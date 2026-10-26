@@ -8,6 +8,17 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
+- Integrity checks: an artifact's stored bytes can be read back and
+  compared with the digests recorded for them
+  (`POST /api/v1/artifacts/{id}/validate`, operators), and so can the whole
+  library (`POST /api/v1/integrity-checks`, administrators, with a new
+  `maintain_storage` permission). Checks run in the background, one at a
+  time, show their progress, resume after a restart, and record what they
+  find: a missing, unreadable or changed object, or a manifest that no
+  longer agrees with the catalogue. Artifacts gain an integrity state
+  (unchecked, intact, damaged). Nothing is repaired; damage is audited.
+  Database migration 0018 adds a table and two columns; it is additive.
+
 - Groundwork for issue reports: text is scrubbed of credentials, paths,
   serial numbers, library file names and LAN addresses before anyone can
   send it, and two settings say where reports go

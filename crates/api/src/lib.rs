@@ -20,6 +20,7 @@ pub mod format_report;
 pub mod health;
 pub mod import;
 pub mod import_runner;
+pub mod integrity;
 pub mod pagination;
 pub mod problem;
 pub mod report;
@@ -135,6 +136,11 @@ pub const API_BASE: &str = "/api/v1";
         routes::rips::upload_rip_file,
         routes::rips::complete_drive_rip,
         routes::diagnostics::diagnostics_report,
+        routes::integrity::validate_artifact,
+        routes::integrity::request_scrub,
+        routes::integrity::list_all_checks,
+        routes::integrity::get_one_check,
+        routes::integrity::cancel_one_check,
         routes::integrations::list_all,
         routes::integrations::create_one,
         routes::integrations::get_one,
@@ -247,6 +253,10 @@ pub const API_BASE: &str = "/api/v1";
         diagnostics::DiagnosticSection,
         diagnostics::DiagnosticCheck,
         diagnostics::CheckStatus,
+        routes::integrity::IntegrityCheckView,
+        routes::integrity::IntegrityProblemView,
+        routes::integrity::IntegrityCheckPage,
+        routes::integrity::RequestIntegrityCheck,
         routes::integrations::IntegrationView,
         routes::integrations::SecretFieldView,
         routes::integrations::IntegrationList,
@@ -435,6 +445,7 @@ pub fn router(state: ApiState) -> Router {
         .nest(API_BASE, routes::workers::router())
         .nest(API_BASE, routes::erasures::router())
         .nest(API_BASE, routes::integrations::router())
+        .nest(API_BASE, routes::integrity::router())
         .nest(API_BASE, routes::romm::router())
         .nest(API_BASE, routes::reports::router())
         .nest(API_BASE, routes::diagnostics::router())

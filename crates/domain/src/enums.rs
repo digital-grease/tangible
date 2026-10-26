@@ -669,6 +669,72 @@ string_enum! {
 }
 
 string_enum! {
+    /// What an integrity check reads (docs/plans/storage-integrity.md).
+    IntegrityScope {
+        /// Every object one artifact names, and its manifest.
+        Artifact => "artifact",
+        /// Every object the library holds, each once.
+        All => "all",
+    }
+}
+
+string_enum! {
+    /// Where an integrity check is.
+    IntegrityCheckState {
+        /// Waiting for the runner.
+        Queued => "queued",
+        /// Reading objects.
+        Running => "running",
+        /// Every object read; problems, if any, recorded. Terminal.
+        Complete => "complete",
+        /// Could not go on (the library unreadable as a whole). Terminal.
+        Failed => "failed",
+        /// Withdrawn. Terminal.
+        Canceled => "canceled",
+    }
+    default = Queued
+}
+
+impl IntegrityCheckState {
+    /// Whether the check has ended.
+    #[must_use]
+    pub const fn is_terminal(&self) -> bool {
+        matches!(self, Self::Complete | Self::Failed | Self::Canceled)
+    }
+}
+
+string_enum! {
+    /// What the last check covering every object of an artifact found.
+    IntegrityState {
+        /// No check has covered it yet.
+        Unchecked => "unchecked",
+        /// Every object read back to the digest and length recorded.
+        Intact => "intact",
+        /// At least one object missing, unreadable or changed.
+        Damaged => "damaged",
+    }
+    default = Unchecked
+}
+
+string_enum! {
+    /// What is wrong with a stored object or a manifest.
+    IntegrityProblemKind {
+        /// The object is not in the store.
+        Missing => "missing",
+        /// The object reads back to another digest.
+        Corrupt => "corrupt",
+        /// The object hashes right and its length is not the one recorded.
+        SizeMismatch => "size_mismatch",
+        /// The object could not be read.
+        Unreadable => "unreadable",
+        /// The manifest names other components than the catalogue does.
+        ManifestMismatch => "manifest_mismatch",
+        /// The manifest could not be read.
+        ManifestUnreadable => "manifest_unreadable",
+    }
+}
+
+string_enum! {
     /// A compression codec chdman can use inside a CHD.
     ChdCodec {
         /// LZMA, for CD data frames.
@@ -742,7 +808,24 @@ mod tests {
             IntegrationKind,
             PhysicalCopyStatus,
             CdRipEngine,
+            IntegrityScope,
+            IntegrityCheckState,
+            IntegrityState,
+            IntegrityProblemKind,
         );
+    }
+
+    #[test]
+    fn a_check_ends_complete_failed_or_canceled() {
+        for terminal in [
+            IntegrityCheckState::Complete,
+            IntegrityCheckState::Failed,
+            IntegrityCheckState::Canceled,
+        ] {
+            assert!(terminal.is_terminal(), "{terminal}");
+        }
+        assert!(!IntegrityCheckState::Queued.is_terminal());
+        assert!(!IntegrityCheckState::Running.is_terminal());
     }
 
     #[test]

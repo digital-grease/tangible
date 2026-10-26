@@ -55,6 +55,12 @@ pub enum Permission {
     /// and holds its password, and a download client's output becomes
     /// imports.
     ManageIntegrations,
+    /// Run and read checks of the whole library, and the GC plan
+    /// (docs/plans/storage-integrity.md).
+    ///
+    /// Administrators only: a full scrub reads every byte the library holds,
+    /// which is a load on the disks somebody should decide on.
+    MaintainStorage,
 }
 
 impl Permission {
@@ -72,6 +78,7 @@ impl Permission {
             Self::ManageUsers => "manage_users",
             Self::Diagnose => "diagnose",
             Self::ManageIntegrations => "manage_integrations",
+            Self::MaintainStorage => "maintain_storage",
         }
     }
 
@@ -85,7 +92,8 @@ impl Permission {
             | Self::ManageWorkers
             | Self::ManageUsers
             | Self::Diagnose
-            | Self::ManageIntegrations => Role::Administrator,
+            | Self::ManageIntegrations
+            | Self::MaintainStorage => Role::Administrator,
         }
     }
 }
@@ -179,6 +187,7 @@ mod tests {
             Permission::ManageUsers,
             Permission::Diagnose,
             Permission::ManageIntegrations,
+            Permission::MaintainStorage,
         ] {
             assert!(!Role::Viewer.allows(permission), "{permission:?}");
         }
@@ -199,6 +208,7 @@ mod tests {
         assert!(!Role::Operator.allows(Permission::ManageUsers));
         assert!(!Role::Operator.allows(Permission::Diagnose));
         assert!(!Role::Operator.allows(Permission::ManageIntegrations));
+        assert!(!Role::Operator.allows(Permission::MaintainStorage));
     }
 
     #[test]
@@ -212,6 +222,7 @@ mod tests {
             Permission::ManageUsers,
             Permission::Diagnose,
             Permission::ManageIntegrations,
+            Permission::MaintainStorage,
         ] {
             assert!(Role::Administrator.allows(permission), "{permission:?}");
         }

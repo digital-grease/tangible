@@ -53,6 +53,11 @@ pub struct ArtifactSummary {
     /// Surfaced in the summary so a damaged artifact is visible in a list
     /// without opening it.
     pub has_warnings: bool,
+    /// What the last integrity check covering every object of it found:
+    /// `unchecked`, `intact` or `damaged` (docs/plans/storage-integrity.md).
+    pub integrity_state: String,
+    /// When that check finished.
+    pub integrity_checked_at: Option<String>,
 }
 
 impl From<&ArtifactManifest> for ArtifactSummary {
@@ -66,7 +71,34 @@ impl From<&ArtifactManifest> for ArtifactSummary {
             total_bytes: manifest.classification.total_bytes,
             source_filename: manifest.origin.source_filename.clone(),
             has_warnings: !manifest.validation.validators.is_empty(),
+            integrity_state: "unchecked".to_owned(),
+            integrity_checked_at: None,
         }
+    }
+}
+
+/// Fill in what integrity checks found, from the catalogue. A database that
+/// cannot answer leaves them unchecked rather than failing the read: the
+/// manifests are the library.
+async fn with_integrity(state: &ApiState, summaries: &mut [ArtifactSummary]) {
+    use time::format_description::well_known::Rfc3339;
+    let ids: Vec<uuid::Uuid> = summaries
+        .iter()
+        .filter_map(|summary| uuid::Uuid::parse_str(&summary.id).ok())
+        .collect();
+    match tangible_db::integrity::integrity_of(state.database().pool(), &ids).await {
+        Ok(found) => {
+            for summary in summaries {
+                if let Some((integrity, checked)) = uuid::Uuid::parse_str(&summary.id)
+                    .ok()
+                    .and_then(|id| found.get(&id))
+                {
+                    summary.integrity_state.clone_from(integrity);
+                    summary.integrity_checked_at = checked.and_then(|at| at.format(&Rfc3339).ok());
+                }
+            }
+        }
+        Err(error) => tracing::warn!(error = ?error, "integrity states could not be read"),
     }
 }
 
@@ -448,6 +480,7 @@ pub async fn list_artifacts(
         }
     }
 
+    with_integrity(&state, &mut items).await;
     Ok(Json(Page::new(items, limit, |item| item.id.clone()).into()))
 }
 
@@ -490,8 +523,11 @@ pub async fn get_artifact(
         })
         .collect();
 
+    let mut summary = [ArtifactSummary::from(&manifest)];
+    with_integrity(&state, &mut summary).await;
+    let [summary] = summary;
     Ok(Json(ArtifactDetail {
-        summary: ArtifactSummary::from(&manifest),
+        summary,
         format_confidence: manifest.classification.format_confidence,
         source_kind: manifest.origin.source_kind.clone(),
         warnings,

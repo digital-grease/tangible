@@ -172,6 +172,7 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         serve.romm_export_root.as_deref(),
     )
     .await?;
+    let (state, integrity) = start_integrity(state, &database, objects.clone(), manifests.clone());
     let (state, derivations) = start_derivations(
         state,
         &database,
@@ -196,6 +197,21 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         },
     );
 
+    let runners = [Some(imports), Some(integrity), romm, derivations]
+        .into_iter()
+        .flatten()
+        .collect();
+    serve_until_shutdown(serve, state, runners).await
+}
+
+/// Listen and serve until asked to stop, then stop the background runners,
+/// letting work already running finish: abandoning an import would leave
+/// staged bytes and a lease behind for no gain.
+async fn serve_until_shutdown(
+    serve: &ServeConfig,
+    state: ApiState,
+    runners: Vec<Stoppable>,
+) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(serve.bind)
         .await
         .with_context(|| format!("binding {}", serve.bind))?;
@@ -215,9 +231,7 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         .await
         .context("serving HTTP");
 
-    // Work already running finishes before the process exits. Abandoning an
-    // import would leave staged bytes and a lease behind for no gain.
-    for (stop, task) in [Some(imports), romm, derivations].into_iter().flatten() {
+    for (stop, task) in runners {
         let _ = stop.send(());
         let _ = task.await;
     }
@@ -364,6 +378,30 @@ struct DerivationPipelineParts {
 }
 
 /// Start the derivation runner when an engine could be set up.
+/// Start the integrity runner, which reads stored objects back for the
+/// checks operators and administrators ask for
+/// (docs/plans/storage-integrity.md).
+fn start_integrity(
+    state: ApiState,
+    database: &Database,
+    objects: FilesystemStore,
+    manifests: ManifestStore,
+) -> (ApiState, Stoppable) {
+    let integrity = tangible_api::integrity::Integrity::new();
+    let runner = tangible_api::integrity::IntegrityRunner::new(
+        database.clone(),
+        objects,
+        manifests,
+        integrity.clone(),
+        tangible_api::integrity::IntegrityRunnerSettings::default(),
+    );
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(runner.run(async {
+        let _ = stopped.await;
+    }));
+    (state.with_integrity(integrity), (stop, task))
+}
+
 fn start_derivations(
     state: ApiState,
     database: &Database,

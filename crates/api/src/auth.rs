@@ -149,8 +149,8 @@ pub enum Access {
 
 use Access::{Public, Signed, SignedOrLeaseholder, Worker};
 use Permission::{
-    Burn, Catalog, Diagnose, Erase, Import, ImportUrl, ManageIntegrations, ManageUsers,
-    ManageWorkers, Read,
+    Burn, Catalog, Diagnose, Erase, Import, ImportUrl, MaintainStorage, ManageIntegrations,
+    ManageUsers, ManageWorkers, Read,
 };
 
 /// Every operation the server answers, and what it requires.
@@ -186,6 +186,21 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
         "GET",
         "/api/v1/artifacts/{artifact_id}/components/{component_id}/content",
         SignedOrLeaseholder(Read),
+    ),
+    // Integrity: operators check an artifact they care about; a full scrub,
+    // which reads every byte, is an administrator's call.
+    (
+        "POST",
+        "/api/v1/artifacts/{artifact_id}/validate",
+        Signed(Import),
+    ),
+    ("GET", "/api/v1/integrity-checks", Signed(MaintainStorage)),
+    ("POST", "/api/v1/integrity-checks", Signed(MaintainStorage)),
+    ("GET", "/api/v1/integrity-checks/{check_id}", Signed(Read)),
+    (
+        "POST",
+        "/api/v1/integrity-checks/{check_id}/cancel",
+        Signed(MaintainStorage),
     ),
     // The catalog.
     ("GET", "/api/v1/titles", Signed(Read)),

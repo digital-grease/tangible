@@ -35,14 +35,15 @@ pub use digest::{DigestParseError, Sha256Digest};
 pub use enums::{
     ArtifactFormat, ArtifactKind, ArtifactOrigin, CdRipEngine, ChdCodec, CompatibilityClaim,
     ComponentRole, DerivationJobState, DiscRelationship, DriveConnection, DriveStatus, EjectPolicy,
-    EnumParseError, ErasureMode, ErasureState, HashAlgorithm, IntegrationKind, LossCharacter,
-    MediaFamily, PhysicalCopyStatus, QuarantineState, RipOriginal, RipState, Role, SetKind,
-    TitleKind, Transformation, ValidationState, VerificationStep, WorkerStatus,
+    EnumParseError, ErasureMode, ErasureState, HashAlgorithm, IntegrationKind, IntegrityCheckState,
+    IntegrityProblemKind, IntegrityScope, IntegrityState, LossCharacter, MediaFamily,
+    PhysicalCopyStatus, QuarantineState, RipOriginal, RipState, Role, SetKind, TitleKind,
+    Transformation, ValidationState, VerificationStep, WorkerStatus,
 };
 pub use id::{
     ArtifactId, BurnAttemptId, BurnJobId, ComponentId, DerivationJobId, DiscId, DiscSetId, DriveId,
-    EditionId, ErasureId, EventId, IdParseError, ImportJobId, IntegrationId, PhysicalCopyId,
-    RipJobId, TitleId, WorkerId,
+    EditionId, ErasureId, EventId, IdParseError, ImportJobId, IntegrationId, IntegrityCheckId,
+    PhysicalCopyId, RipJobId, TitleId, WorkerId,
 };
 pub use import::{ImportState, ImportTransitionError};
 pub use logical_path::{LogicalPath, LogicalPathError};
