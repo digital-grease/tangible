@@ -117,11 +117,11 @@ function fieldLabel(field: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-/** The download clients an administrator can set up here. */
-export type ClientKind = 'qbittorrent' | 'sabnzbd' | 'nzbget';
+/** The integrations an administrator can set up here: download clients, and S3. */
+export type ClientKind = 'qbittorrent' | 'sabnzbd' | 'nzbget' | 's3';
 
 /** The kinds, in the order offered. */
-export const CLIENT_KINDS: ClientKind[] = ['qbittorrent', 'sabnzbd', 'nzbget'];
+export const CLIENT_KINDS: ClientKind[] = ['qbittorrent', 'sabnzbd', 'nzbget', 's3'];
 
 /** Whether an integration's kind has a form here. */
 export function isClientKind(kind: string): kind is ClientKind {
@@ -131,7 +131,9 @@ export function isClientKind(kind: string): kind is ClientKind {
 /** What differs between the kinds' forms. */
 export type ClientWording = {
   /** The secret's field on the server. */
-  secretField: 'password' | 'api_key';
+  secretField: 'password' | 'api_key' | 'secret_access_key';
+  /** Whether it is a download client, with a category and folders. */
+  downloads: boolean;
   /** The secret's label. */
   secretLabel: string;
   /** Whether it takes a user name, and the label. */
@@ -151,6 +153,7 @@ export function clientWording(kind: ClientKind): ClientWording {
   switch (kind) {
     case 'qbittorrent':
       return {
+        downloads: true,
         secretField: 'password',
         secretLabel: 'WebUI password',
         usernameLabel: 'WebUI user',
@@ -161,6 +164,7 @@ export function clientWording(kind: ClientKind): ClientWording {
       };
     case 'sabnzbd':
       return {
+        downloads: true,
         secretField: 'api_key',
         secretLabel: 'API key',
         usernameLabel: null,
@@ -171,6 +175,7 @@ export function clientWording(kind: ClientKind): ClientWording {
       };
     case 'nzbget':
       return {
+        downloads: true,
         secretField: 'password',
         secretLabel: 'Control password',
         usernameLabel: 'Control user',
@@ -178,6 +183,17 @@ export function clientWording(kind: ClientKind): ClientWording {
         addressExample: 'http://192.168.1.13:6789/',
         folderExample: '/downloads/completed/tangible',
         takes: 'an NZB',
+      };
+    case 's3':
+      return {
+        downloads: false,
+        secretField: 'secret_access_key',
+        secretLabel: 'Secret access key',
+        usernameLabel: null,
+        addressLabel: 'Endpoint',
+        addressExample: 'https://s3.eu-west-1.amazonaws.com/',
+        folderExample: '',
+        takes: 'objects from the buckets it allows',
       };
   }
 }
@@ -195,6 +211,14 @@ export type ClientForm = {
   category: string;
   clientPath: string;
   localRoot: string;
+  /** S3 only: the access key id, a secret too, never filled in. */
+  accessKey: string;
+  /** S3 only. */
+  region: string;
+  /** S3 only: buckets in the path rather than as a subdomain. */
+  pathStyle: boolean;
+  /** S3 only: the buckets allowed, one a line or comma-separated. */
+  buckets: string;
 };
 
 /** An empty form for `kind`, with the server's defaults. */
@@ -210,6 +234,10 @@ export function emptyClientForm(kind: ClientKind, roots: string[]): ClientForm {
     category: 'tangible',
     clientPath: '',
     localRoot: roots.length === 1 ? (roots[0] ?? '') : '',
+    accessKey: '',
+    region: 'us-east-1',
+    pathStyle: true,
+    buckets: '',
   };
 }
 
@@ -220,21 +248,44 @@ function text(settings: Record<string, unknown>, key: string): string {
 
 /** A form filled from an integration, to edit it. The secret stays empty. */
 export function clientFormFrom(view: IntegrationView & { kind: ClientKind }): ClientForm {
+  const buckets = view.settings.buckets;
   return {
     kind: view.kind,
     name: view.name,
     enabled: view.enabled,
-    baseUrl: text(view.settings, 'base_url'),
+    baseUrl: text(view.settings, view.kind === 's3' ? 'endpoint' : 'base_url'),
     username: text(view.settings, 'username'),
     secret: '',
     clearSecret: false,
     category: text(view.settings, 'category') || 'tangible',
     clientPath: text(view.settings, 'client_path'),
     localRoot: text(view.settings, 'local_root'),
+    accessKey: '',
+    region: text(view.settings, 'region') || 'us-east-1',
+    pathStyle: view.settings.path_style !== false,
+    buckets: Array.isArray(buckets)
+      ? buckets.filter((bucket) => typeof bucket === 'string').join('\n')
+      : '',
   };
 }
 
+/** The buckets typed, one a line or comma-separated, without blanks. */
+export function parseBuckets(text: string): string[] {
+  return text
+    .split(/[\n,]/)
+    .map((bucket) => bucket.trim())
+    .filter((bucket) => bucket !== '');
+}
+
 function clientSettings(form: ClientForm): Record<string, unknown> {
+  if (form.kind === 's3') {
+    return {
+      endpoint: form.baseUrl.trim(),
+      region: form.region.trim() || 'us-east-1',
+      path_style: form.pathStyle,
+      buckets: parseBuckets(form.buckets),
+    };
+  }
   const settings: Record<string, unknown> = {
     base_url: form.baseUrl.trim(),
     category: form.category.trim() || 'tangible',
@@ -254,8 +305,17 @@ export function createClientRequest(form: ClientForm): CreateIntegrationRequest 
     enabled: form.enabled,
     settings: clientSettings(form),
   };
-  if (form.secret !== '') request.secrets = { [clientWording(form.kind).secretField]: form.secret };
+  const secrets = typedSecrets(form);
+  if (Object.keys(secrets).length > 0) request.secrets = secrets;
   return request;
+}
+
+/** The secrets typed into the form, by their fields on the server. */
+function typedSecrets(form: ClientForm): Record<string, string> {
+  const secrets: Record<string, string> = {};
+  if (form.secret !== '') secrets[clientWording(form.kind).secretField] = form.secret;
+  if (form.kind === 's3' && form.accessKey !== '') secrets.access_key_id = form.accessKey;
+  return secrets;
 }
 
 /**
@@ -269,8 +329,13 @@ export function updateClientRequest(form: ClientForm): UpdateIntegrationRequest 
     enabled: form.enabled,
     settings: clientSettings(form),
   };
-  if (form.clearSecret) request.secrets = { [field]: null };
-  else if (form.secret !== '') request.secrets = { [field]: form.secret };
+  if (form.clearSecret) {
+    request.secrets =
+      form.kind === 's3' ? { access_key_id: null, [field]: null } : { [field]: null };
+  } else {
+    const secrets = typedSecrets(form);
+    if (Object.keys(secrets).length > 0) request.secrets = secrets;
+  }
   return request;
 }
 

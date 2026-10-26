@@ -13,6 +13,7 @@ import {
   loadImportSources,
   loadImports,
   retryImport,
+  s3ImportRequest,
   sendTorrent,
   sourceLabel,
   toBase64,
@@ -404,6 +405,15 @@ describe('torrents for a download client', () => {
       'Waiting for SABnzbd',
     );
     expect(clientOfSource('upload')).toBeNull();
+    expect(sourceLabel('s3_object')).toBe('S3');
+    expect(importStateLabel('acquiring', 's3_object')).toBe('Downloading');
+    expect(s3ImportRequest('s1', 'discs', ' a/b.iso ', ' AB'.repeat(1))).toEqual({
+      integration_id: 's1',
+      bucket: 'discs',
+      key: 'a/b.iso',
+      expected_sha256: 'ab',
+    });
+    expect(s3ImportRequest('s1', 'discs', 'k', '  ')).not.toHaveProperty('expected_sha256');
   });
 
   it('writes bytes as base64, however many', () => {

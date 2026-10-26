@@ -126,7 +126,9 @@ may change between minor versions, and the release notes say how.
   object is looked at first and the import pinned to its version and size;
   the fetch resumes like a URL import. `GET /api/v1/import-sources` lists the
   S3 integrations and their buckets. Requests are signed with `rusty-s3`.
-  Tested against SeaweedFS's S3 gateway, which CI now runs.
+  Tested against SeaweedFS's S3 gateway, which CI now runs. The
+  Integrations page sets it up and tests it, and the Imports page has
+  "Import from S3".
 - The Integrations page sets up SABnzbd and NZBGet as well as qBittorrent,
   and tests and edits all three; the Imports page sends an `.nzb` to a
   Usenet client as it sends a torrent to qBittorrent, and names their

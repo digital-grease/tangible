@@ -51,7 +51,9 @@
 
   const wording = $derived(clientWording(form.kind));
   /** What the secret is called in sentences: "password" or "API key". */
-  const secretNoun = $derived(wording.secretField === 'api_key' ? 'API key' : 'password');
+  const secretNoun = $derived(
+    form.kind === 's3' ? 'keys' : wording.secretField === 'api_key' ? 'API key' : 'password',
+  );
 
   /** The integration being tried, and what trying said. */
   let testing = $state<string | null>(null);
@@ -107,8 +109,9 @@
       ? await updateIntegration(editing.id, updateClientRequest(form))
       : await createIntegration(createClientRequest(form));
     submitting = false;
-    // Whatever happened, the secret typed is not kept in the page.
+    // Whatever happened, the secrets typed are not kept in the page.
     form.secret = '';
+    form.accessKey = '';
     form.clearSecret = false;
     if (result.kind === 'error') {
       refusal = integrationRefusal(result.problem);
@@ -164,7 +167,8 @@
 
 <p>
   Download clients you already run, which Tangible will hand a torrent or an NZB to and import from
-  when it finishes. Tangible never searches for anything, and never asks a client to run a script.
+  when it finishes, and S3-compatible storage operators may import objects from. Tangible never
+  searches for anything, never asks a client to run a script, and only reads from a bucket.
 </p>
 
 <section aria-live="polite" aria-busy={view.kind === 'loading'}>
@@ -277,7 +281,7 @@
     <h2 id="form-heading">
       {editing ? `Edit ${editing.name}` : 'Add a download client'}
     </h2>
-    {#if roots !== null && roots.length === 0}
+    {#if wording.downloads && roots !== null && roots.length === 0}
       <p role="note">
         No watched roots are configured. Tangible reads a client's finished downloads from a folder
         mounted into its container and listed in <code>TANGIBLE_WATCH_ROOTS</code>; add one first.
@@ -293,7 +297,9 @@
             {/each}
           </select>
           <br />
-          <small id="kind-hint">Hands over {wording.takes}.</small>
+          <small id="kind-hint">
+            {#if wording.downloads}Hands over {wording.takes}.{:else}Imports {wording.takes}.{/if}
+          </small>
         </p>
       {/if}
       <p>
@@ -334,6 +340,20 @@
           />
         </p>
       {/if}
+      {#if form.kind === 's3'}
+        <p>
+          <label for="access-key">Access key id</label><br />
+          <input
+            id="access-key"
+            name="access_key_id"
+            type="password"
+            autocomplete="off"
+            spellcheck="false"
+            bind:value={form.accessKey}
+            disabled={form.clearSecret}
+          />
+        </p>
+      {/if}
       <p>
         <label for="secret">{wording.secretLabel}</label><br />
         <input
@@ -348,7 +368,7 @@
         <br />
         <small id="secret-hint">
           {#if editing}
-            Leave empty to keep the stored {secretNoun}. It is never shown again, here or anywhere.
+            Leave empty to keep what is stored. It is never shown again, here or anywhere.
           {:else}
             Stored sealed and never shown again, here or anywhere.
           {/if}
@@ -362,61 +382,104 @@
           </label>
         </p>
       {/if}
-      <p>
-        <label for="category">Category</label><br />
-        <input
-          id="category"
-          name="category"
-          autocomplete="off"
-          bind:value={form.category}
-          aria-describedby="category-hint"
-        />
-        <br />
-        <small id="category-hint">
-          Tangible adds its jobs under this category and follows only them.
-          {#if form.kind !== 'qbittorrent'}
-            It must exist in {kindLabel(form.kind)} first, with its own folder.
-          {/if}
-        </small>
-      </p>
-      <p>
-        <label for="client-path">Download folder, as {kindLabel(form.kind)} sees it</label><br />
-        <input
-          id="client-path"
-          name="client_path"
-          autocomplete="off"
-          spellcheck="false"
-          placeholder={wording.folderExample}
-          bind:value={form.clientPath}
-          required
-          aria-describedby="client-path-hint"
-        />
-        <br />
-        <small id="client-path-hint">
-          Where the category's finished downloads go, as an absolute path inside {kindLabel(
-            form.kind,
-          )}'s own container.
-        </small>
-      </p>
-      <p>
-        <label for="local-root">The same folder, as mounted here</label><br />
-        <select
-          id="local-root"
-          name="local_root"
-          bind:value={form.localRoot}
-          required
-          aria-describedby="local-root-hint"
-        >
-          <option value="" disabled>Choose a watched root</option>
-          {#each roots ?? [] as root (root)}
-            <option value={root}>{root}</option>
-          {/each}
-        </select>
-        <br />
-        <small id="local-root-hint">
-          The watched root where Tangible's container sees that folder, read-only.
-        </small>
-      </p>
+      {#if form.kind === 's3'}
+        <p>
+          <label for="region">Region</label><br />
+          <input
+            id="region"
+            name="region"
+            autocomplete="off"
+            spellcheck="false"
+            bind:value={form.region}
+            aria-describedby="region-hint"
+          />
+          <br />
+          <small id="region-hint">The region signatures are made for; us-east-1 if unsure.</small>
+        </p>
+        <p>
+          <label>
+            <input type="checkbox" name="path_style" bind:checked={form.pathStyle} />
+            Bucket in the path (host/bucket/key)
+          </label>
+          <br />
+          <small
+            >On for most self-hosted servers; off for AWS's newer buckets, which are reached as
+            bucket.host. An endpoint given as an address needs it on.</small
+          >
+        </p>
+        <p>
+          <label for="buckets">Buckets operators may import from</label><br />
+          <textarea
+            id="buckets"
+            name="buckets"
+            rows="3"
+            spellcheck="false"
+            bind:value={form.buckets}
+            required
+            aria-describedby="buckets-hint"
+          ></textarea>
+          <br />
+          <small id="buckets-hint"
+            >One a line. Tangible only reads from them: it never lists, writes or deletes.</small
+          >
+        </p>
+      {:else}
+        <p>
+          <label for="category">Category</label><br />
+          <input
+            id="category"
+            name="category"
+            autocomplete="off"
+            bind:value={form.category}
+            aria-describedby="category-hint"
+          />
+          <br />
+          <small id="category-hint">
+            Tangible adds its jobs under this category and follows only them.
+            {#if form.kind !== 'qbittorrent'}
+              It must exist in {kindLabel(form.kind)} first, with its own folder.
+            {/if}
+          </small>
+        </p>
+        <p>
+          <label for="client-path">Download folder, as {kindLabel(form.kind)} sees it</label><br />
+          <input
+            id="client-path"
+            name="client_path"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder={wording.folderExample}
+            bind:value={form.clientPath}
+            required
+            aria-describedby="client-path-hint"
+          />
+          <br />
+          <small id="client-path-hint">
+            Where the category's finished downloads go, as an absolute path inside {kindLabel(
+              form.kind,
+            )}'s own container.
+          </small>
+        </p>
+        <p>
+          <label for="local-root">The same folder, as mounted here</label><br />
+          <select
+            id="local-root"
+            name="local_root"
+            bind:value={form.localRoot}
+            required
+            aria-describedby="local-root-hint"
+          >
+            <option value="" disabled>Choose a watched root</option>
+            {#each roots ?? [] as root (root)}
+              <option value={root}>{root}</option>
+            {/each}
+          </select>
+          <br />
+          <small id="local-root-hint">
+            The watched root where Tangible's container sees that folder, read-only.
+          </small>
+        </p>
+      {/if}
       <p>
         <label>
           <input type="checkbox" name="enabled" bind:checked={form.enabled} />

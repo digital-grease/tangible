@@ -9,6 +9,7 @@ import {
   deleteIntegration,
   emptyClientForm,
   isClientKind,
+  parseBuckets,
   integrationRefusal,
   integrationStatusLabel,
   kindLabel,
@@ -121,6 +122,60 @@ describe('the download client form', () => {
     expect(request.kind).toBe('nzbget');
     expect(request.settings).toMatchObject({ username: 'nzbget' });
     expect(request.secrets).toEqual({ password: 'p' });
+  });
+
+  it('makes an S3 integration with its endpoint, buckets and both keys', () => {
+    const request = createClientRequest({
+      ...emptyClientForm('s3', []),
+      name: 'Archive',
+      baseUrl: ' http://192.168.1.13:8333 ',
+      region: '',
+      buckets: 'discs\n old-discs , \n',
+      accessKey: 'AKID',
+      secret: 'shh',
+    });
+    expect(request).toEqual({
+      kind: 's3',
+      name: 'Archive',
+      enabled: true,
+      settings: {
+        endpoint: 'http://192.168.1.13:8333',
+        region: 'us-east-1',
+        path_style: true,
+        buckets: ['discs', 'old-discs'],
+      },
+      secrets: { access_key_id: 'AKID', secret_access_key: 'shh' },
+    });
+    expect(parseBuckets(' a ,b\n\nc ')).toEqual(['a', 'b', 'c']);
+  });
+
+  it('edits S3 without holding its keys, and clears both together', () => {
+    const view = qbittorrent({
+      kind: 's3',
+      settings: {
+        endpoint: 'https://s3.example.internal/',
+        region: 'eu-west-1',
+        path_style: false,
+        buckets: ['a', 'b'],
+      },
+      secrets: [
+        { field: 'access_key_id', set: true },
+        { field: 'secret_access_key', set: true },
+      ],
+    });
+    const form = clientFormFrom({ ...view, kind: 's3' });
+    expect(form.baseUrl).toBe('https://s3.example.internal/');
+    expect(form.pathStyle).toBe(false);
+    expect(form.buckets).toBe('a\nb');
+    expect(form.accessKey).toBe('');
+    expect(updateClientRequest(form).secrets).toBeUndefined();
+    expect(updateClientRequest({ ...form, secret: 'new' }).secrets).toEqual({
+      secret_access_key: 'new',
+    });
+    expect(updateClientRequest({ ...form, clearSecret: true }).secrets).toEqual({
+      access_key_id: null,
+      secret_access_key: null,
+    });
   });
 
   it('edits an integration without ever holding its secret', () => {

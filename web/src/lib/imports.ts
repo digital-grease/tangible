@@ -20,6 +20,8 @@ export type UploadView = components['schemas']['UploadView'];
 export type DownloadClient = components['schemas']['DownloadClientView'];
 export type SubmitJobRequest = components['schemas']['SubmitJobRequest'];
 export type IntegrationJobView = components['schemas']['IntegrationJobView'];
+export type S3ImportRequest = components['schemas']['S3ImportRequest'];
+export type S3Source = components['schemas']['S3SourceView'];
 
 /** The largest `.torrent` the server takes, as it says in its own limit. */
 export const MAX_TORRENT_BYTES = 8 * 1024 * 1024;
@@ -210,6 +212,40 @@ export function jobOutcome(job: IntegrationJobView, client: string): string {
   }
 }
 
+/**
+ * Import an object from a bucket an S3 integration allows (ADR 0016). The
+ * server looks at it first, and refuses a bucket not allowed, a missing
+ * object, or one too large.
+ */
+export async function importFromS3(
+  body: S3ImportRequest,
+  fetcher: typeof fetch = apiFetch,
+): Promise<CommandResult<ImportView>> {
+  const result = await request<ImportView>(fetcher, '/api/v1/imports/s3', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (isProblem(result)) return { kind: 'error', problem: result };
+  return { kind: 'ready', data: result };
+}
+
+/** What an S3 import asks for, the SHA-256 only when one was typed. */
+export function s3ImportRequest(
+  integrationId: string,
+  bucket: string,
+  key: string,
+  sha256: string,
+): S3ImportRequest {
+  const digest = sha256.replace(/\s+/g, '').toLowerCase();
+  return {
+    integration_id: integrationId,
+    bucket,
+    key: key.trim(),
+    ...(digest ? { expected_sha256: digest } : {}),
+  };
+}
+
 /** Where an import came from, in words. */
 export function sourceLabel(sourceKind: string): string {
   switch (sourceKind) {
@@ -219,6 +255,8 @@ export function sourceLabel(sourceKind: string): string {
       return 'Watched folder';
     case 'http_url':
       return 'URL';
+    case 's3_object':
+      return 'S3';
     case 'qbittorrent_job':
     case 'sabnzbd_job':
     case 'nzbget_job':
@@ -449,7 +487,7 @@ export function importStateLabel(
       // works, and says why when the client cannot be asked.
       const client = clientOfSource(sourceKind ?? '');
       if (client) return errorCode ? `Waiting for ${client}` : `Downloading in ${client}`;
-      return sourceKind === 'http_url' ? 'Downloading' : 'Copying in';
+      return sourceKind === 'http_url' || sourceKind === 's3_object' ? 'Downloading' : 'Copying in';
     }
     case 'staged':
       return 'Ready to process';

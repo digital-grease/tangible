@@ -338,15 +338,13 @@ deletes.
 1. Make credentials that may read the buckets you mean to allow, and nothing
    else.
 2. Make an integration secret key (below), so they can be stored.
-3. As an administrator, add it with `POST /api/v1/integrations` (the
-   Integrations page gains a form for it soon): `kind` `s3`, the `endpoint`,
-   the `region` (default `us-east-1`), `path_style` (true for most
-   self-hosted servers; false for AWS's newer buckets), the `buckets`
-   operators may import from, and the `access_key_id` and
-   `secret_access_key` secrets. `POST /api/v1/integrations/{id}/test` checks
-   every bucket.
-4. Operators import with `POST /api/v1/imports/s3`, naming the integration,
-   a bucket and the object's key.
+3. As an administrator, add it on the Integrations page, as kind
+   S3-compatible storage: the endpoint, the region (us-east-1 if unsure),
+   whether buckets go in the path (on for most self-hosted servers; off for
+   AWS's newer buckets), the buckets operators may import from, and the
+   access key id and secret. "Test" checks every bucket.
+4. Operators use "Import from S3" on the Imports page: the bucket and the
+   object's key. (The API is `POST /api/v1/imports/s3`.)
 
 An endpoint on your LAN is fine; one on this machine's loopback address only
 if listed in `TANGIBLE_OUTBOUND_ALLOW`. The import is pinned to the version

@@ -266,6 +266,41 @@ describe('Integrations page', () => {
     expect((screen.getByLabelText('API key') as HTMLInputElement).value).toBe('');
   });
 
+  it('adds S3-compatible storage with its buckets and both keys', async () => {
+    const asked = server({
+      'GET /api/v1/integrations': [list([]), list([])],
+      'GET /api/v1/import-sources': sources,
+      'POST /api/v1/integrations': { status: 201, body: nas({ kind: 's3', name: 'Archive' }) },
+    });
+    render(IntegrationsPage);
+    await screen.findByText(/No integrations yet/);
+    await fireEvent.change(screen.getByLabelText('Kind'), { target: { value: 's3' } });
+    expect(screen.queryByLabelText('Category')).toBeNull();
+    expect(screen.queryByLabelText(/Download folder/)).toBeNull();
+    await fill('Name', 'Archive');
+    await fill('Endpoint', 'http://192.168.1.13:8333');
+    await fill('Access key id', 'AKID');
+    await fill('Secret access key', 'shh');
+    await fill('Buckets operators may import from', 'discs\nold-discs');
+    await fireEvent.click(screen.getByRole('button', { name: 'Add S3-compatible storage' }));
+    expect(await screen.findByText('Added Archive.')).toBeTruthy();
+    const post = asked.find((a) => a.method === 'POST');
+    expect(post?.body).toEqual({
+      kind: 's3',
+      name: 'Archive',
+      enabled: true,
+      settings: {
+        endpoint: 'http://192.168.1.13:8333',
+        region: 'us-east-1',
+        path_style: true,
+        buckets: ['discs', 'old-discs'],
+      },
+      secrets: { access_key_id: 'AKID', secret_access_key: 'shh' },
+    });
+    expect((screen.getByLabelText('Secret access key') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('Access key id') as HTMLInputElement).value).toBe('');
+  });
+
   it('edits and tests an NZBGet like any client', async () => {
     const nzbget = nas({
       id: 'n1',

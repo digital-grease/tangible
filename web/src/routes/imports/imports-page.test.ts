@@ -38,6 +38,7 @@ function server(routes: Record<string, Reply>): Asked[] {
 function sources(
   urlImports: boolean,
   downloadClients: { id: string; name: string; kind: string }[] = [],
+  s3Sources: { id: string; name: string; buckets: string[] }[] = [],
 ) {
   return {
     status: 200,
@@ -47,6 +48,7 @@ function sources(
       url_imports: urlImports,
       url_imports_allow_http: false,
       download_clients: downloadClients,
+      s3_sources: s3Sources,
     },
   };
 }
@@ -159,9 +161,9 @@ describe('Imports page, sending a torrent to a download client', () => {
     });
     render(ImportsPage);
     expect(await screen.findByText(/No download client is set up/)).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Integrations' }).getAttribute('href')).toBe(
-      '/integrations',
-    );
+    for (const link of screen.getAllByRole('link', { name: 'Integrations' })) {
+      expect(link.getAttribute('href')).toBe('/integrations');
+    }
     expect(screen.queryByLabelText('or a magnet link')).toBeNull();
   });
 
@@ -285,5 +287,67 @@ describe('Imports page, sending a torrent to a download client', () => {
     render(ImportsPage);
     expect(await screen.findByText('Waiting for qBittorrent')).toBeTruthy();
     expect(screen.getByText(/could not be reached/)).toBeTruthy();
+  });
+});
+
+describe('Imports page, importing from S3', () => {
+  it('says how to set it up where there is none', async () => {
+    server({
+      '/api/v1/import-sources': sources(false),
+      '/api/v1/imports': { status: 200, body: { items: [] } },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    render(ImportsPage);
+    expect(await screen.findByText(/No S3-compatible storage is set up/)).toBeTruthy();
+    expect(screen.queryByLabelText('Object key')).toBeNull();
+  });
+
+  it('asks for an object in an allowed bucket, and lists the import', async () => {
+    const asked = server({
+      '/api/v1/import-sources': sources(
+        false,
+        [],
+        [
+          { id: 's1', name: 'Archive', buckets: ['discs', 'old-discs'] },
+          { id: 's2', name: 'Cloud', buckets: ['cloud-discs'] },
+        ],
+      ),
+      '/api/v1/imports': {
+        status: 200,
+        body: {
+          items: [
+            {
+              ...DOWNLOADING,
+              id: 'o1',
+              source_kind: 's3_object',
+              source_filename: 'Disc.iso',
+              source_reference: 's3://cloud-discs/a/Disc.iso',
+            },
+          ],
+        },
+      },
+      'POST /api/v1/imports/s3': { status: 202, body: DOWNLOADING },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    render(ImportsPage);
+    // Choosing another storage offers its buckets, starting from its first.
+    await fireEvent.change(await screen.findByLabelText('Storage'), { target: { value: 's2' } });
+    expect((screen.getByLabelText('Bucket') as HTMLSelectElement).value).toBe('cloud-discs');
+    await fireEvent.input(screen.getByLabelText('Object key'), {
+      target: { value: ' a/Disc.iso ' },
+    });
+    await fireEvent.click(screen.getByRole('button', { name: 'Import from S3' }));
+    await vi.waitFor(() => {
+      expect(asked.some((call) => call.method === 'POST')).toBe(true);
+    });
+    const sent = asked.find((call) => call.method === 'POST');
+    expect(sent?.url).toBe('/api/v1/imports/s3');
+    expect(JSON.parse(sent?.body ?? '{}')).toEqual({
+      integration_id: 's2',
+      bucket: 'cloud-discs',
+      key: 'a/Disc.iso',
+    });
+    expect(await screen.findByText('s3://cloud-discs/a/Disc.iso')).toBeTruthy();
+    expect(screen.getByText('S3')).toBeTruthy();
   });
 });

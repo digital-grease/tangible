@@ -8,6 +8,7 @@
     clientOfSource,
     canRetry,
     cancelImport,
+    importFromS3,
     importFromUrl,
     importFromWatchedRoot,
     importStateLabel,
@@ -15,6 +16,7 @@
     loadImportSources,
     loadImports,
     retryImport,
+    s3ImportRequest,
     sendTorrent,
     sourceLabel,
     jobOutcome,
@@ -49,8 +51,16 @@
   let magnet = $state('');
   let torrentFiles = $state<FileList | null>(null);
   let nzbFiles = $state<FileList | null>(null);
+  let s3SourceId = $state('');
+  let s3Bucket = $state('');
+  let s3Key = $state('');
+  let s3Sha256 = $state('');
   let handedOver = $state<string | null>(null);
   let torrentRefusal = $state<string | null>(null);
+
+  /** The S3 integrations objects can come from, and the one chosen. */
+  const s3Sources = $derived(sources?.s3_sources ?? []);
+  const chosenS3 = $derived(s3Sources.find((source) => source.id === s3SourceId));
 
   /** The download clients a job can go to. */
   const clients = $derived(sources?.download_clients ?? []);
@@ -88,6 +98,8 @@
       sources = found.data;
       pathId = found.data.watch_roots[0] ?? '';
       clientId = found.data.download_clients[0]?.id ?? '';
+      s3SourceId = found.data.s3_sources[0]?.id ?? '';
+      s3Bucket = found.data.s3_sources[0]?.buckets[0] ?? '';
     }
     await refresh();
     timer = setInterval(refresh, RECONCILE_MS);
@@ -153,6 +165,28 @@
     } else {
       url = '';
       sha256 = '';
+      await refresh();
+    }
+    busy = false;
+  }
+
+  /** A different source offers different buckets: start from its first. */
+  function chooseS3Source(id: string) {
+    s3SourceId = id;
+    s3Bucket = s3Sources.find((source) => source.id === id)?.buckets[0] ?? '';
+  }
+
+  async function importS3(event: SubmitEvent) {
+    event.preventDefault();
+    if (busy || !chosenS3) return;
+    busy = true;
+    problem = null;
+    const result = await importFromS3(s3ImportRequest(chosenS3.id, s3Bucket, s3Key, s3Sha256));
+    if (result.kind === 'error') {
+      problem = result.problem;
+    } else {
+      s3Key = '';
+      s3Sha256 = '';
       await refresh();
     }
     busy = false;
@@ -336,6 +370,65 @@
   {/if}
 </section>
 
+<section aria-labelledby="s3-heading">
+  <h2 id="s3-heading">Import from S3</h2>
+  {#if s3Sources.length === 0}
+    <p>
+      No S3-compatible storage is set up. An administrator can add it on the
+      <a href="/integrations">Integrations</a> page, with the buckets you may import from.
+    </p>
+  {:else}
+    <form onsubmit={importS3}>
+      {#if s3Sources.length > 1}
+        <p>
+          <label for="s3-source">Storage</label><br />
+          <select
+            id="s3-source"
+            value={s3SourceId}
+            onchange={(event) => chooseS3Source(event.currentTarget.value)}
+          >
+            {#each s3Sources as source (source.id)}
+              <option value={source.id}>{source.name}</option>
+            {/each}
+          </select>
+        </p>
+      {/if}
+      <p>
+        <label for="s3-bucket">Bucket</label><br />
+        <select id="s3-bucket" bind:value={s3Bucket}>
+          {#each chosenS3?.buckets ?? [] as bucket (bucket)}
+            <option value={bucket}>{bucket}</option>
+          {/each}
+        </select>
+      </p>
+      <p>
+        <label for="s3-key">Object key</label><br />
+        <input
+          id="s3-key"
+          bind:value={s3Key}
+          placeholder="discs/Example Disc.iso"
+          spellcheck="false"
+          autocomplete="off"
+          aria-describedby="s3-key-hint"
+          required
+        />
+        <br />
+        <small id="s3-key-hint"
+          >The object's full name in the bucket. The server looks at it first, and the import is
+          pinned to the version and size it has now.</small
+        >
+      </p>
+      <p>
+        <label for="s3-sha256">SHA-256, if you know it</label><br />
+        <input id="s3-sha256" bind:value={s3Sha256} spellcheck="false" autocomplete="off" />
+      </p>
+      <button type="submit" disabled={busy || s3Key.trim() === '' || s3Bucket === ''}>
+        {busy ? 'Working…' : 'Import from S3'}
+      </button>
+    </form>
+  {/if}
+</section>
+
 <section aria-labelledby="torrent-heading">
   <h2 id="torrent-heading">Send to a download client</h2>
   {#if clients.length === 0}
@@ -431,7 +524,7 @@
               <th scope="row">{job.source_filename ?? job.id.slice(0, 8)}</th>
               <td>
                 {sourceLabel(job.source_kind)}
-                {#if (job.source_kind === 'http_url' || clientOfSource(job.source_kind)) && job.source_reference}
+                {#if (job.source_kind === 'http_url' || job.source_kind === 's3_object' || clientOfSource(job.source_kind)) && job.source_reference}
                   <br /><small class="reference">{job.source_reference}</small>
                 {/if}
               </td>
