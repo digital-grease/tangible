@@ -18,6 +18,13 @@ may change between minor versions, and the release notes say how.
   longer agrees with the catalogue. Artifacts gain an integrity state
   (unchecked, intact, damaged). Nothing is repaired; damage is audited.
   Database migration 0018 adds a table and two columns; it is additive.
+- `tangible scrub` checks the library, or one artifact with `--artifact`,
+  from the command line, with or without the server running, and exits
+  non-zero when it finds anything. `TANGIBLE_SCRUB_INTERVAL_DAYS` has the
+  server queue a full scrub that many days after the last ends; it is off
+  by default. Diagnostics shows how many artifacts are damaged (a Problem)
+  and when the last full scrub ended and what it found. deploy/README.md,
+  "Checking stored bytes", says how to restore a damaged file.
 
 - Groundwork for issue reports: text is scrubbed of credentials, paths,
   serial numbers, library file names and LAN addresses before anyone can

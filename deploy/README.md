@@ -568,10 +568,11 @@ docker compose -f deploy/compose.yaml run --rm server doctor --report
 
 It works when the web UI does not, and prints a checklist: the database and
 its schema, whether the library and staging directories are there, writable
-and have room, the derivation tool, the RomM export, every worker (version,
-protocol, when it was last heard from, its engines), every drive (vendor,
-model, firmware, connection, status), the codes of the last 20 failures, and
-the settings that matter for support. Each line is OK, Warning or Problem,
+and have room, how many artifacts integrity checks found damaged and when
+the last full scrub ended, the derivation tool, the RomM export, every
+worker (version, protocol, when it was last heard from, its engines), every
+drive (vendor, model, firmware, connection, status), the codes of the last
+20 failures, and the settings that matter for support. Each line is OK, Warning or Problem,
 and the command exits non-zero when any is a Problem. `--report --json`
 gives the same as JSON for scripts.
 
@@ -627,6 +628,52 @@ it has been tried.
 To restore: stop the stack, restore the `library` volume, start only
 PostgreSQL, restore the dump with `pg_restore --clean --if-exists`, then start
 the rest.
+
+## Checking stored bytes
+
+A check reads stored files back and compares each with the SHA-256 digest
+and length recorded when it was stored, to find a failing disk, bit rot or a
+file changed by hand before you need it. A check of one artifact also
+confirms its manifest still names the files the catalogue does. Nothing is
+ever repaired: originals are never rewritten, so the remedy is your backup.
+
+From the command line, the whole library or one artifact:
+
+```bash
+docker compose -f deploy/compose.yaml run --rm server scrub
+docker compose -f deploy/compose.yaml run --rm server scrub --artifact <artifact id>
+```
+
+It says how far it has got, lists what it found, and exits non-zero when it
+found anything, so a job you schedule yourself notices. It works whether or
+not the server is running; if the server is already reading the same check,
+it follows that one. Stopped with Ctrl-C, it gives the check up, and the
+server, or the next `scrub`, goes on from where it got to. `--no-wait`
+queues the check and leaves it to the server.
+
+The server can queue a full scrub itself: set `TANGIBLE_SCRUB_INTERVAL_DAYS`
+to the number of days after one ends before the next is queued. It is off
+by default, because a full scrub reads every byte in the library and that
+load is yours to decide on. Turned on, the first is queued when the server
+starts. The API offers the same (`POST /api/v1/integrity-checks`, for
+administrators, and `POST /api/v1/artifacts/{id}/validate`, for operators).
+
+What a check can find:
+
+- `missing`: the file is not in the library.
+- `corrupt`: it reads back as other bytes than were stored.
+- `size_mismatch`: it is longer or shorter than was stored.
+- `unreadable`: reading it failed; the server log says why.
+- `manifest_mismatch`, `manifest_unreadable`: the artifact's manifest no
+  longer agrees with the catalogue, or cannot be read.
+
+Every artifact naming a damaged file is marked damaged, and `doctor --report`
+shows how many are as a Problem, with when the last full scrub ended and
+what it found. Each problem names the file's digest. The file lives in the
+`library` volume at `objects/sha256/<first two>/<next two>/<digest>`, and a
+manifest at `manifests/<artifact id>.json`. Copy that path back from your
+backup, keep it read-only as Tangible left it, then check the artifact
+again: one that reads back intact is marked intact.
 
 ## Upgrading
 

@@ -59,6 +59,7 @@ fn settings(root: &Path, reports: ReportSettings) -> DiagnosticsSettings {
         decryption_allowed: false,
         url_imports: None,
         secret_key_id: None,
+        scrub_interval_days: 0,
     }
 }
 
@@ -103,6 +104,14 @@ async fn an_administrator_gets_the_checklist_with_its_markdown() {
     assert_eq!(body["build"], "v0.1.0 (76fa515)");
     assert_eq!(check(&body, "Connection")["status"], "ok");
     assert_eq!(check(&body, "Schema")["status"], "ok");
+    // The shared database's history decides what it says; that it was asked
+    // and answered is what this test can know.
+    assert!(
+        check(&body, "Integrity")["detail"]
+            .as_str()
+            .expect("detail")
+            .contains("none scheduled (TANGIBLE_SCRUB_INTERVAL_DAYS)")
+    );
     assert!(
         check(&body, "Library")["detail"]
             .as_str()

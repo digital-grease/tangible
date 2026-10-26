@@ -25,6 +25,10 @@ tangible-storage = { version = "0.1.0", path = "../storage" }
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "signal"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+uuid = { version = "1.24.0", features = ["v7"] }
+
+[dev-dependencies]
+time = "0.3.55"
 
 [lints]
 workspace = true

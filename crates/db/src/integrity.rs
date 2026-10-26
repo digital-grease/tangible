@@ -608,3 +608,137 @@ pub async fn integrity_of(
         })
         .collect()
 }
+
+/// Queue a full scrub when one is due: none is queued or running, and none
+/// finished (complete, failed or withdrawn) within the last
+/// `interval_seconds`. Answers the check queued, or `None` when none was
+/// due. Who asked is `scheduler`.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn queue_scheduled_scrub(
+    pool: &PgPool,
+    interval_seconds: i64,
+) -> Result<Option<IntegrityCheckRecord>, DbError> {
+    let row = sqlx::query(&format!(
+        "INSERT INTO integrity_checks (id, scope, created_by)
+         SELECT $1, 'all', 'scheduler'
+         WHERE NOT EXISTS (
+             SELECT 1 FROM integrity_checks
+             WHERE scope = 'all'
+               AND (state IN ('queued', 'running')
+                    OR completed_at > now() - ($2::bigint * interval '1 second'))
+         )
+         ON CONFLICT (scope) WHERE scope = 'all' AND state IN ('queued', 'running')
+         DO NOTHING
+         RETURNING {COLUMNS}"
+    ))
+    .bind(uuid::Uuid::now_v7())
+    .bind(interval_seconds.max(1))
+    .fetch_optional(pool)
+    .await
+    .map_err(DbError::Query)?;
+    row.as_ref().map(from_row).transpose()
+}
+
+/// Give up every check `owner` holds, so another runner may take each over
+/// at once rather than when its lease lapses. The holder's next progress
+/// write finds the check no longer its own and stops. Answers how many.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn release_checks(pool: &PgPool, owner: &str) -> Result<u64, DbError> {
+    let done = sqlx::query(
+        "UPDATE integrity_checks SET lease_owner = NULL, lease_expires_at = NULL
+         WHERE lease_owner = $1 AND state = 'running'",
+    )
+    .bind(owner)
+    .execute(pool)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(done.rows_affected())
+}
+
+/// What diagnostics says about integrity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntegritySummary {
+    /// The last full scrub that ended.
+    pub last_scrub: Option<ScrubSummary>,
+    /// The full scrub queued or running, if any: objects read, and how many
+    /// it will read once counted.
+    pub active_scrub: Option<(i64, Option<i64>)>,
+    /// How many artifacts a check found damaged.
+    pub damaged_artifacts: i64,
+}
+
+/// How a full scrub ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScrubSummary {
+    /// Complete, failed or canceled.
+    pub state: IntegrityCheckState,
+    /// When it ended.
+    pub completed_at: OffsetDateTime,
+    /// How many objects it read.
+    pub objects_checked: i64,
+    /// How many problems it found.
+    pub problem_count: i32,
+    /// Why it failed, for one that did.
+    pub error_code: Option<String>,
+}
+
+/// Integrity, summed up for diagnostics: no digests, names or paths.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn integrity_summary(pool: &PgPool) -> Result<IntegritySummary, DbError> {
+    let get = DbError::Query;
+    let last = sqlx::query(
+        "SELECT state, completed_at, objects_checked, problem_count, error_code
+         FROM integrity_checks
+         WHERE scope = 'all' AND completed_at IS NOT NULL
+         ORDER BY completed_at DESC, id DESC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(get)?;
+    let last_scrub = match last {
+        Some(row) => {
+            let state: String = row.try_get("state").map_err(get)?;
+            Some(ScrubSummary {
+                state: stored("integrity_checks.state", &state)?,
+                completed_at: row.try_get("completed_at").map_err(get)?,
+                objects_checked: row.try_get("objects_checked").map_err(get)?,
+                problem_count: row.try_get("problem_count").map_err(get)?,
+                error_code: row.try_get("error_code").map_err(get)?,
+            })
+        }
+        None => None,
+    };
+    let active = sqlx::query(
+        "SELECT objects_checked, objects_total FROM integrity_checks
+         WHERE scope = 'all' AND state IN ('queued', 'running')",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(get)?;
+    let active_scrub = match active {
+        Some(row) => Some((
+            row.try_get("objects_checked").map_err(get)?,
+            row.try_get("objects_total").map_err(get)?,
+        )),
+        None => None,
+    };
+    let damaged_artifacts: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM artifacts WHERE integrity_state = 'damaged'")
+            .fetch_one(pool)
+            .await
+            .map_err(get)?;
+    Ok(IntegritySummary {
+        last_scrub,
+        active_scrub,
+        damaged_artifacts,
+    })
+}

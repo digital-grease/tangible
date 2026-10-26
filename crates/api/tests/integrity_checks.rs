@@ -534,3 +534,142 @@ async fn who_may_ask_and_withdraw() {
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_scheduled_scrub_is_queued_only_when_one_is_due() {
+    use tangible_db::integrity::{integrity_summary, queue_scheduled_scrub};
+    let harness = harness().await;
+
+    // A full scrub ends now, withdrawn: one ended is one ended.
+    let (_, asked) = harness
+        .send(
+            &harness.admin,
+            Method::POST,
+            "/api/v1/integrity-checks",
+            Some(serde_json::json!({ "scope": "all" })),
+        )
+        .await;
+    let cancel = format!(
+        "/api/v1/integrity-checks/{}/cancel",
+        asked["id"].as_str().unwrap()
+    );
+    let (status, _) = harness
+        .send(&harness.admin, Method::POST, &cancel, None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        queue_scheduled_scrub(&harness.pool, 3_600).await.unwrap(),
+        None,
+        "not due within the hour after one ended"
+    );
+
+    tokio::time::sleep(Duration::from_millis(1_200)).await;
+    let queued = queue_scheduled_scrub(&harness.pool, 1)
+        .await
+        .unwrap()
+        .expect("due a second after");
+    assert_eq!(queued.created_by, "scheduler");
+    assert_eq!(queued.scope.as_str(), "all");
+    assert_eq!(queued.state.as_str(), "queued");
+    assert_eq!(
+        queue_scheduled_scrub(&harness.pool, 1).await.unwrap(),
+        None,
+        "one is queued already"
+    );
+    let summary = integrity_summary(&harness.pool).await.unwrap();
+    assert_eq!(summary.active_scrub, Some((0, None)));
+    tangible_db::integrity::cancel_check(&harness.pool, queued.id)
+        .await
+        .unwrap();
+
+    // The runner queues one itself when one is due, and reads it.
+    let runner = IntegrityRunner::new(
+        harness.database.clone(),
+        harness.objects.clone(),
+        harness.manifests.clone(),
+        Integrity::new(),
+        IntegrityRunnerSettings {
+            owner: format!("test-{}", uuid::Uuid::now_v7()),
+            scrub_every: Some(Duration::from_secs(3_600)),
+            ..IntegrityRunnerSettings::default()
+        },
+    );
+    tokio::time::sleep(Duration::from_millis(1_200)).await;
+    assert!(
+        !runner.step().await.unwrap(),
+        "a scrub withdrawn a moment ago means none is due within the hour"
+    );
+    let runner = IntegrityRunner::new(
+        harness.database.clone(),
+        harness.objects.clone(),
+        harness.manifests.clone(),
+        Integrity::new(),
+        IntegrityRunnerSettings {
+            owner: format!("test-{}", uuid::Uuid::now_v7()),
+            scrub_every: Some(Duration::from_secs(1)),
+            ..IntegrityRunnerSettings::default()
+        },
+    );
+    assert!(runner.step().await.unwrap());
+    let latest = tangible_db::integrity::list_checks(&harness.pool, None, 1)
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(latest.created_by, "scheduler");
+    assert_eq!(latest.state.as_str(), "complete");
+    let summary = integrity_summary(&harness.pool).await.unwrap();
+    assert_eq!(summary.active_scrub, None);
+    let last = summary.last_scrub.expect("one ended");
+    assert_eq!(last.state.as_str(), "complete");
+    assert_eq!(last.objects_checked, latest.objects_checked);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_check_given_up_is_taken_over_at_once() {
+    use tangible_db::integrity::{Progress, claim_next_check, record_progress, release_checks};
+    let harness = harness().await;
+    let (artifact, _) = harness.import(&[("given-up.bin", 1_000)]).await;
+    let check = harness.validate(&artifact).await;
+
+    let held = claim_next_check(&harness.pool, "holder", 600)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.id.to_string(), check["id"].as_str().unwrap());
+    assert!(
+        claim_next_check(&harness.pool, "another", 600)
+            .await
+            .unwrap()
+            .is_none(),
+        "held for ten minutes"
+    );
+    assert_eq!(release_checks(&harness.pool, "holder").await.unwrap(), 1);
+    assert!(
+        !record_progress(
+            &harness.pool,
+            &Progress {
+                id: held.id,
+                owner: "holder",
+                objects_checked: 0,
+                bytes_checked: 0,
+                resume_after: None,
+                new_problems: &[],
+                new_problem_count: 0,
+                lease_seconds: 600,
+            },
+        )
+        .await
+        .unwrap(),
+        "the holder finds it is no longer its own, and stops"
+    );
+
+    harness.run_all().await;
+    let done = harness.check(check["id"].as_str().unwrap()).await;
+    assert_eq!(done["state"], "complete", "{done}");
+    assert_eq!(
+        harness.artifact(&artifact).await["integrity_state"],
+        "intact"
+    );
+}

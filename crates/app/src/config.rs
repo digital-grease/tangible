@@ -259,6 +259,37 @@ pub struct ServeConfig {
     /// is not secret; the file is.
     #[arg(long, env = "TANGIBLE_SECRET_KEY_FILE")]
     pub secret_key_file: Option<PathBuf>,
+
+    /// Days after a full integrity scrub ends before the next is queued, up
+    /// to 3650. 0, the default, never queues one: a scrub reads every byte
+    /// in the library, a load on the disks an administrator decides on.
+    #[arg(
+        long,
+        env = "TANGIBLE_SCRUB_INTERVAL_DAYS",
+        default_value_t = 0,
+        value_parser = clap::value_parser!(u32).range(0..=3650)
+    )]
+    pub scrub_interval_days: u32,
+}
+
+/// Settings for `tangible scrub`.
+#[derive(Debug, Clone, Args)]
+pub struct ScrubConfig {
+    /// Check one artifact, by id, rather than the whole library.
+    #[arg(long)]
+    pub artifact: Option<tangible_domain::ArtifactId>,
+
+    /// Queue the check and return at once, for the server to read.
+    #[arg(long)]
+    pub no_wait: bool,
+
+    /// Root of the content-addressed store.
+    #[arg(
+        long,
+        env = "TANGIBLE_STORAGE_ROOT",
+        default_value = ".dev-data/library"
+    )]
+    pub storage_root: PathBuf,
 }
 
 /// `tangible secrets`: the key integration secrets are sealed with.
@@ -417,6 +448,21 @@ mod tests {
     #[test]
     fn an_unknown_engine_is_rejected() {
         assert!(TestCli::try_parse_from(["tangible", "--burn-engine", "dd"]).is_err());
+    }
+
+    #[test]
+    fn scrubs_are_never_scheduled_unless_asked_for() {
+        // A scrub reads every byte; the load is an administrator's choice.
+        assert_eq!(parse().scrub_interval_days, 0);
+        let cli = TestCli::try_parse_from(["tangible", "--scrub-interval-days", "30"])
+            .expect("a month parses");
+        assert_eq!(cli.serve.scrub_interval_days, 30);
+        for refused in ["-1", "3651", "weekly"] {
+            assert!(
+                TestCli::try_parse_from(["tangible", "--scrub-interval-days", refused]).is_err(),
+                "{refused}"
+            );
+        }
     }
 
     #[derive(Parser)]

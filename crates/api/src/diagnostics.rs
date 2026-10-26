@@ -24,6 +24,8 @@ use serde::Serialize;
 use tangible_db::Database;
 use tangible_db::diagnostics::{Failure, WorkerDiagnostic};
 use tangible_db::erasures::DriveRecord;
+use tangible_db::integrity::IntegritySummary;
+use tangible_domain::IntegrityCheckState;
 use tangible_storage::object_key::{INCOMING_DIR, OBJECTS_DIR};
 use tangible_storage::space::{DirectoryCheck, Space, check_directory};
 use time::OffsetDateTime;
@@ -171,6 +173,9 @@ pub struct DiagnosticsSettings {
     /// (`TANGIBLE_SECRET_KEY_FILE`), when one is loaded. Not secret: a
     /// digest's first bytes, used to tell keys apart.
     pub secret_key_id: Option<String>,
+    /// Days after a full scrub ends before the next is queued
+    /// (`TANGIBLE_SCRUB_INTERVAL_DAYS`); 0 is never.
+    pub scrub_interval_days: u32,
 }
 
 /// How URL imports are set, when they are on (ADR 0016).
@@ -215,6 +220,8 @@ pub struct Facts {
     /// Stored integration secrets, counted by the id of the key that sealed
     /// them.
     pub sealed_secrets: Answer<Vec<(String, i64)>>,
+    /// What integrity checks have found, summed up.
+    pub integrity: Answer<IntegritySummary>,
 }
 
 /// Look at everything and judge it, now.
@@ -229,9 +236,10 @@ pub async fn collect(database: &Database, settings: &DiagnosticsSettings) -> Fac
     let database_answer = bounded(database.ping()).await.map(|()| ());
     // Once the database is known to be down, the queries that follow would
     // each wait out the timeout to say the same thing.
-    let (pending_migrations, workers, drives, failures, sealed_secrets) =
+    let (pending_migrations, workers, drives, failures, sealed_secrets, integrity) =
         if let Answer::Unavailable(reason) = &database_answer {
             (
+                skipped(reason),
                 skipped(reason),
                 skipped(reason),
                 skipped(reason),
@@ -249,6 +257,7 @@ pub async fn collect(database: &Database, settings: &DiagnosticsSettings) -> Fac
                 ))
                 .await,
                 bounded(tangible_db::integrations::secret_counts_by_key(pool)).await,
+                bounded(tangible_db::integrity::integrity_summary(pool)).await,
             )
         };
     let incoming = settings.storage_root.join(OBJECTS_DIR).join(INCOMING_DIR);
@@ -265,6 +274,7 @@ pub async fn collect(database: &Database, settings: &DiagnosticsSettings) -> Fac
         drives,
         failures,
         sealed_secrets,
+        integrity,
     }
 }
 
@@ -313,6 +323,7 @@ pub fn assess(settings: &DiagnosticsSettings, facts: &Facts, now: OffsetDateTime
             checks: vec![
                 directory_check("Library", &facts.library),
                 directory_check("Staging", &facts.staging),
+                integrity_check(settings.scrub_interval_days, &facts.integrity, now),
             ],
         },
         DiagnosticSection {
@@ -435,6 +446,83 @@ fn directory_check(name: &str, directory: &DirectoryCheck) -> DiagnosticCheck {
         parts.push("free space unknown".to_owned());
     }
     check(name, status, parts.join(", "))
+}
+
+/// What integrity checks have found, and whether full scrubs happen as
+/// often as they were set to. Counts and times only: no digest or name.
+fn integrity_check(
+    scrub_interval_days: u32,
+    integrity: &Answer<IntegritySummary>,
+    now: OffsetDateTime,
+) -> DiagnosticCheck {
+    let summary = match integrity {
+        Answer::Found(summary) => summary,
+        Answer::Unavailable(reason) => {
+            return check("Integrity", CheckStatus::Warn, reason.clone());
+        }
+    };
+    let mut status = CheckStatus::Ok;
+    let mut parts = Vec::new();
+    if summary.damaged_artifacts > 0 {
+        status = CheckStatus::Problem;
+        parts.push(format!(
+            "{} artifact(s) damaged, and nothing was repaired: restore their objects from a \
+             backup, then check them again",
+            summary.damaged_artifacts
+        ));
+    }
+    match summary.active_scrub {
+        Some((read, Some(total))) => parts.push(format!(
+            "a full scrub is running, {read} of {total} objects read"
+        )),
+        Some((_, None)) => parts.push("a full scrub is queued".to_owned()),
+        None => {}
+    }
+    match &summary.last_scrub {
+        None => parts.push("no full scrub has finished yet".to_owned()),
+        Some(last) => {
+            let when = timestamp(last.completed_at);
+            parts.push(match last.state {
+                IntegrityCheckState::Complete if last.problem_count == 0 => format!(
+                    "the last full scrub, finished {when}, read {} object(s) and found nothing \
+                     wrong",
+                    last.objects_checked
+                ),
+                IntegrityCheckState::Complete => format!(
+                    "the last full scrub, finished {when}, read {} object(s) and found {} \
+                     problem(s)",
+                    last.objects_checked, last.problem_count
+                ),
+                IntegrityCheckState::Failed => {
+                    status = status.max(CheckStatus::Warn);
+                    format!(
+                        "the last full scrub failed {when} ({}); the server log says why",
+                        last.error_code.as_deref().unwrap_or("no code recorded")
+                    )
+                }
+                _ => format!("the last full scrub was withdrawn {when}"),
+            });
+        }
+    }
+    if scrub_interval_days == 0 {
+        parts.push("none scheduled (TANGIBLE_SCRUB_INTERVAL_DAYS)".to_owned());
+    } else {
+        parts.push(format!(
+            "one is queued {scrub_interval_days} day(s) after the last ends"
+        ));
+        // A day's grace past the interval, for a scrub still reading.
+        let due_by = time::Duration::days(i64::from(scrub_interval_days) + 1);
+        let overdue = summary.active_scrub.is_none()
+            && summary
+                .last_scrub
+                .as_ref()
+                .is_none_or(|last| now - last.completed_at > due_by);
+        if overdue {
+            status = status.max(CheckStatus::Warn);
+            parts.push("and one is overdue; the server queues it while it runs".to_owned());
+        }
+    }
+    check("Integrity", status, parts.join("; "))
 }
 
 fn space_status(space: Space) -> CheckStatus {
@@ -1047,6 +1135,7 @@ mod tests {
             decryption_allowed: false,
             url_imports: None,
             secret_key_id: None,
+            scrub_interval_days: 0,
         }
     }
 
@@ -1109,6 +1198,11 @@ mod tests {
             drives: Answer::Found(drives),
             failures: Answer::Found(Vec::new()),
             sealed_secrets: Answer::Found(Vec::new()),
+            integrity: Answer::Found(IntegritySummary {
+                last_scrub: None,
+                active_scrub: None,
+                damaged_artifacts: 0,
+            }),
         }
     }
 
@@ -1552,5 +1646,125 @@ mod tests {
         assert!(text.contains("- Overall: Problem\n"));
         assert!(text.contains("\n### Database\n\n- **OK** Connection: reachable\n"));
         assert!(text.contains("- **Problem** Schema: 1 migration(s) not applied (10)"));
+    }
+
+    fn scrubbed(
+        state: IntegrityCheckState,
+        days_ago: i64,
+        problems: i32,
+    ) -> tangible_db::integrity::ScrubSummary {
+        tangible_db::integrity::ScrubSummary {
+            state,
+            completed_at: now() - time::Duration::days(days_ago),
+            objects_checked: 1200,
+            problem_count: problems,
+            error_code: (state == IntegrityCheckState::Failed)
+                .then(|| "storage_unavailable".to_owned()),
+        }
+    }
+
+    #[test]
+    fn integrity_says_what_scrubs_found_and_damage_is_a_problem() {
+        let mut facts = healthy();
+        let report = assess(&settings(), &facts, now());
+        assert_eq!(
+            find(&report, "Integrity").detail,
+            "no full scrub has finished yet; none scheduled (TANGIBLE_SCRUB_INTERVAL_DAYS)"
+        );
+
+        facts.integrity = Answer::Found(IntegritySummary {
+            last_scrub: Some(scrubbed(IntegrityCheckState::Complete, 3, 0)),
+            active_scrub: None,
+            damaged_artifacts: 0,
+        });
+        let line = find(&assess(&settings(), &facts, now()), "Integrity").clone();
+        assert_eq!(line.status, CheckStatus::Ok);
+        assert!(
+            line.detail.starts_with(
+                "the last full scrub, finished 2026-10-14T12:00:00Z, read 1200 object(s) \
+                 and found nothing wrong"
+            ),
+            "{}",
+            line.detail
+        );
+
+        facts.integrity = Answer::Found(IntegritySummary {
+            last_scrub: Some(scrubbed(IntegrityCheckState::Complete, 3, 2)),
+            active_scrub: Some((40, Some(1200))),
+            damaged_artifacts: 2,
+        });
+        let report = assess(&settings(), &facts, now());
+        let line = find(&report, "Integrity");
+        assert_eq!(line.status, CheckStatus::Problem);
+        assert_eq!(report.status, CheckStatus::Problem);
+        assert!(
+            line.detail.starts_with("2 artifact(s) damaged"),
+            "{}",
+            line.detail
+        );
+        assert!(
+            line.detail
+                .contains("a full scrub is running, 40 of 1200 objects read")
+        );
+        assert!(line.detail.contains("found 2 problem(s)"));
+
+        facts.integrity = Answer::Found(IntegritySummary {
+            last_scrub: Some(scrubbed(IntegrityCheckState::Failed, 1, 0)),
+            active_scrub: None,
+            damaged_artifacts: 0,
+        });
+        let line = find(&assess(&settings(), &facts, now()), "Integrity").clone();
+        assert_eq!(line.status, CheckStatus::Warn);
+        assert!(
+            line.detail
+                .contains("failed 2026-10-16T12:00:00Z (storage_unavailable)")
+        );
+
+        facts.integrity = Answer::Unavailable("not checked: down".to_owned());
+        let line = find(&assess(&settings(), &facts, now()), "Integrity").clone();
+        assert_eq!(line.status, CheckStatus::Warn);
+    }
+
+    #[test]
+    fn a_scheduled_scrub_that_has_not_happened_is_a_warning() {
+        let mut weekly = settings();
+        weekly.scrub_interval_days = 7;
+        let mut facts = healthy();
+        let on_time = |facts: &Facts| find(&assess(&weekly, facts, now()), "Integrity").clone();
+
+        // None has ever finished and none is running.
+        let line = on_time(&facts);
+        assert_eq!(line.status, CheckStatus::Warn);
+        assert!(
+            line.detail
+                .contains("one is queued 7 day(s) after the last ends")
+        );
+        assert!(line.detail.contains("overdue"));
+
+        // Within the week and a day's grace.
+        facts.integrity = Answer::Found(IntegritySummary {
+            last_scrub: Some(scrubbed(IntegrityCheckState::Complete, 8, 0)),
+            active_scrub: None,
+            damaged_artifacts: 0,
+        });
+        assert_eq!(on_time(&facts).status, CheckStatus::Ok);
+
+        // Past it.
+        facts.integrity = Answer::Found(IntegritySummary {
+            last_scrub: Some(scrubbed(IntegrityCheckState::Complete, 9, 0)),
+            active_scrub: None,
+            damaged_artifacts: 0,
+        });
+        assert_eq!(on_time(&facts).status, CheckStatus::Warn);
+
+        // Past it, and running now.
+        facts.integrity = Answer::Found(IntegritySummary {
+            last_scrub: Some(scrubbed(IntegrityCheckState::Complete, 9, 0)),
+            active_scrub: Some((0, None)),
+            damaged_artifacts: 0,
+        });
+        let line = on_time(&facts);
+        assert_eq!(line.status, CheckStatus::Ok);
+        assert!(line.detail.contains("a full scrub is queued"));
     }
 }

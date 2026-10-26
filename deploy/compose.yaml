@@ -53,6 +53,9 @@ services:
       TANGIBLE_URL_IMPORTS_ALLOW_HTTP: ${TANGIBLE_URL_IMPORTS_ALLOW_HTTP:-false}
       TANGIBLE_OUTBOUND_ALLOW: ${TANGIBLE_OUTBOUND_ALLOW:-}
       TANGIBLE_OUTBOUND_PROXY: ${TANGIBLE_OUTBOUND_PROXY:-}
+      # Days after a full integrity scrub ends before the next is queued
+      # (deploy/README.md, "Checking stored bytes"). Off (0) unless set.
+      TANGIBLE_SCRUB_INTERVAL_DAYS: ${TANGIBLE_SCRUB_INTERVAL_DAYS:-0}
       # RomM's roms directory, to show chosen games in RomM (deploy/README.md,
       # "Showing games in RomM"). Off unless set: uncomment this and the
       # matching volume below. Tangible writes only folders it marks as its

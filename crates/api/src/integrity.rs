@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use tangible_db::integrity::{
     IntegrityCheckRecord, MAX_KEPT_PROBLEMS, Progress, catalogued_components, claim_next_check,
     complete_check, count_and_record_totals, mark_artifact_damaged, mark_object_damaged,
-    objects_after, record_progress,
+    objects_after, queue_scheduled_scrub, record_progress,
 };
 use tangible_db::{Database, DbError};
 use tangible_domain::{ArtifactId, IntegrityProblemKind, Sha256Digest};
@@ -41,6 +41,10 @@ pub struct IntegrityRunnerSettings {
     pub batch: i64,
     /// What to call this process in the lease.
     pub owner: String,
+    /// How long after a full scrub ends the next is queued, or `None` for
+    /// never (`TANGIBLE_SCRUB_INTERVAL_DAYS`, off by default: the disk load
+    /// is an administrator's decision).
+    pub scrub_every: Option<Duration>,
 }
 
 impl Default for IntegrityRunnerSettings {
@@ -51,6 +55,7 @@ impl Default for IntegrityRunnerSettings {
             progress_every: Duration::from_secs(2),
             batch: 500,
             owner: "tangible-server".to_owned(),
+            scrub_every: None,
         }
     }
 }
@@ -143,6 +148,12 @@ impl IntegrityRunner {
     ///
     /// [`DbError`] if the queue cannot be read or written.
     pub async fn step(&self) -> Result<bool, DbError> {
+        if let Some(every) = self.settings.scrub_every
+            && let Some(check) =
+                queue_scheduled_scrub(self.database.pool(), lease_seconds(every)).await?
+        {
+            tracing::info!(check_id = %check.id, "a scheduled full scrub was queued");
+        }
         let lease = lease_seconds(self.settings.lease);
         let Some(check) =
             claim_next_check(self.database.pool(), &self.settings.owner, lease).await?

@@ -8,6 +8,7 @@
 //! messages.
 
 mod config;
+mod scrub;
 mod telemetry;
 
 use std::io::Write as _;
@@ -27,8 +28,8 @@ use tangible_db::{Database, DbConfig};
 use tangible_storage::{FilesystemStore, ManifestStore, StagingManager, WatchRoots};
 
 use crate::config::{
-    BurnEngineKind, CommonConfig, DerivationEngineKind, DoctorConfig, RotateConfig, SecretsCommand,
-    ServeConfig, WorkerConfig,
+    BurnEngineKind, CommonConfig, DerivationEngineKind, DoctorConfig, RotateConfig, ScrubConfig,
+    SecretsCommand, ServeConfig, WorkerConfig,
 };
 
 /// Self-hosted disc-image preservation, management, and burning.
@@ -56,6 +57,10 @@ enum Command {
     Migrate,
     /// Write the generated OpenAPI document to stdout.
     Openapi,
+    /// Read stored objects back against their digests, for the whole library
+    /// or one artifact, and say what was found. Exits non-zero when anything
+    /// was.
+    Scrub(Box<ScrubConfig>),
     /// Make or rotate the key integration secrets are sealed with.
     #[command(subcommand)]
     Secrets(SecretsCommand),
@@ -70,6 +75,7 @@ async fn main() -> Result<()> {
         Command::Serve(serve) => serve_command(&cli.common, &serve).await,
         Command::Migrate => migrate_command(&cli.common).await,
         Command::Openapi => openapi_command(),
+        Command::Scrub(scrub) => scrub::scrub_command(&cli.common, &scrub).await,
         Command::Secrets(SecretsCommand::Generate) => generate_secret_key(),
         Command::Secrets(SecretsCommand::Rotate(rotate)) => {
             rotate_secrets(&cli.common, &rotate).await
@@ -172,7 +178,12 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         serve.romm_export_root.as_deref(),
     )
     .await?;
-    let (state, integrity) = start_integrity(state, &database, objects.clone(), manifests.clone());
+    let (state, integrity) = start_integrity(
+        state,
+        &database,
+        (objects.clone(), manifests.clone()),
+        serve.scrub_interval_days,
+    );
     let (state, derivations) = start_derivations(
         state,
         &database,
@@ -384,22 +395,38 @@ struct DerivationPipelineParts {
 fn start_integrity(
     state: ApiState,
     database: &Database,
-    objects: FilesystemStore,
-    manifests: ManifestStore,
+    (objects, manifests): (FilesystemStore, ManifestStore),
+    scrub_interval_days: u32,
 ) -> (ApiState, Stoppable) {
+    let scrub_every = scrub_interval(scrub_interval_days);
+    if scrub_every.is_some() {
+        tracing::info!(
+            days = scrub_interval_days,
+            "a full integrity scrub is queued that many days after the last one ends \
+             (TANGIBLE_SCRUB_INTERVAL_DAYS)"
+        );
+    }
     let integrity = tangible_api::integrity::Integrity::new();
     let runner = tangible_api::integrity::IntegrityRunner::new(
         database.clone(),
         objects,
         manifests,
         integrity.clone(),
-        tangible_api::integrity::IntegrityRunnerSettings::default(),
+        tangible_api::integrity::IntegrityRunnerSettings {
+            scrub_every,
+            ..tangible_api::integrity::IntegrityRunnerSettings::default()
+        },
     );
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(runner.run(async {
         let _ = stopped.await;
     }));
     (state.with_integrity(integrity), (stop, task))
+}
+
+/// How long after a full scrub ends the next is queued; 0 days is never.
+fn scrub_interval(days: u32) -> Option<std::time::Duration> {
+    (days > 0).then(|| std::time::Duration::from_secs(u64::from(days) * 24 * 60 * 60))
 }
 
 fn start_derivations(
@@ -579,6 +606,7 @@ fn diagnostics_settings(
                     .is_some_and(|proxy| !proxy.expose().trim().is_empty()),
             }),
         secret_key_id: secret_key.map(|key| key.id().to_owned()),
+        scrub_interval_days: serve.scrub_interval_days,
     }
 }
 
@@ -1031,6 +1059,7 @@ mod tests {
         "TANGIBLE_REPORT_ISSUES_URL",
         "TANGIBLE_REPORT_SCRUB_ADDRESSES",
         "TANGIBLE_ROMM_EXPORT_ROOT",
+        "TANGIBLE_SCRUB_INTERVAL_DAYS",
         // The path to the key file, which is secret; the path is not.
         "TANGIBLE_SECRET_KEY_FILE",
         "TANGIBLE_SERVER_URL",
@@ -1191,6 +1220,28 @@ mod tests {
             derivation_status(DerivationEngineKind::None, None),
             DerivationStatus::Off
         );
+    }
+
+    #[test]
+    fn scrubs_are_scheduled_in_whole_days_and_never_at_zero() {
+        assert_eq!(scrub_interval(0), None);
+        assert_eq!(
+            scrub_interval(7),
+            Some(std::time::Duration::from_secs(7 * 86_400))
+        );
+        let cli = Cli::try_parse_from([
+            "tangible",
+            "scrub",
+            "--artifact",
+            "0192f3a4-5b6c-7d8e-9f00-112233445566",
+            "--no-wait",
+        ])
+        .expect("parse");
+        let Command::Scrub(scrub) = cli.command else {
+            panic!("not scrub");
+        };
+        assert!(scrub.no_wait && scrub.artifact.is_some());
+        assert!(Cli::try_parse_from(["tangible", "scrub", "--artifact", "nope"]).is_err());
     }
 
     #[test]
