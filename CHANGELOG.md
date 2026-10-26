@@ -25,6 +25,11 @@ may change between minor versions, and the release notes say how.
   by default. Diagnostics shows how many artifacts are damaged (a Problem)
   and when the last full scrub ended and what it found. deploy/README.md,
   "Checking stored bytes", says how to restore a damaged file.
+- `tangible gc` and `GET /api/v1/storage/gc-plan` (administrators) plan
+  garbage collection, a dry run: stored files nothing refers to and older
+  than a grace period (7 days by default), with what removing them would
+  free, plus leftover partial files, entries that are not stored files, and
+  recorded files that are missing. Nothing is removed.
 
 - Groundwork for issue reports: text is scrubbed of credentials, paths,
   serial numbers, library file names and LAN addresses before anyone can

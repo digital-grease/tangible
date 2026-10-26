@@ -292,6 +292,35 @@ pub struct ScrubConfig {
     pub storage_root: PathBuf,
 }
 
+/// Settings for `tangible gc`.
+#[derive(Debug, Clone, Args)]
+pub struct GcConfig {
+    /// Keep an unreferenced object younger than this many days.
+    #[arg(
+        long,
+        default_value_t = tangible_api::gc::DEFAULT_GRACE_DAYS,
+        value_parser = clap::value_parser!(u32).range(0..=3650)
+    )]
+    pub grace_days: u32,
+
+    /// Name at most this many candidates and missing objects, largest
+    /// first; all are counted. 0 names every one.
+    #[arg(long, default_value_t = 20)]
+    pub limit: usize,
+
+    /// Print the plan as JSON, as `GET /api/v1/storage/gc-plan` answers it.
+    #[arg(long)]
+    pub json: bool,
+
+    /// Root of the content-addressed store.
+    #[arg(
+        long,
+        env = "TANGIBLE_STORAGE_ROOT",
+        default_value = ".dev-data/library"
+    )]
+    pub storage_root: PathBuf,
+}
+
 /// `tangible secrets`: the key integration secrets are sealed with.
 #[derive(Debug, Clone, Subcommand)]
 pub enum SecretsCommand {

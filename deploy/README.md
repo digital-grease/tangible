@@ -675,6 +675,30 @@ manifest at `manifests/<artifact id>.json`. Copy that path back from your
 backup, keep it read-only as Tangible left it, then check the artifact
 again: one that reads back intact is marked intact.
 
+### Finding files nothing needs
+
+Tangible never removes a stored file yet, but it can say which it would:
+
+```bash
+docker compose -f deploy/compose.yaml run --rm server gc
+```
+
+It lists stored files that nothing refers to (no catalogued artifact,
+published manifest, import still under way, reference count or retention
+lock) and that are older than a grace period, 7 days unless you pass
+`--grace-days`, with what removing them would free. It also counts partial
+files left by uploads or imports that were interrupted, entries in the
+object tree that are not stored files, and files the catalogue records that
+are missing (`scrub` says which artifacts those belong to). `--limit` sets
+how many files it names, largest first; `--json` prints the same plan the
+API gives administrators (`GET /api/v1/storage/gc-plan`). If a manifest or
+an import's checkpoint cannot be read, the plan says it is uncertain, since
+the unread one might name a listed file.
+
+The plan only reads; it removes nothing. If you remove a listed file by
+hand, stop the server first: an import that has just stored the same bytes
+again may not have recorded them yet.
+
 ## Upgrading
 
 1. Read the release notes, especially anything about migrations.

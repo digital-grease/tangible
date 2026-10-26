@@ -4784,6 +4784,82 @@
         }
       }
     },
+    "/api/v1/storage/gc-plan": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "What garbage collection would remove now. Nothing is removed.",
+        "description": "Plan garbage collection, a dry run: walk the object store and report the \\\n                   objects nothing refers to (no artifact, published manifest or import under \\\n                   way, no reference count or retention lock) and older than the grace period, \\\n                   with what removing them would free. Also counts leftover partial files and \\\n                   recorded objects whose file is missing. Nothing is removed; this server \\\n                   cannot remove objects. Reads every directory in the store, so it takes a \\\n                   while on a large library.",
+        "operationId": "gc_plan",
+        "parameters": [
+          {
+            "name": "grace_days",
+            "in": "query",
+            "description": "How young, in days, an unreferenced object is kept anyway: 0 to\n3650, 7 unless given.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many candidates and missing objects to name, largest first:\nclamped to 1 to 1000, 100 unless given. All are counted.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GcPlan"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A grace period out of range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store or catalogue cannot be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/titles": {
       "get": {
         "tags": [
@@ -8633,6 +8709,133 @@
           }
         }
       },
+      "GcCandidate": {
+        "type": "object",
+        "description": "An object collection would remove.",
+        "required": [
+          "sha256",
+          "size_bytes",
+          "modified_at",
+          "recorded"
+        ],
+        "properties": {
+          "modified_at": {
+            "type": "string",
+            "description": "When its file was last written."
+          },
+          "recorded": {
+            "type": "boolean",
+            "description": "Whether the catalogue records it (unreferenced, unlocked). One it\ndoes not was promoted by work that never catalogued it."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "Its digest."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its length.",
+            "minimum": 0
+          }
+        }
+      },
+      "GcPlan": {
+        "type": "object",
+        "description": "What garbage collection would do now. A dry run: nothing is removed.",
+        "required": [
+          "planned_at",
+          "grace_seconds",
+          "stored",
+          "live",
+          "recent",
+          "collectable",
+          "candidates",
+          "partial_files",
+          "stale_partial_files",
+          "unrecognized",
+          "missing",
+          "missing_digests",
+          "manifests_unreadable",
+          "checkpoints_unreadable",
+          "certain"
+        ],
+        "properties": {
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GcCandidate"
+            },
+            "description": "The largest of them, first."
+          },
+          "certain": {
+            "type": "boolean",
+            "description": "Whether everything that could refer to an object was read. When it\nwas not, something unread may name a candidate, and collection\nwould remove nothing."
+          },
+          "checkpoints_unreadable": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Checkpoints of imports under way that could not be read.",
+            "minimum": 0
+          },
+          "collectable": {
+            "$ref": "#/components/schemas/Tally",
+            "description": "Objects nothing refers to, older than the grace period: what\ncollection would remove and free."
+          },
+          "grace_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How young an unreferenced object is kept anyway, in seconds.",
+            "minimum": 0
+          },
+          "live": {
+            "$ref": "#/components/schemas/Tally",
+            "description": "Objects something refers to."
+          },
+          "manifests_unreadable": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Published manifests that could not be read.",
+            "minimum": 0
+          },
+          "missing": {
+            "$ref": "#/components/schemas/Tally",
+            "description": "Objects the catalogue records whose file is absent, with the sizes\nit recorded. A scrub says which artifacts they belong to."
+          },
+          "missing_digests": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Their digests, in order."
+          },
+          "partial_files": {
+            "$ref": "#/components/schemas/Tally",
+            "description": "Temporary files ingests that did not finish left behind."
+          },
+          "planned_at": {
+            "type": "string",
+            "description": "When the plan was made."
+          },
+          "recent": {
+            "$ref": "#/components/schemas/Tally",
+            "description": "Objects nothing refers to, younger than the grace period: kept."
+          },
+          "stale_partial_files": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many of those are older than the grace period.",
+            "minimum": 0
+          },
+          "stored": {
+            "$ref": "#/components/schemas/Tally",
+            "description": "Every object in the store."
+          },
+          "unrecognized": {
+            "$ref": "#/components/schemas/Tally",
+            "description": "Entries in the object tree that are not objects. Never collected."
+          }
+        }
+      },
       "HeartbeatResponse": {
         "type": "object",
         "description": "What the server tells a worker on each heartbeat.",
@@ -10859,6 +11062,28 @@
           }
         },
         "additionalProperties": false
+      },
+      "Tally": {
+        "type": "object",
+        "description": "How many, and how many bytes.",
+        "required": [
+          "count",
+          "bytes"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Their bytes.",
+            "minimum": 0
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many.",
+            "minimum": 0
+          }
+        }
       },
       "TitlePage": {
         "type": "object",

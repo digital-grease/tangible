@@ -1473,6 +1473,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/storage/gc-plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What garbage collection would remove now. Nothing is removed.
+         * @description Plan garbage collection, a dry run: walk the object store and report the \
+         *                        objects nothing refers to (no artifact, published manifest or import under \
+         *                        way, no reference count or retention lock) and older than the grace period, \
+         *                        with what removing them would free. Also counts leftover partial files and \
+         *                        recorded objects whose file is missing. Nothing is removed; this server \
+         *                        cannot remove objects. Reads every directory in the store, so it takes a \
+         *                        while on a large library.
+         */
+        get: operations["gc_plan"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/titles": {
         parameters: {
             query?: never;
@@ -3000,6 +3026,78 @@ export interface components {
             /** @description Human-readable detail, bounded by the server before storage. */
             detail?: string | null;
         };
+        /** @description An object collection would remove. */
+        GcCandidate: {
+            /** @description When its file was last written. */
+            modified_at: string;
+            /**
+             * @description Whether the catalogue records it (unreferenced, unlocked). One it
+             *     does not was promoted by work that never catalogued it.
+             */
+            recorded: boolean;
+            /** @description Its digest. */
+            sha256: string;
+            /**
+             * Format: int64
+             * @description Its length.
+             */
+            size_bytes: number;
+        };
+        /** @description What garbage collection would do now. A dry run: nothing is removed. */
+        GcPlan: {
+            /** @description The largest of them, first. */
+            candidates: components["schemas"]["GcCandidate"][];
+            /**
+             * @description Whether everything that could refer to an object was read. When it
+             *     was not, something unread may name a candidate, and collection
+             *     would remove nothing.
+             */
+            certain: boolean;
+            /**
+             * Format: int64
+             * @description Checkpoints of imports under way that could not be read.
+             */
+            checkpoints_unreadable: number;
+            /**
+             * @description Objects nothing refers to, older than the grace period: what
+             *     collection would remove and free.
+             */
+            collectable: components["schemas"]["Tally"];
+            /**
+             * Format: int64
+             * @description How young an unreferenced object is kept anyway, in seconds.
+             */
+            grace_seconds: number;
+            /** @description Objects something refers to. */
+            live: components["schemas"]["Tally"];
+            /**
+             * Format: int64
+             * @description Published manifests that could not be read.
+             */
+            manifests_unreadable: number;
+            /**
+             * @description Objects the catalogue records whose file is absent, with the sizes
+             *     it recorded. A scrub says which artifacts they belong to.
+             */
+            missing: components["schemas"]["Tally"];
+            /** @description Their digests, in order. */
+            missing_digests: string[];
+            /** @description Temporary files ingests that did not finish left behind. */
+            partial_files: components["schemas"]["Tally"];
+            /** @description When the plan was made. */
+            planned_at: string;
+            /** @description Objects nothing refers to, younger than the grace period: kept. */
+            recent: components["schemas"]["Tally"];
+            /**
+             * Format: int64
+             * @description How many of those are older than the grace period.
+             */
+            stale_partial_files: number;
+            /** @description Every object in the store. */
+            stored: components["schemas"]["Tally"];
+            /** @description Entries in the object tree that are not objects. Never collected. */
+            unrecognized: components["schemas"]["Tally"];
+        };
         /** @description What the server tells a worker on each heartbeat. */
         HeartbeatResponse: {
             /** @description Whether the worker should stop taking new work. */
@@ -3966,6 +4064,19 @@ export interface components {
             nzb?: string | null;
             /** @description A `.torrent` file, base64. */
             torrent?: string | null;
+        };
+        /** @description How many, and how many bytes. */
+        Tally: {
+            /**
+             * Format: int64
+             * @description Their bytes.
+             */
+            bytes: number;
+            /**
+             * Format: int64
+             * @description How many.
+             */
+            count: number;
         };
         /** @description A page of titles. */
         TitlePage: {
@@ -7458,6 +7569,55 @@ export interface operations {
             };
             /** @description The username or password will not do */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    gc_plan: {
+        parameters: {
+            query?: {
+                /**
+                 * @description How young, in days, an unreferenced object is kept anyway: 0 to
+                 *     3650, 7 unless given.
+                 */
+                grace_days?: number | null;
+                /**
+                 * @description How many candidates and missing objects to name, largest first:
+                 *     clamped to 1 to 1000, 100 unless given. All are counted.
+                 */
+                limit?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The plan */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GcPlan"];
+                };
+            };
+            /** @description A grace period out of range */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The store or catalogue cannot be read */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

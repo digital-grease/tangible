@@ -17,6 +17,7 @@ pub mod diagnostics;
 pub mod download_clients;
 pub mod error_report;
 pub mod format_report;
+pub mod gc;
 pub mod health;
 pub mod import;
 pub mod import_runner;
@@ -141,6 +142,7 @@ pub const API_BASE: &str = "/api/v1";
         routes::integrity::list_all_checks,
         routes::integrity::get_one_check,
         routes::integrity::cancel_one_check,
+        routes::storage::gc_plan,
         routes::integrations::list_all,
         routes::integrations::create_one,
         routes::integrations::get_one,
@@ -257,6 +259,9 @@ pub const API_BASE: &str = "/api/v1";
         routes::integrity::IntegrityProblemView,
         routes::integrity::IntegrityCheckPage,
         routes::integrity::RequestIntegrityCheck,
+        gc::GcPlan,
+        gc::GcCandidate,
+        gc::Tally,
         routes::integrations::IntegrationView,
         routes::integrations::SecretFieldView,
         routes::integrations::IntegrationList,
@@ -446,6 +451,7 @@ pub fn router(state: ApiState) -> Router {
         .nest(API_BASE, routes::erasures::router())
         .nest(API_BASE, routes::integrations::router())
         .nest(API_BASE, routes::integrity::router())
+        .nest(API_BASE, routes::storage::router())
         .nest(API_BASE, routes::romm::router())
         .nest(API_BASE, routes::reports::router())
         .nest(API_BASE, routes::diagnostics::router())

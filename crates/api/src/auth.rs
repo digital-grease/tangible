@@ -202,6 +202,9 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
         "/api/v1/integrity-checks/{check_id}/cancel",
         Signed(MaintainStorage),
     ),
+    // What collection would remove: a plan of the whole store, which reads
+    // every directory in it.
+    ("GET", "/api/v1/storage/gc-plan", Signed(MaintainStorage)),
     // The catalog.
     ("GET", "/api/v1/titles", Signed(Read)),
     ("POST", "/api/v1/titles", Signed(Catalog)),

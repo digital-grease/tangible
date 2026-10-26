@@ -8,6 +8,7 @@
 //! messages.
 
 mod config;
+mod gc;
 mod scrub;
 mod telemetry;
 
@@ -28,8 +29,8 @@ use tangible_db::{Database, DbConfig};
 use tangible_storage::{FilesystemStore, ManifestStore, StagingManager, WatchRoots};
 
 use crate::config::{
-    BurnEngineKind, CommonConfig, DerivationEngineKind, DoctorConfig, RotateConfig, ScrubConfig,
-    SecretsCommand, ServeConfig, WorkerConfig,
+    BurnEngineKind, CommonConfig, DerivationEngineKind, DoctorConfig, GcConfig, RotateConfig,
+    ScrubConfig, SecretsCommand, ServeConfig, WorkerConfig,
 };
 
 /// Self-hosted disc-image preservation, management, and burning.
@@ -51,6 +52,10 @@ enum Command {
     BurnWorker(Box<WorkerConfig>),
     /// Check the environment and report configuration problems.
     Doctor(Box<DoctorConfig>),
+    /// Say what garbage collection would remove: stored objects nothing
+    /// refers to, and what removing them would free. A dry run; nothing is
+    /// removed.
+    Gc(Box<GcConfig>),
     /// Inspect and validate artifact manifests.
     Manifest,
     /// Apply pending database migrations.
@@ -75,6 +80,7 @@ async fn main() -> Result<()> {
         Command::Serve(serve) => serve_command(&cli.common, &serve).await,
         Command::Migrate => migrate_command(&cli.common).await,
         Command::Openapi => openapi_command(),
+        Command::Gc(gc) => gc::gc_command(&cli.common, &gc).await,
         Command::Scrub(scrub) => scrub::scrub_command(&cli.common, &scrub).await,
         Command::Secrets(SecretsCommand::Generate) => generate_secret_key(),
         Command::Secrets(SecretsCommand::Rotate(rotate)) => {
@@ -1242,6 +1248,30 @@ mod tests {
         };
         assert!(scrub.no_wait && scrub.artifact.is_some());
         assert!(Cli::try_parse_from(["tangible", "scrub", "--artifact", "nope"]).is_err());
+    }
+
+    #[test]
+    fn gc_plans_with_a_week_of_grace_unless_told_otherwise() {
+        let cli = Cli::try_parse_from(["tangible", "gc"]).expect("parse");
+        let Command::Gc(gc) = cli.command else {
+            panic!("not gc");
+        };
+        assert_eq!((gc.grace_days, gc.limit, gc.json), (7, 20, false));
+        let cli = Cli::try_parse_from([
+            "tangible",
+            "gc",
+            "--grace-days",
+            "0",
+            "--limit",
+            "0",
+            "--json",
+        ])
+        .expect("parse");
+        let Command::Gc(gc) = cli.command else {
+            panic!("not gc");
+        };
+        assert_eq!((gc.grace_days, gc.limit, gc.json), (0, 0, true));
+        assert!(Cli::try_parse_from(["tangible", "gc", "--grace-days", "3651"]).is_err());
     }
 
     #[test]
