@@ -4577,15 +4577,26 @@
         "tags": [
           "catalog"
         ],
-        "summary": "Whether this server exports to RomM, and the platforms it knows.",
+        "summary": "Whether this server exports to RomM, the platforms it knows, and how\nRomM's API stands when one is configured: its health, the platforms owed\na scan, and the last scan asked for.",
+        "description": "# Errors\n\n`STORAGE_UNAVAILABLE` when the database cannot be read.",
         "operationId": "romm_settings",
         "responses": {
           "200": {
-            "description": "The export's settings",
+            "description": "The export's settings, and RomM's API",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RommSettings"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -8144,7 +8155,8 @@
         "description": "An edition's RomM settings and how its export stands.",
         "required": [
           "export",
-          "file_count"
+          "file_count",
+          "scan_owed"
         ],
         "properties": {
           "checked_at": {
@@ -8184,12 +8196,27 @@
             ],
             "description": "The folder in RomM's library, `platform/game`."
           },
+          "last_scan": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RommScanView",
+                "description": "The last scan of the platform's folder asked for."
+              }
+            ]
+          },
           "platform": {
             "type": [
               "string",
               "null"
             ],
             "description": "The platform, as a RomM slug."
+          },
+          "scan_owed": {
+            "type": "boolean",
+            "description": "Whether the export changed the platform's folder since a scan of it\nlast finished, so RomM may not show the change yet."
           },
           "state": {
             "type": [
@@ -10901,6 +10928,151 @@
           }
         }
       },
+      "RommApiView": {
+        "type": "object",
+        "description": "RomM's API, as this server is connected to it.",
+        "required": [
+          "integration_id",
+          "name",
+          "enabled",
+          "status",
+          "scan_after_export",
+          "scans_owed"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether it is in use."
+          },
+          "integration_id": {
+            "type": "string",
+            "description": "The integration."
+          },
+          "last_error_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it last failed, as a stable code."
+          },
+          "last_scan": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RommScanView",
+                "description": "The last scan asked for."
+              }
+            ]
+          },
+          "last_success_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it last worked."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "scan_after_export": {
+            "type": "boolean",
+            "description": "Whether RomM is asked to scan the platforms an export changes."
+          },
+          "scans_owed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Platform folders the export changed that no finished scan has\ncovered yet."
+          },
+          "status": {
+            "type": "string",
+            "description": "`unconfigured`, `ok` or `failing`, from the last time it was used."
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RomM's version, as last seen."
+          }
+        }
+      },
+      "RommScanView": {
+        "type": "object",
+        "description": "A scan Tangible asked RomM for.",
+        "required": [
+          "platforms",
+          "state",
+          "requested_at"
+        ],
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it was refused, or what became of it."
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it ended, as far as Tangible knows."
+          },
+          "new_roms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "ROMs it made."
+          },
+          "platforms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The platform folders it scans."
+          },
+          "requested_at": {
+            "type": "string",
+            "description": "When it was asked for."
+          },
+          "scanned_roms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "ROMs it looked at."
+          },
+          "state": {
+            "type": "string",
+            "description": "`refused` (RomM did not queue it, and `detail` says why), `queued`,\n`running`, `finished`, `failed`, `canceled`, `lost` (RomM no longer\nhas it) or `timed_out` (Tangible stopped waiting)."
+          },
+          "total_roms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "ROMs in the platforms scanned, once RomM has counted."
+          },
+          "updated_roms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "ROMs it changed."
+          }
+        }
+      },
       "RommSettings": {
         "type": "object",
         "description": "Whether this server exports to RomM, and to which platforms.",
@@ -10909,6 +11081,17 @@
           "platforms"
         ],
         "properties": {
+          "api": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RommApiView",
+                "description": "RomM's API, when an administrator has configured it."
+              }
+            ]
+          },
           "configured": {
             "type": "boolean",
             "description": "Whether an export root is configured. Without one, nothing exports."

@@ -23,7 +23,7 @@ use tangible_api::secrets::SecretKey;
 use tangible_api::{
     ApiState, AuthSettings, DerivationPipeline, DerivationRunner, DerivationRunnerSettings,
     Derivations, ImportContext, ImportPipeline, ImportRunner, ImportRunnerSettings, RommExport,
-    RommExporter, WebUi,
+    RommExporter, RommSync, RommSyncHandle, RommSyncSettings, WebUi,
 };
 use tangible_db::{Database, DbConfig};
 use tangible_storage::{FilesystemStore, ManifestStore, StagingManager, WatchRoots};
@@ -177,11 +177,12 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
     }
     .with_integration_client(integrations.clone());
     let state = attach_web_ui(state, serve.web_root.as_deref()).await?;
-    let (state, romm) = start_romm_export(
+    let (state, romm, romm_sync) = start_romm_export(
         state,
         &database,
         &manifests,
         serve.romm_export_root.as_deref(),
+        (Some(integrations.clone()), secret_key.clone()),
     )
     .await?;
     let (state, integrity) = start_integrity(
@@ -214,7 +215,7 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         },
     );
 
-    let runners = [Some(imports), Some(integrity), romm, derivations]
+    let runners = [Some(imports), Some(integrity), romm, romm_sync, derivations]
         .into_iter()
         .flatten()
         .collect();
@@ -654,18 +655,24 @@ type Stoppable = (
     tokio::task::JoinHandle<()>,
 );
 
-/// Start exporting games to RomM, when an export root is configured.
+/// Start exporting games to RomM, when an export root is configured, and
+/// the task that keeps RomM in step through its API once that is
+/// configured too.
 async fn start_romm_export(
     state: ApiState,
     database: &Database,
     manifests: &ManifestStore,
     root: Option<&std::path::Path>,
-) -> Result<(ApiState, Option<Stoppable>)> {
+    (http, key): (
+        Option<tangible_integrations::outbound::OutboundClient>,
+        Option<Arc<SecretKey>>,
+    ),
+) -> Result<(ApiState, Option<Stoppable>, Option<Stoppable>)> {
     let Some(root) = root else {
         tracing::info!(
             "no RomM export root configured (TANGIBLE_ROMM_EXPORT_ROOT); nothing exports"
         );
-        return Ok((state, None));
+        return Ok((state, None, None));
     };
     if !tokio::fs::metadata(root)
         .await
@@ -683,7 +690,8 @@ async fn start_romm_export(
     .await
     .context("recording the RomM export integration")?;
 
-    let export = RommExport::new(root.to_path_buf());
+    let handle = RommSyncHandle::new();
+    let export = RommExport::new(root.to_path_buf()).with_sync(handle.clone());
     let exporter = RommExporter::new(
         export.clone(),
         database.clone(),
@@ -694,8 +702,23 @@ async fn start_romm_export(
     let task = tokio::spawn(exporter.run(async {
         let _ = stopped.await;
     }));
+    let sync = RommSync::new(
+        database.clone(),
+        http,
+        key,
+        RommSyncSettings::default(),
+        handle,
+    );
+    let (sync_stop, sync_stopped) = tokio::sync::oneshot::channel();
+    let sync_task = tokio::spawn(sync.run(async {
+        let _ = sync_stopped.await;
+    }));
     tracing::info!(root = %root.display(), "exporting games to RomM");
-    Ok((state.with_romm(export), Some((stop, task))))
+    Ok((
+        state.with_romm(export),
+        Some((stop, task)),
+        Some((sync_stop, sync_task)),
+    ))
 }
 
 /// Serve the built web UI beside the API, when one is configured.

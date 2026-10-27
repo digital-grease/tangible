@@ -25,6 +25,7 @@ use tangible_db::Database;
 use tangible_db::diagnostics::{Failure, WorkerDiagnostic};
 use tangible_db::erasures::DriveRecord;
 use tangible_db::integrity::IntegritySummary;
+use tangible_db::romm_api::{ScanRecord, ScanState};
 use tangible_domain::IntegrityCheckState;
 use tangible_storage::object_key::{INCOMING_DIR, OBJECTS_DIR};
 use tangible_storage::space::{DirectoryCheck, Space, check_directory};
@@ -222,6 +223,40 @@ pub struct Facts {
     pub sealed_secrets: Answer<Vec<(String, i64)>>,
     /// What integrity checks have found, summed up.
     pub integrity: Answer<IntegritySummary>,
+    /// RomM's API, when an administrator configured it.
+    pub romm_api: Answer<Option<RommApiFacts>>,
+}
+
+/// How RomM's API stands, from the database.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RommApiFacts {
+    /// Whether it is in use.
+    pub enabled: bool,
+    /// `unconfigured`, `ok` or `failing`.
+    pub status: String,
+    /// Why it last failed, as a stable code.
+    pub last_error_code: Option<String>,
+    /// RomM's version, as last seen.
+    pub version: Option<String>,
+    /// Platform folders owed a scan.
+    pub scans_owed: usize,
+    /// The last scan asked for.
+    pub last_scan: Option<ScanRecord>,
+}
+
+async fn romm_api_facts(database: &Database) -> Result<Option<RommApiFacts>, tangible_db::DbError> {
+    let pool = database.pool();
+    let Some(record) = tangible_db::integrations::romm_api_integration(pool).await? else {
+        return Ok(None);
+    };
+    Ok(Some(RommApiFacts {
+        enabled: record.enabled,
+        status: record.status,
+        last_error_code: record.last_error_code,
+        version: record.client_version,
+        scans_owed: tangible_db::romm_api::owed_scans(pool).await?.len(),
+        last_scan: tangible_db::romm_api::last_scan(pool, None).await?,
+    }))
 }
 
 /// Look at everything and judge it, now.
@@ -236,9 +271,10 @@ pub async fn collect(database: &Database, settings: &DiagnosticsSettings) -> Fac
     let database_answer = bounded(database.ping()).await.map(|()| ());
     // Once the database is known to be down, the queries that follow would
     // each wait out the timeout to say the same thing.
-    let (pending_migrations, workers, drives, failures, sealed_secrets, integrity) =
+    let (pending_migrations, workers, drives, failures, sealed_secrets, integrity, romm_api) =
         if let Answer::Unavailable(reason) = &database_answer {
             (
+                skipped(reason),
                 skipped(reason),
                 skipped(reason),
                 skipped(reason),
@@ -258,6 +294,7 @@ pub async fn collect(database: &Database, settings: &DiagnosticsSettings) -> Fac
                 .await,
                 bounded(tangible_db::integrations::secret_counts_by_key(pool)).await,
                 bounded(tangible_db::integrity::integrity_summary(pool)).await,
+                bounded(romm_api_facts(database)).await,
             )
         };
     let incoming = settings.storage_root.join(OBJECTS_DIR).join(INCOMING_DIR);
@@ -275,6 +312,7 @@ pub async fn collect(database: &Database, settings: &DiagnosticsSettings) -> Fac
         failures,
         sealed_secrets,
         integrity,
+        romm_api,
     }
 }
 
@@ -607,7 +645,69 @@ fn tool_checks(settings: &DiagnosticsSettings, facts: &Facts) -> Vec<DiagnosticC
         ),
         Some(_) => check("RomM export", CheckStatus::Ok, "configured and writable"),
     };
-    vec![derivations, romm]
+    vec![derivations, romm, romm_api_check(&facts.romm_api)]
+}
+
+/// How RomM's API stands. RomM's own words about a scan stay on the RomM
+/// page: they can name its host.
+fn romm_api_check(romm_api: &Answer<Option<RommApiFacts>>) -> DiagnosticCheck {
+    const NAME: &str = "RomM API";
+    let facts = match romm_api {
+        Answer::Unavailable(reason) => return check(NAME, CheckStatus::Warn, reason.clone()),
+        Answer::Found(None) => return check(NAME, CheckStatus::Ok, "not configured"),
+        Answer::Found(Some(facts)) => facts,
+    };
+    if !facts.enabled {
+        return check(NAME, CheckStatus::Ok, "configured and turned off");
+    }
+    if facts.status == "failing" {
+        return check(
+            NAME,
+            CheckStatus::Warn,
+            format!(
+                "failing ({}); try it on the Integrations page",
+                facts
+                    .last_error_code
+                    .as_deref()
+                    .unwrap_or("no code recorded")
+            ),
+        );
+    }
+    let mut status = CheckStatus::Ok;
+    let mut parts = vec![match &facts.version {
+        Some(version) => format!("RomM {version}"),
+        None => "configured, not yet used".to_owned(),
+    }];
+    if facts.scans_owed > 0 {
+        parts.push(format!(
+            "{} platform folder(s) waiting for a scan",
+            facts.scans_owed
+        ));
+    }
+    if let Some(scan) = &facts.last_scan {
+        let said = match scan.state {
+            ScanState::Refused => Some("RomM refused the last scan asked for"),
+            ScanState::Failed => Some("the last scan failed in RomM"),
+            ScanState::Canceled => Some("the last scan was stopped in RomM"),
+            ScanState::Lost => Some("RomM lost track of the last scan"),
+            ScanState::TimedOut => {
+                Some("the last scan had not ended when Tangible stopped waiting")
+            }
+            ScanState::Queued | ScanState::Running => {
+                parts.push("a scan is under way".to_owned());
+                None
+            }
+            ScanState::Finished => {
+                parts.push("the last scan finished".to_owned());
+                None
+            }
+        };
+        if let Some(said) = said {
+            status = CheckStatus::Warn;
+            parts.push(format!("{said}; the RomM page says why"));
+        }
+    }
+    check(NAME, status, parts.join(", "))
 }
 
 /// `worker 1`, `worker 2`, … in the order they enrolled.
@@ -1203,6 +1303,7 @@ mod tests {
                 active_scrub: None,
                 damaged_artifacts: 0,
             }),
+            romm_api: Answer::Found(None),
         }
     }
 
@@ -1233,6 +1334,90 @@ mod tests {
         assert_eq!(
             find(&report, "Library").detail,
             "present, writable, 500.0 GiB free of 1000.0 GiB (50%)"
+        );
+    }
+
+    #[test]
+    fn romms_api_says_how_it_stands_and_never_romms_words() {
+        let scan = |state| ScanRecord {
+            id: uuid::Uuid::nil(),
+            integration_id: uuid::Uuid::nil(),
+            platforms: vec!["psx".to_owned()],
+            task_id: None,
+            state,
+            detail: Some("RomM could not be reached: romm.private.example".to_owned()),
+            counts: None,
+            requested_at: now(),
+            ended_at: None,
+        };
+        let working = RommApiFacts {
+            enabled: true,
+            status: "ok".to_owned(),
+            last_error_code: None,
+            version: Some("5.4.1".to_owned()),
+            scans_owed: 0,
+            last_scan: Some(scan(ScanState::Finished)),
+        };
+        let judged = |facts: Option<RommApiFacts>| {
+            let mut all = healthy();
+            all.romm_api = Answer::Found(facts);
+            let report = assess(&settings(), &all, now());
+            let found = find(&report, "RomM API").clone();
+            (found.status, found.detail)
+        };
+        assert_eq!(judged(None), (CheckStatus::Ok, "not configured".to_owned()));
+        assert_eq!(
+            judged(Some(working.clone())),
+            (
+                CheckStatus::Ok,
+                "RomM 5.4.1, the last scan finished".to_owned()
+            )
+        );
+        assert_eq!(
+            judged(Some(RommApiFacts {
+                scans_owed: 2,
+                last_scan: Some(scan(ScanState::Running)),
+                ..working.clone()
+            })),
+            (
+                CheckStatus::Ok,
+                "RomM 5.4.1, 2 platform folder(s) waiting for a scan, a scan is under way"
+                    .to_owned()
+            )
+        );
+        for state in [
+            ScanState::Refused,
+            ScanState::Failed,
+            ScanState::Canceled,
+            ScanState::Lost,
+            ScanState::TimedOut,
+        ] {
+            let (status, detail) = judged(Some(RommApiFacts {
+                last_scan: Some(scan(state)),
+                ..working.clone()
+            }));
+            assert_eq!(status, CheckStatus::Warn, "{state:?}");
+            assert!(detail.ends_with("the RomM page says why"), "{detail}");
+            assert!(!detail.contains("example"), "{detail}");
+        }
+        assert_eq!(
+            judged(Some(RommApiFacts {
+                status: "failing".to_owned(),
+                last_error_code: Some("INTEGRATION_UNREACHABLE".to_owned()),
+                ..working.clone()
+            })),
+            (
+                CheckStatus::Warn,
+                "failing (INTEGRATION_UNREACHABLE); try it on the Integrations page".to_owned()
+            )
+        );
+        assert_eq!(
+            judged(Some(RommApiFacts {
+                enabled: false,
+                ..working
+            }))
+            .1,
+            "configured and turned off"
         );
     }
 

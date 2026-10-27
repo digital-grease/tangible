@@ -17,9 +17,12 @@ use axum::extract::{Path, State};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use tangible_db::integrations::romm_api_integration;
 use tangible_db::romm::{EditionRomm, edition_romm, set_edition_romm};
+use tangible_db::romm_api::{ScanRecord, last_scan, owed_scans};
 use tangible_domain::EditionId;
 use tangible_integrations::romm::{PLATFORMS, is_platform};
+use tangible_integrations::settings::RommApiSettings;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use utoipa::ToSchema;
@@ -55,6 +58,75 @@ pub struct RommSettings {
     pub configured: bool,
     /// The platforms an edition may name.
     pub platforms: Vec<PlatformView>,
+    /// RomM's API, when an administrator has configured it.
+    pub api: Option<RommApiView>,
+}
+
+/// RomM's API, as this server is connected to it.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RommApiView {
+    /// The integration.
+    pub integration_id: String,
+    /// Its name.
+    pub name: String,
+    /// Whether it is in use.
+    pub enabled: bool,
+    /// `unconfigured`, `ok` or `failing`, from the last time it was used.
+    pub status: String,
+    /// Why it last failed, as a stable code.
+    pub last_error_code: Option<String>,
+    /// RomM's version, as last seen.
+    pub version: Option<String>,
+    /// When it last worked.
+    pub last_success_at: Option<String>,
+    /// Whether RomM is asked to scan the platforms an export changes.
+    pub scan_after_export: bool,
+    /// Platform folders the export changed that no finished scan has
+    /// covered yet.
+    pub scans_owed: Vec<String>,
+    /// The last scan asked for.
+    pub last_scan: Option<RommScanView>,
+}
+
+/// A scan Tangible asked RomM for.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RommScanView {
+    /// The platform folders it scans.
+    pub platforms: Vec<String>,
+    /// `refused` (RomM did not queue it, and `detail` says why), `queued`,
+    /// `running`, `finished`, `failed`, `canceled`, `lost` (RomM no longer
+    /// has it) or `timed_out` (Tangible stopped waiting).
+    pub state: String,
+    /// Why it was refused, or what became of it.
+    pub detail: Option<String>,
+    /// ROMs in the platforms scanned, once RomM has counted.
+    pub total_roms: Option<i64>,
+    /// ROMs it looked at.
+    pub scanned_roms: Option<i64>,
+    /// ROMs it made.
+    pub new_roms: Option<i64>,
+    /// ROMs it changed.
+    pub updated_roms: Option<i64>,
+    /// When it was asked for.
+    pub requested_at: String,
+    /// When it ended, as far as Tangible knows.
+    pub ended_at: Option<String>,
+}
+
+impl From<ScanRecord> for RommScanView {
+    fn from(scan: ScanRecord) -> Self {
+        Self {
+            platforms: scan.platforms,
+            state: scan.state.as_str().to_owned(),
+            detail: scan.detail,
+            total_roms: scan.counts.map(|c| c.total_roms),
+            scanned_roms: scan.counts.map(|c| c.scanned_roms),
+            new_roms: scan.counts.map(|c| c.new_roms),
+            updated_roms: scan.counts.map(|c| c.updated_roms),
+            requested_at: rfc3339(scan.requested_at),
+            ended_at: scan.ended_at.map(rfc3339),
+        }
+    }
 }
 
 /// An edition's RomM settings and how its export stands.
@@ -77,12 +149,19 @@ pub struct EditionRommView {
     pub exported_at: Option<String>,
     /// When the exporter last looked.
     pub checked_at: Option<String>,
+    /// Whether the export changed the platform's folder since a scan of it
+    /// last finished, so RomM may not show the change yet.
+    pub scan_owed: bool,
+    /// The last scan of the platform's folder asked for.
+    pub last_scan: Option<RommScanView>,
 }
 
 impl From<EditionRomm> for EditionRommView {
     fn from(romm: EditionRomm) -> Self {
         let status = romm.status;
         Self {
+            scan_owed: false,
+            last_scan: None,
             platform: romm.platform,
             export: romm.export,
             state: status.as_ref().map(|s| s.state.clone()),
@@ -110,15 +189,24 @@ fn parse_edition(raw: &str) -> Result<EditionId, Problem> {
         .map_err(|_| Problem::invalid_parameter("edition_id", "not a valid identifier"))
 }
 
-/// Whether this server exports to RomM, and the platforms it knows.
+/// Whether this server exports to RomM, the platforms it knows, and how
+/// RomM's API stands when one is configured: its health, the platforms owed
+/// a scan, and the last scan asked for.
+///
+/// # Errors
+///
+/// `STORAGE_UNAVAILABLE` when the database cannot be read.
 #[utoipa::path(
     get,
     path = "/api/v1/romm",
     tag = "catalog",
-    responses((status = 200, description = "The export's settings", body = RommSettings)),
+    responses(
+        (status = 200, description = "The export's settings, and RomM's API", body = RommSettings),
+        (status = 503, description = "The database could not be read", body = Problem),
+    ),
 )]
-pub async fn romm_settings(State(state): State<ApiState>) -> Json<RommSettings> {
-    Json(RommSettings {
+pub async fn romm_settings(State(state): State<ApiState>) -> Result<Json<RommSettings>, Problem> {
+    Ok(Json(RommSettings {
         configured: state.romm().is_some(),
         platforms: PLATFORMS
             .iter()
@@ -127,7 +215,56 @@ pub async fn romm_settings(State(state): State<ApiState>) -> Json<RommSettings> 
                 name: (*name).to_owned(),
             })
             .collect(),
-    })
+        api: api_view(&state).await.map_err(|error| {
+            tracing::error!(error = ?error, "could not read RomM's API status");
+            unavailable("RomM's API status could not be read")
+        })?,
+    }))
+}
+
+async fn api_view(state: &ApiState) -> Result<Option<RommApiView>, tangible_db::DbError> {
+    let pool = state.database().pool();
+    let Some(record) = romm_api_integration(pool).await? else {
+        return Ok(None);
+    };
+    let scan_after_export = serde_json::from_value::<RommApiSettings>(record.configuration)
+        .is_ok_and(|settings| settings.scan_after_export);
+    Ok(Some(RommApiView {
+        integration_id: record.id.to_string(),
+        name: record.name,
+        enabled: record.enabled,
+        status: record.status,
+        last_error_code: record.last_error_code,
+        version: record.client_version,
+        last_success_at: record.last_success_at.map(rfc3339),
+        scan_after_export,
+        scans_owed: owed_scans(pool)
+            .await?
+            .into_iter()
+            .map(|owed| owed.platform)
+            .collect(),
+        last_scan: last_scan(pool, None).await?.map(RommScanView::from),
+    }))
+}
+
+/// An edition's RomM view, with the scans of its platform.
+async fn edition_view(
+    state: &ApiState,
+    romm: EditionRomm,
+) -> Result<EditionRommView, tangible_db::DbError> {
+    let pool = state.database().pool();
+    let platform = romm.platform.clone();
+    let mut view = EditionRommView::from(romm);
+    if let Some(platform) = platform {
+        view.scan_owed = owed_scans(pool)
+            .await?
+            .iter()
+            .any(|owed| owed.platform == platform);
+        view.last_scan = last_scan(pool, Some(&platform))
+            .await?
+            .map(RommScanView::from);
+    }
+    Ok(view)
 }
 
 /// An edition's RomM settings and export status.
@@ -150,14 +287,15 @@ pub async fn get_edition_romm(
     Path(edition_id): Path<String>,
 ) -> Result<Json<EditionRommView>, Problem> {
     let id = parse_edition(&edition_id)?;
-    edition_romm(state.database().pool(), id)
+    let read = |error| {
+        tracing::error!(error = ?error, "could not read RomM settings");
+        unavailable("the edition could not be read")
+    };
+    let romm = edition_romm(state.database().pool(), id)
         .await
-        .map_err(|error| {
-            tracing::error!(error = ?error, "could not read RomM settings");
-            unavailable("the edition could not be read")
-        })?
-        .map(|romm| Json(EditionRommView::from(romm)))
-        .ok_or_else(|| Problem::not_found("edition", &id.to_string()))
+        .map_err(read)?
+        .ok_or_else(|| Problem::not_found("edition", &id.to_string()))?;
+    Ok(Json(edition_view(&state, romm).await.map_err(read)?))
 }
 
 /// Set an edition's platform and whether it appears in RomM.
@@ -232,7 +370,11 @@ pub async fn set_edition_romm_route(
     if let Some(romm) = state.romm() {
         romm.nudge();
     }
-    Ok(Json(EditionRommView::from(saved)))
+    let view = edition_view(&state, saved).await.map_err(|error| {
+        tracing::error!(error = ?error, "could not read RomM settings");
+        unavailable("the settings were saved, but could not be read back")
+    })?;
+    Ok(Json(view))
 }
 
 /// The RomM routes.

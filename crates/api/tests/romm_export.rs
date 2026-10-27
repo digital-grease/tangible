@@ -548,3 +548,74 @@ async fn a_server_with_no_export_root_refuses_to_export() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::CONFLICT);
 }
+
+/// The platforms owed a scan among `platforms`.
+async fn owed(pool: &PgPool, platforms: &[&str]) -> Vec<String> {
+    sqlx::query_scalar(
+        "SELECT platform FROM romm_owed_scans WHERE platform = ANY($1) ORDER BY platform",
+    )
+    .bind(platforms)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_folder_written_moved_or_taken_out_owes_its_platforms_a_scan() {
+    // Only this test exports to these platforms, so what is owed of them is
+    // its own doing.
+    const MINE: [&str; 2] = ["dc", "segacd"];
+    let harness = harness().await;
+    sqlx::query("DELETE FROM romm_owed_scans WHERE platform = ANY($1)")
+        .bind(MINE)
+        .execute(&harness.pool)
+        .await
+        .unwrap();
+    let disc = harness.import(&cue_disc("owed")).await;
+    let title = format!("Romm Owed {}", uuid::Uuid::now_v7().simple());
+    let edition = harness.game(&title, "Japan", &[disc]).await;
+
+    harness.set(&edition, Some("dc"), true).await;
+    assert_eq!(harness.reconcile(&edition).await["state"], "current");
+    assert_eq!(owed(&harness.pool, &MINE).await, ["dc"]);
+    let (_, view) = harness
+        .send("GET", &format!("/api/v1/editions/{edition}/romm"), None)
+        .await;
+    assert_eq!(view["scan_owed"], true, "{view}");
+    assert_eq!(view["last_scan"], Value::Null);
+
+    // A pass that changes nothing owes nothing.
+    sqlx::query("DELETE FROM romm_owed_scans WHERE platform = ANY($1)")
+        .bind(MINE)
+        .execute(&harness.pool)
+        .await
+        .unwrap();
+    assert_eq!(harness.reconcile(&edition).await["scan_owed"], false);
+    assert!(owed(&harness.pool, &MINE).await.is_empty());
+
+    // Moved to another platform: both folders changed.
+    harness.set(&edition, Some("segacd"), true).await;
+    let moved = harness.reconcile(&edition).await;
+    assert_eq!(
+        moved["folder"],
+        format!("segacd/{title} (Japan)"),
+        "{moved}"
+    );
+    assert_eq!(owed(&harness.pool, &MINE).await, ["dc", "segacd"]);
+
+    // Taken out: its platform changed again.
+    sqlx::query("DELETE FROM romm_owed_scans WHERE platform = ANY($1)")
+        .bind(MINE)
+        .execute(&harness.pool)
+        .await
+        .unwrap();
+    harness.set(&edition, Some("segacd"), false).await;
+    assert_eq!(harness.reconcile(&edition).await["state"], "removed");
+    assert_eq!(owed(&harness.pool, &MINE).await, ["segacd"]);
+    sqlx::query("DELETE FROM romm_owed_scans WHERE platform = ANY($1)")
+        .bind(MINE)
+        .execute(&harness.pool)
+        .await
+        .unwrap();
+}

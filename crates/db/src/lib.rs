@@ -17,6 +17,7 @@ pub mod integrity;
 pub mod repositories;
 pub mod rips;
 pub mod romm;
+pub mod romm_api;
 pub mod uploads;
 
 use std::time::Duration;

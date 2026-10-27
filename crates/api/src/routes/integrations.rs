@@ -403,7 +403,18 @@ pub async fn create_one(
     .map_err(unavailable("the integration could not be stored"))?
     .map_err(|outcome| outcome_problem(Some(id), &outcome))?;
     tracing::info!(integration_id = %record.id, kind = %record.kind, "integration made");
+    prompt_romm_sync(&state, &record.kind);
     Ok((StatusCode::CREATED, Json(IntegrationView::from(record))).into_response())
+}
+
+/// RomM's API, newly configured or changed, can be asked at once for the
+/// scans the export owes it.
+fn prompt_romm_sync(state: &ApiState, kind: &str) {
+    if kind == "romm_api"
+        && let Some(romm) = state.romm()
+    {
+        romm.nudge_sync();
+    }
 }
 
 /// Change an integration.
@@ -491,6 +502,7 @@ pub async fn update_one(
     .await
     .map_err(unavailable("the integration could not be changed"))?
     .map_err(|outcome| outcome_problem(Some(id), &outcome))?;
+    prompt_romm_sync(&state, &record.kind);
     Ok(Json(IntegrationView::from(record)))
 }
 

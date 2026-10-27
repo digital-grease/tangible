@@ -17,7 +17,7 @@
 use tangible_domain::SecretString;
 use tangible_integrations::download::ClientError;
 use tangible_integrations::outbound::{OutboundClient, OutboundPolicy, Url};
-use tangible_integrations::romm_api::{RommClient, Scope, TaskPhase};
+use tangible_integrations::romm_api::{RommClient, ScanAnswer, Scope, TaskPhase};
 
 fn client(token: Option<&str>) -> Option<RommClient> {
     let Ok(url) = std::env::var("TANGIBLE_TEST_ROMM_URL") else {
@@ -67,10 +67,15 @@ async fn a_scoped_token_finds_everything_tangible_needs() {
 #[tokio::test]
 async fn a_scan_is_queued_and_followed_to_its_end() {
     let Some(client) = client(None) else { return };
-    let queued = client
+    let answer = client
         .scan(&["tangible-test-nothing".to_owned()])
         .await
         .unwrap();
+    // A RomM that slept can have lost its scan worker's registration, and
+    // says so; restarting RomM brings it back.
+    let ScanAnswer::Queued(queued) = answer else {
+        panic!("RomM did not queue the scan: {answer:?}")
+    };
     let mut phase = queued.phase;
     for _ in 0..60 {
         let task = client.task(&queued.id).await.unwrap().expect("RomM has it");

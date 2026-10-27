@@ -356,6 +356,47 @@ pub struct Task {
     pub stats: Option<ScanStats>,
 }
 
+/// What RomM said when asked for a scan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScanAnswer {
+    /// Queued, as this task.
+    Queued(Task),
+    /// Not queued because a scan is already running or queued (409), in
+    /// RomM's words. Ask again once it ends.
+    Busy(String),
+    /// Not queued because no scan worker is listening (503), in RomM's
+    /// words: RomM's worker is down, or its registration lapsed (seen after
+    /// the host slept). Ask again later; restarting RomM brings it back.
+    NoWorker(String),
+}
+
+/// RomM's reason for refusing, from its `{"detail": ...}`: at most 200
+/// characters, without control characters, or `fallback` when it gave
+/// none.
+#[must_use]
+pub fn parse_refusal(text: &str, fallback: &str) -> String {
+    #[derive(Deserialize)]
+    struct Refusal {
+        detail: String,
+    }
+    let detail = serde_json::from_str::<Refusal>(text)
+        .map(|refusal| {
+            refusal
+                .detail
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(200)
+                .collect::<String>()
+        })
+        .unwrap_or_default();
+    let detail = detail.trim();
+    if detail.is_empty() {
+        fallback.to_owned()
+    } else {
+        detail.to_owned()
+    }
+}
+
 /// RomM's version, from a heartbeat.
 ///
 /// # Errors
@@ -745,20 +786,29 @@ impl RommClient {
     }
 
     /// Queue a quick scan of the platform folders `fs_slugs`, answering the
-    /// task. A quick scan adds what is new and notices what moved or went;
-    /// it does not fetch metadata again for what RomM has.
+    /// task, or why RomM would not queue it now. A quick scan adds what is
+    /// new and notices what moved or went; it does not fetch metadata again
+    /// for what RomM has.
     ///
     /// # Errors
     ///
     /// [`ClientError`].
-    pub async fn scan(&self, fs_slugs: &[String]) -> Result<Task, ClientError> {
+    pub async fn scan(&self, fs_slugs: &[String]) -> Result<ScanAnswer, ClientError> {
         let url = self.url("api/tasks/scan", &[])?;
         let body = serde_json::json!({ "type": "quick", "platform_fs_slugs": fs_slugs });
         let answer = self
             .send(reqwest::Method::POST, &url, true, Some(body))
             .await?;
         match answer.status {
-            200 | 202 => parse_task(&answer.text),
+            200 | 202 => parse_task(&answer.text).map(ScanAnswer::Queued),
+            409 => Ok(ScanAnswer::Busy(parse_refusal(
+                &answer.text,
+                "a scan is already running",
+            ))),
+            503 => Ok(ScanAnswer::NoWorker(parse_refusal(
+                &answer.text,
+                "no scan worker is listening",
+            ))),
             403 => Err(missing(Scope::TasksRun)),
             code => Err(ClientError::bad(
                 CLIENT,
@@ -971,6 +1021,24 @@ mod tests {
         }
         let odd_id = r#"{"task_id": "../../api/users", "status": "queued"}"#;
         assert!(parse_task(odd_id).is_err());
+    }
+
+    #[test]
+    fn a_refused_scan_says_why_in_romms_words() {
+        assert_eq!(
+            parse_refusal(&fixture("scan-in-flight-5.4.1.json"), "busy"),
+            "Quick Scan is already running"
+        );
+        assert_eq!(
+            parse_refusal(&fixture("scan-no-worker-5.4.1.json"), "no worker"),
+            "No scan worker is listening, so the scan cannot be queued"
+        );
+        assert_eq!(parse_refusal("<html>", "busy"), "busy");
+        assert_eq!(parse_refusal(r#"{"detail": "  "}"#, "busy"), "busy");
+        let long = format!(r#"{{"detail": "a\u0007b{}"}}"#, "c".repeat(500));
+        let said = parse_refusal(&long, "busy");
+        assert_eq!(said.chars().count(), 200);
+        assert!(said.starts_with("abc"), "{said}");
     }
 
     #[test]

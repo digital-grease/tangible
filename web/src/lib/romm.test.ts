@@ -13,6 +13,8 @@ const romm = (overrides: Partial<EditionRomm>): EditionRomm => ({
   file_count: 0,
   exported_at: null,
   checked_at: null,
+  scan_owed: false,
+  last_scan: null,
   ...overrides,
 });
 

@@ -230,9 +230,24 @@ renames or removes anything in RomM.
    "Integration secrets").
 3. Try it: `POST /api/v1/integrations/<id>/test` answers RomM's version and
    five checks, each saying what it found; "Export marker" says whether
-   RomM leaves out the marker file, as step 3 above sets up. "Asking for scans" needs RomM 5.4
-   or later: an older RomM is found and read, but has to be told to scan in
-   its own interface. There is one RomM API integration, for the one export.
+   RomM leaves out the marker file, as step 3 above sets up. "Asking for
+   scans" needs RomM 5.4 or later: an older RomM is found and read, but has
+   to be told to scan in its own interface. There is one RomM API integration, for the one export.
+
+Once it is connected, every folder the export writes, renames or takes out
+leaves its platform waiting for a scan, and Tangible asks RomM for one quick
+scan of every waiting platform, then follows it to its end (it stops
+waiting after 30 minutes). Changes made before the API was connected are
+scanned too. Set `"scan_after_export": false` in the settings to leave
+scanning to RomM's own schedule.
+
+RomM may refuse a scan for now: while another scan runs, or when it has no
+scan worker listening. Tangible asks again, after a minute and then less
+often, up to hourly, until a scan finishes. A RomM whose host slept can
+keep refusing with "no scan worker": its worker is still running, but its
+registration lapsed. Restart RomM and it scans again. `GET /api/v1/romm`
+says which platforms are waiting and how the last scan went, and the
+diagnostics page warns when the last scan did not finish.
 
 ## Making CHDs
 

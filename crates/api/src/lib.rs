@@ -27,6 +27,7 @@ pub mod problem;
 pub mod report;
 pub mod request_id;
 pub mod romm_export;
+pub mod romm_sync;
 pub mod routes;
 pub mod secrets;
 pub mod state;
@@ -43,6 +44,7 @@ pub use derivation::{DerivationPipeline, DerivationRunner, DerivationRunnerSetti
 pub use import::{ImportCheckpoint, ImportError, ImportOutcome, ImportPipeline, ImportRequest};
 pub use import_runner::{ImportRunner, ImportRunnerSettings};
 pub use romm_export::{RommExport, RommExporter};
+pub use romm_sync::{RommSync, RommSyncHandle, RommSyncSettings};
 pub use state::{ApiState, ImportContext};
 pub use web::{WebUi, WebUiError};
 pub use worker_auth::{
@@ -276,6 +278,8 @@ pub const API_BASE: &str = "/api/v1";
         routes::integrations::IntegrationCheckView,
         routes::romm::PlatformView,
         routes::romm::RommSettings,
+        routes::romm::RommApiView,
+        routes::romm::RommScanView,
         routes::romm::EditionRommView,
         routes::romm::SetEditionRomm,
         routes::erasures::DriveView,

@@ -22,6 +22,10 @@ Captured from a real RomM, so the client in
 - `task-early-5.4.1.json`, `task-finished-5.4.1.json`: `GET
   /api/tasks/{task_id}` for that scan, `started` and then `finished` with
   its counts.
+- `scan-in-flight-5.4.1.json`: the same request answering 409 while
+  another quick scan ran.
+- `scan-no-worker-5.4.1.json`: the same request answering 503 after the
+  host had slept.
 
 ## Provenance
 
@@ -106,6 +110,13 @@ Observed along the way, and relied on by the client:
   `exclude.roms.multi_file.parts.names` in `config.yml` (RomM restarted), a
   quick scan dropped it and the ROM became a nested single file. A file or
   folder directly under a platform whose name starts with `.` is skipped.
+- RomM refuses a scan it cannot run now, with `{"detail": ...}`. 409 `Quick
+  Scan is already running` (or `queued`) while a scan of the library runs
+  or waits. 503 `No scan worker is listening, so the scan cannot be
+  queued` when no worker registered for its `scans` queue is alive: seen
+  twice after the host slept, with the worker process still running but
+  its registration lapsed (RomM's log said `Scheduler lock for scans had
+  expired; re-acquired` on waking). Restarting RomM brought it back.
 - From RomM's source at each release tag: client tokens arrived in 5.0.0;
   `POST /api/tasks/scan` in 5.4.0. `GET /api/roms` takes `platform_ids`,
   `search_term`, `limit`, `offset` and `with_files` from 5.0.0 on.

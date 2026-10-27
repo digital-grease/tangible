@@ -28,6 +28,7 @@ use tangible_db::romm::{
     DiscInputs, LinkedArtifact, Receipt, edition_romm, editions_to_reconcile, export_inputs,
     record_folder_removed, record_receipts, record_status,
 };
+use tangible_db::romm_api::owe_scans;
 use tangible_domain::enums::ComponentRole;
 use tangible_domain::manifest::ArtifactManifest;
 use tangible_domain::{ArtifactFormat, ArtifactId, EditionId, LossCharacter};
@@ -36,6 +37,8 @@ use tangible_integrations::romm::{
 };
 use tangible_storage::ManifestStore;
 use tokio::sync::Notify;
+
+use crate::romm_sync::RommSyncHandle;
 
 /// How often every export is checked when nothing prompts it sooner.
 const INTERVAL: Duration = Duration::from_secs(10 * 60);
@@ -49,6 +52,7 @@ const MAX_SHEET_BYTES: u64 = 1 << 20;
 pub struct RommExport {
     root: PathBuf,
     nudge: Arc<Notify>,
+    sync: Option<RommSyncHandle>,
 }
 
 impl RommExport {
@@ -58,6 +62,22 @@ impl RommExport {
         Self {
             root,
             nudge: Arc::new(Notify::new()),
+            sync: None,
+        }
+    }
+
+    /// Keep RomM in step through its API with `sync`: prompted when the
+    /// exporter changes folders, and when RomM's API is configured.
+    #[must_use]
+    pub fn with_sync(mut self, sync: RommSyncHandle) -> Self {
+        self.sync = Some(sync);
+        self
+    }
+
+    /// Ask the task keeping RomM in step through its API to look again now.
+    pub fn nudge_sync(&self) {
+        if let Some(sync) = &self.sync {
+            sync.nudge();
         }
     }
 
@@ -173,6 +193,7 @@ impl RommExporter {
         } else {
             self.take_out(edition, previous.as_deref()).await?
         };
+        self.owe_scans(previous.as_deref(), &outcome).await?;
 
         match &outcome {
             Outcome::Current {
@@ -225,6 +246,39 @@ impl RommExporter {
                 tracing::error!(%edition, %detail, "RomM export failed");
             }
         }
+        Ok(())
+    }
+
+    /// Record which platform folders an outcome changed, so RomM is asked
+    /// to scan them: the folder written, and the one it replaced or that
+    /// was taken out.
+    async fn owe_scans(
+        &self,
+        previous: Option<&str>,
+        outcome: &Outcome,
+    ) -> Result<(), tangible_db::DbError> {
+        let changed = match outcome {
+            Outcome::Current {
+                folder,
+                written: true,
+                ..
+            } => vec![Some(folder.as_str()), previous],
+            Outcome::Removed => vec![previous],
+            _ => Vec::new(),
+        };
+        let mut platforms: Vec<&str> = changed
+            .into_iter()
+            .flatten()
+            .filter_map(|folder| folder.split('/').next())
+            .filter(|platform| !platform.is_empty())
+            .collect();
+        platforms.sort_unstable();
+        platforms.dedup();
+        if platforms.is_empty() {
+            return Ok(());
+        }
+        owe_scans(self.database.pool(), &platforms).await?;
+        self.export.nudge_sync();
         Ok(())
     }
 

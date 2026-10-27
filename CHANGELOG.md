@@ -52,6 +52,18 @@ may change between minor versions, and the release notes say how.
   folder, listed `.tangible-export.json` as one of the game's files, made a
   one-image game a several-file one, and sent the marker with every
   download. Trying the RomM API integration checks it ("Export marker").
+- RomM is asked to scan what the export changed. Each folder written,
+  renamed or taken out leaves its platform waiting for a scan; once RomM's
+  API is connected (with `scan_after_export`, on by default, and RomM 5.4
+  or later), the server asks for one quick scan of every waiting platform
+  and follows it to its end, or for 30 minutes. A scan RomM refuses (one
+  already running, or no scan worker listening) or that fails is asked for
+  again, after a minute and then less often, up to hourly. Every scan asked
+  for is recorded and audited. `GET /api/v1/romm` gains `api`: the
+  integration's health, the platforms waiting, and the last scan; an
+  edition's RomM status gains `scan_owed` and the last scan of its
+  platform. Diagnostics gains a "RomM API" check. Database migration 0020
+  adds two tables; it is additive.
 
 - Groundwork for issue reports: text is scrubbed of credentials, paths,
   serial numbers, library file names and LAN addresses before anyone can

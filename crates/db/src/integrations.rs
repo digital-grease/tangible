@@ -144,6 +144,21 @@ pub async fn get_integration(
     row.as_ref().map(from_row).transpose()
 }
 
+/// The RomM API integration, of which there is at most one.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn romm_api_integration(pool: &PgPool) -> Result<Option<IntegrationRecord>, DbError> {
+    let row = sqlx::query(&format!(
+        "SELECT {COLUMNS} FROM integrations i WHERE i.kind = 'romm_api'"
+    ))
+    .fetch_optional(pool)
+    .await
+    .map_err(DbError::Query)?;
+    row.as_ref().map(from_row).transpose()
+}
+
 async fn audit(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     actor: &str,

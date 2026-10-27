@@ -1410,7 +1410,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Whether this server exports to RomM, and the platforms it knows. */
+        /**
+         * Whether this server exports to RomM, the platforms it knows, and how
+         *     RomM's API stands when one is configured: its health, the platforms owed
+         *     a scan, and the last scan asked for.
+         * @description # Errors
+         *
+         *     `STORAGE_UNAVAILABLE` when the database cannot be read.
+         */
         get: operations["romm_settings"];
         put?: never;
         post?: never;
@@ -2799,8 +2806,14 @@ export interface components {
             file_count: number;
             /** @description The folder in RomM's library, `platform/game`. */
             folder?: string | null;
+            last_scan?: null | components["schemas"]["RommScanView"];
             /** @description The platform, as a RomM slug. */
             platform?: string | null;
+            /**
+             * @description Whether the export changed the platform's folder since a scan of it
+             *     last finished, so RomM may not show the change yet.
+             */
+            scan_owed: boolean;
             /**
              * @description `current`, `blocked`, `failed` or `removed`; absent until the
              *     exporter has looked.
@@ -3999,8 +4012,71 @@ export interface components {
             /** @description The rip that read it. */
             rip_id: string;
         };
+        /** @description RomM's API, as this server is connected to it. */
+        RommApiView: {
+            /** @description Whether it is in use. */
+            enabled: boolean;
+            /** @description The integration. */
+            integration_id: string;
+            /** @description Why it last failed, as a stable code. */
+            last_error_code?: string | null;
+            last_scan?: null | components["schemas"]["RommScanView"];
+            /** @description When it last worked. */
+            last_success_at?: string | null;
+            /** @description Its name. */
+            name: string;
+            /** @description Whether RomM is asked to scan the platforms an export changes. */
+            scan_after_export: boolean;
+            /**
+             * @description Platform folders the export changed that no finished scan has
+             *     covered yet.
+             */
+            scans_owed: string[];
+            /** @description `unconfigured`, `ok` or `failing`, from the last time it was used. */
+            status: string;
+            /** @description RomM's version, as last seen. */
+            version?: string | null;
+        };
+        /** @description A scan Tangible asked RomM for. */
+        RommScanView: {
+            /** @description Why it was refused, or what became of it. */
+            detail?: string | null;
+            /** @description When it ended, as far as Tangible knows. */
+            ended_at?: string | null;
+            /**
+             * Format: int64
+             * @description ROMs it made.
+             */
+            new_roms?: number | null;
+            /** @description The platform folders it scans. */
+            platforms: string[];
+            /** @description When it was asked for. */
+            requested_at: string;
+            /**
+             * Format: int64
+             * @description ROMs it looked at.
+             */
+            scanned_roms?: number | null;
+            /**
+             * @description `refused` (RomM did not queue it, and `detail` says why), `queued`,
+             *     `running`, `finished`, `failed`, `canceled`, `lost` (RomM no longer
+             *     has it) or `timed_out` (Tangible stopped waiting).
+             */
+            state: string;
+            /**
+             * Format: int64
+             * @description ROMs in the platforms scanned, once RomM has counted.
+             */
+            total_roms?: number | null;
+            /**
+             * Format: int64
+             * @description ROMs it changed.
+             */
+            updated_roms?: number | null;
+        };
         /** @description Whether this server exports to RomM, and to which platforms. */
         RommSettings: {
+            api?: null | components["schemas"]["RommApiView"];
             /** @description Whether an export root is configured. Without one, nothing exports. */
             configured: boolean;
             /** @description The platforms an edition may name. */
@@ -7421,13 +7497,22 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The export's settings */
+            /** @description The export's settings, and RomM's API */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["RommSettings"];
+                };
+            };
+            /** @description The database could not be read */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };

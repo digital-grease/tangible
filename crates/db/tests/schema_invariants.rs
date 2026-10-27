@@ -315,6 +315,77 @@ invariant_test!(
     }
 );
 
+// --- RomM's API --------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_romm_scan_record_says_consistently_whether_romm_queued_it() {
+    // A refused scan has no task to follow, and a queued one must have one:
+    // following a scan Tangible cannot name would wait out the bound for
+    // nothing, and an ended scan reopened would be followed for ever.
+    let pool = pool().await;
+    let mut tx = pool.begin().await.expect("begin");
+    let integration = Uuid::now_v7();
+    tx.execute(
+        format!(
+            "INSERT INTO integrations (id, kind, name, configuration_json) \
+             VALUES ('{integration}', 'webhook', 'scans-{integration}', '{{}}')"
+        )
+        .as_str(),
+    )
+    .await
+    .expect("an integration to file scans under");
+    let insert = |task: &str, state: &str, ended: &str| {
+        format!(
+            "INSERT INTO romm_scans (id, integration_id, platforms, task_id, state, ended_at) \
+             VALUES (gen_random_uuid(), '{integration}', ARRAY['psx'], {task}, '{state}', {ended})"
+        )
+    };
+    tx.execute(insert("NULL", "refused", "now()").as_str())
+        .await
+        .expect("a refused scan is recordable");
+    tx.execute(insert("'32708cfa-50ff-4401-9e6b-adc8b5b301d6'", "running", "NULL").as_str())
+        .await
+        .expect("a running scan is recordable");
+    for (statement, why) in [
+        (
+            insert("'32708cfa-50ff'", "refused", "now()"),
+            "a refused scan has no task",
+        ),
+        (insert("NULL", "queued", "NULL"), "a queued scan has a task"),
+        (
+            insert("'32708cfa'", "finished", "NULL"),
+            "an ended scan has an end",
+        ),
+        (
+            insert("'32708cfa'", "running", "now()"),
+            "a running scan has not ended",
+        ),
+        (
+            insert("'../../api/users'", "queued", "NULL"),
+            "a task id goes in a path, so it is a UUID's characters",
+        ),
+        (
+            insert("'32708cfa'", "pending", "NULL"),
+            "the state is one Tangible knows",
+        ),
+        (
+            format!(
+                "INSERT INTO romm_scans (id, integration_id, platforms, state, ended_at) \
+                 VALUES (gen_random_uuid(), '{integration}', ARRAY[]::text[], 'refused', now())"
+            ),
+            "a scan is of some platform",
+        ),
+        (
+            "INSERT INTO romm_owed_scans (platform) VALUES ('../psx')".to_owned(),
+            "an owed platform is a folder slug",
+        ),
+    ] {
+        must_reject(&mut tx, &statement, why).await;
+    }
+    tx.rollback().await.expect("rollback");
+}
+
 // --- the positive cases, which matter just as much ---------------------------
 
 #[tokio::test]
