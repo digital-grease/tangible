@@ -32,7 +32,7 @@ use tangible_integrations::download::ClientError;
 use tangible_integrations::outbound::OutboundPolicy;
 use tangible_integrations::romm::MARKER;
 use tangible_integrations::romm_api::{Probe, Scope};
-use tangible_integrations::settings::{ConfigurableKind, checked_settings};
+use tangible_integrations::settings::{ConfigurableKind, Roots, checked_settings};
 use time::format_description::well_known::Rfc3339;
 use utoipa::ToSchema;
 
@@ -276,10 +276,11 @@ fn as_new_secrets(sealed: &[(String, Sealed)]) -> Vec<NewSecret<'_>> {
         .collect()
 }
 
-fn known_roots(state: &ApiState) -> Vec<String> {
+/// The watched roots this server has, and those it may delete in.
+fn known_roots(state: &ApiState) -> (Vec<String>, Vec<String>) {
     state
         .imports()
-        .map(|imports| imports.roots.ids())
+        .map(|imports| (imports.roots.ids(), imports.roots.removable_ids()))
         .unwrap_or_default()
 }
 
@@ -377,13 +378,13 @@ pub async fn create_one(
         )
     })?;
     let name = checked_name(&request.name)?;
-    let settings = checked_settings(
-        kind,
-        &request.settings,
-        &known_roots(&state),
-        &policy(&state),
-    )
-    .map_err(|error| Problem::new(ErrorCode::ValidationFailed, error.0))?;
+    let (known, removable) = known_roots(&state);
+    let roots = Roots {
+        known: &known,
+        removable: &removable,
+    };
+    let settings = checked_settings(kind, &request.settings, roots, &policy(&state))
+        .map_err(|error| Problem::new(ErrorCode::ValidationFailed, error.0))?;
     let id = uuid::Uuid::now_v7();
     let sealed = sealed_secrets(&state, kind, id, &request.secrets)?;
     let secrets = as_new_secrets(&sealed);
@@ -459,10 +460,15 @@ pub async fn update_one(
         )
     })?;
     let name = request.name.as_deref().map(checked_name).transpose()?;
+    let (known, removable) = known_roots(&state);
+    let roots = Roots {
+        known: &known,
+        removable: &removable,
+    };
     let settings = request
         .settings
         .as_ref()
-        .map(|settings| checked_settings(kind, settings, &known_roots(&state), &policy(&state)))
+        .map(|settings| checked_settings(kind, settings, roots, &policy(&state)))
         .transpose()
         .map_err(|error| Problem::new(ErrorCode::ValidationFailed, error.0))?;
     let to_set: BTreeMap<String, SecretString> = request

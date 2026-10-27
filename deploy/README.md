@@ -389,8 +389,8 @@ waiting longer each time up to an hour. Setting `after_import` back to
 ## Sending NZBs to SABnzbd
 
 Tangible can hand an NZB you already have to a SABnzbd you run, and import
-the download when it completes. It never searches for anything, asks for no
-script, and never removes a job or its files.
+the download when it completes. It never searches for anything and asks for
+no script. It removes a download only where you set it to (below).
 
 1. In SABnzbd, add a category (Config, Categories), `tangible` by default,
    with its own folder. SABnzbd files a category it does not know under its
@@ -411,6 +411,34 @@ script, and never removes a job or its files.
 Use SABnzbd's IP address, or add its host name to `host_whitelist` in its
 special settings: SABnzbd turns away host names it does not know.
 
+### Deleting Usenet downloads once imported
+
+Off by default, for SABnzbd and NZBGet alike. Neither can delete a completed
+download's files through its API (SABnzbd's history delete removes only a
+failed job's incomplete folder; NZBGet's leaves its folder), so Tangible
+deletes them itself, and needs two things for that:
+
+1. In the deployment: the finished folder mounted read-write (drop the
+   `:ro`), and its watched root named in `TANGIBLE_REMOVABLE_ROOTS` in
+   `.env`, such as `TANGIBLE_REMOVABLE_ROOTS=usenet` beside
+   `TANGIBLE_WATCH_ROOTS=usenet=/var/lib/tangible/usenet`. Every other
+   watched root stays read-only; the server refuses to start if the setting
+   names a root that is not watched. Diagnostics says whether each such root
+   is writable.
+2. On the integration: `after_import` set to `remove`. The server refuses
+   that for a root not in `TANGIBLE_REMOVABLE_ROOTS`.
+
+Then each download imported from then on is deleted once the library has
+it: an integrity check of the new artifact first, reading every stored byte
+back, and nothing deleted if it finds a problem. Tangible looks again that
+the job is still finished at the path it was imported from, and deletes only
+the files whose SHA-256 and size are those of the artifact's files, checked
+just before each is deleted, then the folders that leaves empty. A file put
+in the folder since, or changed since, stays, and the import says how many
+were left. Links and paths outside the folder are refused as on import.
+Then it asks the client to forget the job: SABnzbd moves it to its history
+archive, NZBGet hides it in history.
+
 ## Sending NZBs to NZBGet
 
 The same as SABnzbd above, with NZBGet's own words:
@@ -430,6 +458,9 @@ The same as SABnzbd above, with NZBGet's own words:
 Tangible appends with no post-processing parameters and NZBGet's duplicate
 check off, since it keeps its own; a script you set on the category is
 yours, and runs as you set it.
+
+To have imported downloads deleted, see "Deleting Usenet downloads once
+imported" above.
 
 ## Importing from S3-compatible storage
 

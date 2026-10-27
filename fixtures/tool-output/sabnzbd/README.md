@@ -8,6 +8,12 @@ against what the client says.
   server: 300000 random bytes as `probe-disc.iso`, yEnc-encoded.
 - `addfile-4.5.3.json`: `mode=addfile` answering the job's `nzo_id`.
 - `queue-4.5.3.json`: `mode=queue` with one job waiting (the queue paused).
+- `history-delete-4.5.3.json`: `mode=history&name=delete&value=<nzo_id>`
+  with `del_files=0`, answering `{"status": true}` (as it does for an id it
+  does not have). Recorded 2026-10-27; the entry went to SABnzbd's history
+  archive, and `del_files=1` was found, by test and in its source
+  (`_api_history`), to remove only a failed job's incomplete folder, never a
+  completed job's files.
 - `history-4.5.3.json`: `mode=history` with one job `Completed` (its
   `storage` the downloaded file; SABnzbd's deobfuscation renamed it
   `probe.iso`) and one `Failed` (an article the server does not have; its

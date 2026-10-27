@@ -60,6 +60,7 @@ fn settings(root: &Path, reports: ReportSettings) -> DiagnosticsSettings {
         url_imports: None,
         secret_key_id: None,
         scrub_interval_days: 0,
+        removable_roots: Vec::new(),
     }
 }
 

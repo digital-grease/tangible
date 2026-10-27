@@ -50,7 +50,9 @@ pub struct SourceRemovalRecord {
     /// The import's source descriptor.
     pub source_descriptor: serde_json::Value,
     /// The client's id for the job (an infohash, an `nzo_id`, an NZBID),
-    /// for a download client's import.
+    /// for a download client's import: from the import's descriptor, as the
+    /// runner reads it (a Usenet job's `integration_jobs.client_job_id` is
+    /// Tangible's own, the NZB's SHA-256).
     pub client_job_id: Option<String>,
     /// The path beneath the client's download folder the import was copied
     /// from, once recorded.
@@ -61,7 +63,9 @@ const COLUMNS: &str = "r.id, r.import_job_id, r.integration_id, r.artifact_id, r
      r.state, r.detail, r.files_removed, r.bytes_removed, r.files_kept, r.attempts, \
      r.next_attempt_at, r.requested_at, r.ended_at, i.source_kind, \
      i.source_descriptor_json AS source_descriptor, \
-     j.client_job_id, j.content_path";
+     COALESCE(i.source_descriptor_json->>'client_job_id', \
+              i.source_descriptor_json->>'infohash', j.client_job_id) AS client_job_id, \
+     j.content_path";
 
 const FROM: &str = "source_removals r JOIN import_jobs i ON i.id = r.import_job_id \
      LEFT JOIN integration_jobs j ON j.import_job_id = r.import_job_id";
@@ -326,4 +330,24 @@ pub async fn end_removal(
     }
     tx.commit().await.map_err(DbError::Query)?;
     Ok(true)
+}
+
+/// The SHA-256 and length of every component of `artifact_id`: what the
+/// library holds of it, which a file must be to be deleted at its source.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn artifact_contents(
+    pool: &PgPool,
+    artifact_id: uuid::Uuid,
+) -> Result<Vec<(String, i64)>, DbError> {
+    sqlx::query_as(
+        "SELECT sha256, length_bytes FROM artifact_components WHERE artifact_id = $1
+         ORDER BY sha256",
+    )
+    .bind(artifact_id)
+    .fetch_all(pool)
+    .await
+    .map_err(DbError::Query)
 }

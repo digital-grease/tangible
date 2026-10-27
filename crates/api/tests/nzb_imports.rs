@@ -31,9 +31,11 @@ use axum::http::{HeaderMap, Method, Request, StatusCode, Uri};
 use axum::response::IntoResponse;
 use serde_json::{Value, json};
 use sqlx::PgPool;
+use tangible_api::integrity::{Integrity, IntegrityRunner, IntegrityRunnerSettings};
 use tangible_api::secrets::SecretKey;
 use tangible_api::{
-    ApiState, ImportContext, ImportPipeline, ImportRunner, ImportRunnerSettings, router,
+    ApiState, ImportContext, ImportPipeline, ImportRunner, ImportRunnerSettings,
+    SourceRemovalHandle, SourceRemovalSettings, SourceRemover, router,
 };
 use tangible_domain::Role;
 use tangible_integrations::outbound::{OutboundClient, OutboundPolicy};
@@ -60,6 +62,8 @@ struct Fake {
     adds: Vec<String>,
     /// Every request URI, to show the key never travels in one.
     uris: Vec<String>,
+    /// The jobs deleted from history, with `del_files` as sent.
+    forgets: Vec<(String, String)>,
 }
 
 type Shared = Arc<Mutex<Fake>>;
@@ -131,6 +135,15 @@ async fn api(
                 .collect();
             axum::Json(json!({ "queue": { "slots": slots } })).into_response()
         }
+        "history" if field(&body, &content_type, "name").as_deref() == Some("delete") => {
+            // As SABnzbd 4.5.3: true whether or not it had the job, and its
+            // files never touched.
+            let id = field(&body, &content_type, "value").unwrap_or_default();
+            let del_files = field(&body, &content_type, "del_files").unwrap_or_default();
+            fake.history.remove(&id);
+            fake.forgets.push((id, del_files));
+            axum::Json(json!({ "status": true })).into_response()
+        }
         "history" => {
             let slots: Vec<Value> = fake
                 .history
@@ -166,6 +179,8 @@ struct Harness {
     pool: PgPool,
     state: ApiState,
     runner: ImportRunner,
+    remover: SourceRemover,
+    integrity: IntegrityRunner,
     downloads: PathBuf,
     fake: Shared,
     sabnzbd: SocketAddr,
@@ -180,8 +195,14 @@ async fn harness() -> Harness {
 }
 
 /// A harness whose watched root `downloads` is `downloads`, or a temporary
-/// directory.
+/// directory, and one Tangible may delete in.
 async fn harness_with(downloads: Option<PathBuf>) -> Harness {
+    harness_where(downloads, true).await
+}
+
+/// The same, with `downloads` removable or not.
+#[allow(clippy::too_many_lines)]
+async fn harness_where(downloads: Option<PathBuf>, removable: bool) -> Harness {
     let queue = QUEUE
         .get_or_init(|| tokio::sync::Mutex::new(()))
         .lock()
@@ -196,7 +217,7 @@ async fn harness_with(downloads: Option<PathBuf>) -> Harness {
     let staging = StagingManager::open(dir.path().join("staging"))
         .await
         .unwrap();
-    let pipeline = ImportPipeline::new(staging, objects, manifests.clone());
+    let pipeline = ImportPipeline::new(staging, objects.clone(), manifests.clone());
     let downloads = downloads.unwrap_or_else(|| {
         let downloads = dir.path().join("downloads");
         std::fs::create_dir(&downloads).unwrap();
@@ -204,14 +225,16 @@ async fn harness_with(downloads: Option<PathBuf>) -> Harness {
     });
     let mut roots = BTreeMap::new();
     roots.insert("downloads".to_owned(), downloads.clone());
-    let roots = WatchRoots::new(roots);
+    let roots = WatchRoots::new(roots)
+        .with_removable(if removable { vec!["downloads"] } else { vec![] })
+        .unwrap();
     let client = OutboundClient::new(
         OutboundPolicy::for_integrations(vec!["127.0.0.1/32".parse().unwrap()], None),
         "tangible-test",
     )
     .unwrap();
     let key = Arc::new(SecretKey::from_base64(&SecretKey::generate().unwrap()).unwrap());
-    let state = ApiState::with_manifests(database.clone(), manifests)
+    let state = ApiState::with_manifests(database.clone(), manifests.clone())
         .with_imports(ImportContext {
             pipeline: pipeline.clone(),
             roots: roots.clone(),
@@ -221,6 +244,31 @@ async fn harness_with(downloads: Option<PathBuf>) -> Harness {
         })
         .with_secret_key(Arc::clone(&key))
         .with_integration_client(client.clone());
+    let integrity = Integrity::new();
+    let remover = SourceRemover::new(
+        database.clone(),
+        integrity.clone(),
+        Some(client.clone()),
+        Some(Arc::clone(&key)),
+        SourceRemovalHandle::new(),
+        SourceRemovalSettings {
+            owner: format!("test-{}", uuid::Uuid::now_v7()),
+            check_poll: Duration::ZERO,
+            first_retry: Duration::ZERO,
+            ..SourceRemovalSettings::default()
+        },
+    )
+    .with_roots(roots.clone());
+    let integrity = IntegrityRunner::new(
+        database.clone(),
+        objects,
+        manifests,
+        integrity,
+        IntegrityRunnerSettings {
+            owner: format!("test-{}", uuid::Uuid::now_v7()),
+            ..IntegrityRunnerSettings::default()
+        },
+    );
     let runner = ImportRunner::new(
         database,
         pipeline,
@@ -242,8 +290,18 @@ async fn harness_with(downloads: Option<PathBuf>) -> Harness {
     .execute(&pool)
     .await
     .unwrap();
+    sqlx::query(
+        "UPDATE source_removals SET state = 'kept', detail = 'left by an earlier test run',
+             ended_at = now(), leased_by = NULL, leased_until = NULL, next_attempt_at = NULL
+         WHERE state IN ('verifying', 'removing')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let (sabnzbd, fake) = fake_sabnzbd().await;
     Harness {
+        remover,
+        integrity,
         admin: support::administrator(&pool).await,
         operator: support::sign_in(&pool, Role::Operator).await,
         pool,
@@ -287,24 +345,99 @@ impl Harness {
     /// A SABnzbd integration pointing at `base_url` with `api_key`.
     async fn integration_at(&self, base_url: &str, api_key: &str, client_path: &str) -> String {
         let (status, made) = self
-            .send(
-                &self.admin,
-                Method::POST,
-                "/api/v1/integrations",
-                Some(json!({
-                    "kind": "sabnzbd",
-                    "name": format!("sab-{}", uuid::Uuid::now_v7().simple()),
-                    "settings": {
-                        "base_url": base_url,
-                        "client_path": client_path,
-                        "local_root": "downloads",
-                    },
-                    "secrets": { "api_key": api_key },
-                })),
+            .sabnzbd_after(base_url, api_key, client_path, "keep")
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{made}");
+        made["id"].as_str().unwrap().to_owned()
+    }
+
+    /// Ask for a SABnzbd integration doing `after_import`, answering what
+    /// the server said.
+    async fn sabnzbd_after(
+        &self,
+        base_url: &str,
+        api_key: &str,
+        client_path: &str,
+        after_import: &str,
+    ) -> (StatusCode, Value) {
+        self.send(
+            &self.admin,
+            Method::POST,
+            "/api/v1/integrations",
+            Some(json!({
+                "kind": "sabnzbd",
+                "name": format!("sab-{}", uuid::Uuid::now_v7().simple()),
+                "settings": {
+                    "base_url": base_url,
+                    "client_path": client_path,
+                    "local_root": "downloads",
+                    "after_import": after_import,
+                },
+                "secrets": { "api_key": api_key },
+            })),
+        )
+        .await
+    }
+
+    /// A SABnzbd integration pointing at the fake that removes after import.
+    async fn removing_sabnzbd(&self) -> String {
+        let (status, made) = self
+            .sabnzbd_after(
+                &format!("http://{}/", self.sabnzbd),
+                API_KEY,
+                "/downloads/complete/tangible",
+                "remove",
             )
             .await;
         assert_eq!(status, StatusCode::CREATED, "{made}");
         made["id"].as_str().unwrap().to_owned()
+    }
+
+    /// Run the remover and the integrity checks until neither has anything
+    /// due, and answer the import's source removal.
+    async fn removal(&self, import_id: &str) -> Value {
+        for _ in 0..20 {
+            let removed = self.remover.step().await.unwrap();
+            let checked = self.integrity.step().await.unwrap();
+            if !removed && !checked {
+                break;
+            }
+        }
+        self.import(import_id).await["source_removal"].clone()
+    }
+
+    /// An NZB handed to SABnzbd `integration`, finished as one file
+    /// `image` in a folder of its own, and imported. Answers the import's
+    /// id, the job's id and the folder.
+    async fn imported_from_sabnzbd(
+        &self,
+        integration: &str,
+        image: &[u8],
+    ) -> (String, String, PathBuf) {
+        let (status, job) = self
+            .submit(integration, json!({ "nzb": base64(&unique_nzb()) }))
+            .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+        let nzo_id = job["client_job_id"].as_str().unwrap().to_owned();
+        let identity = job["identity"].as_str().unwrap().to_owned();
+        let import_id = job["import_id"].as_str().unwrap().to_owned();
+        let name = format!("tangible-{}", &identity[..12]);
+        let folder = self.downloads.join(&name);
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(folder.join("disc.iso"), image).unwrap();
+        self.finish(
+            &nzo_id,
+            json!({
+                "nzo_id": nzo_id,
+                "status": "Completed",
+                "storage": format!("/downloads/complete/tangible/{name}/disc.iso"),
+                "bytes": image.len(),
+            }),
+        );
+        self.drain().await;
+        let done = self.import(&import_id).await;
+        assert_eq!(done["state"], "complete", "{done}");
+        (import_id, nzo_id, folder)
     }
 
     async fn integration(&self, api_key: &str) -> String {
@@ -753,6 +886,8 @@ struct FakeNzbget {
     appends: Vec<Value>,
     /// What the next append answers, when not a new NZBID.
     refuse: bool,
+    /// The editqueue calls it took: command and ids.
+    edits: Vec<Value>,
 }
 
 type SharedNzbget = Arc<Mutex<FakeNzbget>>;
@@ -801,6 +936,16 @@ async fn jsonrpc(
         "history" => {
             reply(json!(fake.history.values().cloned().collect::<Vec<_>>())).into_response()
         }
+        "editqueue" => {
+            fake.edits.push(call["params"].clone());
+            let had = call["params"][0] == "HistoryDelete"
+                && call["params"][2]
+                    .as_array()
+                    .and_then(|ids| ids.first())
+                    .and_then(Value::as_i64)
+                    .is_some_and(|id| fake.history.remove(&id).is_some());
+            reply(json!(had)).into_response()
+        }
         _ => axum::Json(json!({ "version": "1.1", "id": 1,
             "error": { "name": "JSONRPCError", "code": 1, "message": "Invalid procedure" } }))
         .into_response(),
@@ -833,6 +978,18 @@ impl Harness {
         password: &str,
         client_path: &str,
     ) -> String {
+        self.nzbget_after(base_url, (user, password), client_path, "keep")
+            .await
+    }
+
+    /// The same, doing `after_import`.
+    async fn nzbget_after(
+        &self,
+        base_url: &str,
+        (user, password): (&str, &str),
+        client_path: &str,
+        after_import: &str,
+    ) -> String {
         let (status, made) = self
             .send(
                 &self.admin,
@@ -846,6 +1003,7 @@ impl Harness {
                         "username": user,
                         "client_path": client_path,
                         "local_root": "downloads",
+                        "after_import": after_import,
                     },
                     "secrets": { "password": password },
                 })),
@@ -1079,4 +1237,300 @@ async fn a_real_nzbget_download_is_imported() {
     }
     assert_eq!(done["state"], "complete", "{done}");
     assert_eq!(done["source_kind"], "nzbget_job");
+}
+
+/// An ISO no other test imports, so a changed copy touches no one else.
+fn own_image(mark: u8) -> Vec<u8> {
+    let mut image = iso_image();
+    let last = image.len() - 1;
+    image[last] = mark;
+    image
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_sabnzbd_download_is_deleted_by_tangible_once_the_copy_is_checked() {
+    let harness = harness().await;
+    let integration = harness.removing_sabnzbd().await;
+    let (import_id, nzo_id, folder) = harness
+        .imported_from_sabnzbd(&integration, &iso_image())
+        .await;
+    assert!(folder.join("disc.iso").exists(), "nothing before the check");
+
+    let removed = harness.removal(&import_id).await;
+    assert_eq!(removed["state"], "removed", "{removed}");
+    assert_eq!(
+        removed["detail"],
+        "Deleted 1 file from SABnzbd's folder; SABnzbd no longer lists the job"
+    );
+    assert_eq!(removed["files_removed"], 1);
+    assert_eq!(removed["files_kept"], 0);
+    assert_eq!(removed["bytes_removed"], iso_image().len());
+    assert!(
+        !folder.exists(),
+        "the job's own folder goes with its one file"
+    );
+    assert!(harness.downloads.exists(), "the download folder never does");
+    assert_eq!(
+        harness.fake.lock().unwrap().forgets,
+        [(nzo_id, "0".to_owned())],
+        "forgotten, its files said not to be SABnzbd's to delete"
+    );
+    let audited: Value = sqlx::query_scalar(
+        "SELECT metadata FROM audit_events
+         WHERE action = 'integration.source_deleted' AND target_id = $1",
+    )
+    .bind(&integration)
+    .fetch_one(&harness.pool)
+    .await
+    .unwrap();
+    assert_eq!(audited["removed"]["kind"], "usenet_download");
+    assert_eq!(audited["removed"]["client"], "SABnzbd");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_changed_or_vanished_sabnzbd_download_is_left_or_noted() {
+    let harness = harness().await;
+    let integration = harness.removing_sabnzbd().await;
+
+    // Written over after the import: not the library's, so not deleted.
+    let image = own_image(0x5C);
+    let (changed, _, folder) = harness.imported_from_sabnzbd(&integration, &image).await;
+    let mut other = image.clone();
+    other[0] ^= 0xFF;
+    std::fs::write(folder.join("disc.iso"), &other).unwrap();
+    let kept = harness.removal(&changed).await;
+    assert_eq!(kept["state"], "kept", "{kept}");
+    assert!(
+        kept["detail"]
+            .as_str()
+            .unwrap()
+            .starts_with("Nothing in the download is what the library holds"),
+        "{kept}"
+    );
+    assert_eq!(std::fs::read(folder.join("disc.iso")).unwrap(), other);
+    assert!(harness.fake.lock().unwrap().forgets.is_empty());
+
+    // Cleared out by hand before Tangible got to it.
+    let (gone, nzo_id, folder) = harness
+        .imported_from_sabnzbd(&integration, &iso_image())
+        .await;
+    std::fs::remove_dir_all(&folder).unwrap();
+    let noted = harness.removal(&gone).await;
+    assert_eq!(noted["state"], "already_gone", "{noted}");
+    assert_eq!(
+        harness.fake.lock().unwrap().forgets,
+        [(nzo_id, "0".to_owned())],
+        "still forgotten in SABnzbd"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn removal_needs_a_root_tangible_may_delete_in() {
+    let harness = harness_where(None, false).await;
+    let base = format!("http://{}/", harness.sabnzbd);
+    let (status, refused) = harness
+        .sabnzbd_after(&base, API_KEY, "/downloads/complete/tangible", "remove")
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert!(
+        refused["detail"]
+            .as_str()
+            .unwrap()
+            .contains("TANGIBLE_REMOVABLE_ROOTS"),
+        "{refused}"
+    );
+
+    // Set when the root was removable, and the root no longer is.
+    let integration = harness.integration(API_KEY).await;
+    sqlx::query(
+        "UPDATE integrations
+         SET configuration_json = configuration_json || '{\"after_import\": \"remove\"}'
+         WHERE id = $1",
+    )
+    .bind(uuid::Uuid::parse_str(&integration).unwrap())
+    .execute(&harness.pool)
+    .await
+    .unwrap();
+    let (import_id, _, folder) = harness
+        .imported_from_sabnzbd(&integration, &iso_image())
+        .await;
+    let kept = harness.removal(&import_id).await;
+    assert_eq!(kept["state"], "kept", "{kept}");
+    assert!(
+        kept["detail"]
+            .as_str()
+            .unwrap()
+            .contains("not one Tangible may delete in"),
+        "{kept}"
+    );
+    assert!(folder.join("disc.iso").exists());
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_nzbget_download_loses_what_the_library_holds_and_keeps_the_rest() {
+    let harness = harness().await;
+    let (address, fake) = fake_nzbget().await;
+    let integration = harness
+        .nzbget_after(
+            &format!("http://{address}/"),
+            (NZBGET_USER, NZBGET_PASSWORD),
+            "/downloads/completed/tangible",
+            "remove",
+        )
+        .await;
+    let (status, job) = harness
+        .submit(&integration, json!({ "nzb": base64(&unique_nzb()) }))
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    let identity = job["identity"].as_str().unwrap().to_owned();
+    let nzbid: i64 = job["client_job_id"].as_str().unwrap().parse().unwrap();
+    let import_id = job["import_id"].as_str().unwrap().to_owned();
+    let name = format!("tangible-{}", &identity[..12]);
+    let folder = harness.downloads.join(&name);
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(folder.join("disc.iso"), iso_image()).unwrap();
+    {
+        let mut fake = fake.lock().unwrap();
+        fake.queue.remove(&nzbid);
+        fake.history.insert(
+            nzbid,
+            json!({ "NZBID": nzbid, "Status": "SUCCESS/ALL", "FinalDir": "",
+                    "DestDir": format!("/downloads/completed/tangible/{name}"),
+                    "FileSizeLo": 65536, "FileSizeHi": 0 }),
+        );
+    }
+    harness.drain().await;
+    assert_eq!(harness.import(&import_id).await["state"], "complete");
+    // Something put beside it afterwards is not the library's.
+    std::fs::write(folder.join("notes.txt"), b"written later").unwrap();
+
+    let removed = harness.removal(&import_id).await;
+    assert_eq!(removed["state"], "removed", "{removed}");
+    assert_eq!(
+        removed["detail"],
+        "Deleted 1 file from NZBGet's folder, and left 1 file the library does not hold; \
+         NZBGet no longer lists the job"
+    );
+    assert_eq!(removed["files_kept"], 1);
+    assert!(!folder.join("disc.iso").exists());
+    assert!(folder.join("notes.txt").exists(), "not the library's");
+    assert_eq!(
+        fake.lock().unwrap().edits,
+        [json!(["HistoryDelete", "", [nzbid]])],
+        "hidden in history, the gentler delete"
+    );
+}
+
+impl Harness {
+    /// Follow a real client's download to its import, then its removal, and
+    /// answer the removal and where the download was.
+    async fn imported_then_removed(&self, integration: &str) -> (Value, PathBuf) {
+        let (status, job) = self
+            .submit(integration, json!({ "nzb": base64(&probe_nzb()) }))
+            .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+        let import_id = job["import_id"].as_str().unwrap().to_owned();
+        let mut done = Value::Null;
+        for _ in 0..30 {
+            self.drain().await;
+            done = self.import(&import_id).await;
+            if done["state"] != "acquiring" && done["state"] != "requested" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1100)).await;
+        }
+        assert_eq!(done["state"], "complete", "{done}");
+        let content: String = sqlx::query_scalar(
+            "SELECT content_path FROM integration_jobs WHERE import_job_id = $1",
+        )
+        .bind(uuid::Uuid::parse_str(&import_id).unwrap())
+        .fetch_one(&self.pool)
+        .await
+        .unwrap();
+        let path = self.downloads.join(content);
+        assert!(path.exists(), "{}", path.display());
+        (self.removal(&import_id).await, path)
+    }
+}
+
+/// Against a real SABnzbd, gated as [`a_real_sabnzbd_download_is_imported`],
+/// whose download folder this test may delete in: downloaded, imported,
+/// checked, then its file deleted by Tangible and the job forgotten.
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_real_sabnzbd_download_is_deleted_once_imported() {
+    let vars = [
+        "TANGIBLE_TEST_SABNZBD_URL",
+        "TANGIBLE_TEST_SABNZBD_API_KEY",
+        "TANGIBLE_TEST_SABNZBD_CLIENT_PATH",
+        "TANGIBLE_TEST_SABNZBD_DOWNLOADS",
+    ]
+    .map(|name| std::env::var(name).ok());
+    let [Some(url), Some(api_key), Some(client_path), Some(downloads)] = vars else {
+        eprintln!("skipping: set TANGIBLE_TEST_SABNZBD_URL, _API_KEY, _CLIENT_PATH and _DOWNLOADS");
+        return;
+    };
+    let harness = harness_with(Some(PathBuf::from(&downloads))).await;
+    let (status, made) = harness
+        .sabnzbd_after(&url, &api_key, &client_path, "remove")
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{made}");
+    let (removed, path) = harness
+        .imported_then_removed(made["id"].as_str().unwrap())
+        .await;
+    assert_eq!(removed["state"], "removed", "{removed}");
+    assert!(
+        removed["detail"]
+            .as_str()
+            .unwrap()
+            .ends_with("SABnzbd no longer lists the job"),
+        "{removed}"
+    );
+    assert!(!path.exists(), "{}", path.display());
+}
+
+/// The same against a real NZBGet, gated as
+/// [`a_real_nzbget_download_is_imported`].
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_real_nzbget_download_is_deleted_once_imported() {
+    let vars = [
+        "TANGIBLE_TEST_NZBGET_URL",
+        "TANGIBLE_TEST_NZBGET_USER",
+        "TANGIBLE_TEST_NZBGET_PASSWORD",
+        "TANGIBLE_TEST_NZBGET_CLIENT_PATH",
+        "TANGIBLE_TEST_NZBGET_DOWNLOADS",
+    ]
+    .map(|name| std::env::var(name).ok());
+    let [
+        Some(url),
+        Some(user),
+        Some(password),
+        Some(client_path),
+        Some(downloads),
+    ] = vars
+    else {
+        eprintln!(
+            "skipping: set TANGIBLE_TEST_NZBGET_URL, _USER, _PASSWORD, _CLIENT_PATH and _DOWNLOADS"
+        );
+        return;
+    };
+    let harness = harness_with(Some(PathBuf::from(&downloads))).await;
+    let integration = harness
+        .nzbget_after(&url, (&user, &password), &client_path, "remove")
+        .await;
+    let (removed, path) = harness.imported_then_removed(&integration).await;
+    assert_eq!(removed["state"], "removed", "{removed}");
+    assert!(
+        removed["detail"]
+            .as_str()
+            .unwrap()
+            .ends_with("NZBGet no longer lists the job"),
+        "{removed}"
+    );
+    assert!(!path.exists(), "{}", path.display());
 }

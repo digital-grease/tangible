@@ -96,7 +96,7 @@ async fn main() -> Result<()> {
 }
 
 /// The watched roots configured, said at start.
-fn watched_roots(serve: &ServeConfig) -> WatchRoots {
+fn watched_roots(serve: &ServeConfig) -> Result<WatchRoots> {
     let roots = WatchRoots::parse(&serve.watch_roots);
     if roots.is_empty() {
         tracing::info!(
@@ -105,7 +105,22 @@ fn watched_roots(serve: &ServeConfig) -> WatchRoots {
     } else {
         tracing::info!(roots = ?roots.ids(), "watched roots configured");
     }
-    roots
+    // A removable root meant and not there would keep its downloads for
+    // ever, so a mistyped one stops the server.
+    let roots = roots
+        .with_removable(serve.removable_roots.split(','))
+        .map_err(|id| {
+            anyhow::anyhow!(
+                "TANGIBLE_REMOVABLE_ROOTS names {id}, which is not a root in TANGIBLE_WATCH_ROOTS"
+            )
+        })?;
+    if !roots.removable_ids().is_empty() {
+        tracing::info!(
+            roots = ?roots.removable_ids(),
+            "Tangible may delete imported Usenet downloads in these watched roots (TANGIBLE_REMOVABLE_ROOTS)"
+        );
+    }
+    Ok(roots)
 }
 
 /// Say at start when rips may decrypt.
@@ -136,7 +151,7 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
 
     let (objects, manifests, staging) = open_library(serve).await?;
 
-    let roots = watched_roots(serve);
+    let roots = watched_roots(serve)?;
     say_decryption(serve);
 
     let pipeline = ImportPipeline::new(staging.clone(), objects.clone(), manifests.clone());
@@ -414,6 +429,12 @@ fn start_source_remover(
         secret_key.cloned(),
         handle.clone(),
         SourceRemovalSettings::default(),
+    )
+    .with_roots(
+        state
+            .imports()
+            .map(|imports| imports.roots.clone())
+            .unwrap_or_default(),
     );
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(remover.run(async {
@@ -648,6 +669,11 @@ fn diagnostics_settings(
             }),
         secret_key_id: secret_key.map(|key| key.id().to_owned()),
         scrub_interval_days: serve.scrub_interval_days,
+        // Checked at start too; a mistyped id fails there.
+        removable_roots: WatchRoots::parse(&serve.watch_roots)
+            .with_removable(serve.removable_roots.split(','))
+            .map(|roots| roots.removable_paths())
+            .unwrap_or_default(),
     }
 }
 
@@ -1119,6 +1145,7 @@ mod tests {
         "TANGIBLE_MIGRATE_ON_START",
         "TANGIBLE_OUTBOUND_ALLOW",
         "TANGIBLE_PUBLIC_URL",
+        "TANGIBLE_REMOVABLE_ROOTS",
         "TANGIBLE_REPORT_ISSUES_URL",
         "TANGIBLE_REPORT_SCRUB_ADDRESSES",
         "TANGIBLE_ROMM_EXPORT_ROOT",

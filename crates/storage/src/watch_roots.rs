@@ -21,11 +21,18 @@
 //! comparison. A prefix test on unresolved text is defeated by any link in the
 //! middle of the path, which is the mistake this type exists to make
 //! impossible.
+//!
+//! A root is read-only to Tangible unless the host's operator marked it
+//! removable (`TANGIBLE_REMOVABLE_ROOTS`, ADR 0017), and then only
+//! [`WatchRoots::remove_matching`] deletes in it: the files of one download
+//! whose bytes the library holds, found by the same rules an import uses.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Component, Path, PathBuf};
 
+use sha2::{Digest as _, Sha256};
 use tokio::fs;
+use tokio::io::AsyncReadExt as _;
 
 /// Why a watched path could not be used.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -64,6 +71,13 @@ pub enum WatchRootError {
     #[error("that directory holds no files to import")]
     EmptyDirectory,
 
+    /// Deleting was asked for in a root not marked removable.
+    #[error("the watched root {path_id} is not one Tangible may delete in")]
+    NotRemovable {
+        /// What was asked for.
+        path_id: String,
+    },
+
     /// A directory past the bounds a disc's files fit in.
     #[error(
         "that directory holds more than {MAX_DIRECTORY_FILES} files or is nested deeper than {MAX_DIRECTORY_DEPTH} levels"
@@ -98,13 +112,75 @@ pub enum WatchedSource {
 #[derive(Debug, Clone, Default)]
 pub struct WatchRoots {
     roots: BTreeMap<String, PathBuf>,
+    removable: BTreeSet<String>,
+}
+
+/// What deleting a download's files came to.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Removed {
+    /// Files deleted: their bytes were the library's.
+    pub files_removed: usize,
+    /// Their bytes.
+    pub bytes_removed: u64,
+    /// Files left: their bytes were not the library's.
+    pub files_kept: usize,
 }
 
 impl WatchRoots {
     /// Roots from identifier and path pairs.
     #[must_use]
     pub fn new(roots: BTreeMap<String, PathBuf>) -> Self {
-        Self { roots }
+        Self {
+            roots,
+            removable: BTreeSet::new(),
+        }
+    }
+
+    /// The same roots, with `ids` marked removable.
+    ///
+    /// # Errors
+    ///
+    /// The first id that names no configured root: a removable root that was
+    /// meant and is not there would leave its downloads for ever, and one
+    /// mistyped is better refused at start.
+    pub fn with_removable<I, S>(mut self, ids: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        for id in ids {
+            let id = id.as_ref().trim();
+            if id.is_empty() {
+                continue;
+            }
+            if !self.roots.contains_key(id) {
+                return Err(id.to_owned());
+            }
+            self.removable.insert(id.to_owned());
+        }
+        Ok(self)
+    }
+
+    /// Whether Tangible may delete in the root `path_id`.
+    #[must_use]
+    pub fn is_removable(&self, path_id: &str) -> bool {
+        self.removable.contains(path_id)
+    }
+
+    /// The identifiers of the roots Tangible may delete in.
+    #[must_use]
+    pub fn removable_ids(&self) -> Vec<String> {
+        self.removable.iter().cloned().collect()
+    }
+
+    /// Where the roots Tangible may delete in are, for the server's own
+    /// checks (diagnostics asks whether each is writable). Never for the API.
+    #[must_use]
+    pub fn removable_paths(&self) -> Vec<PathBuf> {
+        self.removable
+            .iter()
+            .filter_map(|id| self.roots.get(id).cloned())
+            .collect()
     }
 
     /// Parse the `id=path,id=path` form used by configuration.
@@ -315,6 +391,174 @@ impl WatchRoots {
         files.sort();
         Ok(WatchedSource::Directory { files })
     }
+}
+
+impl WatchRoots {
+    /// Delete the download at `relative` beneath the removable root
+    /// `path_id`: each regular file in it whose SHA-256 (lowercase hex) and
+    /// length are in `library`, then the folders that leaves empty, the one
+    /// named among them and those above it, up to but never the root (a
+    /// client may name a job's one file inside a folder of its own).
+    /// Everything else stays and is counted.
+    ///
+    /// The download is found exactly as an import finds it
+    /// ([`Self::resolve_source`]): no links, nothing outside the root, the
+    /// same bounds. Each file is hashed just before it is deleted. Names
+    /// beginning with `.` are neither imported nor deleted.
+    ///
+    /// # Errors
+    ///
+    /// [`WatchRootError::NotRemovable`] for a root not marked removable; as
+    /// [`Self::resolve_source`] otherwise ([`WatchRootError::NotFound`] when
+    /// nothing is there); [`WatchRootError::Unreadable`] for a file that
+    /// cannot be read or deleted.
+    pub async fn remove_matching(
+        &self,
+        path_id: &str,
+        relative: &str,
+        library: &HashSet<(String, u64)>,
+    ) -> Result<Removed, WatchRootError> {
+        if !self.contains(path_id) {
+            return Err(WatchRootError::UnknownRoot {
+                path_id: path_id.to_owned(),
+            });
+        }
+        if !self.is_removable(path_id) {
+            return Err(WatchRootError::NotRemovable {
+                path_id: path_id.to_owned(),
+            });
+        }
+        let source = self.resolve_source(path_id, relative).await?;
+        let root = self.canonical_root(path_id).await?;
+        let (files, directory) = match source {
+            WatchedSource::File(path) => (vec![(String::new(), path)], None),
+            WatchedSource::Directory { files } => {
+                let directory = self.resolve_directory(path_id, relative).await?;
+                (files, Some(directory))
+            }
+        };
+        let mut removed = Removed::default();
+        for (_, path) in &files {
+            // Looked at again: the walk was a moment ago.
+            let metadata = fs::symlink_metadata(path)
+                .await
+                .map_err(|_| WatchRootError::Unreadable)?;
+            if !metadata.file_type().is_file() {
+                removed.files_kept += 1;
+                continue;
+            }
+            let (digest, length) = hash_file(path)
+                .await
+                .map_err(|_| WatchRootError::Unreadable)?;
+            if library.contains(&(digest, length)) {
+                fs::remove_file(path)
+                    .await
+                    .map_err(|_| WatchRootError::Unreadable)?;
+                removed.files_removed += 1;
+                removed.bytes_removed += length;
+            } else {
+                removed.files_kept += 1;
+            }
+        }
+        if let Some(directory) = directory {
+            // Deepest first, so a folder emptied by its children goes too.
+            // One that is not empty stays: removing a directory never
+            // removes what is in it.
+            let mut folders: BTreeSet<PathBuf> = BTreeSet::new();
+            for (inside, _) in &files {
+                let mut parent = Path::new(inside).parent();
+                while let Some(folder) = parent.filter(|p| !p.as_os_str().is_empty()) {
+                    folders.insert(directory.join(folder));
+                    parent = folder.parent();
+                }
+            }
+            let mut folders: Vec<PathBuf> = folders.into_iter().collect();
+            folders.sort_by_key(|folder| std::cmp::Reverse(folder.components().count()));
+            for folder in folders {
+                let _ = fs::remove_dir(&folder).await;
+            }
+            prune_up(&root, &directory).await;
+        } else if removed.files_removed == 1
+            && let Some(parent) = files.first().and_then(|(_, path)| path.parent())
+        {
+            prune_up(&root, parent).await;
+        }
+        Ok(removed)
+    }
+
+    /// A root's real path.
+    async fn canonical_root(&self, path_id: &str) -> Result<PathBuf, WatchRootError> {
+        let root = self
+            .roots
+            .get(path_id)
+            .ok_or_else(|| WatchRootError::UnknownRoot {
+                path_id: path_id.to_owned(),
+            })?;
+        fs::canonicalize(root)
+            .await
+            .map_err(|_| WatchRootError::Unreadable)
+    }
+
+    /// The real path of a directory beneath a root, checked to be inside it
+    /// and not itself a link, and never the root itself.
+    async fn resolve_directory(
+        &self,
+        path_id: &str,
+        relative: &str,
+    ) -> Result<PathBuf, WatchRootError> {
+        check_relative(relative)?;
+        let root = self.canonical_root(path_id).await?;
+        let candidate = root.join(relative);
+        let metadata = fs::symlink_metadata(&candidate)
+            .await
+            .map_err(|_| WatchRootError::Unreadable)?;
+        if metadata.file_type().is_symlink() {
+            return Err(WatchRootError::UnsafePath {
+                reason: "symbolic links are not followed",
+            });
+        }
+        let resolved = fs::canonicalize(&candidate)
+            .await
+            .map_err(|_| WatchRootError::Unreadable)?;
+        if resolved == root || !resolved.starts_with(&root) {
+            return Err(WatchRootError::UnsafePath {
+                reason: "it resolves outside the watched root",
+            });
+        }
+        Ok(resolved)
+    }
+}
+
+/// Remove `folder` and each folder above it that is left empty, stopping at
+/// the first that is not, and never removing `root` or anything outside it.
+async fn prune_up(root: &Path, folder: &Path) {
+    let mut here = Some(folder);
+    while let Some(folder) = here {
+        if folder == root || !folder.starts_with(root) {
+            return;
+        }
+        if fs::remove_dir(folder).await.is_err() {
+            return;
+        }
+        here = folder.parent();
+    }
+}
+
+/// A file's SHA-256, lowercase hex, and its length, read in 1 MiB pieces.
+async fn hash_file(path: &Path) -> std::io::Result<(String, u64)> {
+    let mut file = fs::File::open(path).await?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; 1 << 20];
+    let mut length = 0_u64;
+    loop {
+        let read = file.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        length += read as u64;
+    }
+    Ok((hex::encode(hasher.finalize()), length))
 }
 
 /// Reject a relative path before it touches the filesystem.
@@ -590,6 +834,190 @@ mod tests {
         assert!(matches!(
             roots(dir.path()).resolve_source("incoming", "disc").await,
             Err(WatchRootError::UnsafePath { .. })
+        ));
+    }
+
+    /// What the library holds of `contents`: their digests and lengths.
+    fn library(contents: &[&[u8]]) -> HashSet<(String, u64)> {
+        contents
+            .iter()
+            .map(|bytes| {
+                (
+                    hex::encode(Sha256::digest(bytes)),
+                    u64::try_from(bytes.len()).unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    fn removable(dir: &Path) -> WatchRoots {
+        roots(dir).with_removable(["incoming"]).unwrap()
+    }
+
+    #[test]
+    fn only_a_configured_root_is_marked_removable() {
+        let roots = WatchRoots::parse("incoming=/srv/incoming,archive=/srv/archive");
+        let marked = roots.clone().with_removable([" incoming ", ""]).unwrap();
+        assert!(marked.is_removable("incoming"));
+        assert!(!marked.is_removable("archive"));
+        assert_eq!(marked.removable_ids(), ["incoming"]);
+        assert_eq!(
+            roots.with_removable(["incoming", "nzbs"]).unwrap_err(),
+            "nzbs"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_download_loses_only_the_files_the_library_holds_and_the_folders_left_empty() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let job = dir.path().join("Disc (CUE)");
+        std::fs::create_dir_all(job.join("extras/deeper")).unwrap();
+        std::fs::write(job.join("disc.cue"), b"cue").unwrap();
+        std::fs::write(job.join("disc.bin"), b"bin bytes").unwrap();
+        std::fs::write(job.join("extras/deeper/track.bin"), b"track").unwrap();
+        std::fs::write(job.join("extras/notes.nfo"), b"not imported").unwrap();
+        std::fs::write(job.join(".DS_Store"), b"bookkeeping").unwrap();
+        let held = library(&[b"cue", b"bin bytes", b"track"]);
+
+        let removed = removable(dir.path())
+            .remove_matching("incoming", "Disc (CUE)", &held)
+            .await
+            .unwrap();
+        assert_eq!(
+            removed,
+            Removed {
+                files_removed: 3,
+                bytes_removed: 17,
+                files_kept: 1,
+            }
+        );
+        assert!(!job.join("disc.bin").exists());
+        assert!(!job.join("extras/deeper").exists(), "emptied, so removed");
+        assert!(job.join("extras/notes.nfo").exists(), "not the library's");
+        assert!(job.join(".DS_Store").exists(), "never looked at");
+        assert!(dir.path().exists(), "the root is never removed");
+
+        // A job's one file in a folder of its own, named as the file: the
+        // folder goes with it.
+        let single = dir.path().join("single");
+        std::fs::create_dir(&single).unwrap();
+        std::fs::write(single.join("single.iso"), b"one").unwrap();
+        let removed = removable(dir.path())
+            .remove_matching("incoming", "single/single.iso", &library(&[b"one"]))
+            .await
+            .unwrap();
+        assert_eq!(removed.files_removed, 1);
+        assert!(!single.exists());
+
+        // Everything the library's: the folder goes too, the root stays.
+        let whole = dir.path().join("whole");
+        std::fs::create_dir(&whole).unwrap();
+        std::fs::write(whole.join("disc.iso"), b"iso").unwrap();
+        let removed = removable(dir.path())
+            .remove_matching("incoming", "whole", &library(&[b"iso"]))
+            .await
+            .unwrap();
+        assert_eq!(removed.files_removed, 1);
+        assert!(!whole.exists());
+        assert!(dir.path().exists());
+    }
+
+    #[tokio::test]
+    async fn a_file_changed_since_import_is_kept() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        std::fs::write(dir.path().join("disc.iso"), b"changed").unwrap();
+        let removed = removable(dir.path())
+            .remove_matching("incoming", "disc.iso", &library(&[b"original"]))
+            .await
+            .unwrap();
+        assert_eq!(removed.files_removed, 0);
+        assert_eq!(removed.files_kept, 1);
+        assert!(dir.path().join("disc.iso").exists());
+
+        // The same bytes but another length cannot happen; another length
+        // recorded for the same digest is still not a match.
+        let mut wrong_length = library(&[b"changed"]);
+        wrong_length = wrong_length
+            .into_iter()
+            .map(|(digest, length)| (digest, length + 1))
+            .collect();
+        let removed = removable(dir.path())
+            .remove_matching("incoming", "disc.iso", &wrong_length)
+            .await
+            .unwrap();
+        assert_eq!(removed.files_removed, 0);
+    }
+
+    #[tokio::test]
+    async fn nothing_is_deleted_outside_a_removable_root_or_through_a_link() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let outside = tempfile::TempDir::new().expect("temp dir");
+        std::fs::write(dir.path().join("disc.iso"), b"iso").unwrap();
+        std::fs::write(outside.path().join("other.iso"), b"iso").unwrap();
+        let held = library(&[b"iso"]);
+
+        // A root not marked removable.
+        assert!(matches!(
+            roots(dir.path())
+                .remove_matching("incoming", "disc.iso", &held)
+                .await,
+            Err(WatchRootError::NotRemovable { .. })
+        ));
+        assert!(matches!(
+            removable(dir.path())
+                .remove_matching("elsewhere", "disc.iso", &held)
+                .await,
+            Err(WatchRootError::UnknownRoot { .. })
+        ));
+        assert!(dir.path().join("disc.iso").exists());
+
+        // The root itself, and ways out of it.
+        for relative in ["", ".", "..", "../other.iso", "/etc"] {
+            assert!(
+                removable(dir.path())
+                    .remove_matching("incoming", relative, &held)
+                    .await
+                    .is_err(),
+                "{relative:?}"
+            );
+        }
+
+        // A link to a file outside, alone or in a folder.
+        std::os::unix::fs::symlink(
+            outside.path().join("other.iso"),
+            dir.path().join("link.iso"),
+        )
+        .unwrap();
+        let folder = dir.path().join("folder");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(folder.join("disc.iso"), b"iso").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("other.iso"), folder.join("other.iso"))
+            .unwrap();
+        for relative in ["link.iso", "folder"] {
+            assert!(matches!(
+                removable(dir.path())
+                    .remove_matching("incoming", relative, &held)
+                    .await,
+                Err(WatchRootError::UnsafePath { .. })
+            ));
+        }
+        // A folder that is itself a link.
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("linked")).unwrap();
+        assert!(matches!(
+            removable(dir.path())
+                .remove_matching("incoming", "linked", &held)
+                .await,
+            Err(WatchRootError::UnsafePath { .. })
+        ));
+        assert!(outside.path().join("other.iso").exists());
+        assert!(folder.join("disc.iso").exists(), "refused whole");
+
+        // Nothing there.
+        assert!(matches!(
+            removable(dir.path())
+                .remove_matching("incoming", "gone.iso", &held)
+                .await,
+            Err(WatchRootError::NotFound)
         ));
     }
 

@@ -147,6 +147,15 @@ pub struct ServeConfig {
     #[arg(long, env = "TANGIBLE_WATCH_ROOTS", default_value = "")]
     pub watch_roots: String,
 
+    /// Watched roots Tangible may delete in, as `id,id`: a SABnzbd or NZBGet
+    /// download folder whose completed files are deleted once imported, for
+    /// an integration set to remove after import (ADR 0017).
+    ///
+    /// Empty by default: every watched root is only read. Each id must be in
+    /// `TANGIBLE_WATCH_ROOTS`, and its folder mounted read-write.
+    #[arg(long, env = "TANGIBLE_REMOVABLE_ROOTS", default_value = "")]
+    pub removable_roots: String,
+
     /// Largest upload accepted, in bytes.
     ///
     /// Defaults to 64 GiB, which covers a dual-layer Blu-ray with room to
@@ -466,6 +475,7 @@ mod tests {
         // The safe value. With none configured, no request can name a path on
         // this host at all.
         assert_eq!(parse().watch_roots, "");
+        assert_eq!(parse().removable_roots, "");
     }
 
     #[test]

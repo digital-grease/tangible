@@ -169,6 +169,12 @@ pub struct SabnzbdSettings {
     /// The watched root on this server where the same folder is mounted,
     /// read-only, by its id in `TANGIBLE_WATCH_ROOTS`.
     pub local_root: String,
+    /// What becomes of a download once its import is in the library and
+    /// checked: kept (the default), or its files deleted by Tangible and the
+    /// job removed from SABnzbd's history. Removing needs `local_root` to be
+    /// a removable root, mounted read-write (ADR 0017).
+    #[serde(default)]
+    pub after_import: AfterImport,
 }
 
 impl SabnzbdSettings {
@@ -180,15 +186,17 @@ impl SabnzbdSettings {
     /// As [`QbittorrentSettings::checked`].
     pub fn checked(
         value: &serde_json::Value,
-        known_roots: &[String],
+        roots: Roots<'_>,
         policy: &OutboundPolicy,
     ) -> Result<Self, SettingsError> {
         let settings: Self = parsed(value)?;
+        let local_root = checked_local_root(settings.local_root, roots.known)?;
         Ok(Self {
             base_url: checked_base_url(&settings.base_url, policy)?,
             category: checked_category(settings.category)?,
             client_path: checked_client_path(&settings.client_path, "SABnzbd")?,
-            local_root: checked_local_root(settings.local_root, known_roots)?,
+            after_import: checked_removal(settings.after_import, &local_root, roots)?,
+            local_root,
         })
     }
 }
@@ -213,6 +221,10 @@ pub struct NzbgetSettings {
     /// The watched root on this server where the same folder is mounted,
     /// read-only, by its id in `TANGIBLE_WATCH_ROOTS`.
     pub local_root: String,
+    /// As for SABnzbd: kept, or its files deleted by Tangible and the job
+    /// hidden in NZBGet's history.
+    #[serde(default)]
+    pub after_import: AfterImport,
 }
 
 impl NzbgetSettings {
@@ -224,16 +236,18 @@ impl NzbgetSettings {
     /// As [`QbittorrentSettings::checked`].
     pub fn checked(
         value: &serde_json::Value,
-        known_roots: &[String],
+        roots: Roots<'_>,
         policy: &OutboundPolicy,
     ) -> Result<Self, SettingsError> {
         let settings: Self = parsed(value)?;
+        let local_root = checked_local_root(settings.local_root, roots.known)?;
         Ok(Self {
             base_url: checked_base_url(&settings.base_url, policy)?,
             username: checked_username(&settings.username)?,
             category: checked_category(settings.category)?,
             client_path: checked_client_path(&settings.client_path, "NZBGet")?,
-            local_root: checked_local_root(settings.local_root, known_roots)?,
+            after_import: checked_removal(settings.after_import, &local_root, roots)?,
+            local_root,
         })
     }
 }
@@ -467,6 +481,32 @@ fn checked_client_path(path: &str, client: &str) -> Result<String, SettingsError
     })
 }
 
+/// The watched roots a server has, and those of them it may delete in.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Roots<'a> {
+    /// Every watched root's id (`TANGIBLE_WATCH_ROOTS`).
+    pub known: &'a [String],
+    /// The ids of those Tangible may delete in
+    /// (`TANGIBLE_REMOVABLE_ROOTS`, ADR 0017).
+    pub removable: &'a [String],
+}
+
+/// A Usenet client's `after_import`: `remove` only where Tangible may
+/// delete in its root, since it deletes the files itself.
+fn checked_removal(
+    after_import: AfterImport,
+    local_root: &str,
+    roots: Roots<'_>,
+) -> Result<AfterImport, SettingsError> {
+    if after_import == AfterImport::Remove && !roots.removable.iter().any(|id| id == local_root) {
+        return Err(SettingsError(format!(
+            "after_import remove needs the watched root {local_root} to be one Tangible may \
+             delete in: list it in TANGIBLE_REMOVABLE_ROOTS and mount it read-write"
+        )));
+    }
+    Ok(after_import)
+}
+
 fn checked_local_root(root: String, known_roots: &[String]) -> Result<String, SettingsError> {
     if known_roots.contains(&root) {
         return Ok(root);
@@ -489,15 +529,15 @@ fn checked_local_root(root: String, known_roots: &[String]) -> Result<String, Se
 pub fn checked_settings(
     kind: ConfigurableKind,
     value: &serde_json::Value,
-    known_roots: &[String],
+    roots: Roots<'_>,
     policy: &OutboundPolicy,
 ) -> Result<serde_json::Value, SettingsError> {
     match kind {
         ConfigurableKind::Qbittorrent => {
-            stored(&QbittorrentSettings::checked(value, known_roots, policy)?)
+            stored(&QbittorrentSettings::checked(value, roots.known, policy)?)
         }
-        ConfigurableKind::Sabnzbd => stored(&SabnzbdSettings::checked(value, known_roots, policy)?),
-        ConfigurableKind::Nzbget => stored(&NzbgetSettings::checked(value, known_roots, policy)?),
+        ConfigurableKind::Sabnzbd => stored(&SabnzbdSettings::checked(value, roots, policy)?),
+        ConfigurableKind::Nzbget => stored(&NzbgetSettings::checked(value, roots, policy)?),
         ConfigurableKind::S3 => stored(&S3Settings::checked(value, policy)?),
         ConfigurableKind::RommApi => stored(&RommApiSettings::checked(value, policy)?),
     }
@@ -517,6 +557,13 @@ mod tests {
         vec!["downloads".to_owned()]
     }
 
+    fn known(roots: &[String]) -> Roots<'_> {
+        Roots {
+            known: roots,
+            removable: &[],
+        }
+    }
+
     fn policy() -> OutboundPolicy {
         OutboundPolicy::for_integrations(Vec::new(), None)
     }
@@ -532,8 +579,13 @@ mod tests {
 
     #[test]
     fn good_settings_are_stored_tidied() {
-        let stored =
-            checked_settings(ConfigurableKind::Qbittorrent, &good(), &roots(), &policy()).unwrap();
+        let stored = checked_settings(
+            ConfigurableKind::Qbittorrent,
+            &good(),
+            known(&roots()),
+            &policy(),
+        )
+        .unwrap();
         assert_eq!(
             stored,
             serde_json::json!({
@@ -617,7 +669,7 @@ mod tests {
             let error = checked_settings(
                 ConfigurableKind::Qbittorrent,
                 &settings,
-                &roots(),
+                known(&roots()),
                 &policy(),
             )
             .expect_err("refused");
@@ -633,15 +685,49 @@ mod tests {
             checked_settings(
                 ConfigurableKind::Qbittorrent,
                 &settings,
-                &roots(),
+                known(&roots()),
                 &policy()
             )
             .is_err()
         );
         let allowed = OutboundPolicy::for_integrations(vec!["127.0.0.1/32".parse().unwrap()], None);
         assert!(
-            checked_settings(ConfigurableKind::Qbittorrent, &settings, &roots(), &allowed).is_ok()
+            checked_settings(
+                ConfigurableKind::Qbittorrent,
+                &settings,
+                known(&roots()),
+                &allowed
+            )
+            .is_ok()
         );
+    }
+
+    #[test]
+    fn a_usenet_client_removes_only_where_tangible_may_delete() {
+        let mut removing = serde_json::json!({
+            "base_url": "http://192.168.1.13:8080/",
+            "client_path": "/downloads/complete/tangible",
+            "local_root": "downloads",
+            "after_import": "remove",
+        });
+        let roots = roots();
+        let removable = Roots {
+            known: &roots,
+            removable: &roots,
+        };
+        for kind in [ConfigurableKind::Sabnzbd, ConfigurableKind::Nzbget] {
+            if kind == ConfigurableKind::Nzbget {
+                removing["username"] = "tangible".into();
+            }
+            let error = checked_settings(kind, &removing, known(&roots), &policy())
+                .expect_err("a root Tangible may not delete in");
+            assert!(error.0.contains("TANGIBLE_REMOVABLE_ROOTS"), "{error}");
+            let stored = checked_settings(kind, &removing, removable, &policy()).unwrap();
+            assert_eq!(stored["after_import"], "remove", "{kind:?}");
+            let mut keeping = removing.clone();
+            keeping["after_import"] = "keep".into();
+            assert!(checked_settings(kind, &keeping, known(&roots), &policy()).is_ok());
+        }
     }
 
     #[test]
@@ -652,23 +738,34 @@ mod tests {
             "local_root": "downloads",
         });
         assert_eq!(
-            checked_settings(ConfigurableKind::Sabnzbd, &good, &roots(), &policy()).unwrap(),
+            checked_settings(ConfigurableKind::Sabnzbd, &good, known(&roots()), &policy()).unwrap(),
             serde_json::json!({
                 "base_url": "http://192.168.1.13:8080/sabnzbd",
                 "category": "tangible",
                 "client_path": "/downloads/complete/tangible",
                 "local_root": "downloads",
+                "after_import": "keep",
             })
         );
         let mut with_user = good.clone();
         with_user["username"] = "admin".into();
-        let error = checked_settings(ConfigurableKind::Sabnzbd, &with_user, &roots(), &policy())
-            .expect_err("refused");
+        let error = checked_settings(
+            ConfigurableKind::Sabnzbd,
+            &with_user,
+            known(&roots()),
+            &policy(),
+        )
+        .expect_err("refused");
         assert!(error.0.contains("do not fit"), "{error}");
         let mut relative = good;
         relative["client_path"] = "complete".into();
-        let error = checked_settings(ConfigurableKind::Sabnzbd, &relative, &roots(), &policy())
-            .expect_err("refused");
+        let error = checked_settings(
+            ConfigurableKind::Sabnzbd,
+            &relative,
+            known(&roots()),
+            &policy(),
+        )
+        .expect_err("refused");
         assert!(error.0.contains("as SABnzbd reports it"), "{error}");
     }
 
@@ -679,7 +776,7 @@ mod tests {
             "buckets": [" discs ", "discs", "archive.2026"],
         });
         assert_eq!(
-            checked_settings(ConfigurableKind::S3, &good, &roots(), &policy()).unwrap(),
+            checked_settings(ConfigurableKind::S3, &good, known(&roots()), &policy()).unwrap(),
             serde_json::json!({
                 "endpoint": "http://192.168.1.13:8333/",
                 "region": "us-east-1",
@@ -704,22 +801,23 @@ mod tests {
             (with("path_style", false.into()), "path_style"),
             (with("client_path", "/x".into()), "do not fit"),
         ] {
-            let error = checked_settings(ConfigurableKind::S3, &settings, &roots(), &policy())
-                .expect_err("refused");
+            let error =
+                checked_settings(ConfigurableKind::S3, &settings, known(&roots()), &policy())
+                    .expect_err("refused");
             assert!(error.0.contains(says), "{settings}: {error}");
         }
         let mut aws = good;
         aws["endpoint"] = "https://s3.eu-west-1.amazonaws.com".into();
         aws["path_style"] = false.into();
         aws["region"] = "eu-west-1".into();
-        assert!(checked_settings(ConfigurableKind::S3, &aws, &roots(), &policy()).is_ok());
+        assert!(checked_settings(ConfigurableKind::S3, &aws, known(&roots()), &policy()).is_ok());
     }
 
     #[test]
     fn romm_api_settings_are_checked_and_stored_tidied() {
         let good = serde_json::json!({ "base_url": "http://192.168.1.13:8080" });
         assert_eq!(
-            checked_settings(ConfigurableKind::RommApi, &good, &roots(), &policy()).unwrap(),
+            checked_settings(ConfigurableKind::RommApi, &good, known(&roots()), &policy()).unwrap(),
             serde_json::json!({
                 "base_url": "http://192.168.1.13:8080/",
                 "scan_after_export": true,
@@ -748,8 +846,13 @@ mod tests {
             (with("web_url", "https://romm/?x=1".into()), "web_url"),
             (with("token", "rmm_x".into()), "do not fit"),
         ] {
-            let error = checked_settings(ConfigurableKind::RommApi, &settings, &roots(), &policy())
-                .expect_err("refused");
+            let error = checked_settings(
+                ConfigurableKind::RommApi,
+                &settings,
+                known(&roots()),
+                &policy(),
+            )
+            .expect_err("refused");
             assert!(error.0.contains(says), "{settings}: {error}");
         }
     }

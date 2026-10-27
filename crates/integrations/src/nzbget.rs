@@ -4,10 +4,14 @@
 //! An NZBGet the operator already runs (docs/plans/acquisition.md A5,
 //! ADR 0016).
 //!
-//! Asked for four things only, through its JSON-RPC API: its version, its
+//! Asked for four things, through its JSON-RPC API: its version, its
 //! categories, to append an NZB the operator supplied to Tangible's category
-//! with no post-processing parameters, and how one job is doing. Never to
-//! search, run a script, or delete anything. HTTP basic authentication, the
+//! with no post-processing parameters, and how one job is doing. And a fifth
+//! only where an administrator set the integration to remove after import,
+//! once the library's copy is checked and Tangible has deleted the
+//! download's files itself: to hide the job in history
+//! (docs/plans/source-retention.md, ADR 0017). Never to search, run a
+//! script, or delete files. HTTP basic authentication, the
 //! header marked sensitive; every request through the outbound client under
 //! the integrations policy.
 //!
@@ -25,6 +29,10 @@
 //!   moved it) naming its folder, or `FAILURE/...`, `WARNING/...`,
 //!   `DELETED/...`.
 //! - Sizes are `...SizeLo` and `...SizeHi`, 32-bit halves of a byte count.
+//! - `editqueue("HistoryDelete", "", [id])` hides an entry (still listed by
+//!   `history(true)`), `HistoryFinalDelete` drops it; each answers `true`,
+//!   or `false` for an id it does not have, and neither touches `DestDir`
+//!   (checked 2026-10-27).
 //! - `config` answers every setting, NZBGet's own passwords among them; only
 //!   the category names are read from it, and nothing else is kept.
 
@@ -184,6 +192,22 @@ impl NzbgetClient {
             )
             .await?;
         Ok((id > 0).then_some(id))
+    }
+
+    /// Hide job `nzbid` in history: the gentler of NZBGet's two deletes,
+    /// so it is still listed among hidden entries. Its files are not
+    /// touched. Answers whether NZBGet had it.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`].
+    pub async fn forget(&self, nzbid: i64) -> Result<bool, ClientError> {
+        self.call(
+            "editqueue",
+            serde_json::json!(["HistoryDelete", "", [nzbid]]),
+            MAX_BODY_BYTES,
+        )
+        .await
     }
 
     /// Where job `nzbid` stands, or `None` when NZBGet has no such job.
@@ -368,6 +392,15 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn a_recorded_forget_says_whether_nzbget_had_the_job() {
+        let had: bool = parse_reply(&fixture("editqueue-history-delete-25.3.json")).unwrap();
+        assert!(had);
+        let had: bool =
+            parse_reply(&fixture("editqueue-history-delete-unknown-25.3.json")).unwrap();
+        assert!(!had);
     }
 
     #[test]

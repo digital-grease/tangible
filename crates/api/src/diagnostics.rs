@@ -177,6 +177,9 @@ pub struct DiagnosticsSettings {
     /// Days after a full scrub ends before the next is queued
     /// (`TANGIBLE_SCRUB_INTERVAL_DAYS`); 0 is never.
     pub scrub_interval_days: u32,
+    /// The watched roots Tangible may delete in
+    /// (`TANGIBLE_REMOVABLE_ROOTS`, ADR 0017), to see that each is writable.
+    pub removable_roots: Vec<PathBuf>,
 }
 
 /// How URL imports are set, when they are on (ADR 0016).
@@ -225,6 +228,8 @@ pub struct Facts {
     pub integrity: Answer<IntegritySummary>,
     /// RomM's API, when an administrator configured it.
     pub romm_api: Answer<Option<RommApiFacts>>,
+    /// Each watched root Tangible may delete in.
+    pub removable_roots: Vec<DirectoryCheck>,
 }
 
 /// How RomM's API stands, from the database.
@@ -298,6 +303,10 @@ pub async fn collect(database: &Database, settings: &DiagnosticsSettings) -> Fac
             )
         };
     let incoming = settings.storage_root.join(OBJECTS_DIR).join(INCOMING_DIR);
+    let mut removable_roots = Vec::with_capacity(settings.removable_roots.len());
+    for root in &settings.removable_roots {
+        removable_roots.push(check_directory(root, None).await);
+    }
     Facts {
         database: database_answer,
         pending_migrations,
@@ -313,6 +322,7 @@ pub async fn collect(database: &Database, settings: &DiagnosticsSettings) -> Fac
         sealed_secrets,
         integrity,
         romm_api,
+        removable_roots,
     }
 }
 
@@ -362,6 +372,7 @@ pub fn assess(settings: &DiagnosticsSettings, facts: &Facts, now: OffsetDateTime
                 directory_check("Library", &facts.library),
                 directory_check("Staging", &facts.staging),
                 integrity_check(settings.scrub_interval_days, &facts.integrity, now),
+                removable_roots_check(&facts.removable_roots),
             ],
         },
         DiagnosticSection {
@@ -1042,6 +1053,39 @@ fn setting_checks(settings: &DiagnosticsSettings) -> Vec<DiagnosticCheck> {
     ]
 }
 
+/// Whether Tangible can delete where it was told it may: each removable
+/// root there and writable. Counted, never named.
+fn removable_roots_check(roots: &[DirectoryCheck]) -> DiagnosticCheck {
+    let total = roots.len();
+    let unusable = roots
+        .iter()
+        .filter(|root| !root.present || root.writable != Some(true))
+        .count();
+    match (total, unusable) {
+        (0, _) => check(
+            "Removable roots",
+            CheckStatus::Ok,
+            "none: every watched root is only read",
+        ),
+        (_, 0) => check(
+            "Removable roots",
+            CheckStatus::Ok,
+            format!(
+                "{total} {}, writable",
+                if total == 1 { "root" } else { "roots" }
+            ),
+        ),
+        _ => check(
+            "Removable roots",
+            CheckStatus::Warn,
+            format!(
+                "{unusable} of {total} missing or read-only: Tangible cannot delete imported \
+                 downloads there; mount them read-write"
+            ),
+        ),
+    }
+}
+
 /// Whether the integration secrets stored can be opened with the key held.
 fn secret_check(key_id: Option<&str>, sealed: &Answer<Vec<(String, i64)>>) -> DiagnosticCheck {
     const NAME: &str = "Integration secrets";
@@ -1236,6 +1280,7 @@ mod tests {
             url_imports: None,
             secret_key_id: None,
             scrub_interval_days: 0,
+            removable_roots: Vec::new(),
         }
     }
 
@@ -1304,6 +1349,7 @@ mod tests {
                 damaged_artifacts: 0,
             }),
             romm_api: Answer::Found(None),
+            removable_roots: Vec::new(),
         }
     }
 
@@ -1468,6 +1514,31 @@ mod tests {
                 .starts_with("2 migration(s) not applied (9, 10)")
         );
         assert!(schema.detail.contains("tangible migrate"));
+    }
+
+    #[test]
+    fn removable_roots_are_counted_and_one_that_cannot_be_written_is_a_warning() {
+        let mut facts = healthy();
+        let report = assess(&settings(), &facts, now());
+        let none = find(&report, "Removable roots");
+        assert_eq!(none.status, CheckStatus::Ok);
+        assert_eq!(none.detail, "none: every watched root is only read");
+
+        facts.removable_roots = vec![roomy(), roomy()];
+        let both = assess(&settings(), &facts, now());
+        assert_eq!(find(&both, "Removable roots").detail, "2 roots, writable");
+
+        let mut read_only = roomy();
+        read_only.writable = Some(false);
+        facts.removable_roots = vec![roomy(), read_only];
+        let report = assess(&settings(), &facts, now());
+        let warned = find(&report, "Removable roots");
+        assert_eq!(warned.status, CheckStatus::Warn);
+        assert!(
+            warned.detail.starts_with("1 of 2 missing or read-only"),
+            "{}",
+            warned.detail
+        );
     }
 
     #[test]

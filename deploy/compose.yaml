@@ -32,6 +32,10 @@ services:
       # default: with none configured, no request can name a path on this host
       # at all. Anything listed here must also be mounted below.
       TANGIBLE_WATCH_ROOTS: ${TANGIBLE_WATCH_ROOTS:-}
+      # Watched roots Tangible may delete imported Usenet downloads in, for a
+      # SABnzbd or NZBGet set to remove after import (ADR 0017). Empty: every
+      # root is only read. Mount each one listed read-write, the rest :ro.
+      TANGIBLE_REMOVABLE_ROOTS: ${TANGIBLE_REMOVABLE_ROOTS:-}
       TANGIBLE_MAX_UPLOAD_BYTES: ${TANGIBLE_MAX_UPLOAD_BYTES:-68719476736}
       # What makes derivatives (CHDs of disc images), each one only when asked
       # for: chdman, which the image carries, or none.

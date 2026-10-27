@@ -16,13 +16,21 @@
 //!   removed for that import;
 //! - then it removes at the source, having looked first that the source is
 //!   still what was imported: a torrent still in Tangible's category at the
-//!   path imported, an object of the size and ETag imported. Anything else
-//!   is left where it is, saying why.
+//!   path imported, an object of the size and ETag imported, a Usenet
+//!   download still at the path imported. Anything else is left where it
+//!   is, saying why.
+//!
+//! qBittorrent and S3 remove their own. SABnzbd and NZBGet cannot remove a
+//! completed download's files, so Tangible deletes them itself (ADR 0017),
+//! only in a watched root the host's operator marked removable, and only
+//! the files whose bytes the library holds; then it asks the client to
+//! forget the job.
 //!
 //! A source that cannot be reached is tried again with a backoff, saying
 //! why on the import, for as long as the integration still removes. Turning
 //! the setting off ends every removal not yet made.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -30,8 +38,8 @@ use serde_json::{Value, json};
 use tangible_db::integrations::{IntegrationRecord, get_integration, record_integration_health};
 use tangible_db::integrity::{Requested, get_check, request_check};
 use tangible_db::source_removals::{
-    Ending, Hold, SourceRemovalRecord, begin_removing, claim_next_removal, end_removal,
-    hold_removal,
+    Ending, Hold, SourceRemovalRecord, artifact_contents, begin_removing, claim_next_removal,
+    end_removal, hold_removal,
 };
 use tangible_db::{Database, DbError};
 use tangible_domain::{IntegrityCheckId, IntegrityCheckState, SourceRemovalState};
@@ -40,9 +48,10 @@ use tangible_integrations::outbound::OutboundClient;
 use tangible_integrations::s3::{Deleted, ObjectError};
 use tangible_integrations::settings::AfterImport;
 use tangible_integrations::torrent::Infohash;
+use tangible_storage::{WatchRootError, WatchRoots};
 use tokio::sync::Notify;
 
-use crate::download_clients::{DownloadClient, open_client, open_s3};
+use crate::download_clients::{DownloadClient, Folders, open_client, open_s3};
 use crate::integrity::Integrity;
 use crate::secrets::SecretKey;
 
@@ -105,6 +114,7 @@ pub struct SourceRemover {
     key: Option<Arc<SecretKey>>,
     handle: SourceRemovalHandle,
     settings: SourceRemovalSettings,
+    roots: WatchRoots,
 }
 
 /// How one try at a removal came out.
@@ -115,6 +125,7 @@ enum Outcome {
         detail: String,
         files: Option<i32>,
         bytes: Option<i64>,
+        kept: Option<i32>,
         what: Value,
     },
     /// Gone before Tangible got to it.
@@ -129,6 +140,15 @@ enum Outcome {
 /// short.
 fn shown(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).take(64).collect()
+}
+
+/// "1 file", "2 files".
+fn files(count: usize) -> String {
+    if count == 1 {
+        "1 file".to_owned()
+    } else {
+        format!("{count} files")
+    }
 }
 
 /// The wait before the next try, after `attempts` tries that failed.
@@ -164,7 +184,7 @@ fn descriptor_text(record: &SourceRemovalRecord, key: &str) -> Option<String> {
 impl SourceRemover {
     /// Assemble a remover.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         database: Database,
         integrity: Integrity,
         http: Option<OutboundClient>,
@@ -179,7 +199,16 @@ impl SourceRemover {
             key,
             handle,
             settings,
+            roots: WatchRoots::default(),
         }
+    }
+
+    /// The same remover, deleting Usenet downloads in `roots`: those of
+    /// them marked removable. Without, every such download is kept.
+    #[must_use]
+    pub fn with_roots(mut self, roots: WatchRoots) -> Self {
+        self.roots = roots;
+        self
     }
 
     /// Run removals until `shutdown` resolves.
@@ -368,6 +397,9 @@ impl SourceRemover {
         let outcome = match (record.kind.as_str(), removal.source_kind.as_str()) {
             ("qbittorrent", "qbittorrent_job") => self.remove_torrent(removal, &record).await,
             ("s3", "s3_object") => self.remove_object(removal, &record).await,
+            ("sabnzbd", "sabnzbd_job") | ("nzbget", "nzbget_job") => {
+                self.remove_download(removal, &record).await
+            }
             _ => Outcome::Kept(format!(
                 "Tangible does not remove imports from {} after import",
                 record.kind
@@ -456,6 +488,7 @@ impl SourceRemover {
                 detail: "Removed the torrent and its files from qBittorrent".to_owned(),
                 files: None,
                 bytes: Some(torrent.size).filter(|size| *size >= 0),
+                kept: None,
                 what: json!({
                     "kind": "torrent",
                     "infohash": hash.as_str(),
@@ -570,6 +603,7 @@ impl SourceRemover {
             detail: deleted,
             files: Some(1),
             bytes: i64::try_from(info.size).ok(),
+            kept: None,
             what: json!({
                 "kind": "s3_object",
                 "bucket": bucket,
@@ -579,11 +613,172 @@ impl SourceRemover {
         }
     }
 
+    /// Delete a Usenet download's files, those the library holds, and then
+    /// have the client forget the job.
+    async fn remove_download(
+        &self,
+        removal: &SourceRemovalRecord,
+        record: &IntegrationRecord,
+    ) -> Outcome {
+        let Some(job_id) = removal.client_job_id.as_deref() else {
+            return Outcome::Kept("No job is recorded for this import".to_owned());
+        };
+        let Some(imported) = removal.content_path.as_deref() else {
+            return Outcome::Kept(
+                "Where the download was imported from was not recorded, so it was left".to_owned(),
+            );
+        };
+        let opened = open_client(
+            &self.database,
+            self.http.as_ref(),
+            self.key.as_deref(),
+            record,
+        )
+        .await;
+        let (mut client, folders) = match opened {
+            Ok(opened) => opened,
+            Err(error) => return Outcome::Retry(error.detail),
+        };
+        let name = client.name();
+        if !self.roots.is_removable(&folders.local_root) {
+            return Outcome::Kept(format!(
+                "The watched root {} is not one Tangible may delete in \
+                 (TANGIBLE_REMOVABLE_ROOTS), so the download was left",
+                folders.local_root
+            ));
+        }
+        let job = match client.job(job_id).await {
+            Ok(job) => {
+                self.note(record, Ok(())).await;
+                job
+            }
+            Err(error) => {
+                self.note(record, Err(&error)).await;
+                return Outcome::Retry(error.to_string());
+            }
+        };
+        match job.as_ref().map(|job| &job.phase) {
+            Some(Phase::Complete { content_path, .. })
+                if relative_to(&folders.client_path, content_path).as_deref() != Some(imported) =>
+            {
+                return Outcome::Kept(format!(
+                    "{name} has moved the download since it was imported, so it was left"
+                ));
+            }
+            Some(Phase::Failed(state)) => {
+                return Outcome::Kept(format!(
+                    "{name} reports the download as {}, so it was left",
+                    shown(state)
+                ));
+            }
+            Some(Phase::Downloading { .. }) => {
+                return Outcome::Retry(format!("Waiting for {name} to finish with the download"));
+            }
+            // Still where it was imported from; or forgotten there already,
+            // and its files may still be here.
+            Some(Phase::Complete { .. }) | None => {}
+        }
+        let forget = job.is_some().then_some(job_id);
+        self.delete_download(removal, &mut client, &folders, imported, forget)
+            .await
+    }
+
+    /// Delete the files at `imported` beneath the client's watched root that
+    /// the library holds, then have the client forget `forget`, the job, if
+    /// it still lists it.
+    async fn delete_download(
+        &self,
+        removal: &SourceRemovalRecord,
+        client: &mut DownloadClient,
+        folders: &Folders,
+        imported: &str,
+        forget: Option<&str>,
+    ) -> Outcome {
+        let name = client.name();
+        let library: HashSet<(String, u64)> =
+            match artifact_contents(self.database.pool(), removal.artifact_id).await {
+                Ok(rows) => rows
+                    .into_iter()
+                    .filter_map(|(digest, length)| {
+                        u64::try_from(length).ok().map(|length| (digest, length))
+                    })
+                    .collect(),
+                Err(error) => {
+                    tracing::warn!(error = ?error, "could not read what the library holds");
+                    return Outcome::Retry(
+                        "What the library holds of the artifact could not be read".to_owned(),
+                    );
+                }
+            };
+        let removed = match self
+            .roots
+            .remove_matching(&folders.local_root, imported, &library)
+            .await
+        {
+            Ok(removed) => removed,
+            Err(WatchRootError::NotFound) => {
+                if let Some(job_id) = forget {
+                    let _ = client.forget(job_id).await;
+                }
+                return Outcome::AlreadyGone(format!(
+                    "The download's files are no longer in {name}'s folder"
+                ));
+            }
+            Err(WatchRootError::Unreadable) => {
+                return Outcome::Retry(format!(
+                    "{name}'s folder could not be read or written here; is the watched root \
+                     {} mounted read-write?",
+                    folders.local_root
+                ));
+            }
+            Err(error) => return Outcome::Kept(format!("{error}, so the download was left")),
+        };
+        if removed.files_removed == 0 {
+            return Outcome::Kept(format!(
+                "Nothing in the download is what the library holds, so nothing was deleted \
+                 ({} left)",
+                files(removed.files_kept)
+            ));
+        }
+        let left = if removed.files_kept > 0 {
+            format!(
+                ", and left {} the library does not hold",
+                files(removed.files_kept)
+            )
+        } else {
+            String::new()
+        };
+        let forgotten = match forget {
+            None => String::new(),
+            Some(job_id) => match client.forget(job_id).await {
+                Ok(_) => format!("; {name} no longer lists the job"),
+                Err(error) => format!("; {name} could not be asked to forget the job ({error})"),
+            },
+        };
+        let detail = format!(
+            "Deleted {} from {name}'s folder{left}{forgotten}",
+            files(removed.files_removed)
+        );
+        Outcome::Removed {
+            detail,
+            files: Some(i32::try_from(removed.files_removed).unwrap_or(i32::MAX)),
+            bytes: i64::try_from(removed.bytes_removed).ok(),
+            kept: Some(i32::try_from(removed.files_kept).unwrap_or(i32::MAX)),
+            what: json!({
+                "kind": "usenet_download",
+                "client": name,
+                "job_id": removal.client_job_id,
+                "files_removed": removed.files_removed,
+                "files_kept": removed.files_kept,
+            }),
+        }
+    }
+
     /// Record how a try came out.
     async fn finish(&self, removal: &SourceRemovalRecord, outcome: Outcome) -> Result<(), DbError> {
         let pool = self.database.pool();
         let owner = &self.settings.owner;
-        let (state, detail, files, bytes, what) = match outcome {
+        let (state, detail, counts, what) = match outcome {
             Outcome::Retry(why) => {
                 tracing::info!(removal_id = %removal.id, why, "a source removal will be tried again");
                 hold_removal(
@@ -604,17 +799,23 @@ impl SourceRemover {
                 detail,
                 files,
                 bytes,
+                kept,
                 what,
             } => (
                 SourceRemovalState::Removed,
                 detail,
-                files,
-                bytes,
+                (files, bytes, kept),
                 Some(what),
             ),
-            Outcome::AlreadyGone(why) => (SourceRemovalState::AlreadyGone, why, None, None, None),
-            Outcome::Kept(why) => (SourceRemovalState::Kept, why, None, None, None),
+            Outcome::AlreadyGone(why) => (
+                SourceRemovalState::AlreadyGone,
+                why,
+                (None, None, None),
+                None,
+            ),
+            Outcome::Kept(why) => (SourceRemovalState::Kept, why, (None, None, None), None),
         };
+        let (files, bytes, kept) = counts;
         let ended = end_removal(
             pool,
             removal.id,
@@ -624,7 +825,7 @@ impl SourceRemover {
                 detail: &detail,
                 files_removed: files,
                 bytes_removed: bytes,
-                files_kept: None,
+                files_kept: kept,
                 removed: what,
             },
         )

@@ -17,8 +17,9 @@
 //! ```
 //!
 //! Every test makes a bucket of its own, so runs never meet. Each bucket is
-//! a SeaweedFS collection with volumes of its own, and by default a server
-//! has room for only a few: `-volume.max` lets many runs share one server.
+//! a SeaweedFS collection that takes about seven volumes, so a server has
+//! room for only one run's buckets by default, and about nine buckets with
+//! `-volume.max=64`: start a fresh one after a run or so.
 
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 

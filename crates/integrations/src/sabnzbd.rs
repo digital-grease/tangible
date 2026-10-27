@@ -4,9 +4,13 @@
 //! A SABnzbd the operator already runs (docs/plans/acquisition.md A5,
 //! ADR 0016).
 //!
-//! Asked for four things only: its version, its categories, to add an NZB
-//! the operator supplied to Tangible's category with no script, and how one
-//! job is doing. Never to search, run a script, or delete anything. Every
+//! Asked for four things: its version, its categories, to add an NZB the
+//! operator supplied to Tangible's category with no script, and how one job
+//! is doing. And a fifth only where an administrator set the integration to
+//! remove after import, once the library's copy is checked and Tangible has
+//! deleted the download's files itself: to forget the job, which its history
+//! keeps in its archive (docs/plans/source-retention.md, ADR 0017). Never to
+//! search, run a script, or delete files. Every
 //! request is a POST with the API key in the body, so the key is never in a
 //! URL, and goes through the outbound client under the integrations policy.
 //!
@@ -23,6 +27,10 @@
 //! - A job is in the queue while it downloads, then in history, `Completed`
 //!   with `storage` naming the file or folder, or `Failed` with a
 //!   `fail_message` and `storage` in the incomplete folder.
+//! - `mode=history&name=delete&value=<nzo_id>` answers `{"status": true}`
+//!   for any id, known or not, and archives the entry unless `archive=0`.
+//!   `del_files=1` removes only a failed job's incomplete folder, never a
+//!   completed job's files (its source, `_api_history`, checked 2026-10-27).
 
 use std::fmt;
 
@@ -170,6 +178,23 @@ impl SabnzbdClient {
         parse_added(&self.call(content_type, body).await?)
     }
 
+    /// Forget job `nzo_id`: delete it from history, which SABnzbd archives
+    /// rather than drops. Its files are not touched (SABnzbd never deletes a
+    /// completed job's), and `del_files` is sent as 0 to say so.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`], including an answer that is not `status: true`.
+    pub async fn forget(&self, nzo_id: &str) -> Result<(), ClientError> {
+        let text = self
+            .mode(
+                "history",
+                &[("name", "delete"), ("value", nzo_id), ("del_files", "0")],
+            )
+            .await?;
+        parse_status(&text)
+    }
+
     /// Where job `nzo_id` stands, or `None` when SABnzbd has no such job.
     ///
     /// # Errors
@@ -182,6 +207,23 @@ impl SabnzbdClient {
             return Ok(Some(phase));
         }
         parse_history(&self.mode("history", &[("nzo_ids", nzo_id)]).await?, nzo_id)
+    }
+}
+
+/// Whether an answer is `{"status": true}`.
+///
+/// # Errors
+///
+/// [`ClientError::BadResponse`] for any other answer.
+pub fn parse_status(text: &str) -> Result<(), ClientError> {
+    #[derive(Deserialize)]
+    struct Answer {
+        status: bool,
+    }
+    match serde_json::from_str::<Answer>(text) {
+        Ok(Answer { status: true }) => Ok(()),
+        Ok(_) => Err(ClientError::bad(CLIENT, "it declined to forget the job")),
+        Err(_) => Err(ClientError::bad(CLIENT, "the answer did not parse")),
     }
 }
 
@@ -363,6 +405,14 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn a_recorded_forget_is_taken_and_anything_else_is_not() {
+        parse_status(&fixture("history-delete-4.5.3.json")).unwrap();
+        for other in [r#"{"status":false}"#, "error: not implemented", "{}"] {
+            assert!(parse_status(other).is_err(), "{other}");
+        }
     }
 
     #[test]

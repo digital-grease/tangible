@@ -11,6 +11,12 @@ against what the client says. The NZB is `../sabnzbd/probe.nzb`.
   `DestDir` the folder holding the file), the same NZB added again
   `DELETED/COPY`, and a file that is not an NZB `FAILURE/SCAN`.
 
+- `editqueue-history-delete-25.3.json`, `...-unknown-25.3.json`:
+  `editqueue("HistoryDelete", "", [id])` for a job in history (`true`; the
+  entry is then `SUCCESS/HIDDEN` in `history(true)`) and for an id NZBGet
+  does not have (`false`). Recorded 2026-10-27. Neither it nor
+  `HistoryFinalDelete` touched the job's `DestDir`.
+
 ## Provenance
 
 NZBGet 25.3, image `nzbgetcom/nzbget:v25.3`, captured 2026-10-25 on a

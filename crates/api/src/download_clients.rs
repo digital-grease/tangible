@@ -118,6 +118,29 @@ impl DownloadClient {
         }
     }
 
+    /// Forget job `id` in a Usenet client's history, once Tangible has
+    /// deleted its files (docs/plans/source-retention.md): SABnzbd archives
+    /// the entry, NZBGet hides it. Answers whether the client had it, where
+    /// it says. qBittorrent's jobs are removed with
+    /// [`QbittorrentClient::remove`], never through this.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`]; [`ClientError::BadResponse`] for qBittorrent.
+    pub async fn forget(&mut self, id: &str) -> Result<bool, ClientError> {
+        match self {
+            Self::Qbittorrent(_) => Err(ClientError::bad(
+                "qBittorrent",
+                "a torrent is removed, not forgotten",
+            )),
+            Self::Sabnzbd(client) => client.forget(id).await.map(|()| true),
+            Self::Nzbget(client) => match id.parse::<i64>() {
+                Ok(nzbid) => client.forget(nzbid).await,
+                Err(_) => Ok(false),
+            },
+        }
+    }
+
     /// Sign in, and say the client's version, and whether it has
     /// `category`. qBittorrent makes a category it lacks, so always has it.
     ///

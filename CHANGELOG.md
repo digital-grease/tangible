@@ -94,6 +94,16 @@ may change between minor versions, and the release notes say how.
   an unreachable client is tried again. Each import's view gains
   `source_removal`. Each removal is audited as `integration.source_deleted`.
   Database migration 0022 adds a table and a column; it is additive.
+- SABnzbd and NZBGet integrations gain `after_import` too. Their APIs
+  cannot delete a completed download's files, so with `remove` Tangible
+  deletes them itself, once the library's copy has passed its check: only in
+  a watched root listed in the new `TANGIBLE_REMOVABLE_ROOTS` (mounted
+  read-write; the server refuses to start if one listed is not watched, and
+  an integration is refused `remove` on a root not listed), only the files
+  whose SHA-256 and size are the artifact's, checked just before each
+  delete, and then the folders left empty. Anything else stays and is
+  counted. SABnzbd is then asked to forget the job (it archives it), NZBGet
+  to hide it. Diagnostics gains a "Removable roots" check (ADR 0017).
 
 - Groundwork for issue reports: text is scrubbed of credentials, paths,
   serial numbers, library file names and LAN addresses before anyone can
