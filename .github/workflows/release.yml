@@ -133,7 +133,7 @@ jobs:
           # Named, so a new cosign cannot change the signature format under a
           # release; cosign 3 writes Sigstore bundles, which verifying needs
           # cosign 3 or later to find (deploy/README.md says so).
-          cosign-release: v3.0.6
+          cosign-release: v3.1.4
 
       - name: Sign the image
         env:
