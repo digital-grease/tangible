@@ -30,6 +30,7 @@ use tangible_db::integrations::{
 use tangible_domain::SecretString;
 use tangible_integrations::download::ClientError;
 use tangible_integrations::outbound::OutboundPolicy;
+use tangible_integrations::romm::MARKER;
 use tangible_integrations::romm_api::{Probe, Scope};
 use tangible_integrations::settings::{ConfigurableKind, checked_settings};
 use time::format_description::well_known::Rfc3339;
@@ -771,11 +772,7 @@ async fn test_romm(
 
 /// What a RomM probe found, check by check, in words.
 fn romm_checks(probe: &Probe, scan_after_export: bool) -> Vec<IntegrationCheckView> {
-    let check = |name: &str, ok: bool, detail: String| IntegrationCheckView {
-        name: name.to_owned(),
-        ok,
-        detail,
-    };
+    let check = romm_check;
     let lacking = |scopes: &[Scope]| -> Vec<&'static str> {
         scopes
             .iter()
@@ -823,13 +820,36 @@ fn romm_checks(probe: &Probe, scan_after_export: bool) -> Vec<IntegrationCheckVi
             "its platforms and ROMs can be read".to_owned(),
         )
     });
-    checks.push(if !scan_after_export {
+    checks.push(scan_check(probe, scan_after_export));
+    checks.push(if capabilities.known_platforms {
+        check(
+            "Known platforms",
+            true,
+            "the platforms RomM knows can be read, so one it would not recognise is flagged"
+                .to_owned(),
+        )
+    } else {
+        check(
+            "Known platforms",
+            false,
+            "its API document lacks the list of platforms it knows; platforms are not checked"
+                .to_owned(),
+        )
+    });
+    checks.push(marker_check(probe.ignores_marker));
+    checks
+}
+
+/// Whether RomM can be asked to scan, as a check.
+fn scan_check(probe: &Probe, scan_after_export: bool) -> IntegrationCheckView {
+    let check = romm_check;
+    if !scan_after_export {
         check(
             "Asking for scans",
             true,
             "turned off for this integration: RomM scans when it is told to there".to_owned(),
         )
-    } else if !capabilities.scan {
+    } else if !probe.capabilities.scan {
         check(
             "Asking for scans",
             false,
@@ -849,23 +869,44 @@ fn romm_checks(probe: &Probe, scan_after_export: bool) -> Vec<IntegrationCheckVi
             true,
             "a quick scan follows each change an export makes".to_owned(),
         )
-    });
-    checks.push(if capabilities.known_platforms {
-        check(
-            "Known platforms",
+    }
+}
+
+/// Whether RomM leaves the export's marker out of each game, as a check.
+fn marker_check(ignores_marker: Option<bool>) -> IntegrationCheckView {
+    let check = romm_check;
+    match ignores_marker {
+        Some(true) => check(
+            "Export marker",
             true,
-            "the platforms RomM knows can be read, so one it would not recognise is flagged"
-                .to_owned(),
-        )
-    } else {
-        check(
-            "Known platforms",
+            format!("RomM leaves {MARKER} out of each game's files"),
+        ),
+        Some(false) => check(
+            "Export marker",
             false,
-            "its API document lacks the list of platforms it knows; platforms are not checked"
-                .to_owned(),
-        )
-    });
-    checks
+            format!(
+                "RomM counts {MARKER}, the file that marks a folder as Tangible's, as one of \
+                 the game's files; name it under exclude.roms.multi_file.parts.names in RomM's \
+                 config.yml and scan again"
+            ),
+        ),
+        None => check(
+            "Export marker",
+            false,
+            format!(
+                "RomM's configuration could not be read, so whether it counts {MARKER} as one \
+                 of each game's files is not known"
+            ),
+        ),
+    }
+}
+
+fn romm_check(name: &str, ok: bool, detail: String) -> IntegrationCheckView {
+    IntegrationCheckView {
+        name: name.to_owned(),
+        ok,
+        detail,
+    }
 }
 
 /// The integration routes.
@@ -907,6 +948,7 @@ mod tests {
                 .iter()
                 .map(|scope| (*scope, granted.contains(scope)))
                 .collect(),
+            ignores_marker: Some(true),
         }
     }
 
@@ -927,6 +969,7 @@ mod tests {
                 ("Finding exported games", true),
                 ("Asking for scans", true),
                 ("Known platforms", true),
+                ("Export marker", true),
             ]
         );
     }
@@ -954,5 +997,21 @@ mod tests {
         let ancient = romm_checks(&probe(Capabilities::default(), &Scope::ALL), true);
         assert!(!ancient[0].ok && ancient[0].detail.contains("5.0 or later"));
         assert!(!ancient[1].ok && !ancient[3].ok);
+        let counted = Probe {
+            ignores_marker: Some(false),
+            ..probe(ALL, &Scope::ALL)
+        };
+        let checks = romm_checks(&counted, true);
+        assert!(
+            !checks[4].ok
+                && checks[4]
+                    .detail
+                    .contains("exclude.roms.multi_file.parts.names")
+        );
+        let unread = Probe {
+            ignores_marker: None,
+            ..probe(ALL, &Scope::ALL)
+        };
+        assert!(!romm_checks(&unread, true)[4].ok);
     }
 }

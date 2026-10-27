@@ -46,6 +46,12 @@ may change between minor versions, and the release notes say how.
   export. Database migration 0019 widens the integration kinds; it is
   additive. `POST /integrations/{id}/test` answers a new `checks` list,
   empty for other kinds.
+- deploy/README.md now tells RomM to leave the export's marker file out of
+  each game (`exclude.roms.multi_file.parts.names` in RomM's
+  `config.yml`). Without it RomM, which counts every file in a game's
+  folder, listed `.tangible-export.json` as one of the game's files, made a
+  one-image game a several-file one, and sent the marker with every
+  download. Trying the RomM API integration checks it ("Export marker").
 
 - Groundwork for issue reports: text is scrubbed of credentials, paths,
   serial numbers, library file names and LAN addresses before anyone can

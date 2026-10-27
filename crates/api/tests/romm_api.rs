@@ -45,6 +45,7 @@ fn fixture(name: &str) -> String {
 /// What the fake RomM answers.
 struct Fake {
     document: Value,
+    config: Value,
     /// Scopes its token lacks: their routes answer 403.
     denied: Vec<&'static str>,
     /// Authorization headers it was sent, to check none leaks elsewhere.
@@ -67,6 +68,10 @@ async fn answer(
         "/openapi.json" => {
             let document = fake.lock().unwrap().document.to_string();
             return (StatusCode::OK, document).into_response();
+        }
+        "/api/config" => {
+            let config = fake.lock().unwrap().config.to_string();
+            return (StatusCode::OK, config).into_response();
         }
         _ => {}
     }
@@ -108,6 +113,7 @@ async fn answer(
 async fn fake_romm() -> (SocketAddr, Shared) {
     let fake: Shared = Arc::new(Mutex::new(Fake {
         document: serde_json::from_str(&fixture("openapi-5.4.1-used.json")).unwrap(),
+        config: serde_json::from_str(&fixture("config-5.4.1.json")).unwrap(),
         denied: Vec::new(),
         seen_tokens: Vec::new(),
     }));
@@ -288,6 +294,7 @@ async fn a_romm_with_a_scoped_token_passes_every_check() {
             ("Finding exported games".to_owned(), true),
             ("Asking for scans".to_owned(), true),
             ("Known platforms".to_owned(), true),
+            ("Export marker".to_owned(), true),
         ]
     );
     assert!(!tried.to_string().contains(TOKEN), "{tried}");
@@ -349,6 +356,20 @@ async fn what_a_romm_cannot_do_is_said_check_by_check() {
     let settings = harness.settings();
     let (_, made) = harness.make(TOKEN, settings).await;
     let id = made["id"].as_str().unwrap().to_owned();
+
+    // A RomM that counts the export's marker as a game file is told how
+    // to stop, and still found.
+    harness.fake.lock().unwrap().config["EXCLUDED_MULTI_PARTS_FILES"] = json!([".DS_Store"]);
+    let tried = harness.try_it(&id).await;
+    assert_eq!(tried["ok"], true, "{tried}");
+    assert_eq!(tried["checks"][4]["ok"], false, "{tried}");
+    assert!(
+        tried["checks"][4]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("exclude.roms.multi_file.parts.names"),
+        "{tried}"
+    );
 
     // A token without tasks.run still finds games, and says scans cannot
     // be asked for.
@@ -466,7 +487,9 @@ async fn settings_and_secrets_that_will_not_do_are_refused() {
 
 /// Against a real RomM, when `TANGIBLE_TEST_ROMM_URL` and
 /// `TANGIBLE_TEST_ROMM_TOKEN` name one and a token with the three scopes,
-/// as `tangible_integrations`' live test does; skipped otherwise.
+/// as `tangible_integrations`' live test does; skipped otherwise. Its
+/// `config.yml` must leave out the export's marker, as the deploy guide
+/// says, for every check to pass.
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
 async fn a_real_romm_passes_every_check() {

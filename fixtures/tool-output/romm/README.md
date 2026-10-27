@@ -5,6 +5,9 @@ Captured from a real RomM, so the client in
 
 - `heartbeat-5.4.1.json`: `GET /api/heartbeat`, no token: the version and
   the instance's configuration.
+- `config-5.4.1.json`: `GET /api/config`, no token, with `config.yml`
+  excluding `.tangible-export.json` from a game's files, as the deploy
+  guide says to.
 - `openapi-5.4.1-used.json`: RomM's `GET /openapi.json` (494 KB), cut down
   to the operations Tangible uses, each with its parameters' names, as
   below.
@@ -97,6 +100,12 @@ Observed along the way, and relied on by the client:
   found the game), so a match is checked against `fs_name` exactly.
 - A task RomM does not have answers 404.
 - RomM's page for a ROM is `/rom/{id}`.
+- Every file in a game's folder is one of the game's files, dotfiles too:
+  with the export's `.tangible-export.json` beside one ISO, a new ROM had
+  `has_multiple_files` true and listed the marker. Named under
+  `exclude.roms.multi_file.parts.names` in `config.yml` (RomM restarted), a
+  quick scan dropped it and the ROM became a nested single file. A file or
+  folder directly under a platform whose name starts with `.` is skipped.
 - From RomM's source at each release tag: client tokens arrived in 5.0.0;
   `POST /api/tasks/scan` in 5.4.0. `GET /api/roms` takes `platform_ids`,
   `search_term`, `limit`, `offset` and `with_files` from 5.0.0 on.

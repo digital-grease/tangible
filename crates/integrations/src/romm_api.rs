@@ -25,6 +25,11 @@
 //!   queued and scans nothing.
 //! - `search_term` is fuzzy, so a ROM found by it is matched exactly by its
 //!   platform folder and `fs_name` before it is believed.
+//! - Every file in a game's folder is one of the game's files, the export's
+//!   marker (`.tangible-export.json`) too, unless RomM's configuration names
+//!   it in `exclude.roms.multi_file.parts.names`. Counted, it makes a
+//!   one-image game a several-file one and goes out with every download.
+//!   `/api/config`, without a token, lists what is excluded.
 //!
 //! RomM adds fields often, so answers parse into types that name only what
 //! Tangible reads.
@@ -195,8 +200,9 @@ pub fn capabilities(document: &str) -> Result<Capabilities, ClientError> {
     })
 }
 
-/// What trying an instance found: its version, what it offers, and which
-/// scopes the token carries.
+/// What trying an instance found: its version, what it offers, which
+/// scopes the token carries, and whether it leaves the export's marker out
+/// of a game's files.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Probe {
     /// Its version, such as `5.4.1`.
@@ -205,6 +211,9 @@ pub struct Probe {
     pub capabilities: Capabilities,
     /// Each scope Tangible asks for, and whether the token carries it.
     pub scopes: Vec<(Scope, bool)>,
+    /// Whether its configuration excludes the export's marker from a game's
+    /// files; `None` when its configuration could not be read.
+    pub ignores_marker: Option<bool>,
 }
 
 impl Probe {
@@ -366,6 +375,29 @@ pub fn parse_version(text: &str) -> Result<String, ClientError> {
     serde_json::from_str::<Heartbeat>(text)
         .map(|heartbeat| heartbeat.system.version.chars().take(32).collect())
         .map_err(|_| ClientError::bad(CLIENT, "the heartbeat did not parse; is this RomM?"))
+}
+
+/// Whether a configuration (`/api/config`) leaves the export's marker out
+/// of a game's files: whether `EXCLUDED_MULTI_PARTS_FILES` names it. RomM
+/// compares names regardless of case.
+///
+/// # Errors
+///
+/// [`ClientError::BadResponse`] for one that does not parse.
+pub fn parse_ignores_marker(text: &str) -> Result<bool, ClientError> {
+    #[derive(Deserialize)]
+    struct Config {
+        #[serde(rename = "EXCLUDED_MULTI_PARTS_FILES")]
+        excluded: Vec<String>,
+    }
+    serde_json::from_str::<Config>(text)
+        .map(|config| {
+            config
+                .excluded
+                .iter()
+                .any(|name| name.trim().eq_ignore_ascii_case(crate::romm::MARKER))
+        })
+        .map_err(|_| ClientError::bad(CLIENT, "its configuration did not parse"))
 }
 
 /// The platforms in a platform list.
@@ -575,6 +607,24 @@ impl RommClient {
         capabilities(&answer.text)
     }
 
+    /// Whether its configuration leaves the export's marker out of a game's
+    /// files. It needs no token.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`].
+    pub async fn ignores_marker(&self) -> Result<bool, ClientError> {
+        let url = self.url("api/config", &[])?;
+        let answer = self.send(reqwest::Method::GET, &url, false, None).await?;
+        if answer.status != 200 {
+            return Err(ClientError::bad(
+                CLIENT,
+                format!("its configuration answered {}", answer.status),
+            ));
+        }
+        parse_ignores_marker(&answer.text)
+    }
+
     /// Whether the token carries `scope`, by a request that needs it and
     /// changes nothing.
     ///
@@ -593,11 +643,13 @@ impl RommClient {
         }
     }
 
-    /// Its version, what it offers, and which scopes the token carries.
+    /// Its version, what it offers, which scopes the token carries, and
+    /// whether it leaves the export's marker out of a game's files.
     ///
     /// # Errors
     ///
-    /// [`ClientError`].
+    /// [`ClientError`]; a configuration that cannot be read is
+    /// [`Probe::ignores_marker`] `None`, not an error.
     pub async fn probe(&self) -> Result<Probe, ClientError> {
         let version = self.version().await?;
         let capabilities = self.capabilities().await?;
@@ -605,10 +657,18 @@ impl RommClient {
         for scope in Scope::ALL {
             scopes.push((scope, self.carries(scope).await?));
         }
+        let ignores_marker = match self.ignores_marker().await {
+            Ok(ignores) => Some(ignores),
+            Err(error) => {
+                tracing::debug!(error = %error, "RomM's configuration could not be read");
+                None
+            }
+        };
         Ok(Probe {
             version,
             capabilities,
             scopes,
+            ignores_marker,
         })
     }
 
@@ -864,6 +924,21 @@ mod tests {
     }
 
     #[test]
+    fn the_configuration_says_whether_the_marker_is_left_out() {
+        let config = fixture("config-5.4.1.json");
+        assert!(parse_ignores_marker(&config).unwrap());
+        let mut without: serde_json::Value = serde_json::from_str(&config).unwrap();
+        without["EXCLUDED_MULTI_PARTS_FILES"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|name| name != crate::romm::MARKER);
+        assert!(!parse_ignores_marker(&without.to_string()).unwrap());
+        let shouted = r#"{"EXCLUDED_MULTI_PARTS_FILES": [" .TANGIBLE-EXPORT.JSON "]}"#;
+        assert!(parse_ignores_marker(shouted).unwrap());
+        assert!(parse_ignores_marker("{}").is_err());
+    }
+
+    #[test]
     fn a_scan_is_followed_from_queued_to_finished() {
         let queued = parse_task(&fixture("scan-queued-5.4.1.json")).unwrap();
         assert_eq!(queued.id, "32708cfa-50ff-4401-9e6b-adc8b5b301d6");
@@ -913,6 +988,7 @@ mod tests {
                 .iter()
                 .map(|scope| (*scope, granted.contains(scope)))
                 .collect(),
+            ignores_marker: Some(true),
         };
         let everything = probe(all, &Scope::ALL);
         assert!(everything.can_link() && everything.can_scan());

@@ -164,7 +164,23 @@ discs together in one folder. It is off until you give the server RomM's
    library.
 2. Make that folder writable by the server's user, uid 10001 in the image.
    RomM only needs to read it.
-3. Run `docker compose -f deploy/compose.yaml config`, check the mount, and
+3. Tell RomM to leave out the file that marks each folder as Tangible's.
+   In RomM's `config.yml` (in the folder RomM mounts at `/romm/config`):
+
+   ```yaml
+   exclude:
+     roms:
+       multi_file:
+         parts:
+           names:
+             - .tangible-export.json
+   ```
+
+   Without it, RomM counts that file as one of the game's files: a game
+   of one image is listed as several files, and the marker goes out with
+   every download. Restart RomM after changing it, and scan the platform
+   again for games already there.
+4. Run `docker compose -f deploy/compose.yaml config`, check the mount, and
    restart the stack.
 
 Then, in the catalog, open an edition, choose its platform and tick "Show this
@@ -213,7 +229,8 @@ renames or removes anything in RomM.
    password, so the server needs `TANGIBLE_SECRET_KEY_FILE` (see
    "Integration secrets").
 3. Try it: `POST /api/v1/integrations/<id>/test` answers RomM's version and
-   four checks, each saying what it found. "Asking for scans" needs RomM 5.4
+   five checks, each saying what it found; "Export marker" says whether
+   RomM leaves out the marker file, as step 3 above sets up. "Asking for scans" needs RomM 5.4
    or later: an older RomM is found and read, but has to be told to scan in
    its own interface. There is one RomM API integration, for the one export.
 
