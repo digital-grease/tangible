@@ -75,6 +75,14 @@ may change between minor versions, and the release notes say how.
   the RomM API integration, or pointing it at another address, forgets
   the links. Database migration 0021 adds four columns to the export's
   status and a size to export receipts; it is additive.
+- The web UI shows RomM's API. The Integrations page adds and edits it
+  (RomM's address for the server and for your browser, the client token,
+  and whether to ask for scans) and lists, check by check, what trying it
+  found. An edition's RomM section says what RomM made of the game, in
+  words (RomM has it, has not seen it yet, marks it missing, sees different
+  files, and what differs), links to the game's page in RomM, says when a
+  scan is awaited and how the last one went, and warns of a platform the
+  connected RomM does not know.
 
 - Groundwork for issue reports: text is scrubbed of credentials, paths,
   serial numbers, library file names and LAN addresses before anyone can

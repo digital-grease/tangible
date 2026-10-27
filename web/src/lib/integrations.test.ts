@@ -204,6 +204,56 @@ describe('the download client form', () => {
     expect(isClientKind('romm')).toBe(false);
     expect(versionLabel('qbittorrent')).toBe('WebUI API');
     expect(versionLabel('sabnzbd')).toBe('version');
+    expect(isClientKind('romm_api')).toBe(true);
+    expect(kindLabel('romm_api')).toBe("RomM's API");
+    expect(versionLabel('romm_api')).toBe('RomM');
+    expect(clientWording('romm_api').secretField).toBe('token');
+  });
+
+  it("makes RomM's API with its addresses, the scan switch and a token", () => {
+    const form = {
+      ...emptyClientForm('romm_api', ['downloads']),
+      name: 'RomM',
+      baseUrl: ' http://romm:8080/ ',
+      secret: 'rmm_token',
+    };
+    expect(createClientRequest(form)).toEqual({
+      kind: 'romm_api',
+      name: 'RomM',
+      enabled: true,
+      settings: { base_url: 'http://romm:8080/', scan_after_export: true },
+      secrets: { token: 'rmm_token' },
+    });
+    const linked = createClientRequest({
+      ...form,
+      webUrl: ' https://romm.example.net/ ',
+      scanAfterExport: false,
+    });
+    expect(linked.settings).toEqual({
+      base_url: 'http://romm:8080/',
+      web_url: 'https://romm.example.net/',
+      scan_after_export: false,
+    });
+
+    const view = qbittorrent({
+      kind: 'romm_api',
+      name: 'RomM',
+      settings: {
+        base_url: 'http://romm:8080/',
+        web_url: 'https://romm.example.net/',
+        scan_after_export: false,
+      },
+      secrets: [{ field: 'token', set: true }],
+    });
+    const edited = clientFormFrom({ ...view, kind: 'romm_api' });
+    expect(edited).toMatchObject({
+      baseUrl: 'http://romm:8080/',
+      webUrl: 'https://romm.example.net/',
+      scanAfterExport: false,
+      secret: '',
+    });
+    expect(updateClientRequest(edited).secrets).toBeUndefined();
+    expect(updateClientRequest({ ...edited, clearSecret: true }).secrets).toEqual({ token: null });
   });
 
   it('says what to do when the server has no key', () => {
@@ -250,6 +300,21 @@ describe('trying an integration', () => {
         checks: [],
       }),
     ).toBe('NAS did not work: qBittorrent refused to sign in: the user name or password is wrong');
+    expect(testOutcome('RomM', { ok: true, api_version: '5.4.1', checks: [] }, 'romm_api')).toBe(
+      'RomM answered as RomM 5.4.1; exported games can be found.',
+    );
+    expect(
+      testOutcome(
+        'RomM',
+        {
+          ok: false,
+          error_code: 'INTEGRATION_MISCONFIGURED',
+          detail: 'the client token lacks the roms.read scope',
+          checks: [],
+        },
+        'romm_api',
+      ),
+    ).toBe('RomM will not do: the client token lacks the roms.read scope');
   });
 
   it('posts to the integration, escaped', async () => {

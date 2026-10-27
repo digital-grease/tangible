@@ -211,8 +211,9 @@ renames or removes anything in RomM.
 1. In RomM, open Settings, then Client API Tokens, and make a token with
    exactly the scopes `platforms.read`, `roms.read` and `tasks.run`. RomM
    shows it once.
-2. Make the integration, with RomM's address as the server reaches it (on
-   the same Compose network, its service name):
+2. On the Integrations page, add "RomM's API" with RomM's address as the
+   server reaches it (on the same Compose network, its service name), its
+   address as your browser reaches it, and the token. Or from a shell:
 
    ```bash
    curl -sS -b "$jar" -H 'Content-Type: application/json' \
@@ -228,7 +229,8 @@ renames or removes anything in RomM.
    that is the same address. The token is sealed like a download client's
    password, so the server needs `TANGIBLE_SECRET_KEY_FILE` (see
    "Integration secrets").
-3. Try it: `POST /api/v1/integrations/<id>/test` answers RomM's version and
+3. Try it with Test on the Integrations page, or
+   `POST /api/v1/integrations/<id>/test`: it answers RomM's version and
    five checks, each saying what it found; "Export marker" says whether
    RomM leaves out the marker file, as step 3 above sets up. "Asking for
    scans" needs RomM 5.4 or later: an older RomM is found and read, but has
@@ -252,7 +254,10 @@ diagnostics page warns when the last scan did not finish.
 After each scan, and hourly, Tangible finds each exported game among
 RomM's games and records what RomM made of it: not seen yet, in RomM (with
 a link to its page, from `web_url`), marked missing, or listing different
-files from those written. `GET /api/v1/editions/<id>/romm` shows it.
+files from those written. The edition's RomM section in the catalog shows it, with a link to the
+game's page, and how the last scan of its platform went; so does
+`GET /api/v1/editions/<id>/romm`. The platform list marks platforms the
+connected RomM does not know.
 Renaming a game (a new title or region) renames its folder and files. A
 one-image game keeps its entry in RomM; a CUE/BIN game becomes a new entry,
 because its CUE sheet names the renamed files and so changes, and RomM

@@ -2,11 +2,19 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   import { onDestroy } from 'svelte';
+  // An edition's RomM export: its platform, the switch, how the export
+  // stands, and, once RomM's API is connected, what RomM made of it, with a
+  // link to the game's page there, and how the last scan of its platform
+  // went.
   import {
+    inRommLabel,
     loadEditionRomm,
     loadRommSettings,
+    platformOptionLabel,
+    rommApiInUse,
     rommStateLabel,
     saveEditionRomm,
+    scanLabel,
     type EditionRomm,
     type RommSettings,
   } from '$lib/romm';
@@ -41,28 +49,34 @@
   onDestroy(() => clearTimeout(timer));
 
   /**
-   * Check back a few times after a change: the exporter works in the
-   * background and records how it went, usually within seconds.
+   * Check back after a change: the exporter works in the background and
+   * records how it went, usually within seconds. With RomM's API in use,
+   * keep checking, less often, until RomM has been asked about the game
+   * again, which waits for RomM's scan.
    */
-  function follow(id: string, before: string | null | undefined, tries: number) {
+  function follow(id: string, before: Snapshot, tries: number) {
     clearTimeout(timer);
     if (tries <= 0) return;
     timer = setTimeout(async () => {
       const r = await loadEditionRomm(id);
       if (r.kind === 'ok') {
         romm = r.data;
-        if (r.data.checked_at !== before) return;
+        const exported = r.data.checked_at !== before.exported;
+        const looked = r.data.in_romm?.checked_at !== before.looked && !r.data.scan_owed;
+        if (exported && (!rommApiInUse(settings) || looked)) return;
       }
       follow(id, before, tries - 1);
-    }, 2000);
+    }, 3000);
   }
+
+  type Snapshot = { exported: string | null | undefined; looked: string | null | undefined };
 
   async function save(event: SubmitEvent) {
     event.preventDefault();
     if (saving) return;
     saving = true;
     problem = null;
-    const before = romm?.checked_at;
+    const before = { exported: romm?.checked_at, looked: romm?.in_romm?.checked_at };
     const result = await saveEditionRomm(editionId, platform || null, exportToRomm);
     saving = false;
     if (result.kind === 'error') {
@@ -70,7 +84,12 @@
       return;
     }
     romm = result.data;
-    follow(editionId, before, 10);
+    // Two minutes: long enough for a quick scan of a platform or two.
+    follow(editionId, before, 40);
+  }
+
+  function when(value: string | null | undefined): string {
+    return value ? new Date(value).toLocaleString() : '';
   }
 </script>
 
@@ -85,7 +104,7 @@
       <select id="romm-platform" bind:value={platform}>
         <option value="">Not set</option>
         {#each settings?.platforms ?? [] as option (option.slug)}
-          <option value={option.slug}>{option.name}</option>
+          <option value={option.slug}>{platformOptionLabel(option)}</option>
         {/each}
       </select>
     </p>
@@ -109,13 +128,46 @@
     </div>
     <button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
   </form>
-  {#if romm}
-    <p aria-live="polite">
-      <strong>{rommStateLabel(romm)}</strong>
-      {#if romm.folder && romm.state === 'current'}
-        as <code>{romm.folder}</code>, {romm.file_count} file{romm.file_count === 1 ? '' : 's'}
-      {/if}
-      {#if romm.detail}<br />{romm.detail}{/if}
+  {#if settings?.platforms.some((option) => option.slug === platform && option.known_to_romm === false)}
+    <p role="note">
+      The connected RomM does not know this platform, so it would not recognise the folder.
     </p>
+  {/if}
+  {#if romm}
+    <div aria-live="polite">
+      <p>
+        <strong>{rommStateLabel(romm)}</strong>
+        {#if romm.folder && romm.state === 'current'}
+          as <code>{romm.folder}</code>, {romm.file_count} file{romm.file_count === 1 ? '' : 's'}
+        {/if}
+        {#if romm.detail}<br />{romm.detail}{/if}
+      </p>
+      {#if rommApiInUse(settings)}
+        {@const seen = inRommLabel(romm)}
+        {#if seen && romm.in_romm}
+          <p>
+            <strong>{seen}</strong>
+            {#if romm.in_romm.url && romm.in_romm.state !== 'unseen'}
+              <a href={romm.in_romm.url} target="_blank" rel="noopener noreferrer"
+                >Open it in RomM</a
+              >
+            {/if}
+            {#if romm.in_romm.detail}<br />{romm.in_romm.detail}{/if}
+            <br /><small>Asked {when(romm.in_romm.checked_at)}</small>
+          </p>
+        {/if}
+        {#if romm.scan_owed && romm.export}
+          <p>Waiting for RomM to scan its platform's folder.</p>
+        {/if}
+        {#if romm.last_scan}
+          <p>
+            <small
+              >Last scan of {romm.last_scan.platforms.join(', ')}: {scanLabel(romm.last_scan)},
+              asked {when(romm.last_scan.requested_at)}</small
+            >
+          </p>
+        {/if}
+      {/if}
+    </div>
   {/if}
 </section>

@@ -222,7 +222,7 @@ describe('Integrations page', () => {
       'GET /api/v1/import-sources': sources,
       'POST /api/v1/integrations/i1/test': {
         status: 200,
-        body: { ok: true, api_version: '2.11.4' },
+        body: { ok: true, api_version: '2.11.4', checks: [] },
       },
     });
     render(IntegrationsPage);
@@ -301,6 +301,80 @@ describe('Integrations page', () => {
     expect((screen.getByLabelText('Access key id') as HTMLInputElement).value).toBe('');
   });
 
+  it("adds RomM's API with a token, its browser address and the scan switch", async () => {
+    const asked = server({
+      'GET /api/v1/integrations': [list([]), list([])],
+      'GET /api/v1/import-sources': sources,
+      'POST /api/v1/integrations': { status: 201, body: nas({ kind: 'romm_api', name: 'RomM' }) },
+    });
+    render(IntegrationsPage);
+    await screen.findByText(/No integrations yet/);
+    await fireEvent.change(screen.getByLabelText('Kind'), { target: { value: 'romm_api' } });
+    expect(screen.getByText(/It never changes anything in RomM/)).toBeTruthy();
+    expect(screen.queryByLabelText('Category')).toBeNull();
+    expect(screen.queryByLabelText(/Download folder/)).toBeNull();
+    expect(screen.getByText('tasks.run')).toBeTruthy();
+    await fill('Name', 'RomM');
+    await fill('RomM address, as this server reaches it', 'http://romm:8080/');
+    await fill('RomM address, as your browser reaches it', 'https://romm.example.net/');
+    await fill('Client token', 'rmm_secret');
+    await fireEvent.click(screen.getByLabelText('Ask RomM to scan what the export changes'));
+    await fireEvent.click(screen.getByRole('button', { name: "Add RomM's API" }));
+    expect(await screen.findByText('Added RomM.')).toBeTruthy();
+    const post = asked.find((a) => a.method === 'POST');
+    expect(post?.body).toEqual({
+      kind: 'romm_api',
+      name: 'RomM',
+      enabled: true,
+      settings: {
+        base_url: 'http://romm:8080/',
+        web_url: 'https://romm.example.net/',
+        scan_after_export: false,
+      },
+      secrets: { token: 'rmm_secret' },
+    });
+    expect((screen.getByLabelText('Client token') as HTMLInputElement).value).toBe('');
+  });
+
+  it("tries RomM's API and lists what it checked, in words", async () => {
+    const rommApi = nas({
+      id: 'a1',
+      kind: 'romm_api',
+      name: 'RomM',
+      settings: { base_url: 'http://romm:8080/', scan_after_export: true },
+      secrets: [{ field: 'token', set: true }],
+    });
+    server({
+      'GET /api/v1/integrations': [list([rommApi]), list([rommApi])],
+      'GET /api/v1/import-sources': sources,
+      'POST /api/v1/integrations/a1/test': {
+        status: 200,
+        body: {
+          ok: true,
+          api_version: '5.4.1',
+          checks: [
+            { name: 'Finding exported games', ok: true, detail: 'platforms and ROMs can be read' },
+            {
+              name: 'Export marker',
+              ok: false,
+              detail: "RomM counts .tangible-export.json as one of each game's files",
+            },
+          ],
+        },
+      },
+    });
+    render(IntegrationsPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Test RomM' }));
+    expect(
+      await screen.findByText(/RomM answered as RomM 5.4.1; exported games can be found/),
+    ).toBeTruthy();
+    const checks = screen.getByRole('list', { name: 'What was checked' });
+    expect(within(checks).getByText('Finding exported games: yes.')).toBeTruthy();
+    expect(within(checks).getByText('Export marker: no.')).toBeTruthy();
+    expect(within(checks).getByText(/counts .tangible-export.json/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Edit RomM' })).toBeTruthy();
+  });
+
   it('edits and tests an NZBGet like any client', async () => {
     const nzbget = nas({
       id: 'n1',
@@ -318,7 +392,10 @@ describe('Integrations page', () => {
     server({
       'GET /api/v1/integrations': [list([nzbget]), list([nzbget])],
       'GET /api/v1/import-sources': sources,
-      'POST /api/v1/integrations/n1/test': { status: 200, body: { ok: true, api_version: '25.3' } },
+      'POST /api/v1/integrations/n1/test': {
+        status: 200,
+        body: { ok: true, api_version: '25.3', checks: [] },
+      },
     });
     render(IntegrationsPage);
     expect(await screen.findByText('version 25.3')).toBeTruthy();

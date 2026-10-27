@@ -2,9 +2,9 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   // Integrations, for administrators (ADR 0016). A download client
-  // (qBittorrent, SABnzbd, NZBGet) is configured here; a password or API key
-  // is typed, sent, and never shown again. The RomM export is listed, and
-  // kept by its own setting.
+  // (qBittorrent, SABnzbd, NZBGet), S3-compatible storage or RomM's API is
+  // configured here; a password, API key or token is typed, sent, and never
+  // shown again. The RomM export is listed, and kept by its own setting.
   import { onMount } from 'svelte';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import { loadImportSources } from '$lib/imports';
@@ -28,6 +28,7 @@
     updateIntegration,
     versionLabel,
     type ClientForm,
+    type IntegrationCheckView,
     type IntegrationView,
   } from '$lib/integrations';
   import type { Problem } from '$lib/session';
@@ -52,12 +53,23 @@
   const wording = $derived(clientWording(form.kind));
   /** What the secret is called in sentences: "password" or "API key". */
   const secretNoun = $derived(
-    form.kind === 's3' ? 'keys' : wording.secretField === 'api_key' ? 'API key' : 'password',
+    form.kind === 's3'
+      ? 'keys'
+      : wording.secretField === 'api_key'
+        ? 'API key'
+        : wording.secretField === 'token'
+          ? 'token'
+          : 'password',
   );
 
   /** The integration being tried, and what trying said. */
   let testing = $state<string | null>(null);
-  let tested = $state<{ id: string; text: string; ok: boolean } | null>(null);
+  let tested = $state<{
+    id: string;
+    text: string;
+    ok: boolean;
+    checks: IntegrationCheckView[];
+  } | null>(null);
 
   /** Removing is a second, deliberate action. */
   let confirmingRemove = $state<string | null>(null);
@@ -134,11 +146,13 @@
             id: item.id,
             text: testOutcome(item.name, result.data, item.kind),
             ok: result.data.ok,
+            checks: result.data.checks,
           }
         : {
             id: item.id,
             text: `${item.name} could not be tried: ${result.problem.detail}`,
             ok: false,
+            checks: [],
           };
     await refresh();
   }
@@ -167,8 +181,9 @@
 
 <p>
   Download clients you already run, which Tangible will hand a torrent or an NZB to and import from
-  when it finishes, and S3-compatible storage operators may import objects from. Tangible never
-  searches for anything, never asks a client to run a script, and only reads from a bucket.
+  when it finishes; S3-compatible storage operators may import objects from; and the API of the RomM
+  the export writes into. Tangible never searches for anything, never asks a client to run a script,
+  only reads from a bucket, and never changes anything in RomM.
 </p>
 
 <section aria-live="polite" aria-busy={view.kind === 'loading'}>
@@ -194,7 +209,7 @@
       </div>
     {/if}
     {#if view.items.length === 0}
-      <p>No integrations yet. Add a download client below.</p>
+      <p>No integrations yet. Add one below.</p>
     {:else}
       <table>
         <caption>Configured integrations</caption>
@@ -273,13 +288,23 @@
   {#if done}<p>{done}</p>{/if}
   {#if tested}
     <p><strong>{tested.ok ? 'Working.' : 'Not working.'}</strong> {tested.text}</p>
+    {#if tested.checks.length > 0}
+      <ul aria-label="What was checked">
+        {#each tested.checks as check (check.name)}
+          <li>
+            <strong>{check.name}: {check.ok ? 'yes' : 'no'}.</strong>
+            {check.detail}
+          </li>
+        {/each}
+      </ul>
+    {/if}
   {/if}
 </div>
 
 {#if view.kind === 'ready'}
   <section aria-labelledby="form-heading">
     <h2 id="form-heading">
-      {editing ? `Edit ${editing.name}` : 'Add a download client'}
+      {editing ? `Edit ${editing.name}` : 'Add an integration'}
     </h2>
     {#if wording.downloads && roots !== null && roots.length === 0}
       <p role="note">
@@ -297,9 +322,7 @@
             {/each}
           </select>
           <br />
-          <small id="kind-hint">
-            {#if wording.downloads}Hands over {wording.takes}.{:else}Imports {wording.takes}.{/if}
-          </small>
+          <small id="kind-hint">{wording.purpose}</small>
         </p>
       {/if}
       <p>
@@ -422,6 +445,42 @@
           <small id="buckets-hint"
             >One a line. Tangible only reads from them: it never lists, writes or deletes.</small
           >
+        </p>
+      {:else if form.kind === 'romm_api'}
+        <p>
+          <label for="web-url">RomM address, as your browser reaches it</label><br />
+          <input
+            id="web-url"
+            name="web_url"
+            type="url"
+            inputmode="url"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="https://romm.example.net/"
+            bind:value={form.webUrl}
+            aria-describedby="web-url-hint"
+          />
+          <br />
+          <small id="web-url-hint"
+            >For links to games' pages in RomM. Leave empty when it is the address above. The server
+            never fetches it.</small
+          >
+        </p>
+        <p>
+          <label>
+            <input type="checkbox" name="scan_after_export" bind:checked={form.scanAfterExport} />
+            Ask RomM to scan what the export changes
+          </label>
+          <br />
+          <small
+            >A quick scan of each platform folder the export wrote, renamed or took out (RomM 5.4 or
+            later). Off, scanning is left to RomM's own schedule.</small
+          >
+        </p>
+        <p role="note">
+          Make the client token in RomM (Settings, then Client API Tokens) with exactly the scopes
+          <code>platforms.read</code>, <code>roms.read</code> and <code>tasks.run</code>, then Test
+          it here.
         </p>
       {:else}
         <p>

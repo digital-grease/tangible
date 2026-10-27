@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Integrations, for administrators (ADR 0016): download clients (qBittorrent,
-// SABnzbd, NZBGet) and the settings they need. A password or API key is sent
-// and never comes back; a view says only whether one is set.
+// SABnzbd, NZBGet), S3-compatible storage and RomM's API, and the settings
+// they need. A password, API key or token is sent and never comes back; a
+// view says only whether one is set.
 
 import type { components } from './api-types';
 import { apiCall, apiFetch, type Problem, type Result } from './session';
@@ -13,6 +14,7 @@ export type IntegrationList = components['schemas']['IntegrationList'];
 export type CreateIntegrationRequest = components['schemas']['CreateIntegrationRequest'];
 export type UpdateIntegrationRequest = components['schemas']['UpdateIntegrationRequest'];
 export type IntegrationTestView = components['schemas']['IntegrationTestView'];
+export type IntegrationCheckView = components['schemas']['IntegrationCheckView'];
 
 /** Every integration, and whether the server can store a password. */
 export function loadIntegrations(
@@ -56,11 +58,24 @@ export function testIntegration(
 
 /** What a client's reported version is a version of. */
 export function versionLabel(kind: string): string {
-  return kind === 'qbittorrent' ? 'WebUI API' : 'version';
+  switch (kind) {
+    case 'qbittorrent':
+      return 'WebUI API';
+    case 'romm_api':
+      return 'RomM';
+    default:
+      return 'version';
+  }
 }
 
 /** How trying an integration went, in words. */
 export function testOutcome(name: string, test: IntegrationTestView, kind = 'qbittorrent'): string {
+  if (kind === 'romm_api') {
+    const version = test.api_version ? ` ${test.api_version}` : '';
+    return test.ok
+      ? `${name} answered as RomM${version}; exported games can be found.`
+      : `${name} will not do: ${test.detail ?? test.error_code ?? 'no reason given'}`;
+  }
   if (test.ok) {
     return `${name} signed in${test.api_version ? `; ${versionLabel(kind)} ${test.api_version}` : ''}.`;
   }
@@ -74,6 +89,8 @@ export function kindLabel(kind: string): string {
       return 'qBittorrent';
     case 'romm':
       return 'RomM export';
+    case 'romm_api':
+      return "RomM's API";
     case 'sabnzbd':
       return 'SABnzbd';
     case 'nzbget':
@@ -117,11 +134,11 @@ function fieldLabel(field: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-/** The integrations an administrator can set up here: download clients, and S3. */
-export type ClientKind = 'qbittorrent' | 'sabnzbd' | 'nzbget' | 's3';
+/** The integrations an administrator can set up here: download clients, S3, and RomM's API. */
+export type ClientKind = 'qbittorrent' | 'sabnzbd' | 'nzbget' | 's3' | 'romm_api';
 
 /** The kinds, in the order offered. */
-export const CLIENT_KINDS: ClientKind[] = ['qbittorrent', 'sabnzbd', 'nzbget', 's3'];
+export const CLIENT_KINDS: ClientKind[] = ['qbittorrent', 'sabnzbd', 'nzbget', 's3', 'romm_api'];
 
 /** Whether an integration's kind has a form here. */
 export function isClientKind(kind: string): kind is ClientKind {
@@ -131,7 +148,7 @@ export function isClientKind(kind: string): kind is ClientKind {
 /** What differs between the kinds' forms. */
 export type ClientWording = {
   /** The secret's field on the server. */
-  secretField: 'password' | 'api_key' | 'secret_access_key';
+  secretField: 'password' | 'api_key' | 'secret_access_key' | 'token';
   /** Whether it is a download client, with a category and folders. */
   downloads: boolean;
   /** The secret's label. */
@@ -146,6 +163,8 @@ export type ClientWording = {
   folderExample: string;
   /** What a job is handed over as. */
   takes: string;
+  /** What it is for, in a sentence. */
+  purpose: string;
 };
 
 /** How a kind's form reads. */
@@ -161,6 +180,7 @@ export function clientWording(kind: ClientKind): ClientWording {
         addressExample: 'http://192.168.1.13:8080/',
         folderExample: '/downloads/tangible',
         takes: 'a .torrent file or a magnet link',
+        purpose: 'Hands over a .torrent file or a magnet link.',
       };
     case 'sabnzbd':
       return {
@@ -172,6 +192,7 @@ export function clientWording(kind: ClientKind): ClientWording {
         addressExample: 'http://192.168.1.13:8080/',
         folderExample: '/downloads/complete/tangible',
         takes: 'an NZB',
+        purpose: 'Hands over an NZB.',
       };
     case 'nzbget':
       return {
@@ -183,6 +204,7 @@ export function clientWording(kind: ClientKind): ClientWording {
         addressExample: 'http://192.168.1.13:6789/',
         folderExample: '/downloads/completed/tangible',
         takes: 'an NZB',
+        purpose: 'Hands over an NZB.',
       };
     case 's3':
       return {
@@ -194,6 +216,21 @@ export function clientWording(kind: ClientKind): ClientWording {
         addressExample: 'https://s3.eu-west-1.amazonaws.com/',
         folderExample: '',
         takes: 'objects from the buckets it allows',
+        purpose: 'Imports objects from the buckets it allows.',
+      };
+    case 'romm_api':
+      return {
+        downloads: false,
+        secretField: 'token',
+        secretLabel: 'Client token',
+        usernameLabel: null,
+        addressLabel: 'RomM address, as this server reaches it',
+        addressExample: 'http://romm:8080/',
+        folderExample: '',
+        takes: '',
+        purpose:
+          'Finds exported games in RomM, links to their pages, and asks RomM to scan what the ' +
+          'export changed. It never changes anything in RomM. There is one, for the one export.',
       };
   }
 }
@@ -219,6 +256,10 @@ export type ClientForm = {
   pathStyle: boolean;
   /** S3 only: the buckets allowed, one a line or comma-separated. */
   buckets: string;
+  /** RomM's API only: RomM's address as a browser reaches it, for links. */
+  webUrl: string;
+  /** RomM's API only: ask RomM to scan what the export changed. */
+  scanAfterExport: boolean;
 };
 
 /** An empty form for `kind`, with the server's defaults. */
@@ -238,6 +279,8 @@ export function emptyClientForm(kind: ClientKind, roots: string[]): ClientForm {
     region: 'us-east-1',
     pathStyle: true,
     buckets: '',
+    webUrl: '',
+    scanAfterExport: true,
   };
 }
 
@@ -266,6 +309,8 @@ export function clientFormFrom(view: IntegrationView & { kind: ClientKind }): Cl
     buckets: Array.isArray(buckets)
       ? buckets.filter((bucket) => typeof bucket === 'string').join('\n')
       : '',
+    webUrl: text(view.settings, 'web_url'),
+    scanAfterExport: view.settings.scan_after_export !== false,
   };
 }
 
@@ -278,6 +323,15 @@ export function parseBuckets(text: string): string[] {
 }
 
 function clientSettings(form: ClientForm): Record<string, unknown> {
+  if (form.kind === 'romm_api') {
+    const settings: Record<string, unknown> = {
+      base_url: form.baseUrl.trim(),
+      scan_after_export: form.scanAfterExport,
+    };
+    // Left out, links use the address the server reaches RomM at.
+    if (form.webUrl.trim() !== '') settings.web_url = form.webUrl.trim();
+    return settings;
+  }
   if (form.kind === 's3') {
     return {
       endpoint: form.baseUrl.trim(),
