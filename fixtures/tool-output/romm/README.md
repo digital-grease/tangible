@@ -97,7 +97,13 @@ Observed along the way, and relied on by the client:
   `tasks.run`; `GET /api/tasks/status` grows with every task run.
 - A quick scan made the folder ROM 1. Renamed, a quick scan kept ROM 1 and
   changed its `fs_name`; removed, ROM 1 stayed with `missing_from_fs` true;
-  put back under a third name, ROM 1 again, no longer missing.
+  put back under a third name, ROM 1 again, no longer missing. RomM
+  matches a folder under a new name to a missing ROM by the hash of its
+  files (`get_matching_missing_rom` in its scan), so this holds when the
+  files are unchanged. A one-ISO folder with the ISO renamed too, as the
+  export renames it, kept its ROM. A CUE/BIN export renamed (region USA to
+  Europe) did not: its BIN is renamed, so its rewritten sheet's bytes
+  change, and RomM made a new ROM and left the old one missing.
 - A scan of a slug the library has no folder for is queued, and finishes
   having scanned nothing.
 - `search_term` matches fuzzily (`Probe`, `(USA)` and `Probe Game (U` all

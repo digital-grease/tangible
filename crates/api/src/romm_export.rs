@@ -26,7 +26,7 @@ use std::time::Duration;
 use tangible_db::Database;
 use tangible_db::romm::{
     DiscInputs, LinkedArtifact, Receipt, edition_romm, editions_to_reconcile, export_inputs,
-    record_folder_removed, record_receipts, record_status,
+    fill_receipt_lengths, record_folder_removed, record_receipts, record_status,
 };
 use tangible_db::romm_api::owe_scans;
 use tangible_domain::enums::ComponentRole;
@@ -72,6 +72,13 @@ impl RommExport {
     pub fn with_sync(mut self, sync: RommSyncHandle) -> Self {
         self.sync = Some(sync);
         self
+    }
+
+    /// The platforms the connected RomM knows, as the task keeping RomM in
+    /// step last read them.
+    #[must_use]
+    pub fn known_platforms(&self) -> Option<Vec<String>> {
+        self.sync.as_ref().and_then(RommSyncHandle::known_platforms)
     }
 
     /// Ask the task keeping RomM in step through its API to look again now.
@@ -358,6 +365,7 @@ impl RommExporter {
                     representation: representation.to_owned(),
                     method: "copy".to_owned(),
                     sha256: file.sha256.clone(),
+                    length_bytes: i64::try_from(file.length).unwrap_or(i64::MAX),
                 }
             })
             .collect();
@@ -370,11 +378,16 @@ impl RommExporter {
                 .await;
 
         Ok(match applied {
-            Ok(Ok(Applied::Unchanged)) => Outcome::Current {
-                folder,
-                files: file_count,
-                written: false,
-            },
+            Ok(Ok(Applied::Unchanged)) => {
+                // Receipts written before they recorded sizes get them, so
+                // RomM's files can be compared by size too.
+                fill_receipt_lengths(self.database.pool(), self.integration_id, &receipts).await?;
+                Outcome::Current {
+                    folder,
+                    files: file_count,
+                    written: false,
+                }
+            }
             Ok(Ok(Applied::Written(methods))) => {
                 let receipts: Vec<Receipt> = receipts
                     .into_iter()

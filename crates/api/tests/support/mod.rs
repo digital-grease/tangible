@@ -10,6 +10,8 @@
 
 #![allow(dead_code, clippy::expect_used)]
 
+pub mod romm;
+
 use axum::body::Body;
 use axum::http::{HeaderValue, Request};
 use sqlx::PgPool;

@@ -27,6 +27,7 @@ pub mod problem;
 pub mod report;
 pub mod request_id;
 pub mod romm_export;
+pub mod romm_link;
 pub mod romm_sync;
 pub mod routes;
 pub mod secrets;
@@ -280,6 +281,7 @@ pub const API_BASE: &str = "/api/v1";
         routes::romm::RommSettings,
         routes::romm::RommApiView,
         routes::romm::RommScanView,
+        routes::romm::RommLinkView,
         routes::romm::EditionRommView,
         routes::romm::SetEditionRomm,
         routes::erasures::DriveView,

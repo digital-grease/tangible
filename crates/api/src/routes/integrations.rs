@@ -502,6 +502,11 @@ pub async fn update_one(
     .await
     .map_err(unavailable("the integration could not be changed"))?
     .map_err(|outcome| outcome_problem(Some(id), &outcome))?;
+    if record.kind == "romm_api"
+        && current.configuration.get("base_url") != record.configuration.get("base_url")
+    {
+        forget_links(&state).await?;
+    }
     prompt_romm_sync(&state, &record.kind);
     Ok(Json(IntegrationView::from(record)))
 }
@@ -528,11 +533,28 @@ pub async fn delete_one(
     Path(integration_id): Path<String>,
 ) -> Result<StatusCode, Problem> {
     let id = parse_id(&integration_id)?;
+    let kind = get_integration(state.database().pool(), id)
+        .await
+        .map_err(unavailable("the integration could not be read"))?
+        .map(|record| record.kind);
     delete_integration(state.database().pool(), id, &user.username)
         .await
         .map_err(unavailable("the integration could not be removed"))?
         .map_err(|outcome| outcome_problem(Some(id), &outcome))?;
+    if kind.as_deref() == Some("romm_api") {
+        forget_links(&state).await?;
+    }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Forget the links to RomM's ROMs: RomM's API is gone, or points at
+/// another RomM, whose ids are its own.
+async fn forget_links(state: &ApiState) -> Result<(), Problem> {
+    let forgotten = tangible_db::romm::forget_romm_links(state.database().pool())
+        .await
+        .map_err(unavailable("the links to RomM could not be forgotten"))?;
+    tracing::info!(forgotten, "links to RomM's ROMs forgotten");
+    Ok(())
 }
 
 /// How trying an integration went.

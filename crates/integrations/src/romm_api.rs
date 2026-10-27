@@ -17,9 +17,11 @@
 //! - `/api/heartbeat` and `/openapi.json` answer without a token. Every
 //!   other route answers 401 `Not authenticated` without a token that opens,
 //!   and 403 `Forbidden` to a token without the route's scope.
-//! - A quick scan of a platform folder makes a new folder a ROM, keeps the
-//!   ROM's id when the folder is renamed, and marks it `missing_from_fs`
-//!   when the folder goes; a folder put back is the same ROM again.
+//! - A quick scan of a platform folder makes a new folder a ROM, and marks
+//!   it `missing_from_fs` when the folder goes. A folder that turns up
+//!   under another name keeps the missing ROM's id only if its files hash
+//!   the same: a renamed ISO does, a renamed CUE/BIN export does not, since
+//!   its sheet names its renamed BIN and so changes.
 //! - `POST /api/tasks/scan`, which a token may call, is new in 5.4.0; before
 //!   it a scan needed a browser session. A slug it has no folder for is
 //!   queued and scans nothing.

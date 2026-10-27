@@ -386,6 +386,70 @@ async fn a_romm_scan_record_says_consistently_whether_romm_queued_it() {
     tx.rollback().await.expect("rollback");
 }
 
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_link_to_romm_has_an_id_exactly_when_romm_has_the_game() {
+    // An unseen export pointing at a ROM would link to some other game's
+    // page; a linked one without an id links nowhere.
+    let pool = pool().await;
+    let f = Fixture::new();
+    let mut tx = pool.begin().await.expect("begin");
+    seed(&mut tx, &f).await;
+    tx.execute(
+        format!(
+            "INSERT INTO romm_edition_exports (edition_id, state, folder) \
+             VALUES ('{}', 'current', 'psx/Game')",
+            f.edition
+        )
+        .as_str(),
+    )
+    .await
+    .expect("an export");
+    let link = |state: &str, id: &str, checked: &str| {
+        format!(
+            "UPDATE romm_edition_exports SET romm_state = {state}, romm_rom_id = {id}, \
+             romm_checked_at = {checked} WHERE edition_id = '{}'",
+            f.edition
+        )
+    };
+    tx.execute(link("'linked'", "41", "now()").as_str())
+        .await
+        .expect("a linked export");
+    tx.execute(link("'unseen'", "NULL", "now()").as_str())
+        .await
+        .expect("an unseen export");
+    for (statement, why) in [
+        (
+            link("'unseen'", "41", "now()"),
+            "an unseen export has no ROM",
+        ),
+        (
+            link("'linked'", "NULL", "now()"),
+            "a linked export has a ROM",
+        ),
+        (
+            link("'missing'", "NULL", "now()"),
+            "a missing export has a ROM",
+        ),
+        (
+            link("'linked'", "41", "NULL"),
+            "a link says when it was looked up",
+        ),
+        (
+            link("NULL", "NULL", "now()"),
+            "nothing looked up has no time",
+        ),
+        (link("'linked'", "0", "now()"), "RomM's ids are positive"),
+        (
+            link("'found'", "41", "now()"),
+            "the state is one Tangible knows",
+        ),
+    ] {
+        must_reject(&mut tx, &statement, why).await;
+    }
+    tx.rollback().await.expect("rollback");
+}
+
 // --- the positive cases, which matter just as much ---------------------------
 
 #[tokio::test]

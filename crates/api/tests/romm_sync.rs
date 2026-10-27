@@ -14,15 +14,12 @@
 
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
-use std::collections::VecDeque;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::extract::State;
-use axum::http::{HeaderMap, Method, Request, StatusCode};
-use axum::response::IntoResponse;
+use axum::http::{Method, Request, StatusCode};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use tangible_api::secrets::SecretKey;
@@ -35,140 +32,7 @@ use tower::ServiceExt as _;
 
 mod support;
 
-const TOKEN: &str = "rmm_fake-token-for-the-fake-romm";
-const TASK: &str = "32708cfa-50ff-4401-9e6b-adc8b5b301d6";
-
-fn fixture(name: &str) -> String {
-    std::fs::read_to_string(format!(
-        "{}/../../fixtures/tool-output/romm/{name}",
-        env!("CARGO_MANIFEST_DIR")
-    ))
-    .unwrap()
-}
-
-/// How the fake answers a request for a scan.
-#[derive(Debug, Clone, Copy)]
-enum ScanReply {
-    Queued,
-    Busy,
-    NoWorker,
-}
-
-/// How the fake answers after a task.
-#[derive(Debug, Clone, Copy)]
-enum TaskReply {
-    Says(&'static str),
-    Gone,
-}
-
-/// What the fake RomM answers, and what it was asked.
-struct Fake {
-    document: Value,
-    scan_replies: VecDeque<ScanReply>,
-    task_replies: VecDeque<TaskReply>,
-    /// While set, a task is `started` whatever else is queued.
-    hold: bool,
-    /// The bodies of the scans asked for.
-    scans: Vec<Value>,
-    /// How many times a task was asked after.
-    task_asks: usize,
-}
-
-type Shared = Arc<Mutex<Fake>>;
-
-fn task(status: &str) -> String {
-    if status == "finished" {
-        return fixture("task-finished-5.4.1.json");
-    }
-    json!({ "task_id": TASK, "status": status, "meta": { "scan_stats": null } }).to_string()
-}
-
-async fn answer(
-    State(fake): State<Shared>,
-    method: Method,
-    headers: HeaderMap,
-    uri: axum::http::Uri,
-    body: String,
-) -> axum::response::Response {
-    let path = uri.path().to_owned();
-    let mut fake = fake.lock().unwrap();
-    match path.as_str() {
-        "/api/heartbeat" => {
-            return (StatusCode::OK, fixture("heartbeat-5.4.1.json")).into_response();
-        }
-        "/openapi.json" => return (StatusCode::OK, fake.document.to_string()).into_response(),
-        "/api/config" => return (StatusCode::OK, fixture("config-5.4.1.json")).into_response(),
-        _ => {}
-    }
-    let signed = headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        == Some(format!("Bearer {TOKEN}").as_str());
-    if !signed {
-        return (
-            StatusCode::UNAUTHORIZED,
-            axum::Json(json!({ "detail": "Not authenticated" })),
-        )
-            .into_response();
-    }
-    match (method.as_str(), path.as_str()) {
-        ("POST", "/api/tasks/scan") => {
-            fake.scans.push(serde_json::from_str(&body).unwrap());
-            match fake.scan_replies.pop_front().unwrap_or(ScanReply::Queued) {
-                ScanReply::Queued => {
-                    (StatusCode::ACCEPTED, fixture("scan-queued-5.4.1.json")).into_response()
-                }
-                ScanReply::Busy => {
-                    (StatusCode::CONFLICT, fixture("scan-in-flight-5.4.1.json")).into_response()
-                }
-                ScanReply::NoWorker => (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    fixture("scan-no-worker-5.4.1.json"),
-                )
-                    .into_response(),
-            }
-        }
-        ("GET", task_path) if task_path == format!("/api/tasks/{TASK}") => {
-            fake.task_asks += 1;
-            if fake.hold {
-                return (StatusCode::OK, task("started")).into_response();
-            }
-            match fake
-                .task_replies
-                .pop_front()
-                .unwrap_or(TaskReply::Says("finished"))
-            {
-                TaskReply::Says(status) => (StatusCode::OK, task(status)).into_response(),
-                TaskReply::Gone => (
-                    StatusCode::NOT_FOUND,
-                    axum::Json(json!({ "detail": "Task not found" })),
-                )
-                    .into_response(),
-            }
-        }
-        _ => StatusCode::NOT_FOUND.into_response(),
-    }
-}
-
-async fn fake_romm() -> (SocketAddr, Shared) {
-    let fake: Shared = Arc::new(Mutex::new(Fake {
-        document: serde_json::from_str(&fixture("openapi-5.4.1-used.json")).unwrap(),
-        scan_replies: VecDeque::new(),
-        task_replies: VecDeque::new(),
-        hold: false,
-        scans: Vec::new(),
-        task_asks: 0,
-    }));
-    let app = axum::Router::new()
-        .fallback(answer)
-        .with_state(Arc::clone(&fake));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, app).await;
-    });
-    (address, fake)
-}
+use support::romm::{ScanReply, Shared, TASK, TOKEN, TaskReply};
 
 static TURN: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
 
@@ -224,7 +88,7 @@ async fn harness() -> Harness {
     let state = ApiState::with_manifests(database.clone(), manifests)
         .with_secret_key(Arc::clone(&key))
         .with_integration_client(client.clone());
-    let (romm, fake) = fake_romm().await;
+    let (romm, fake) = support::romm::start().await;
     Harness {
         admin: support::administrator(&pool).await,
         pool,
@@ -577,7 +441,8 @@ async fn nothing_is_asked_of_a_romm_that_takes_no_scans_or_when_scans_are_off() 
     let id = harness.connect(json!({ "scan_after_export": false })).await;
     owe_scans(&harness.pool, &["psx"]).await.unwrap();
     let sync = harness.sync(quick());
-    assert_eq!(sync.pass().await, tangible_api::romm_sync::Pass::default());
+    let pass = sync.pass().await;
+    assert_eq!((pass.scan, pass.retry_soon), (None, false));
     assert_eq!(harness.api().await["scan_after_export"], false);
 
     // RomM 5.0 to 5.3: its document has no scan a token may ask for.
@@ -597,7 +462,7 @@ async fn nothing_is_asked_of_a_romm_that_takes_no_scans_or_when_scans_are_off() 
         .unwrap()
         .remove("/api/tasks/scan");
     let pass = sync.pass().await;
-    assert_eq!(pass, tangible_api::romm_sync::Pass::default());
+    assert_eq!((pass.scan, pass.retry_soon), (None, false));
     assert!(harness.scans_asked().is_empty());
     assert_eq!(
         harness.owed().await,

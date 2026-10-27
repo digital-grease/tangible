@@ -27,6 +27,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use utoipa::ToSchema;
 
+use crate::RommExport;
 use crate::auth::SignedIn;
 use crate::problem::{ErrorCode, Problem};
 use crate::state::ApiState;
@@ -49,6 +50,10 @@ pub struct PlatformView {
     pub slug: String,
     /// Its name.
     pub name: String,
+    /// Whether the connected RomM knows the platform: false means RomM
+    /// would not recognise the folder. Absent until RomM's API has been
+    /// asked.
+    pub known_to_romm: Option<bool>,
 }
 
 /// Whether this server exports to RomM, and to which platforms.
@@ -154,6 +159,28 @@ pub struct EditionRommView {
     pub scan_owed: bool,
     /// The last scan of the platform's folder asked for.
     pub last_scan: Option<RommScanView>,
+    /// What RomM made of the export, once RomM's API has looked it up.
+    pub in_romm: Option<RommLinkView>,
+}
+
+/// What RomM made of an export, as last looked up through its API.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RommLinkView {
+    /// `unseen` (RomM has no game for the folder yet), `linked` (it has,
+    /// and its files agree with what was written; for an export taken out,
+    /// RomM still lists it), `missing` (RomM marks it missing from its
+    /// library) or `differs` (RomM's files do not agree, and `detail` says
+    /// how).
+    pub state: String,
+    /// RomM's id for the game.
+    pub rom_id: Option<i64>,
+    /// The game's page in RomM, from the integration's `web_url` (or
+    /// `base_url`).
+    pub url: Option<String>,
+    /// What there is to say.
+    pub detail: Option<String>,
+    /// When RomM was asked.
+    pub checked_at: String,
 }
 
 impl From<EditionRomm> for EditionRommView {
@@ -162,6 +189,16 @@ impl From<EditionRomm> for EditionRommView {
         Self {
             scan_owed: false,
             last_scan: None,
+            in_romm: status
+                .as_ref()
+                .and_then(|s| s.link.as_ref())
+                .map(|link| RommLinkView {
+                    state: link.state.clone(),
+                    rom_id: link.rom_id,
+                    url: None,
+                    detail: link.detail.clone(),
+                    checked_at: rfc3339(link.checked_at),
+                }),
             platform: romm.platform,
             export: romm.export,
             state: status.as_ref().map(|s| s.state.clone()),
@@ -206,6 +243,7 @@ fn parse_edition(raw: &str) -> Result<EditionId, Problem> {
     ),
 )]
 pub async fn romm_settings(State(state): State<ApiState>) -> Result<Json<RommSettings>, Problem> {
+    let known = state.romm().and_then(RommExport::known_platforms);
     Ok(Json(RommSettings {
         configured: state.romm().is_some(),
         platforms: PLATFORMS
@@ -213,6 +251,7 @@ pub async fn romm_settings(State(state): State<ApiState>) -> Result<Json<RommSet
             .map(|(slug, name)| PlatformView {
                 slug: (*slug).to_owned(),
                 name: (*name).to_owned(),
+                known_to_romm: known.as_ref().map(|known| known.iter().any(|k| k == slug)),
             })
             .collect(),
         api: api_view(&state).await.map_err(|error| {
@@ -247,7 +286,13 @@ async fn api_view(state: &ApiState) -> Result<Option<RommApiView>, tangible_db::
     }))
 }
 
-/// An edition's RomM view, with the scans of its platform.
+/// RomM's page for ROM `id`: `/rom/{id}` in its web UI, under `base`.
+fn rom_page(base: &str, id: i64) -> String {
+    format!("{}/rom/{id}", base.trim_end_matches('/'))
+}
+
+/// An edition's RomM view, with the scans of its platform and the page of
+/// its game in RomM.
 async fn edition_view(
     state: &ApiState,
     romm: EditionRomm,
@@ -255,6 +300,13 @@ async fn edition_view(
     let pool = state.database().pool();
     let platform = romm.platform.clone();
     let mut view = EditionRommView::from(romm);
+    if let Some(link) = view.in_romm.as_mut()
+        && let Some(rom_id) = link.rom_id
+        && let Some(record) = romm_api_integration(pool).await?
+        && let Ok(settings) = serde_json::from_value::<RommApiSettings>(record.configuration)
+    {
+        link.url = Some(rom_page(settings.link_base(), rom_id));
+    }
     if let Some(platform) = platform {
         view.scan_owed = owed_scans(pool)
             .await?

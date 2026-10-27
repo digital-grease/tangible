@@ -43,6 +43,56 @@ pub struct ExportStatus {
     pub exported_at: Option<OffsetDateTime>,
     /// When it was last checked.
     pub checked_at: OffsetDateTime,
+    /// What RomM made of it, once RomM's API has been asked.
+    pub link: Option<RommLink>,
+}
+
+/// What RomM made of an export, as last looked up through its API.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RommLink {
+    /// `unseen`, `linked`, `missing` or `differs`.
+    pub state: String,
+    /// RomM's id for the ROM, when one was found.
+    pub rom_id: Option<i64>,
+    /// How RomM's files differ, or what else there is to say.
+    pub detail: Option<String>,
+    /// When RomM was asked.
+    pub checked_at: OffsetDateTime,
+}
+
+/// An export to look up in RomM.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkTarget {
+    /// The edition.
+    pub edition_id: EditionId,
+    /// The export's state: `current` or `removed`.
+    pub state: String,
+    /// Its folder, `platform/game`, while it is current.
+    pub folder: Option<String>,
+    /// RomM's id for its ROM, as last found.
+    pub rom_id: Option<i64>,
+    /// What RomM made of it last time.
+    pub romm_state: Option<String>,
+}
+
+/// A file an export holds, as its receipt has it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportedFile {
+    /// Its name in the game's folder.
+    pub name: String,
+    /// Its size, when the receipt recorded one.
+    pub length_bytes: Option<i64>,
+}
+
+/// What to record of looking an export up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NewLink<'a> {
+    /// `unseen`, `linked`, `missing` or `differs`.
+    pub state: &'a str,
+    /// RomM's id for the ROM; none for `unseen`.
+    pub rom_id: Option<i64>,
+    /// What there is to say.
+    pub detail: Option<&'a str>,
 }
 
 /// Everything the export needs to know about an edition.
@@ -95,6 +145,8 @@ pub struct Receipt {
     pub method: String,
     /// The digest of the bytes written.
     pub sha256: String,
+    /// The number of bytes written.
+    pub length_bytes: i64,
 }
 
 /// Set an edition's platform and whether it should appear in RomM.
@@ -151,7 +203,8 @@ pub async fn edition_romm(
 ) -> Result<Option<EditionRomm>, DbError> {
     let row = sqlx::query(
         "SELECT e.platform, e.romm_export, x.state, x.folder, x.detail, x.file_count,
-                x.exported_at, x.checked_at
+                x.exported_at, x.checked_at, x.romm_rom_id, x.romm_state, x.romm_detail,
+                x.romm_checked_at
          FROM editions e LEFT JOIN romm_edition_exports x ON x.edition_id = e.id
          WHERE e.id = $1",
     )
@@ -161,6 +214,19 @@ pub async fn edition_romm(
     .map_err(DbError::Query)?;
     row.map(|row| {
         let state: Option<String> = row.try_get("state").map_err(DbError::Query)?;
+        let romm_state: Option<String> = row.try_get("romm_state").map_err(DbError::Query)?;
+        let link = match (
+            romm_state,
+            row.try_get("romm_checked_at").map_err(DbError::Query)?,
+        ) {
+            (Some(state), Some(checked_at)) => Some(RommLink {
+                state,
+                rom_id: row.try_get("romm_rom_id").map_err(DbError::Query)?,
+                detail: row.try_get("romm_detail").map_err(DbError::Query)?,
+                checked_at,
+            }),
+            _ => None,
+        };
         Ok(EditionRomm {
             edition_id,
             platform: row.try_get("platform").map_err(DbError::Query)?,
@@ -174,6 +240,7 @@ pub async fn edition_romm(
                     file_count: row.try_get("file_count").map_err(DbError::Query)?,
                     exported_at: row.try_get("exported_at").map_err(DbError::Query)?,
                     checked_at: row.try_get("checked_at").map_err(DbError::Query)?,
+                    link,
                 }),
             },
         })
@@ -373,13 +440,14 @@ pub async fn record_receipts(
         sqlx::query(
             "INSERT INTO export_receipts
                  (id, integration_id, artifact_id, destination_key, representation,
-                  materialization_method, content_fingerprint, state)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 'present')
+                  materialization_method, content_fingerprint, state, length_bytes)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'present', $8)
              ON CONFLICT (integration_id, destination_key) DO UPDATE SET
                  artifact_id = EXCLUDED.artifact_id,
                  representation = EXCLUDED.representation,
                  materialization_method = EXCLUDED.materialization_method,
                  content_fingerprint = EXCLUDED.content_fingerprint,
+                 length_bytes = EXCLUDED.length_bytes,
                  state = 'present'",
         )
         .bind(uuid::Uuid::now_v7())
@@ -389,6 +457,7 @@ pub async fn record_receipts(
         .bind(&receipt.representation)
         .bind(&receipt.method)
         .bind(&receipt.sha256)
+        .bind(receipt.length_bytes)
         .execute(&mut *tx)
         .await
         .map_err(DbError::Query)?;
@@ -397,6 +466,166 @@ pub async fn record_receipts(
     mark_removed(&mut tx, integration_id, folder, &present).await?;
     tx.commit().await.map_err(DbError::Query)?;
     Ok(())
+}
+
+/// Give the receipts of an unchanged export the sizes they were written
+/// before receipts recorded any.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn fill_receipt_lengths(
+    pool: &PgPool,
+    integration_id: uuid::Uuid,
+    receipts: &[Receipt],
+) -> Result<(), DbError> {
+    let destinations: Vec<&str> = receipts.iter().map(|r| r.destination.as_str()).collect();
+    let lengths: Vec<i64> = receipts.iter().map(|r| r.length_bytes).collect();
+    sqlx::query(
+        "UPDATE export_receipts r SET length_bytes = f.length_bytes
+         FROM unnest($2::text[], $3::bigint[]) AS f(destination_key, length_bytes)
+         WHERE r.integration_id = $1 AND r.destination_key = f.destination_key
+           AND r.length_bytes IS NULL AND r.state = 'present'",
+    )
+    .bind(integration_id)
+    .bind(&destinations)
+    .bind(&lengths)
+    .execute(pool)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(())
+}
+
+/// The exports to look up in RomM: every current one when `all`, else
+/// those not linked or written since they were last looked up; and every
+/// removed one whose ROM RomM has not yet marked missing, or that still
+/// has something recorded to clear.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn exports_to_link(pool: &PgPool, all: bool) -> Result<Vec<LinkTarget>, DbError> {
+    let rows = sqlx::query(
+        "SELECT edition_id, state, folder, romm_rom_id, romm_state FROM romm_edition_exports
+         WHERE (state = 'current' AND folder IS NOT NULL
+                AND ($1 OR romm_checked_at IS NULL OR romm_state <> 'linked'
+                     OR exported_at > romm_checked_at))
+            OR (state = 'removed'
+                AND ((romm_rom_id IS NOT NULL AND romm_state <> 'missing')
+                     OR (romm_rom_id IS NULL AND romm_state IS NOT NULL)))
+         ORDER BY edition_id",
+    )
+    .bind(all)
+    .fetch_all(pool)
+    .await
+    .map_err(DbError::Query)?;
+    rows.iter()
+        .map(|row| {
+            let get = DbError::Query;
+            Ok(LinkTarget {
+                edition_id: EditionId::from_uuid(row.try_get("edition_id").map_err(get)?),
+                state: row.try_get("state").map_err(get)?,
+                folder: row.try_get("folder").map_err(get)?,
+                rom_id: row.try_get("romm_rom_id").map_err(get)?,
+                romm_state: row.try_get("romm_state").map_err(get)?,
+            })
+        })
+        .collect()
+}
+
+/// The files the export holds in `folder`, by name, from their receipts.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn exported_files(pool: &PgPool, folder: &str) -> Result<Vec<ExportedFile>, DbError> {
+    let prefix = format!("{folder}/");
+    let rows = sqlx::query(
+        "SELECT r.destination_key, r.length_bytes
+         FROM export_receipts r JOIN integrations i ON i.id = r.integration_id
+         WHERE i.name = $1 AND r.state = 'present' AND left(r.destination_key, $3) = $2
+         ORDER BY r.destination_key",
+    )
+    .bind(INTEGRATION_NAME)
+    .bind(&prefix)
+    .bind(i32::try_from(prefix.chars().count()).unwrap_or(i32::MAX))
+    .fetch_all(pool)
+    .await
+    .map_err(DbError::Query)?;
+    rows.iter()
+        .filter_map(|row| {
+            let destination: String = match row.try_get("destination_key") {
+                Ok(destination) => destination,
+                Err(error) => return Some(Err(DbError::Query(error))),
+            };
+            let name = destination.strip_prefix(&prefix)?;
+            // A file in a folder below the game's is not one the export
+            // writes.
+            if name.contains('/') {
+                return None;
+            }
+            Some(
+                row.try_get("length_bytes")
+                    .map_err(DbError::Query)
+                    .map(|length_bytes| ExportedFile {
+                        name: name.to_owned(),
+                        length_bytes,
+                    }),
+            )
+        })
+        .collect()
+}
+
+/// Record what looking `target` up in RomM found, or clear it with `None`.
+/// Nothing is recorded if the export changed since it was read: the next
+/// pass looks again. Returns whether it was recorded.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure, including a link that breaks
+/// the table's constraints.
+pub async fn record_link(
+    pool: &PgPool,
+    target: &LinkTarget,
+    link: Option<NewLink<'_>>,
+) -> Result<bool, DbError> {
+    let done = sqlx::query(
+        "UPDATE romm_edition_exports SET
+             romm_state = $4, romm_rom_id = $5, romm_detail = $6,
+             romm_checked_at = CASE WHEN $4::text IS NULL THEN NULL ELSE now() END
+         WHERE edition_id = $1 AND state = $2 AND folder IS NOT DISTINCT FROM $3",
+    )
+    .bind(target.edition_id.as_uuid())
+    .bind(&target.state)
+    .bind(target.folder.as_deref())
+    .bind(link.map(|link| link.state))
+    .bind(link.and_then(|link| link.rom_id))
+    .bind(
+        link.and_then(|link| link.detail)
+            .map(|text| text.chars().take(2000).collect::<String>()),
+    )
+    .execute(pool)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(done.rows_affected() == 1)
+}
+
+/// Forget every link to RomM's ROMs: RomM's API was removed, or now points
+/// at another RomM, whose ids are its own.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn forget_romm_links(pool: &PgPool) -> Result<u64, DbError> {
+    let done = sqlx::query(
+        "UPDATE romm_edition_exports SET
+             romm_state = NULL, romm_rom_id = NULL, romm_detail = NULL, romm_checked_at = NULL
+         WHERE romm_state IS NOT NULL OR romm_rom_id IS NOT NULL",
+    )
+    .execute(pool)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(done.rows_affected())
 }
 
 /// Record that everything an export held in `folder` is gone.

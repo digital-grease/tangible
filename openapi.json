@@ -8196,6 +8196,17 @@
             ],
             "description": "The folder in RomM's library, `platform/game`."
           },
+          "in_romm": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RommLinkView",
+                "description": "What RomM made of the export, once RomM's API has looked it up."
+              }
+            ]
+          },
           "last_scan": {
             "oneOf": [
               {
@@ -9905,6 +9916,13 @@
           "name"
         ],
         "properties": {
+          "known_to_romm": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the connected RomM knows the platform: false means RomM\nwould not recognise the folder. Absent until RomM's API has been\nasked."
+          },
           "name": {
             "type": "string",
             "description": "Its name."
@@ -10998,6 +11016,46 @@
               "null"
             ],
             "description": "RomM's version, as last seen."
+          }
+        }
+      },
+      "RommLinkView": {
+        "type": "object",
+        "description": "What RomM made of an export, as last looked up through its API.",
+        "required": [
+          "state",
+          "checked_at"
+        ],
+        "properties": {
+          "checked_at": {
+            "type": "string",
+            "description": "When RomM was asked."
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What there is to say."
+          },
+          "rom_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "RomM's id for the game."
+          },
+          "state": {
+            "type": "string",
+            "description": "`unseen` (RomM has no game for the folder yet), `linked` (it has,\nand its files agree with what was written; for an export taken out,\nRomM still lists it), `missing` (RomM marks it missing from its\nlibrary) or `differs` (RomM's files do not agree, and `detail` says\nhow)."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The game's page in RomM, from the integration's `web_url` (or\n`base_url`)."
           }
         }
       },

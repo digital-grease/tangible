@@ -64,6 +64,17 @@ may change between minor versions, and the release notes say how.
   edition's RomM status gains `scan_owed` and the last scan of its
   platform. Diagnostics gains a "RomM API" check. Database migration 0020
   adds two tables; it is additive.
+- Exported games are found in RomM. After each scan, and hourly, the
+  server looks each export up among RomM's ROMs by its platform folder and
+  folder name, and records RomM's id for it and whether RomM's files agree
+  with what was written (names, and sizes). An edition's RomM status gains
+  `in_romm`: `unseen`, `linked`, `missing` or `differs`, with what
+  differs, RomM's id, and a link to the game's page in RomM. A removed
+  export is followed until RomM marks it missing. Each platform in
+  `GET /api/v1/romm` says whether the connected RomM knows it. Removing
+  the RomM API integration, or pointing it at another address, forgets
+  the links. Database migration 0021 adds four columns to the export's
+  status and a size to export receipts; it is additive.
 
 - Groundwork for issue reports: text is scrubbed of credentials, paths,
   serial numbers, library file names and LAN addresses before anyone can

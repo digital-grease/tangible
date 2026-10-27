@@ -15,16 +15,26 @@
 //! listening) or that fails is asked for again, sooner at first and then
 //! hourly.
 //!
-//! Everything it knows is in the database: what is owed, and each scan
-//! asked for with RomM's task id. A scan left open by a restart is followed
-//! again on the next pass. No transaction is held across a request to
-//! RomM.
+//! Then it looks each export up among RomM's ROMs (`crate::romm_link`) and
+//! records what it found: RomM's id for the ROM and whether its files agree
+//! with what was written, or that RomM has not seen it, or marks it
+//! missing. A pass prompted by the exporter looks up only what changed or
+//! is not linked; one an hour looks up everything, so RomM's own scans are
+//! noticed. A removed export is followed by its ROM's id until RomM marks
+//! it missing. The platforms RomM knows are read on the hourly pass, for
+//! the platform picker.
+//!
+//! Everything it knows is in the database, but for the platforms RomM
+//! knows: what is owed, each scan asked for with RomM's task id, and each
+//! link. A scan left open by a restart is followed again on the next pass.
+//! No transaction is held across a request to RomM.
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
 
 use tangible_db::Database;
 use tangible_db::integrations::{record_integration_health, romm_api_integration};
+use tangible_db::romm::{LinkTarget, NewLink, exported_files, exports_to_link, record_link};
 use tangible_db::romm_api::{
     NewScan, ScanCounts, ScanRecord, ScanState, open_scans, owed_scans, prune_scans, record_scan,
     settle_owed_scans, update_scan,
@@ -36,6 +46,7 @@ use time::OffsetDateTime;
 use tokio::sync::Notify;
 
 use crate::download_clients::open_romm;
+use crate::romm_link::{Finder, Link, current_link, removed_link};
 use crate::secrets::SecretKey;
 
 /// How the task paces itself.
@@ -66,10 +77,12 @@ impl Default for RommSyncSettings {
     }
 }
 
-/// The means to prompt the task, held by the exporter and the routes.
+/// The means to prompt the task, held by the exporter and the routes, and
+/// what it last read of the platforms RomM knows.
 #[derive(Debug, Clone, Default)]
 pub struct RommSyncHandle {
     nudge: Arc<Notify>,
+    known_platforms: Arc<RwLock<Option<Vec<String>>>>,
 }
 
 impl RommSyncHandle {
@@ -83,6 +96,22 @@ impl RommSyncHandle {
     pub fn nudge(&self) {
         self.nudge.notify_one();
     }
+
+    /// The slugs of the platforms the connected RomM knows, as last read;
+    /// `None` until they have been.
+    #[must_use]
+    pub fn known_platforms(&self) -> Option<Vec<String>> {
+        self.known_platforms
+            .read()
+            .ok()
+            .and_then(|known| known.clone())
+    }
+
+    fn set_known_platforms(&self, known: Option<Vec<String>>) {
+        if let Ok(mut slot) = self.known_platforms.write() {
+            *slot = known;
+        }
+    }
 }
 
 /// How one pass went.
@@ -93,6 +122,8 @@ pub struct Pass {
     /// Whether platforms are still owed a scan RomM could be asked for
     /// again.
     pub retry_soon: bool,
+    /// How many exports were looked up in RomM.
+    pub looked_up: usize,
 }
 
 /// The background task.
@@ -135,10 +166,15 @@ impl RommSync {
     {
         let mut shutdown = std::pin::pin!(shutdown);
         let mut retry = self.settings.retry;
+        let mut last_full: Option<Instant> = None;
         loop {
+            let full = last_full.is_none_or(|at| at.elapsed() >= self.settings.interval);
+            if full {
+                last_full = Some(Instant::now());
+            }
             let pass = tokio::select! {
                 () = &mut shutdown => return,
-                pass = self.pass() => pass,
+                pass = self.run_pass(full) => pass,
             };
             let wait = if pass.retry_soon {
                 let wait = retry;
@@ -156,21 +192,32 @@ impl RommSync {
         }
     }
 
-    /// One pass: follow scans left open, then ask for one of what is owed.
+    /// The hourly pass: follow scans left open, ask for one of what is
+    /// owed, look up every export, and read the platforms RomM knows.
     pub async fn pass(&self) -> Pass {
-        match self.try_pass().await {
+        self.run_pass(true).await
+    }
+
+    /// A pass prompted by a change: as [`Self::pass`], looking up only the
+    /// exports that changed or are not linked.
+    pub async fn prompted_pass(&self) -> Pass {
+        self.run_pass(false).await
+    }
+
+    async fn run_pass(&self, full: bool) -> Pass {
+        match self.try_pass(full).await {
             Ok(pass) => pass,
             Err(error) => {
                 tracing::error!(error = ?error, "could not keep RomM in step");
                 Pass {
-                    scan: None,
                     retry_soon: true,
+                    ..Pass::default()
                 }
             }
         }
     }
 
-    async fn try_pass(&self) -> Result<Pass, tangible_db::DbError> {
+    async fn try_pass(&self, full: bool) -> Result<Pass, tangible_db::DbError> {
         let pool = self.database.pool();
         let Some(record) = romm_api_integration(pool).await? else {
             return Ok(Pass::default());
@@ -193,6 +240,16 @@ impl RommSync {
                 return Ok(Pass::default());
             }
         };
+        if full || self.handle.known_platforms().is_none() {
+            let known = match client.known_platforms().await {
+                Ok(known) => Some(known),
+                Err(error) => {
+                    tracing::debug!(error = %error, "could not read the platforms RomM knows");
+                    None
+                }
+            };
+            self.handle.set_known_platforms(known);
+        }
 
         for scan in open_scans(pool, record.id).await? {
             let ended = self.follow(&client, &scan).await?;
@@ -221,8 +278,79 @@ impl RommSync {
                 pass.retry_soon = ended.is_some_and(|state| state != ScanState::Finished);
             }
         }
+        match self.link(&client, full).await? {
+            Ok(looked_up) => {
+                pass.looked_up = looked_up;
+                if looked_up > 0 {
+                    record_integration_health(pool, record.id, Ok(None)).await?;
+                }
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "could not look exports up in RomM");
+                self.unhealthy(record.id, &error).await?;
+            }
+        }
         prune_scans(pool, record.id, self.settings.keep_scans).await?;
         Ok(pass)
+    }
+
+    /// Look the exports up in RomM and record what was found, answering how
+    /// many were. A client error stops the pass: the next looks again.
+    async fn link(
+        &self,
+        client: &RommClient,
+        full: bool,
+    ) -> Result<Result<usize, ClientError>, tangible_db::DbError> {
+        let pool = self.database.pool();
+        let targets = exports_to_link(pool, full).await?;
+        let mut finder = Finder::new(client);
+        let mut looked_up = 0;
+        for target in &targets {
+            let link = match self.look_up(&mut finder, client, target).await? {
+                Ok(link) => link,
+                Err(error) => return Ok(Err(error)),
+            };
+            let recorded = record_link(
+                pool,
+                target,
+                link.as_ref().map(|link| NewLink {
+                    state: link.state.as_str(),
+                    rom_id: link.rom_id,
+                    detail: link.detail.as_deref(),
+                }),
+            )
+            .await?;
+            if recorded {
+                looked_up += 1;
+            }
+        }
+        Ok(Ok(looked_up))
+    }
+
+    async fn look_up(
+        &self,
+        finder: &mut Finder<'_>,
+        client: &RommClient,
+        target: &LinkTarget,
+    ) -> Result<Result<Option<Link>, ClientError>, tangible_db::DbError> {
+        let Some(folder) = target
+            .folder
+            .as_deref()
+            .filter(|_| target.state == "current")
+        else {
+            // Taken out: followed by its ROM's id until RomM marks it
+            // missing, and cleared when RomM no longer has it.
+            let Some(id) = target.rom_id else {
+                return Ok(Ok(None));
+            };
+            return Ok(client.rom(id).await.map(|rom| removed_link(rom.as_ref())));
+        };
+        let found = match finder.find(folder, target.rom_id).await {
+            Ok(found) => found,
+            Err(error) => return Ok(Err(error)),
+        };
+        let exported = exported_files(self.database.pool(), folder).await?;
+        Ok(Ok(Some(current_link(folder, &found, &exported))))
     }
 
     /// Ask for a quick scan of `platforms` and follow it. `None` when this

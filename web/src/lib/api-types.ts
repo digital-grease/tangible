@@ -2806,6 +2806,7 @@ export interface components {
             file_count: number;
             /** @description The folder in RomM's library, `platform/game`. */
             folder?: string | null;
+            in_romm?: null | components["schemas"]["RommLinkView"];
             last_scan?: null | components["schemas"]["RommScanView"];
             /** @description The platform, as a RomM slug. */
             platform?: string | null;
@@ -3570,6 +3571,12 @@ export interface components {
         };
         /** @description A platform a game can be exported to. */
         PlatformView: {
+            /**
+             * @description Whether the connected RomM knows the platform: false means RomM
+             *     would not recognise the folder. Absent until RomM's API has been
+             *     asked.
+             */
+            known_to_romm?: boolean | null;
             /** @description Its name. */
             name: string;
             /** @description RomM's folder slug. */
@@ -4036,6 +4043,31 @@ export interface components {
             status: string;
             /** @description RomM's version, as last seen. */
             version?: string | null;
+        };
+        /** @description What RomM made of an export, as last looked up through its API. */
+        RommLinkView: {
+            /** @description When RomM was asked. */
+            checked_at: string;
+            /** @description What there is to say. */
+            detail?: string | null;
+            /**
+             * Format: int64
+             * @description RomM's id for the game.
+             */
+            rom_id?: number | null;
+            /**
+             * @description `unseen` (RomM has no game for the folder yet), `linked` (it has,
+             *     and its files agree with what was written; for an export taken out,
+             *     RomM still lists it), `missing` (RomM marks it missing from its
+             *     library) or `differs` (RomM's files do not agree, and `detail` says
+             *     how).
+             */
+            state: string;
+            /**
+             * @description The game's page in RomM, from the integration's `web_url` (or
+             *     `base_url`).
+             */
+            url?: string | null;
         };
         /** @description A scan Tangible asked RomM for. */
         RommScanView: {

@@ -249,6 +249,15 @@ registration lapsed. Restart RomM and it scans again. `GET /api/v1/romm`
 says which platforms are waiting and how the last scan went, and the
 diagnostics page warns when the last scan did not finish.
 
+After each scan, and hourly, Tangible finds each exported game among
+RomM's games and records what RomM made of it: not seen yet, in RomM (with
+a link to its page, from `web_url`), marked missing, or listing different
+files from those written. `GET /api/v1/editions/<id>/romm` shows it.
+Renaming a game (a new title or region) renames its folder and files. A
+one-image game keeps its entry in RomM; a CUE/BIN game becomes a new entry,
+because its CUE sheet names the renamed files and so changes, and RomM
+keeps the old entry, with any notes or collections, marked missing.
+
 ## Making CHDs
 
 The image carries chdman, from MAME, so the server can make a CHD of a disc
