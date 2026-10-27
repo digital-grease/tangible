@@ -236,10 +236,10 @@ describe('the download client form', () => {
 
 describe('trying an integration', () => {
   it('says how it went', () => {
-    expect(testOutcome('NAS', { ok: true, api_version: '2.11.4' })).toBe(
+    expect(testOutcome('NAS', { ok: true, api_version: '2.11.4', checks: [] })).toBe(
       'NAS signed in; WebUI API 2.11.4.',
     );
-    expect(testOutcome('SAB', { ok: true, api_version: '4.5.3' }, 'sabnzbd')).toBe(
+    expect(testOutcome('SAB', { ok: true, api_version: '4.5.3', checks: [] }, 'sabnzbd')).toBe(
       'SAB signed in; version 4.5.3.',
     );
     expect(
@@ -247,6 +247,7 @@ describe('trying an integration', () => {
         ok: false,
         error_code: 'INTEGRATION_AUTH_FAILED',
         detail: 'qBittorrent refused to sign in: the user name or password is wrong',
+        checks: [],
       }),
     ).toBe('NAS did not work: qBittorrent refused to sign in: the user name or password is wrong');
   });

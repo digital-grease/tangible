@@ -8,8 +8,8 @@
 //! paths fail to parse into. Its secrets (a password, an API key) are not
 //! settings: they are named here, entered separately, and stored sealed.
 //!
-//! qBittorrent (docs/plans/acquisition.md A4), SABnzbd and NZBGet (A5), and
-//! S3-compatible storage (A6).
+//! qBittorrent (docs/plans/acquisition.md A4), SABnzbd and NZBGet (A5),
+//! S3-compatible storage (A6), and RomM's API (docs/plans/romm-api.md M1).
 
 use serde::{Deserialize, Serialize};
 
@@ -26,6 +26,8 @@ pub enum ConfigurableKind {
     Nzbget,
     /// An S3-compatible endpoint and the buckets operators may import from.
     S3,
+    /// The API of the RomM the export writes into.
+    RommApi,
 }
 
 impl ConfigurableKind {
@@ -37,6 +39,7 @@ impl ConfigurableKind {
             "sabnzbd" => Some(Self::Sabnzbd),
             "nzbget" => Some(Self::Nzbget),
             "s3" => Some(Self::S3),
+            "romm_api" => Some(Self::RommApi),
             _ => None,
         }
     }
@@ -49,6 +52,7 @@ impl ConfigurableKind {
             Self::Sabnzbd => "sabnzbd",
             Self::Nzbget => "nzbget",
             Self::S3 => "s3",
+            Self::RommApi => "romm_api",
         }
     }
 
@@ -59,6 +63,7 @@ impl ConfigurableKind {
             Self::Qbittorrent | Self::Nzbget => &["password"],
             Self::Sabnzbd => &["api_key"],
             Self::S3 => &["access_key_id", "secret_access_key"],
+            Self::RommApi => &["token"],
         }
     }
 }
@@ -291,6 +296,76 @@ impl S3Settings {
     }
 }
 
+/// How the server reaches RomM's API, and how a browser reaches RomM. Its
+/// client token is a secret, not a setting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RommApiSettings {
+    /// RomM's address as this server reaches it, such as
+    /// `http://romm:8080/` on the same Compose network.
+    pub base_url: String,
+    /// RomM's address as a browser reaches it, for links to its pages; the
+    /// same as `base_url` when absent. Never fetched by the server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_url: Option<String>,
+    /// Whether to ask RomM to scan the platforms an export changed.
+    #[serde(default = "default_scan_after_export")]
+    pub scan_after_export: bool,
+}
+
+const fn default_scan_after_export() -> bool {
+    true
+}
+
+impl RommApiSettings {
+    /// Check settings an administrator sent, answering them as they are
+    /// stored.
+    ///
+    /// # Errors
+    ///
+    /// [`SettingsError`] saying what will not do.
+    pub fn checked(
+        value: &serde_json::Value,
+        policy: &OutboundPolicy,
+    ) -> Result<Self, SettingsError> {
+        let settings: Self = parsed(value)?;
+        let web_url = match settings.web_url.as_deref().map(str::trim) {
+            None | Some("") => None,
+            Some(text) => Some(checked_web_url(text)?),
+        };
+        Ok(Self {
+            base_url: checked_base_url(&settings.base_url, policy)?,
+            web_url,
+            scan_after_export: settings.scan_after_export,
+        })
+    }
+
+    /// The address links to RomM's pages start from.
+    #[must_use]
+    pub fn link_base(&self) -> &str {
+        self.web_url.as_deref().unwrap_or(&self.base_url)
+    }
+}
+
+/// An address only a browser follows: `http` or `https`, with no
+/// credentials, query or fragment. The server never fetches it, so the
+/// outbound policy does not apply.
+fn checked_web_url(text: &str) -> Result<String, SettingsError> {
+    let url = Url::parse(text).map_err(|_| refuse("web_url is not a URL"))?;
+    let ok = matches!(url.scheme(), "http" | "https")
+        && url.host().is_some()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none();
+    if !ok {
+        return Err(refuse(
+            "web_url must be an http or https address without credentials, a query or a fragment",
+        ));
+    }
+    Ok(url.to_string())
+}
+
 fn parsed<T: serde::de::DeserializeOwned>(value: &serde_json::Value) -> Result<T, SettingsError> {
     serde_json::from_value(value.clone())
         .map_err(|error| SettingsError(format!("the settings do not fit: {error}")))
@@ -390,6 +465,7 @@ pub fn checked_settings(
         ConfigurableKind::Sabnzbd => stored(&SabnzbdSettings::checked(value, known_roots, policy)?),
         ConfigurableKind::Nzbget => stored(&NzbgetSettings::checked(value, known_roots, policy)?),
         ConfigurableKind::S3 => stored(&S3Settings::checked(value, policy)?),
+        ConfigurableKind::RommApi => stored(&RommApiSettings::checked(value, policy)?),
     }
 }
 
@@ -566,6 +642,45 @@ mod tests {
     }
 
     #[test]
+    fn romm_api_settings_are_checked_and_stored_tidied() {
+        let good = serde_json::json!({ "base_url": "http://192.168.1.13:8080" });
+        assert_eq!(
+            checked_settings(ConfigurableKind::RommApi, &good, &roots(), &policy()).unwrap(),
+            serde_json::json!({
+                "base_url": "http://192.168.1.13:8080/",
+                "scan_after_export": true,
+            })
+        );
+        let mut linked = good.clone();
+        linked["web_url"] = "https://romm.example.net".into();
+        linked["scan_after_export"] = false.into();
+        let settings = RommApiSettings::checked(&linked, &policy()).unwrap();
+        assert_eq!(settings.link_base(), "https://romm.example.net/");
+        assert!(!settings.scan_after_export);
+        let mut blank = good.clone();
+        blank["web_url"] = " ".into();
+        let settings = RommApiSettings::checked(&blank, &policy()).unwrap();
+        assert_eq!(settings.web_url, None);
+        assert_eq!(settings.link_base(), "http://192.168.1.13:8080/");
+        let with = |field: &str, value: serde_json::Value| {
+            let mut settings = good.clone();
+            settings[field] = value;
+            settings
+        };
+        for (settings, says) in [
+            (with("base_url", "http://127.0.0.1:8080".into()), "base_url"),
+            (with("web_url", "javascript:alert(1)".into()), "web_url"),
+            (with("web_url", "https://u:p@romm/".into()), "web_url"),
+            (with("web_url", "https://romm/?x=1".into()), "web_url"),
+            (with("token", "rmm_x".into()), "do not fit"),
+        ] {
+            let error = checked_settings(ConfigurableKind::RommApi, &settings, &roots(), &policy())
+                .expect_err("refused");
+            assert!(error.0.contains(says), "{settings}: {error}");
+        }
+    }
+
+    #[test]
     fn only_known_kinds_are_configured_and_each_names_its_secrets() {
         assert_eq!(
             ConfigurableKind::parse("qbittorrent"),
@@ -586,6 +701,11 @@ mod tests {
             ConfigurableKind::S3.secret_fields(),
             ["access_key_id", "secret_access_key"]
         );
+        assert_eq!(
+            ConfigurableKind::parse("romm_api"),
+            Some(ConfigurableKind::RommApi)
+        );
+        assert_eq!(ConfigurableKind::RommApi.secret_fields(), ["token"]);
         for other in ["romm", "webhook", "peer_instance", ""] {
             assert_eq!(ConfigurableKind::parse(other), None, "{other}");
         }

@@ -30,6 +30,7 @@ use tangible_db::integrations::{
 use tangible_domain::SecretString;
 use tangible_integrations::download::ClientError;
 use tangible_integrations::outbound::OutboundPolicy;
+use tangible_integrations::romm_api::{Probe, Scope};
 use tangible_integrations::settings::{ConfigurableKind, checked_settings};
 use time::format_description::well_known::Rfc3339;
 use utoipa::ToSchema;
@@ -199,6 +200,10 @@ fn outcome_problem(id: Option<uuid::Uuid>, outcome: &IntegrationOutcome) -> Prob
             ErrorCode::Conflict,
             "imports still refer to this integration; turn it off instead",
         ),
+        IntegrationOutcome::OnlyOne => Problem::new(
+            ErrorCode::Conflict,
+            "there is a RomM API integration already, for the one export; change that one",
+        ),
     }
 }
 
@@ -366,7 +371,8 @@ pub async fn create_one(
     let kind = ConfigurableKind::parse(&request.kind).ok_or_else(|| {
         Problem::new(
             ErrorCode::ValidationFailed,
-            "kind must be qbittorrent, sabnzbd, nzbget or s3; others are not configurable yet",
+            "kind must be qbittorrent, sabnzbd, nzbget, s3 or romm_api; others are not \
+             configurable yet",
         )
     })?;
     let name = checked_name(&request.name)?;
@@ -527,6 +533,20 @@ pub struct IntegrationTestView {
     pub error_code: Option<String>,
     /// Why not, in words.
     pub detail: Option<String>,
+    /// What was checked, one by one, for an integration that checks more
+    /// than whether it answers (RomM's API); otherwise empty.
+    pub checks: Vec<IntegrationCheckView>,
+}
+
+/// One thing trying an integration checked.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct IntegrationCheckView {
+    /// What, in words, such as `Asking for scans`.
+    pub name: String,
+    /// Whether it will do.
+    pub ok: bool,
+    /// What was found, in words.
+    pub detail: String,
 }
 
 pub(crate) fn open_problem(error: &OpenError) -> Problem {
@@ -592,6 +612,9 @@ pub async fn test_one(
     if record.kind == "s3" {
         return test_s3(&state, &record).await.map(Json);
     }
+    if record.kind == "romm_api" {
+        return test_romm(&state, &record).await.map(Json);
+    }
     let (mut client, folders) = open_client(
         state.database(),
         state.integration_client(),
@@ -608,6 +631,8 @@ pub async fn test_one(
                 api_version: Some(version),
                 error_code: None,
                 detail: None,
+
+                checks: Vec::new(),
             }
         }
         Ok((version, false)) => {
@@ -621,6 +646,7 @@ pub async fn test_one(
                      filed under its default",
                     folders.category
                 )),
+                checks: Vec::new(),
             }
         }
         Err(error) => {
@@ -630,6 +656,8 @@ pub async fn test_one(
                 api_version: None,
                 error_code: Some(error.code().to_owned()),
                 detail: Some(error.to_string()),
+
+                checks: Vec::new(),
             }
         }
     };
@@ -666,6 +694,8 @@ async fn test_s3(
             api_version: None,
             error_code: Some(failed.0.to_owned()),
             detail: Some(failed.1),
+
+            checks: Vec::new(),
         });
     }
     note_health(state, record.id, Ok(None)).await;
@@ -674,7 +704,168 @@ async fn test_s3(
         api_version: None,
         error_code: None,
         detail: None,
+
+        checks: Vec::new(),
     })
+}
+
+/// Try a RomM API integration: its version, which of the operations
+/// Tangible uses its API document lists, and which scopes the token
+/// carries. It will do when exported games can be found in it; asking for
+/// scans is a check of its own, since RomM before 5.4 cannot be asked.
+async fn test_romm(
+    state: &ApiState,
+    record: &tangible_db::integrations::IntegrationRecord,
+) -> Result<IntegrationTestView, Problem> {
+    let (client, settings) = crate::download_clients::open_romm(
+        state.database(),
+        state.integration_client(),
+        state.secret_key(),
+        record,
+    )
+    .await
+    .map_err(|error| open_problem(&error))?;
+    let probe = match client.probe().await {
+        Ok(probe) => probe,
+        Err(error) => {
+            note_health(state, record.id, Err(error.code())).await;
+            return Ok(IntegrationTestView {
+                ok: false,
+                api_version: None,
+                error_code: Some(error.code().to_owned()),
+                detail: Some(error.to_string()),
+                checks: Vec::new(),
+            });
+        }
+    };
+    let checks = romm_checks(&probe, settings.scan_after_export);
+    let view = if probe.can_link() {
+        note_health(state, record.id, Ok(Some(&probe.version))).await;
+        IntegrationTestView {
+            ok: true,
+            api_version: Some(probe.version),
+            error_code: None,
+            detail: None,
+            checks,
+        }
+    } else {
+        let code = if probe.capabilities.client_tokens && probe.capabilities.lookup {
+            "INTEGRATION_MISCONFIGURED"
+        } else {
+            "INTEGRATION_UNSUPPORTED"
+        };
+        note_health(state, record.id, Err(code)).await;
+        IntegrationTestView {
+            ok: false,
+            api_version: Some(probe.version),
+            error_code: Some(code.to_owned()),
+            detail: checks
+                .iter()
+                .find(|check| !check.ok)
+                .map(|check| check.detail.clone()),
+            checks,
+        }
+    };
+    Ok(view)
+}
+
+/// What a RomM probe found, check by check, in words.
+fn romm_checks(probe: &Probe, scan_after_export: bool) -> Vec<IntegrationCheckView> {
+    let check = |name: &str, ok: bool, detail: String| IntegrationCheckView {
+        name: name.to_owned(),
+        ok,
+        detail,
+    };
+    let lacking = |scopes: &[Scope]| -> Vec<&'static str> {
+        scopes
+            .iter()
+            .filter(|scope| !probe.granted(**scope))
+            .map(|scope| scope.as_str())
+            .collect()
+    };
+    let capabilities = probe.capabilities;
+    let mut checks = vec![if capabilities.client_tokens {
+        check(
+            "Client tokens",
+            true,
+            format!("RomM {} takes client tokens", probe.version),
+        )
+    } else {
+        check(
+            "Client tokens",
+            false,
+            format!(
+                "RomM {} takes no client tokens; RomM 5.0 or later does",
+                probe.version
+            ),
+        )
+    }];
+    let missing = lacking(&[Scope::PlatformsRead, Scope::RomsRead]);
+    checks.push(if !capabilities.lookup {
+        check(
+            "Finding exported games",
+            false,
+            "its API document lacks the platform and ROM routes Tangible reads".to_owned(),
+        )
+    } else if !missing.is_empty() {
+        check(
+            "Finding exported games",
+            false,
+            format!(
+                "the token lacks {}; make one with platforms.read, roms.read and tasks.run",
+                missing.join(" and ")
+            ),
+        )
+    } else {
+        check(
+            "Finding exported games",
+            true,
+            "its platforms and ROMs can be read".to_owned(),
+        )
+    });
+    checks.push(if !scan_after_export {
+        check(
+            "Asking for scans",
+            true,
+            "turned off for this integration: RomM scans when it is told to there".to_owned(),
+        )
+    } else if !capabilities.scan {
+        check(
+            "Asking for scans",
+            false,
+            "this RomM cannot be asked to scan; RomM 5.4 or later can. Until then, scan in \
+             RomM after an export changes, or turn on its scheduled rescan"
+                .to_owned(),
+        )
+    } else if !probe.granted(Scope::TasksRun) {
+        check(
+            "Asking for scans",
+            false,
+            "the token lacks tasks.run, so RomM cannot be asked to scan".to_owned(),
+        )
+    } else {
+        check(
+            "Asking for scans",
+            true,
+            "a quick scan follows each change an export makes".to_owned(),
+        )
+    });
+    checks.push(if capabilities.known_platforms {
+        check(
+            "Known platforms",
+            true,
+            "the platforms RomM knows can be read, so one it would not recognise is flagged"
+                .to_owned(),
+        )
+    } else {
+        check(
+            "Known platforms",
+            false,
+            "its API document lacks the list of platforms it knows; platforms are not checked"
+                .to_owned(),
+        )
+    });
+    checks
 }
 
 /// The integration routes.
@@ -692,4 +883,76 @@ pub fn router() -> Router<ApiState> {
             )),
         )
         .route("/integrations/{integration_id}/test", post(test_one))
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+mod tests {
+    use tangible_integrations::romm_api::Capabilities;
+
+    use super::*;
+
+    const ALL: Capabilities = Capabilities {
+        client_tokens: true,
+        lookup: true,
+        known_platforms: true,
+        scan: true,
+    };
+
+    fn probe(capabilities: Capabilities, granted: &[Scope]) -> Probe {
+        Probe {
+            version: "5.4.1".to_owned(),
+            capabilities,
+            scopes: Scope::ALL
+                .iter()
+                .map(|scope| (*scope, granted.contains(scope)))
+                .collect(),
+        }
+    }
+
+    fn verdicts(checks: &[IntegrationCheckView]) -> Vec<(&str, bool)> {
+        checks
+            .iter()
+            .map(|check| (check.name.as_str(), check.ok))
+            .collect()
+    }
+
+    #[test]
+    fn a_romm_with_everything_passes_every_check() {
+        let checks = romm_checks(&probe(ALL, &Scope::ALL), true);
+        assert_eq!(
+            verdicts(&checks),
+            [
+                ("Client tokens", true),
+                ("Finding exported games", true),
+                ("Asking for scans", true),
+                ("Known platforms", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn each_shortfall_is_said_in_its_own_check() {
+        let narrow = romm_checks(&probe(ALL, &[Scope::RomsRead, Scope::TasksRun]), true);
+        assert!(!narrow[1].ok);
+        assert!(
+            narrow[1].detail.contains("lacks platforms.read"),
+            "{narrow:?}"
+        );
+        let no_tasks = romm_checks(&probe(ALL, &[Scope::PlatformsRead, Scope::RomsRead]), true);
+        assert!(no_tasks[1].ok && !no_tasks[2].ok);
+        assert!(no_tasks[2].detail.contains("tasks.run"), "{no_tasks:?}");
+        let before_scans = Capabilities { scan: false, ..ALL };
+        let old = romm_checks(&probe(before_scans, &Scope::ALL), true);
+        assert!(
+            !old[2].ok && old[2].detail.contains("5.4 or later"),
+            "{old:?}"
+        );
+        // An operator who turned scans off is not told they are missing.
+        let off = romm_checks(&probe(before_scans, &Scope::ALL), false);
+        assert!(off[2].ok && off[2].detail.contains("turned off"), "{off:?}");
+        let ancient = romm_checks(&probe(Capabilities::default(), &Scope::ALL), true);
+        assert!(!ancient[0].ok && ancient[0].detail.contains("5.0 or later"));
+        assert!(!ancient[1].ok && !ancient[3].ok);
+    }
 }

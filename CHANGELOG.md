@@ -36,6 +36,16 @@ may change between minor versions, and the release notes say how.
   artifacts. A Storage page for administrators runs and withdraws full
   scrubs, lists every check with what it found, and shows the collection
   plan on request.
+- RomM's API as an integration (kind `romm_api`, administrators): RomM's
+  address and a client token (RomM 5.0 and later) with `platforms.read`,
+  `roms.read` and `tasks.run`, sealed like a download client's password.
+  Trying it reads RomM's version and its own OpenAPI document and says,
+  check by check, whether exported games can be found, whether RomM can be
+  asked to scan (5.4 and later), and whether its platforms can be checked.
+  Tangible never changes anything in RomM. There is one, for the one
+  export. Database migration 0019 widens the integration kinds; it is
+  additive. `POST /integrations/{id}/test` answers a new `checks` list,
+  empty for other kinds.
 
 - Groundwork for issue reports: text is scrubbed of credentials, paths,
   serial numbers, library file names and LAN addresses before anyone can

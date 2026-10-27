@@ -1,0 +1,77 @@
+{
+ "SYSTEM": {
+  "VERSION": "5.4.1",
+  "GIT_BRANCH": null,
+  "SHOW_SETUP_WIZARD": false
+ },
+ "METADATA_SOURCES": {
+  "ANY_SOURCE_ENABLED": true,
+  "IGDB_API_ENABLED": false,
+  "SS_API_ENABLED": false,
+  "SS_DEV_CREDENTIALS_SET": true,
+  "MOBY_API_ENABLED": false,
+  "STEAMGRIDDB_API_ENABLED": false,
+  "RA_API_ENABLED": false,
+  "LAUNCHBOX_API_ENABLED": false,
+  "HASHEOUS_API_ENABLED": false,
+  "PLAYMATCH_API_ENABLED": false,
+  "TGDB_API_ENABLED": false,
+  "FLASHPOINT_API_ENABLED": false,
+  "HLTB_API_ENABLED": false,
+  "DEMOZOO_API_ENABLED": false,
+  "POUET_API_ENABLED": false,
+  "CSDB_API_ENABLED": false,
+  "STEAM_API_ENABLED": false,
+  "LIBRETRO_API_ENABLED": true
+ },
+ "FILESYSTEM": {
+  "FS_PLATFORMS": [
+   "psx"
+  ],
+  "TITLE_ID_EXTRACTION_ENABLED": true
+ },
+ "EMULATION": {
+  "DISABLE_EMULATOR_JS": false,
+  "DISABLE_RUFFLE_RS": false,
+  "DISABLE_JSDOS": false,
+  "DISABLE_PICO8": false,
+  "DISABLE_EASYRPG": false
+ },
+ "FRONTEND": {
+  "DISABLE_USERPASS_LOGIN": false,
+  "DISABLE_LOGS_VIEWER": false,
+  "YOUTUBE_BASE_URL": "https://www.youtube.com"
+ },
+ "OIDC": {
+  "ENABLED": false,
+  "AUTOLOGIN": false,
+  "PROVIDER": "",
+  "RP_INITIATED_LOGOUT": false
+ },
+ "NOTIFICATIONS": {
+  "EMAIL_ENABLED": false,
+  "EMAILS_RESET_LINKS": false
+ },
+ "DEVICE_INSTALL": {
+  "ENABLED": true,
+  "EXCLUDED_PLATFORM_SLUGS": [
+   "win",
+   "win3x",
+   "win9x",
+   "windows-apps"
+  ]
+ },
+ "CONVERTO": {
+  "ENABLED": false
+ },
+ "TASKS": {
+  "ENABLE_SCHEDULED_RESCAN": false,
+  "SCHEDULED_RESCAN_CRON": "0 3 * * *",
+  "ENABLE_SCHEDULED_UPDATE_SWITCH_TITLEDB": false,
+  "SCHEDULED_UPDATE_SWITCH_TITLEDB_CRON": "0 4 * * *",
+  "ENABLE_SCHEDULED_UPDATE_LAUNCHBOX_METADATA": false,
+  "SCHEDULED_UPDATE_LAUNCHBOX_METADATA_CRON": "0 4 * * *",
+  "ENABLE_SCHEDULED_CONVERT_IMAGES_TO_WEBP": false,
+  "SCHEDULED_CONVERT_IMAGES_TO_WEBP_CRON": "0 4 * * *"
+ }
+}

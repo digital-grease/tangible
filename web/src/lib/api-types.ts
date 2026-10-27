@@ -3198,6 +3198,15 @@ export interface components {
              */
             warnings: string[];
         };
+        /** @description One thing trying an integration checked. */
+        IntegrationCheckView: {
+            /** @description What was found, in words. */
+            detail: string;
+            /** @description What, in words, such as `Asking for scans`. */
+            name: string;
+            /** @description Whether it will do. */
+            ok: boolean;
+        };
         /** @description A job handed to a download client, and the import following it. */
         IntegrationJobView: {
             /** @description What it became, when already imported. */
@@ -3237,6 +3246,11 @@ export interface components {
         IntegrationTestView: {
             /** @description The client's API version, when it answered. */
             api_version?: string | null;
+            /**
+             * @description What was checked, one by one, for an integration that checks more
+             *     than whether it answers (RomM's API); otherwise empty.
+             */
+            checks: components["schemas"]["IntegrationCheckView"][];
             /** @description Why not, in words. */
             detail?: string | null;
             /** @description Why not, as a stable code. */

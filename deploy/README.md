@@ -186,6 +186,37 @@ For each disc the export takes a checked CHD when the disc has one (see
 TOC reaches RomM through its CHD, since RomM's emulators do not read TOC
 files. A CHD that was not checked against its original is never exported.
 
+### Connecting to RomM's API
+
+Tangible can also talk to RomM's API, which RomM 5.0 and later offer to
+client tokens. It only reads, and asks for quick scans: it never changes,
+renames or removes anything in RomM.
+
+1. In RomM, open Settings, then Client API Tokens, and make a token with
+   exactly the scopes `platforms.read`, `roms.read` and `tasks.run`. RomM
+   shows it once.
+2. Make the integration, with RomM's address as the server reaches it (on
+   the same Compose network, its service name):
+
+   ```bash
+   curl -sS -b "$jar" -H 'Content-Type: application/json' \
+     -H 'X-CSRF-Token: <csrf_token>' \
+     -d '{"kind": "romm_api", "name": "RomM", "enabled": true,
+          "settings": {"base_url": "http://romm:8080/",
+                       "web_url": "https://romm.example.net/"},
+          "secrets": {"token": "<the token>"}}' \
+     http://localhost:8080/api/v1/integrations
+   ```
+
+   `web_url` is how your browser reaches RomM, for links; leave it out when
+   that is the same address. The token is sealed like a download client's
+   password, so the server needs `TANGIBLE_SECRET_KEY_FILE` (see
+   "Integration secrets").
+3. Try it: `POST /api/v1/integrations/<id>/test` answers RomM's version and
+   four checks, each saying what it found. "Asking for scans" needs RomM 5.4
+   or later: an older RomM is found and read, but has to be told to scan in
+   its own interface. There is one RomM API integration, for the one export.
+
 ## Making CHDs
 
 The image carries chdman, from MAME, so the server can make a CHD of a disc

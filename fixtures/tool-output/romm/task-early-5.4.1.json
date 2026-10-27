@@ -1,0 +1,14 @@
+{
+ "task_key": null,
+ "task_name": "Quick Scan",
+ "task_id": "32708cfa-50ff-4401-9e6b-adc8b5b301d6",
+ "status": "started",
+ "created_at": "2026-10-26T15:33:58.309949+00:00",
+ "enqueued_at": "2026-10-26T15:33:58.310225+00:00",
+ "started_at": "2026-10-26T15:33:58.314224+00:00",
+ "ended_at": null,
+ "task_type": "scan",
+ "meta": {
+  "scan_stats": null
+ }
+}

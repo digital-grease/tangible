@@ -1,0 +1,519 @@
+{
+ "info": {
+  "title": "RomM API",
+  "version": "5.4.1"
+ },
+ "openapi": "3.1.0",
+ "paths": {
+  "/api/client-tokens": {
+   "get": {
+    "operationId": "list_tokens_api_client_tokens_get",
+    "security": [
+     {
+      "OAuth2PasswordBearer": [
+       "me.read"
+      ]
+     },
+     {
+      "HTTPBasic": []
+     }
+    ],
+    "summary": "List Tokens",
+    "tags": [
+     "client-tokens"
+    ]
+   },
+   "post": {
+    "operationId": "create_token_api_client_tokens_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ClientTokenCreatePayload"
+       }
+      }
+     },
+     "required": true
+    },
+    "security": [
+     {
+      "OAuth2PasswordBearer": [
+       "me.write"
+      ]
+     },
+     {
+      "HTTPBasic": []
+     }
+    ],
+    "summary": "Create Token",
+    "tags": [
+     "client-tokens"
+    ]
+   }
+  },
+  "/api/heartbeat": {
+   "get": {
+    "operationId": "heartbeat_api_heartbeat_get",
+    "summary": "Heartbeat",
+    "tags": [
+     "system"
+    ]
+   }
+  },
+  "/api/platforms": {
+   "get": {
+    "operationId": "get_platforms_api_platforms_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "updated_after",
+      "required": false
+     }
+    ],
+    "security": [
+     {
+      "OAuth2PasswordBearer": [
+       "platforms.read"
+      ]
+     },
+     {
+      "HTTPBasic": []
+     }
+    ],
+    "summary": "Get Platforms",
+    "tags": [
+     "platforms"
+    ]
+   }
+  },
+  "/api/platforms/supported": {
+   "get": {
+    "operationId": "get_supported_platforms_endpoint_api_platforms_supported_get",
+    "security": [
+     {
+      "OAuth2PasswordBearer": [
+       "platforms.read"
+      ]
+     },
+     {
+      "HTTPBasic": []
+     }
+    ],
+    "summary": "Get Supported Platforms Endpoint",
+    "tags": [
+     "platforms"
+    ]
+   }
+  },
+  "/api/roms": {
+   "get": {
+    "operationId": "get_roms_api_roms_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "with_char_index",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "with_filter_values",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "with_rom_id_index",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "with_total",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "order_by",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "order_dir",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "updated_after",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "released_days",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "released_before_year",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "with_files",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "search_term",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "platform_ids",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "collection_id",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "virtual_collection_id",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "smart_collection_id",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "matched",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "favorite",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "duplicate",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "last_played",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "playable",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "missing",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "physical",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "has_ra",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "has_saves",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "has_states",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "verified",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "has_soundtrack",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "group_by_meta_id",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "genres",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "franchises",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "collections",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "companies",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "publishers",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "developers",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "age_ratings",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "statuses",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "regions",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "languages",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "player_counts",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "metadata_providers",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "tags",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "genres_logic",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "franchises_logic",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "collections_logic",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "companies_logic",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "publishers_logic",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "developers_logic",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "age_ratings_logic",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "statuses_logic",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "regions_logic",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "languages_logic",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "player_counts_logic",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "metadata_providers_logic",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "tags_logic",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "hltb_main_story_min",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "hltb_main_story_max",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false
+     },
+     {
+      "in": "query",
+      "name": "offset",
+      "required": false
+     }
+    ],
+    "security": [
+     {
+      "OAuth2PasswordBearer": [
+       "roms.read"
+      ]
+     },
+     {
+      "HTTPBasic": []
+     }
+    ],
+    "summary": "Get Roms",
+    "tags": [
+     "roms"
+    ]
+   }
+  },
+  "/api/roms/{id}": {
+   "get": {
+    "operationId": "get_rom_api_roms__id__get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "id",
+      "required": true
+     }
+    ],
+    "security": [
+     {
+      "OAuth2PasswordBearer": [
+       "roms.read"
+      ]
+     },
+     {
+      "HTTPBasic": []
+     }
+    ],
+    "summary": "Get Rom",
+    "tags": [
+     "roms"
+    ]
+   }
+  },
+  "/api/tasks": {
+   "get": {
+    "operationId": "list_tasks_api_tasks_get",
+    "security": [
+     {
+      "OAuth2PasswordBearer": [
+       "tasks.run"
+      ]
+     },
+     {
+      "HTTPBasic": []
+     }
+    ],
+    "summary": "List Tasks",
+    "tags": [
+     "tasks"
+    ]
+   }
+  },
+  "/api/tasks/scan": {
+   "post": {
+    "operationId": "start_scan_api_tasks_scan_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ScanPayload"
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "OAuth2PasswordBearer": [
+       "tasks.run"
+      ]
+     },
+     {
+      "HTTPBasic": []
+     }
+    ],
+    "summary": "Start Scan",
+    "tags": [
+     "tasks"
+    ]
+   }
+  },
+  "/api/tasks/{task_id}": {
+   "get": {
+    "operationId": "get_task_by_id_api_tasks__task_id__get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "task_id",
+      "required": true
+     }
+    ],
+    "security": [
+     {
+      "OAuth2PasswordBearer": [
+       "tasks.run"
+      ]
+     },
+     {
+      "HTTPBasic": []
+     }
+    ],
+    "summary": "Get Task By Id",
+    "tags": [
+     "tasks"
+    ]
+   }
+  }
+ }
+}

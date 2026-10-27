@@ -6,9 +6,10 @@
 //! Integrations may submit a user-selected job to a client the operator
 //! already runs. They must never turn Tangible into a release-search platform.
 //!
-//! In place: exporting games to a RomM library as a managed folder view, and
-//! the outbound client every fetch of an address somebody supplied goes
-//! through (ADR 0016).
+//! In place: exporting games to a RomM library as a managed folder view,
+//! RomM's API for what it made of them, the download clients, S3, and the
+//! outbound client every fetch of an address somebody supplied goes through
+//! (ADR 0016).
 
 pub mod download;
 pub mod fetch;
@@ -17,6 +18,7 @@ pub mod nzbget;
 pub mod outbound;
 pub mod qbittorrent;
 pub mod romm;
+pub mod romm_api;
 pub mod s3;
 pub mod sabnzbd;
 pub mod settings;

@@ -5,6 +5,7 @@
 //! checked again as they are read, and its secret, opened with the server's
 //! key only for as long as the client needs it. Shared by the routes that
 //! submit and test, and by the import runner that follows a job to the end.
+//! S3 and RomM's API are opened the same way.
 
 use tangible_db::Database;
 use tangible_db::integrations::{IntegrationRecord, sealed_secret};
@@ -13,10 +14,11 @@ use tangible_integrations::download::{ClientError, JobStatus};
 use tangible_integrations::nzbget::NzbgetClient;
 use tangible_integrations::outbound::{OutboundClient, Url};
 use tangible_integrations::qbittorrent::QbittorrentClient;
+use tangible_integrations::romm_api::RommClient;
 use tangible_integrations::s3::S3Client;
 use tangible_integrations::sabnzbd::SabnzbdClient;
 use tangible_integrations::settings::{
-    NzbgetSettings, QbittorrentSettings, S3Settings, SabnzbdSettings,
+    NzbgetSettings, QbittorrentSettings, RommApiSettings, S3Settings, SabnzbdSettings,
 };
 use tangible_integrations::torrent::Infohash;
 
@@ -211,6 +213,36 @@ pub async fn open_s3(
     .await
 }
 
+/// A configured RomM API integration's client and its settings, ready to
+/// use.
+///
+/// # Errors
+///
+/// As [`open_client`]; `INTEGRATION_MISCONFIGURED` too for one without its
+/// client token.
+pub async fn open_romm(
+    database: &Database,
+    http: Option<&OutboundClient>,
+    key: Option<&SecretKey>,
+    record: &IntegrationRecord,
+) -> Result<(RommClient, RommApiSettings), OpenError> {
+    if record.kind != "romm_api" {
+        return Err(OpenError::new(
+            "INTEGRATION_OFF",
+            format!("{} is not RomM's API", record.name),
+        ));
+    }
+    let http = in_use(record, http)?;
+    Opener {
+        database,
+        http,
+        key,
+        record,
+    }
+    .romm()
+    .await
+}
+
 /// The integrations client, for an integration that is turned on.
 fn in_use<'a>(
     record: &IntegrationRecord,
@@ -314,6 +346,16 @@ impl Opener<'_> {
             settings.path_style,
             &access_key_id,
             &secret,
+        );
+        Ok((client, settings))
+    }
+
+    async fn romm(&self) -> Result<(RommClient, RommApiSettings), OpenError> {
+        let settings: RommApiSettings = self.settings()?;
+        let client = RommClient::new(
+            self.http.clone(),
+            self.url(&settings.base_url)?,
+            self.required_secret("token", "client token").await?,
         );
         Ok((client, settings))
     }

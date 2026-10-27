@@ -9039,6 +9039,29 @@
           }
         }
       },
+      "IntegrationCheckView": {
+        "type": "object",
+        "description": "One thing trying an integration checked.",
+        "required": [
+          "name",
+          "ok",
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string",
+            "description": "What was found, in words."
+          },
+          "name": {
+            "type": "string",
+            "description": "What, in words, such as `Asking for scans`."
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "Whether it will do."
+          }
+        }
+      },
       "IntegrationJobView": {
         "type": "object",
         "description": "A job handed to a download client, and the import following it.",
@@ -9106,7 +9129,8 @@
         "type": "object",
         "description": "How trying an integration went.",
         "required": [
-          "ok"
+          "ok",
+          "checks"
         ],
         "properties": {
           "api_version": {
@@ -9115,6 +9139,13 @@
               "null"
             ],
             "description": "The client's API version, when it answered."
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrationCheckView"
+            },
+            "description": "What was checked, one by one, for an integration that checks more\nthan whether it answers (RomM's API); otherwise empty."
           },
           "detail": {
             "type": [

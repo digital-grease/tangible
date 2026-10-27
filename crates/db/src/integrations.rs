@@ -82,6 +82,9 @@ pub enum IntegrationOutcome {
     Managed,
     /// Something still refers to it.
     InUse,
+    /// There is one of its kind already, and there may be only one (the
+    /// RomM API: there is one export).
+    OnlyOne,
 }
 
 const COLUMNS: &str = "i.id, i.kind, i.name, i.enabled, i.configuration_json, i.status,
@@ -222,8 +225,8 @@ pub struct NewIntegration<'a> {
 ///
 /// # Errors
 ///
-/// [`DbError::Query`] on a database failure. A taken name is an
-/// [`IntegrationOutcome`].
+/// [`DbError::Query`] on a database failure. A taken name, or a second
+/// RomM API integration, is an [`IntegrationOutcome`].
 pub async fn create_integration(
     pool: &PgPool,
     new: &NewIntegration<'_>,
@@ -235,7 +238,7 @@ pub async fn create_integration(
     let inserted = sqlx::query(
         "INSERT INTO integrations (id, kind, name, enabled, configuration_json, status)
          VALUES ($1, $2, $3, $4, $5, 'unconfigured')
-         ON CONFLICT (name) DO NOTHING",
+         ON CONFLICT DO NOTHING",
     )
     .bind(new.id)
     .bind(new.kind)
@@ -246,8 +249,19 @@ pub async fn create_integration(
     .await
     .map_err(DbError::Query)?;
     if inserted.rows_affected() == 0 {
+        // The name, or the one RomM API integration there may be.
+        let name_taken: bool =
+            sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM integrations WHERE name = $1)")
+                .bind(new.name)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(DbError::Query)?;
         tx.rollback().await.map_err(DbError::Query)?;
-        return Ok(Err(IntegrationOutcome::NameTaken));
+        return Ok(Err(if name_taken {
+            IntegrationOutcome::NameTaken
+        } else {
+            IntegrationOutcome::OnlyOne
+        }));
     }
     for secret in new.secrets {
         put_secret(&mut tx, new.id, secret).await?;

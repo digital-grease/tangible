@@ -273,6 +273,7 @@ pub const API_BASE: &str = "/api/v1";
         routes::s3_imports::S3ImportRequest,
         routes::s3_imports::S3SourceView,
         routes::integrations::IntegrationTestView,
+        routes::integrations::IntegrationCheckView,
         routes::romm::PlatformView,
         routes::romm::RommSettings,
         routes::romm::EditionRommView,
