@@ -31,6 +31,7 @@ pub mod romm_link;
 pub mod romm_sync;
 pub mod routes;
 pub mod secrets;
+pub mod source_removal;
 pub mod state;
 pub mod web;
 pub mod worker_auth;
@@ -46,6 +47,7 @@ pub use import::{ImportCheckpoint, ImportError, ImportOutcome, ImportPipeline, I
 pub use import_runner::{ImportRunner, ImportRunnerSettings};
 pub use romm_export::{RommExport, RommExporter};
 pub use romm_sync::{RommSync, RommSyncHandle, RommSyncSettings};
+pub use source_removal::{SourceRemovalHandle, SourceRemovalSettings, SourceRemover};
 pub use state::{ApiState, ImportContext};
 pub use web::{WebUi, WebUiError};
 pub use worker_auth::{
@@ -206,6 +208,7 @@ pub const API_BASE: &str = "/api/v1";
         routes::catalog::CreateDiscRequest,
         routes::catalog::LinkArtifactRequest,
         routes::imports::ImportView,
+        routes::imports::SourceRemovalView,
         routes::imports::ImportPage,
         routes::imports::ImportSources,
         routes::imports::CreateImportRequest,

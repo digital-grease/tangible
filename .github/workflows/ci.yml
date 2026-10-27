@@ -154,7 +154,7 @@ jobs:
           docker run -d --name s3 -p 127.0.0.1:8333:8333 \
             -v "$RUNNER_TEMP/s3.json:/etc/seaweedfs/s3.json:ro" \
             chrislusf/seaweedfs:4.48@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d \
-            server -s3 -s3.config=/etc/seaweedfs/s3.json -s3.port=8333
+            server -s3 -s3.config=/etc/seaweedfs/s3.json -s3.port=8333 -volume.max=64
           for _ in $(seq 1 30); do
             code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8333/ || true)
             [ "$code" = "403" ] && exit 0

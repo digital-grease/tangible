@@ -2581,6 +2581,11 @@ pub async fn record_import_expected(
 /// schema refuses a completed import without one and a caller that set them
 /// separately would be briefly claiming something untrue.
 ///
+/// An import from a download client or S3 whose integration says
+/// `after_import: remove` gets its source removal queued in the same
+/// statement (docs/plans/source-retention.md), so a completed import that
+/// should be removed is never left without one.
+///
 /// # Errors
 ///
 /// [`DbError::Query`] on a database failure.
@@ -2589,19 +2594,35 @@ pub async fn complete_import_job(
     id: ImportJobId,
     artifact_id: uuid::Uuid,
 ) -> Result<bool, DbError> {
-    let result = sqlx::query(
-        "UPDATE import_jobs
-         SET state = 'complete', artifact_id = $2, completed_at = now(),
-             lease_owner = NULL, lease_expires_at = NULL,
-             error_code = NULL, error_detail = NULL
-         WHERE id = $1",
+    let completed: i64 = sqlx::query_scalar(
+        "WITH done AS (
+             UPDATE import_jobs
+             SET state = 'complete', artifact_id = $2, completed_at = now(),
+                 lease_owner = NULL, lease_expires_at = NULL,
+                 error_code = NULL, error_detail = NULL
+             WHERE id = $1
+             RETURNING id, source_kind, source_descriptor_json
+         ), removal AS (
+             INSERT INTO source_removals (id, import_job_id, integration_id, artifact_id)
+             SELECT $3, done.id, integrations.id, $2
+             FROM done
+             JOIN integrations
+               ON integrations.id::text = done.source_descriptor_json->>'integration_id'
+             WHERE (done.source_kind, integrations.kind) IN (
+                       ('qbittorrent_job', 'qbittorrent'), ('sabnzbd_job', 'sabnzbd'),
+                       ('nzbget_job', 'nzbget'), ('s3_object', 's3'))
+               AND integrations.configuration_json->>'after_import' = 'remove'
+             ON CONFLICT (import_job_id) DO NOTHING
+         )
+         SELECT count(*) FROM done",
     )
     .bind(id.as_uuid())
     .bind(artifact_id)
-    .execute(pool)
+    .bind(uuid::Uuid::now_v7())
+    .fetch_one(pool)
     .await
     .map_err(DbError::Query)?;
-    Ok(result.rows_affected() > 0)
+    Ok(completed > 0)
 }
 
 /// Record that an import failed.

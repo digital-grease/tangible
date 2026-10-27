@@ -42,3 +42,8 @@ Observed along the way, and relied on by the adapter:
 - The API answers 401 without a session and 403 with a stale one.
 - `torrents/add` answers 200 `Ok.`, or 200 `Fails.` for a torrent it already
   has, and makes a category that does not exist yet.
+- `torrents/delete` (checked 2026-10-27, same image) takes only a POST (405
+  for a GET) and needs `deleteFiles` (400 without it). It answers 200 with an
+  empty body whether or not it had the torrent. With `deleteFiles=true` the
+  torrent is gone from `torrents/info` at once and its files a moment later;
+  with `false` the files stay.

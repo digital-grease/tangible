@@ -83,6 +83,17 @@ may change between minor versions, and the release notes say how.
   files, and what differs), links to the game's page in RomM, says when a
   scan is awaited and how the last one went, and warns of a platform the
   connected RomM does not know.
+- A source can be removed once the library has it. qBittorrent and S3
+  integrations gain `after_import`: `keep` (the default) or `remove`. With
+  `remove`, each import completed from then on is followed by an integrity
+  check of its artifact, and only when that finds nothing wrong is the
+  source removed: the torrent with its files, if it is still in Tangible's
+  category at the path imported; the object version imported, if its size
+  and ETag are still the ones imported (a delete conditional on `If-Match`
+  where the bucket keeps no versions). Anything else is left, saying why;
+  an unreachable client is tried again. Each import's view gains
+  `source_removal`. Each removal is audited as `integration.source_deleted`.
+  Database migration 0022 adds a table and a column; it is additive.
 
 - Groundwork for issue reports: text is scrubbed of credentials, paths,
   serial numbers, library file names and LAN addresses before anyone can

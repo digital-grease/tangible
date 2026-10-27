@@ -321,9 +321,10 @@ URL imports are on and how far they reach.
 
 Tangible can hand a torrent you already have (a `.torrent` file or a magnet
 link) to a qBittorrent you run, and import it when it finishes. It adds the
-torrent to one category and nothing else, never searches for anything, never
-asks qBittorrent to run a script, and never removes a torrent or its data:
-seeding and cleaning up stay qBittorrent's business.
+torrent to one category and nothing else, never searches for anything, and
+never asks qBittorrent to run a script. Seeding and cleaning up stay
+qBittorrent's business, unless you set the integration to remove each torrent
+once it is in the library (below).
 
 1. Give Tangible's server read-only access to the category's download
    folder. If qBittorrent saves `tangible` torrents to `/downloads/tangible`
@@ -359,6 +360,31 @@ import shows "Waiting for qBittorrent" and why, and the integration shows as
 failing. A torrent
 qBittorrent reports in error, removes, or keeps outside the category's
 folder ends the import.
+
+### Removing torrents once imported
+
+Off by default. With the integration's `after_import` setting at `remove`
+(`PATCH /api/v1/integrations/{id}`, its settings with `"after_import":
+"remove"`), each torrent imported from then on is removed from qBittorrent,
+with its files, once the library has it:
+
+1. When the import completes, Tangible checks the library's copy (an
+   integrity check of the new artifact, which reads every stored byte back).
+   Until that check is done nothing is removed, and if it finds anything
+   wrong nothing ever is: the import says so.
+2. Then it asks qBittorrent after the torrent. Only a torrent still in
+   Tangible's category, finished, and at the path it was imported from is
+   removed. One you moved to another category or folder is yours, and is
+   left, saying why.
+3. qBittorrent removes the torrent and deletes its files itself; Tangible's
+   read-only mount stays read-only.
+
+The import shows where this stands: checking the copy, removing, removed,
+already gone, or left and why. An unreachable qBittorrent is tried again,
+waiting longer each time up to an hour. Setting `after_import` back to
+`keep` stops every removal not yet made; torrents imported before it was
+`remove` are never removed. Each removal is in the audit log
+(`integration.source_deleted`).
 
 ## Sending NZBs to SABnzbd
 
@@ -409,8 +435,8 @@ yours, and runs as you set it.
 
 Operators can import an object from a bucket you allow on an S3-compatible
 service (AWS S3, or a self-hosted one such as SeaweedFS or Garage). Tangible
-only reads: it asks what an object is and fetches it, never lists, writes or
-deletes.
+asks what an object is and fetches it. It never lists or writes, and deletes
+only where you set the integration to (below).
 
 1. Make credentials that may read the buckets you mean to allow, and nothing
    else.
@@ -430,6 +456,26 @@ writing the key again meanwhile does not change what is imported. In one
 without, a rewrite of a different size fails the import, and one of the same
 size is not noticed: give the SHA-256 when you need to be sure of the
 content.
+
+### Deleting objects once imported
+
+Off by default. With the integration's `after_import` setting at `remove`,
+each object imported from then on is deleted from its bucket once the
+library has a checked copy, as for torrents above: an integrity check of the
+artifact first, nothing deleted if it finds a problem. Then:
+
+- in a bucket with versioning, the version that was imported is deleted, and
+  only that version: a newer one written since is left, and no delete marker
+  is added;
+- in a bucket without, the object is deleted only while its ETag is still
+  the one imported (`If-Match`), so an object written over since is left.
+  An endpoint that ignores `If-Match` could delete an object rewritten in
+  the instant between Tangible's look and its delete; use versioning where
+  that matters.
+
+The credentials then need `s3:DeleteObject`, and `s3:DeleteObjectVersion`
+for a versioned bucket. Without them each removal waits, saying the
+endpoint refused, and is tried again.
 
 ## Integration secrets
 

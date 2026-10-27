@@ -86,6 +86,34 @@ pub struct QbittorrentSettings {
     /// The watched root on this server where the same folder is mounted,
     /// read-only, by its id in `TANGIBLE_WATCH_ROOTS`.
     pub local_root: String,
+    /// What becomes of a torrent once its import is in the library and
+    /// checked: kept seeding (the default), or removed with its files.
+    #[serde(default)]
+    pub after_import: AfterImport,
+}
+
+/// What becomes of an import's source once the library holds a checked
+/// copy (docs/plans/source-retention.md, ADR 0017).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AfterImport {
+    /// Left where it is.
+    #[default]
+    Keep,
+    /// Removed: a torrent with its files, a Usenet download's files and
+    /// history entry, an S3 object version.
+    Remove,
+}
+
+impl AfterImport {
+    /// As stored: `keep` or `remove`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Keep => "keep",
+            Self::Remove => "remove",
+        }
+    }
 }
 
 fn default_category() -> String {
@@ -118,6 +146,7 @@ impl QbittorrentSettings {
             category: checked_category(settings.category)?,
             client_path: checked_client_path(&settings.client_path, "qBittorrent")?,
             local_root: checked_local_root(settings.local_root, known_roots)?,
+            after_import: settings.after_import,
         })
     }
 }
@@ -226,6 +255,10 @@ pub struct S3Settings {
     pub path_style: bool,
     /// The buckets operators may import from; no other is ever asked for.
     pub buckets: Vec<String>,
+    /// What becomes of an object once its import is in the library and
+    /// checked: kept (the default), or the version imported deleted.
+    #[serde(default)]
+    pub after_import: AfterImport,
 }
 
 fn default_region() -> String {
@@ -292,6 +325,7 @@ impl S3Settings {
             region,
             path_style: settings.path_style,
             buckets,
+            after_import: settings.after_import,
         })
     }
 }
@@ -508,8 +542,47 @@ mod tests {
                 "category": "tangible",
                 "client_path": "/downloads/tangible",
                 "local_root": "downloads",
+                "after_import": "keep",
             })
         );
+    }
+
+    #[test]
+    fn removing_after_import_is_asked_for_by_name_and_off_unless_asked() {
+        let mut removing = good();
+        removing["after_import"] = "remove".into();
+        let settings = QbittorrentSettings::checked(&removing, &roots(), &policy()).unwrap();
+        assert_eq!(settings.after_import, AfterImport::Remove);
+        assert_eq!(settings.after_import.as_str(), "remove");
+        assert_eq!(
+            QbittorrentSettings::checked(&good(), &roots(), &policy())
+                .unwrap()
+                .after_import,
+            AfterImport::Keep
+        );
+        for wrong in [
+            serde_json::json!("delete"),
+            serde_json::json!(true),
+            serde_json::json!(null),
+        ] {
+            let mut settings = good();
+            settings["after_import"] = wrong.clone();
+            assert!(
+                QbittorrentSettings::checked(&settings, &roots(), &policy()).is_err(),
+                "{wrong}"
+            );
+        }
+        let mut s3 = serde_json::json!({
+            "endpoint": "http://192.168.1.13:8333",
+            "buckets": ["discs"],
+            "after_import": "remove",
+        });
+        assert_eq!(
+            S3Settings::checked(&s3, &policy()).unwrap().after_import,
+            AfterImport::Remove
+        );
+        s3["after_import"] = "sometimes".into();
+        assert!(S3Settings::checked(&s3, &policy()).is_err());
     }
 
     #[test]
@@ -612,6 +685,7 @@ mod tests {
                 "region": "us-east-1",
                 "path_style": true,
                 "buckets": ["discs", "archive.2026"],
+                "after_import": "keep",
             })
         );
         let with = |field: &str, value: serde_json::Value| {

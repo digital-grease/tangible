@@ -1,0 +1,10 @@
+412
+Accept-Ranges: bytes
+Content-Length: 293
+Content-Type: application/xml
+Server: SeaweedFS 30GB 4.48
+Vary: Origin
+Connection: close
+-- body 293 bytes
+<?xml version="1.0" encoding="UTF-8"?>
+<Error><Code>PreconditionFailed</Code><Message>At least one of the pre-conditions you specified did not hold</Message><Resource>/rec/disc.iso</Resource><RequestId>18E27F915CF664B5031F91FE</RequestId><Key>disc.iso</Key><BucketName>rec</BucketName></Error>

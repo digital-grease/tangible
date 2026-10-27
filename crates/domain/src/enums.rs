@@ -704,6 +704,50 @@ impl IntegrityCheckState {
 }
 
 string_enum! {
+    /// Where removing an import's source stands
+    /// (docs/plans/source-retention.md, ADR 0017).
+    SourceRemovalState {
+        /// Waiting for an integrity check to read the library's copy back.
+        Verifying => "verifying",
+        /// The copy is whole; removing at the source, retried until it
+        /// answers.
+        Removing => "removing",
+        /// Removed. Terminal.
+        Removed => "removed",
+        /// The source had already gone. Terminal.
+        AlreadyGone => "already_gone",
+        /// Left where it is, saying why. Terminal.
+        Kept => "kept",
+        /// The library's copy failed its check; nothing is removed. Terminal.
+        Refused => "refused",
+    }
+    default = Verifying
+}
+
+impl SourceRemovalState {
+    /// Whether the removal is still under way.
+    #[must_use]
+    pub const fn is_open(&self) -> bool {
+        matches!(self, Self::Verifying | Self::Removing)
+    }
+
+    /// Whether a removal here may move to `next`. A source is removed only
+    /// from `removing`, which only a whole copy leads to; refused comes only
+    /// from the check; nothing leaves an end.
+    #[must_use]
+    pub const fn can_become(&self, next: Self) -> bool {
+        matches!(
+            (self, next),
+            (Self::Verifying, Self::Removing | Self::Refused | Self::Kept)
+                | (
+                    Self::Removing,
+                    Self::Removed | Self::AlreadyGone | Self::Kept
+                )
+        )
+    }
+}
+
+string_enum! {
     /// What the last check covering every object of an artifact found.
     IntegrityState {
         /// No check has covered it yet.
@@ -812,7 +856,40 @@ mod tests {
             IntegrityCheckState,
             IntegrityState,
             IntegrityProblemKind,
+            SourceRemovalState,
         );
+    }
+
+    #[test]
+    fn a_source_is_removed_only_after_a_whole_copy_and_nothing_leaves_an_end() {
+        use SourceRemovalState as S;
+        let all = [
+            S::Verifying,
+            S::Removing,
+            S::Removed,
+            S::AlreadyGone,
+            S::Kept,
+            S::Refused,
+        ];
+        let allowed = [
+            (S::Verifying, S::Removing),
+            (S::Verifying, S::Refused),
+            (S::Verifying, S::Kept),
+            (S::Removing, S::Removed),
+            (S::Removing, S::AlreadyGone),
+            (S::Removing, S::Kept),
+        ];
+        for from in all {
+            for to in all {
+                assert_eq!(
+                    from.can_become(to),
+                    allowed.contains(&(from, to)),
+                    "{from} to {to}"
+                );
+            }
+            assert_eq!(from.is_open(), matches!(from, S::Verifying | S::Removing));
+        }
+        assert_eq!(S::default(), S::Verifying);
     }
 
     #[test]

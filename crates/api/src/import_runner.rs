@@ -33,7 +33,8 @@ use std::time::Duration;
 
 use sha2::{Digest as _, Sha256};
 use tangible_db::integrations::{
-    get_integration, record_integration_health, record_integration_job_state,
+    get_integration, record_integration_health, record_integration_job_content,
+    record_integration_job_state,
 };
 use tangible_db::repositories::{
     ImportJobRecord, claim_next_import_job, complete_import_job, fail_import_job,
@@ -53,6 +54,7 @@ use crate::import::{
     DownloadCheckpoint, ImportCheckpoint, ImportError, ImportPipeline, ImportRequest,
 };
 use crate::secrets::SecretKey;
+use crate::source_removal::SourceRemovalHandle;
 
 /// How the runner behaves.
 #[derive(Debug, Clone)]
@@ -84,6 +86,9 @@ pub struct ImportRunnerSettings {
     pub secret_key: Option<Arc<SecretKey>>,
     /// How often a torrent still downloading is asked after.
     pub torrent_poll: Duration,
+    /// The remover to wake when an import completes, which may have queued
+    /// its source's removal (docs/plans/source-retention.md).
+    pub source_removal: Option<SourceRemovalHandle>,
 }
 
 impl Default for ImportRunnerSettings {
@@ -102,6 +107,7 @@ impl Default for ImportRunnerSettings {
             integrations: None,
             secret_key: None,
             torrent_poll: Duration::from_secs(30),
+            source_removal: None,
         }
     }
 }
@@ -317,6 +323,9 @@ impl ImportRunner {
                                 "the import's staging area could not be removed"
                             );
                         }
+                        if let Some(remover) = &self.settings.source_removal {
+                            remover.nudge();
+                        }
                     }
                     Err(error) => tracing::error!(
                         import_id = %job.id,
@@ -487,6 +496,13 @@ impl ImportRunner {
                 };
                 tracing::info!(import_id = %job.id, client = name, "the download finished; copying it in");
                 let _ = record_import_expected(pool, job.id, size).await;
+                // What a removal acts on, if the integration removes after
+                // import: this path, not wherever the client says it is later.
+                if let Err(error) =
+                    record_integration_job_content(pool, *job.id.as_uuid(), &relative).await
+                {
+                    tracing::warn!(import_id = %job.id, error = ?error, "could not record where the job is");
+                }
                 self.copy_from_root(job, &folders.local_root, &relative)
                     .await
                     .map(|()| Acquired::Ready)

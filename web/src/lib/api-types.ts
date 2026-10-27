@@ -3200,6 +3200,7 @@ export interface components {
              *     URL without credentials, query or fragment.
              */
             source_reference?: string | null;
+            source_removal?: null | components["schemas"]["SourceRemovalView"];
             /** @description Lifecycle state. */
             state: string;
             /** @description When it last changed. */
@@ -4173,6 +4174,39 @@ export interface components {
         SetupStatus: {
             /** @description True until the first administrator exists. */
             needed: boolean;
+        };
+        /** @description Removing an import's source once the library has a checked copy. */
+        SourceRemovalView: {
+            /**
+             * Format: int64
+             * @description Bytes removed, where known.
+             */
+            bytes_removed?: number | null;
+            /** @description Why it waits, or how it ended, in words. */
+            detail?: string | null;
+            /** @description When it ended. */
+            ended_at?: string | null;
+            /**
+             * Format: int32
+             * @description Files left because they were not the library's.
+             */
+            files_kept?: number | null;
+            /**
+             * Format: int32
+             * @description Files removed, where counted.
+             */
+            files_removed?: number | null;
+            /** @description When it is tried next, while held off. */
+            next_attempt_at?: string | null;
+            /** @description When it was asked for: when the import completed. */
+            requested_at: string;
+            /**
+             * @description `verifying` (the library's copy is being checked first), `removing`
+             *     (at the source, tried again until it answers), or how it ended:
+             *     `removed`, `already_gone`, `kept` (left, saying why) or `refused`
+             *     (the library's copy failed its check, so nothing was removed).
+             */
+            state: string;
         };
         /**
          * @description A job the operator already has, for a download client to fetch: a

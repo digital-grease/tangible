@@ -23,7 +23,8 @@ use tangible_api::secrets::SecretKey;
 use tangible_api::{
     ApiState, AuthSettings, DerivationPipeline, DerivationRunner, DerivationRunnerSettings,
     Derivations, ImportContext, ImportPipeline, ImportRunner, ImportRunnerSettings, RommExport,
-    RommExporter, RommSync, RommSyncHandle, RommSyncSettings, WebUi,
+    RommExporter, RommSync, RommSyncHandle, RommSyncSettings, SourceRemovalHandle,
+    SourceRemovalSettings, SourceRemover, WebUi,
 };
 use tangible_db::{Database, DbConfig};
 use tangible_storage::{FilesystemStore, ManifestStore, StagingManager, WatchRoots};
@@ -202,6 +203,7 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         engine,
     );
 
+    let (removal, remover) = start_source_remover(&state, &integrations, secret_key.as_ref());
     let imports = start_import_runner(
         database,
         pipeline,
@@ -211,14 +213,22 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
             max_download_bytes: serve.max_upload_bytes,
             integrations: Some(integrations),
             secret_key,
+            source_removal: Some(removal),
             ..ImportRunnerSettings::default()
         },
     );
 
-    let runners = [Some(imports), Some(integrity), romm, romm_sync, derivations]
-        .into_iter()
-        .flatten()
-        .collect();
+    let runners = [
+        Some(imports),
+        Some(integrity),
+        Some(remover),
+        romm,
+        romm_sync,
+        derivations,
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
     serve_until_shutdown(serve, state, runners).await
 }
 
@@ -386,6 +396,30 @@ fn start_import_runner(
         let _ = stopped.await;
     }));
     (stop, task)
+}
+
+/// Start the remover, which removes an import's source from its download
+/// client or bucket once the library has a checked copy, where an
+/// administrator set the integration to (docs/plans/source-retention.md).
+fn start_source_remover(
+    state: &ApiState,
+    integrations: &tangible_integrations::outbound::OutboundClient,
+    secret_key: Option<&Arc<tangible_api::secrets::SecretKey>>,
+) -> (SourceRemovalHandle, Stoppable) {
+    let handle = SourceRemovalHandle::new();
+    let remover = SourceRemover::new(
+        state.database().clone(),
+        state.integrity().cloned().unwrap_or_default(),
+        Some(integrations.clone()),
+        secret_key.cloned(),
+        handle.clone(),
+        SourceRemovalSettings::default(),
+    );
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(remover.run(async {
+        let _ = stopped.await;
+    }));
+    (handle, (stop, task))
 }
 
 /// What a derivation pipeline is built from.

@@ -4,10 +4,12 @@
 //! A qBittorrent WebUI (API v2) the operator already runs
 //! (docs/plans/acquisition.md A4, ADR 0016).
 //!
-//! Three things are asked of it, and nothing else: sign in, add a torrent the
-//! operator supplied to Tangible's category, and say how one torrent is
-//! doing, by infohash. Tangible never searches, never removes a torrent or
-//! its data, and never asks the client to run anything. Every request goes
+//! Four things are asked of it, and nothing else: sign in, add a torrent the
+//! operator supplied to Tangible's category, say how one torrent is doing,
+//! by infohash, and, only where an administrator set the integration to
+//! remove after import and the library's copy is checked, remove a torrent
+//! with its files (docs/plans/source-retention.md). Tangible never searches
+//! and never asks the client to run anything. Every request goes
 //! through the outbound client, under the integrations policy (the
 //! administrator's address, so the LAN is allowed).
 //!
@@ -29,6 +31,11 @@
 //!   `content_path`, absolute as the client sees it: the file for a
 //!   single-file torrent, its folder otherwise. A magnet still fetching
 //!   metadata reports an empty `content_path`.
+//! - `torrents/delete` takes only a POST (405 otherwise) and needs
+//!   `deleteFiles` (400 without it). It answers 200 with an empty body
+//!   whether or not it had the torrent, so whether it went is learned by
+//!   asking after it again. The torrent goes from `torrents/info` at once,
+//!   its files a moment later.
 
 use std::fmt;
 
@@ -353,6 +360,39 @@ impl QbittorrentClient {
                 .into_iter()
                 .find(|torrent| torrent.hash.eq_ignore_ascii_case(hash.as_str()))
         })
+    }
+
+    /// Remove the torrent with `hash`, and its files when `with_files`.
+    /// qBittorrent answers the same whether or not it had it: ask after it
+    /// to learn whether it went.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`].
+    pub async fn remove(&mut self, hash: &Infohash, with_files: bool) -> Result<(), ClientError> {
+        let url = self.endpoint("api/v2/torrents/delete")?;
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("hashes", hash.as_str())
+            .append_pair("deleteFiles", if with_files { "true" } else { "false" })
+            .finish();
+        let (status, _) = self
+            .call(|this| {
+                Ok(this
+                    .http
+                    .request(reqwest::Method::POST, &url)
+                    .map_err(outbound)?
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(body.clone()))
+            })
+            .await?;
+        if status == 200 {
+            Ok(())
+        } else {
+            Err(ClientError::bad(
+                CLIENT,
+                format!("removing the torrent answered {status}"),
+            ))
+        }
     }
 }
 

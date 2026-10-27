@@ -6,7 +6,10 @@
 //!
 //! Two things are asked of it: what an object is (HEAD: its size, ETag and
 //! version), and the object itself, which the import runner fetches with
-//! the URL import's resumable fetch from a short-lived presigned GET. Requests
+//! the URL import's resumable fetch from a short-lived presigned GET. A third
+//! only where an administrator set the integration to remove after import and
+//! the library's copy is checked: delete the version imported, only while its
+//! ETag is the one imported (docs/plans/source-retention.md). Requests
 //! are signed with SigV4 by `rusty-s3` (owner's choice, 2026-10-24) and sent
 //! through the outbound client under the integrations policy: the endpoint is
 //! the administrator's, so a private network is allowed.
@@ -22,7 +25,9 @@
 //! `Last-Modified` and, in a versioned bucket, `X-Amz-Version-Id`; a missing
 //! object or bucket is 404 (`NoSuchKey`, `NoSuchBucket`); a wrong key 403
 //! (`SignatureDoesNotMatch`); a ranged GET of an older version with
-//! `If-Range` on its ETag is 206.
+//! `If-Range` on its ETag is 206. DELETE with `versionId` removes that
+//! version, leaving the current one; with `If-Match` on another ETag it
+//! answers 412 and deletes nothing; a key or version not there answers 204.
 
 use std::fmt;
 use std::time::Duration;
@@ -72,6 +77,17 @@ pub enum ObjectError {
     /// The endpoint could not be used.
     #[error(transparent)]
     Client(#[from] ClientError),
+}
+
+/// What a delete came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Deleted {
+    /// Gone, or never there: S3 answers the same.
+    Deleted,
+    /// Its ETag is no longer the one given, so it was left.
+    Changed,
+    /// The endpoint cannot delete only if unchanged (501), so it was left.
+    Unconditional,
 }
 
 /// Why a bucket name or object key was refused.
@@ -255,16 +271,71 @@ impl S3Client {
     /// `INTEGRATION_AUTH_FAILED`) or an endpoint that cannot be reached or
     /// answers oddly.
     pub async fn head(&self, bucket: &str, key: &str) -> Result<ObjectInfo, ObjectError> {
+        self.head_version(bucket, key, None).await
+    }
+
+    /// What `key` in `bucket` is, at `version_id` when given.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::head`].
+    pub async fn head_version(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<&str>,
+    ) -> Result<ObjectInfo, ObjectError> {
         check_key(key).map_err(|error| ClientError::bad(CLIENT, error.0))?;
         let url = {
             let bucket = self.bucket(bucket)?;
-            let signed = bucket
-                .head_object(Some(&self.credentials), key)
-                .sign(HEAD_EXPIRY);
-            confined(&bucket, signed)?
+            let mut action = bucket.head_object(Some(&self.credentials), key);
+            if let Some(version) = version_id {
+                action.query_mut().insert("versionId", version.to_owned());
+            }
+            confined(&bucket, action.sign(HEAD_EXPIRY))?
         };
         let headers = self.send_head(&url).await?;
         Ok(object_info(&headers)?)
+    }
+
+    /// Delete `key` in `bucket`: the version `version_id` when given, which
+    /// leaves every other version, and only while its ETag is `if_match`
+    /// when given.
+    ///
+    /// # Errors
+    ///
+    /// [`ObjectError::Missing`] for no such bucket; [`ObjectError::Client`]
+    /// for a refusal (credentials that may not delete are
+    /// `INTEGRATION_AUTH_FAILED`) or an endpoint that cannot be reached or
+    /// answers oddly.
+    pub async fn delete(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<&str>,
+        if_match: Option<&str>,
+    ) -> Result<Deleted, ObjectError> {
+        check_key(key).map_err(|error| ClientError::bad(CLIENT, error.0))?;
+        let url = {
+            let bucket = self.bucket(bucket)?;
+            let mut action = bucket.delete_object(Some(&self.credentials), key);
+            if let Some(version) = version_id {
+                action.query_mut().insert("versionId", version.to_owned());
+            }
+            if let Some(etag) = if_match {
+                action.headers_mut().insert("if-match", etag.to_owned());
+            }
+            confined(&bucket, action.sign(HEAD_EXPIRY))?
+        };
+        let mut request = self
+            .http
+            .request(reqwest::Method::DELETE, &url)
+            .map_err(outbound)?;
+        if let Some(etag) = if_match {
+            request = request.header("if-match", etag);
+        }
+        let response = self.http.send(request).await.map_err(outbound)?;
+        delete_answer(response.status().as_u16())
     }
 
     /// Send a presigned HEAD, answering the headers of a 200.
@@ -294,6 +365,27 @@ impl S3Client {
             .into()),
             code => Err(ClientError::bad(CLIENT, format!("it answered {code}")).into()),
         }
+    }
+}
+
+/// What a DELETE's status says.
+///
+/// # Errors
+///
+/// As [`S3Client::delete`].
+pub fn delete_answer(status: u16) -> Result<Deleted, ObjectError> {
+    match status {
+        200 | 204 => Ok(Deleted::Deleted),
+        412 => Ok(Deleted::Changed),
+        501 => Ok(Deleted::Unconditional),
+        404 => Err(ObjectError::Missing),
+        403 => Err(ClientError::Auth {
+            client: CLIENT,
+            reason: "it refused to delete; the credentials need s3:DeleteObject, and \
+                     s3:DeleteObjectVersion for a versioned bucket",
+        }
+        .into()),
+        code => Err(ClientError::bad(CLIENT, format!("deleting answered {code}")).into()),
     }
 }
 
@@ -346,6 +438,27 @@ mod tests {
             );
         }
         (status, headers)
+    }
+
+    #[test]
+    fn recorded_deletes_read_as_deleted_or_left_and_refusals_say_why() {
+        for (name, answer) in [
+            ("delete-version-seaweedfs-4.48.txt", Deleted::Deleted),
+            ("delete-version-gone-seaweedfs-4.48.txt", Deleted::Deleted),
+            (
+                "delete-if-match-other-etag-seaweedfs-4.48.txt",
+                Deleted::Changed,
+            ),
+        ] {
+            let (status, _) = recorded(name);
+            assert_eq!(delete_answer(status).unwrap(), answer, "{name}");
+        }
+        assert_eq!(delete_answer(501).unwrap(), Deleted::Unconditional);
+        assert!(matches!(delete_answer(404), Err(ObjectError::Missing)));
+        let refused = delete_answer(403).unwrap_err().to_string();
+        assert!(refused.contains("s3:DeleteObject"), "{refused}");
+        let odd = delete_answer(500).unwrap_err().to_string();
+        assert!(odd.contains("500"), "{odd}");
     }
 
     #[test]

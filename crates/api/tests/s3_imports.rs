@@ -13,10 +13,12 @@
 //!
 //! ```sh
 //! docker run -d -p 127.0.0.1:18333:8333 -v "$PWD/s3.json:/etc/seaweedfs/s3.json:ro" \
-//!   chrislusf/seaweedfs:4.48 server -s3 -s3.config=/etc/seaweedfs/s3.json
+//!   chrislusf/seaweedfs:4.48 server -s3 -s3.config=/etc/seaweedfs/s3.json -volume.max=64
 //! ```
 //!
-//! Every test makes a bucket of its own, so runs never meet.
+//! Every test makes a bucket of its own, so runs never meet. Each bucket is
+//! a SeaweedFS collection with volumes of its own, and by default a server
+//! has room for only a few: `-volume.max` lets many runs share one server.
 
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
@@ -29,9 +31,11 @@ use axum::http::{Method, Request, StatusCode};
 use rusty_s3::{Bucket, Credentials, S3Action as _, UrlStyle};
 use serde_json::{Value, json};
 use sqlx::PgPool;
+use tangible_api::integrity::{Integrity, IntegrityRunner, IntegrityRunnerSettings};
 use tangible_api::secrets::SecretKey;
 use tangible_api::{
-    ApiState, ImportContext, ImportPipeline, ImportRunner, ImportRunnerSettings, router,
+    ApiState, ImportContext, ImportPipeline, ImportRunner, ImportRunnerSettings,
+    SourceRemovalHandle, SourceRemovalSettings, SourceRemover, router,
 };
 use tangible_domain::Role;
 use tangible_integrations::outbound::{OutboundClient, OutboundPolicy};
@@ -83,6 +87,27 @@ impl Server {
 
     /// A new bucket, versioned.
     async fn make_bucket(&self) -> String {
+        let name = self.make_plain_bucket().await;
+        let bucket = self.bucket(&name);
+        // PUT ?versioning on the bucket: the same request shape as making it.
+        let credentials = self.credentials();
+        let mut versioning = bucket.create_bucket(&credentials);
+        versioning.query_mut().insert("versioning", "");
+        let versioned = reqwest::Client::new()
+            .put(versioning.sign(Duration::from_secs(60)).as_str())
+            .body(
+                "<VersioningConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">\
+                 <Status>Enabled</Status></VersioningConfiguration>",
+            )
+            .send()
+            .await
+            .unwrap();
+        assert!(versioned.status().is_success(), "{}", versioned.status());
+        name
+    }
+
+    /// A new bucket that keeps no versions.
+    async fn make_plain_bucket(&self) -> String {
         let name = format!(
             "tangible-{}",
             &uuid::Uuid::now_v7().simple().to_string()[16..]
@@ -100,21 +125,24 @@ impl Server {
             .await
             .unwrap();
         assert!(made.status().is_success(), "{}", made.status());
-        // PUT ?versioning on the bucket: the same request shape as making it.
+        name
+    }
+
+    /// The status and bytes of a GET of `key`, at `version` when given.
+    async fn get(&self, bucket: &str, key: &str, version: Option<&str>) -> (u16, Vec<u8>) {
         let credentials = self.credentials();
-        let mut versioning = bucket.create_bucket(&credentials);
-        versioning.query_mut().insert("versioning", "");
-        let versioned = http
-            .put(versioning.sign(Duration::from_secs(60)).as_str())
-            .body(
-                "<VersioningConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">\
-                 <Status>Enabled</Status></VersioningConfiguration>",
-            )
+        let bucket = self.bucket(bucket);
+        let mut action = bucket.get_object(Some(&credentials), key);
+        if let Some(version) = version {
+            action.query_mut().insert("versionId", version.to_owned());
+        }
+        let answer = reqwest::Client::new()
+            .get(action.sign(Duration::from_secs(60)).as_str())
             .send()
             .await
             .unwrap();
-        assert!(versioned.status().is_success(), "{}", versioned.status());
-        name
+        let status = answer.status().as_u16();
+        (status, answer.bytes().await.unwrap().to_vec())
     }
 
     async fn put(&self, bucket: &str, key: &str, bytes: Vec<u8>) {
@@ -136,6 +164,8 @@ struct Harness {
     pool: PgPool,
     state: ApiState,
     runner: ImportRunner,
+    remover: SourceRemover,
+    integrity: IntegrityRunner,
     admin: support::Session,
     operator: support::Session,
     _dir: TempDir,
@@ -159,7 +189,7 @@ async fn harness(max_upload_bytes: u64) -> Harness {
     let staging = StagingManager::open(dir.path().join("staging"))
         .await
         .unwrap();
-    let pipeline = ImportPipeline::new(staging, objects, manifests.clone());
+    let pipeline = ImportPipeline::new(staging, objects.clone(), manifests.clone());
     // The server under test listens on loopback, which only an allowed block
     // lets in.
     let client = OutboundClient::new(
@@ -171,7 +201,7 @@ async fn harness(max_upload_bytes: u64) -> Harness {
     )
     .unwrap();
     let key = Arc::new(SecretKey::from_base64(&SecretKey::generate().unwrap()).unwrap());
-    let state = ApiState::with_manifests(database.clone(), manifests)
+    let state = ApiState::with_manifests(database.clone(), manifests.clone())
         .with_imports(ImportContext {
             pipeline: pipeline.clone(),
             roots: WatchRoots::new(BTreeMap::new()),
@@ -181,6 +211,30 @@ async fn harness(max_upload_bytes: u64) -> Harness {
         })
         .with_secret_key(Arc::clone(&key))
         .with_integration_client(client.clone());
+    let integrity = Integrity::new();
+    let remover = SourceRemover::new(
+        database.clone(),
+        integrity.clone(),
+        Some(client.clone()),
+        Some(Arc::clone(&key)),
+        SourceRemovalHandle::new(),
+        SourceRemovalSettings {
+            owner: format!("test-{}", uuid::Uuid::now_v7()),
+            check_poll: Duration::ZERO,
+            first_retry: Duration::ZERO,
+            ..SourceRemovalSettings::default()
+        },
+    );
+    let integrity = IntegrityRunner::new(
+        database.clone(),
+        objects,
+        manifests,
+        integrity,
+        IntegrityRunnerSettings {
+            owner: format!("test-{}", uuid::Uuid::now_v7()),
+            ..IntegrityRunnerSettings::default()
+        },
+    );
     let runner = ImportRunner::new(
         database,
         pipeline,
@@ -206,6 +260,8 @@ async fn harness(max_upload_bytes: u64) -> Harness {
         pool,
         state,
         runner,
+        remover,
+        integrity,
         _dir: dir,
         _queue: queue,
     }
@@ -240,6 +296,18 @@ impl Harness {
 
     /// An S3 integration for `server` allowing `buckets`, with `secret_key`.
     async fn integration(&self, server: &Server, buckets: &[&str], secret_key: &str) -> String {
+        self.integration_after(server, buckets, secret_key, "keep")
+            .await
+    }
+
+    /// The same, doing `after_import` with an object once it is imported.
+    async fn integration_after(
+        &self,
+        server: &Server,
+        buckets: &[&str],
+        secret_key: &str,
+        after_import: &str,
+    ) -> String {
         let (status, made) = self
             .send(
                 &self.admin,
@@ -248,7 +316,11 @@ impl Harness {
                 Some(json!({
                     "kind": "s3",
                     "name": format!("s3-{}", uuid::Uuid::now_v7().simple()),
-                    "settings": { "endpoint": server.endpoint, "buckets": buckets },
+                    "settings": {
+                        "endpoint": server.endpoint,
+                        "buckets": buckets,
+                        "after_import": after_import,
+                    },
                     "secrets": {
                         "access_key_id": server.access_key,
                         "secret_access_key": secret_key,
@@ -284,6 +356,40 @@ impl Harness {
         )
         .await
         .1
+    }
+}
+
+impl Harness {
+    /// Run the remover and the integrity checks until neither has anything
+    /// due, and answer the import's source removal.
+    async fn removal(&self, id: &str) -> Value {
+        for _ in 0..20 {
+            let removed = self.remover.step().await.unwrap();
+            let checked = self.integrity.step().await.unwrap();
+            if !removed && !checked {
+                break;
+            }
+        }
+        self.send(
+            &self.admin,
+            Method::GET,
+            &format!("/api/v1/imports/{id}"),
+            None,
+        )
+        .await
+        .1["source_removal"]
+            .clone()
+    }
+
+    /// The version an import pinned.
+    async fn pinned_version(&self, id: &str) -> String {
+        sqlx::query_scalar(
+            "SELECT source_descriptor_json->>'version_id' FROM import_jobs WHERE id = $1",
+        )
+        .bind(uuid::Uuid::parse_str(id).unwrap())
+        .fetch_one(&self.pool)
+        .await
+        .unwrap()
     }
 }
 
@@ -527,4 +633,106 @@ async fn trying_an_s3_integration_checks_every_bucket() {
         .await;
     assert_eq!(tried["ok"], false, "{tried}");
     assert_eq!(tried["error_code"], "INTEGRATION_AUTH_FAILED");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_versioned_object_loses_only_the_version_imported() {
+    let Some(server) = server() else { return };
+    let harness = harness(64 * 1024 * 1024).await;
+    let bucket = server.make_bucket().await;
+    let key = "discs/Removed Disc.iso";
+    let first = iso_image(*b"RM1 ");
+    server.put(&bucket, key, first.clone()).await;
+    let integration = harness
+        .integration_after(&server, &[&bucket], &server.secret_key, "remove")
+        .await;
+    let (status, queued) = harness
+        .import(json!({ "integration_id": integration, "bucket": bucket, "key": key }))
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{queued}");
+    let id = queued["id"].as_str().unwrap().to_owned();
+    let done = harness.settle(&id).await;
+    assert_eq!(done["state"], "complete", "{done}");
+    assert_eq!(done["source_removal"]["state"], "verifying", "{done}");
+    let imported = harness.pinned_version(&id).await;
+
+    // A newer version written after the import is the operator's.
+    let second = iso_image(*b"RM2 ");
+    server.put(&bucket, key, second.clone()).await;
+
+    let removed = harness.removal(&id).await;
+    assert_eq!(removed["state"], "removed", "{removed}");
+    assert_eq!(
+        removed["detail"],
+        format!("Deleted the imported version of the object from bucket {bucket}")
+    );
+    assert_eq!(removed["files_removed"], 1);
+    assert_eq!(removed["bytes_removed"], first.len());
+    assert_eq!(
+        server.get(&bucket, key, Some(&imported)).await.0,
+        404,
+        "the imported version is gone"
+    );
+    assert_eq!(
+        server.get(&bucket, key, None).await,
+        (200, second),
+        "the newer version, and no delete marker, is left"
+    );
+
+    let audited: Value = sqlx::query_scalar(
+        "SELECT metadata FROM audit_events
+         WHERE action = 'integration.source_deleted' AND target_id = $1",
+    )
+    .bind(&integration)
+    .fetch_one(&harness.pool)
+    .await
+    .unwrap();
+    assert_eq!(audited["removed"]["version_id"], imported.as_str());
+    assert_eq!(audited["removed"]["key"], key);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_unversioned_object_is_deleted_only_while_it_is_what_was_imported() {
+    let Some(server) = server() else { return };
+    let harness = harness(64 * 1024 * 1024).await;
+    let bucket = server.make_plain_bucket().await;
+    let integration = harness
+        .integration_after(&server, &[&bucket], &server.secret_key, "remove")
+        .await;
+
+    // Written over after the import: the same size, another ETag.
+    let replaced_key = "discs/Replaced.iso";
+    server.put(&bucket, replaced_key, iso_image(*b"OLD ")).await;
+    let (_, queued) = harness
+        .import(json!({ "integration_id": integration, "bucket": bucket, "key": replaced_key }))
+        .await;
+    let replaced = queued["id"].as_str().unwrap().to_owned();
+    assert_eq!(harness.settle(&replaced).await["state"], "complete");
+    let newer = iso_image(*b"NEW ");
+    server.put(&bucket, replaced_key, newer.clone()).await;
+    let kept = harness.removal(&replaced).await;
+    assert_eq!(kept["state"], "kept", "{kept}");
+    assert!(
+        kept["detail"].as_str().unwrap().contains("changed since"),
+        "{kept}"
+    );
+    assert_eq!(server.get(&bucket, replaced_key, None).await, (200, newer));
+
+    // Left alone since: deleted.
+    let key = "discs/Unchanged.iso";
+    server.put(&bucket, key, iso_image(*b"SAME")).await;
+    let (_, queued) = harness
+        .import(json!({ "integration_id": integration, "bucket": bucket, "key": key }))
+        .await;
+    let unchanged = queued["id"].as_str().unwrap().to_owned();
+    assert_eq!(harness.settle(&unchanged).await["state"], "complete");
+    let removed = harness.removal(&unchanged).await;
+    assert_eq!(removed["state"], "removed", "{removed}");
+    assert_eq!(
+        removed["detail"],
+        format!("Deleted the object from bucket {bucket}")
+    );
+    assert_eq!(server.get(&bucket, key, None).await.0, 404);
 }

@@ -36,6 +36,7 @@ use tangible_db::repositories::{
     create_audited_import_job, create_import_job, get_import_job, list_import_jobs, record_denial,
     retry_import_job,
 };
+use tangible_db::source_removals::{SourceRemovalRecord, removals_for_imports};
 use tangible_domain::{ImportJobId, ImportState, LogicalPath};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -106,6 +107,63 @@ pub struct ImportView {
     pub updated_at: String,
     /// When it finished, if it has.
     pub completed_at: Option<String>,
+    /// Removing its source from the download client or bucket, where the
+    /// integration removes after import (docs/plans/source-retention.md).
+    pub source_removal: Option<SourceRemovalView>,
+}
+
+/// Removing an import's source once the library has a checked copy.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct SourceRemovalView {
+    /// `verifying` (the library's copy is being checked first), `removing`
+    /// (at the source, tried again until it answers), or how it ended:
+    /// `removed`, `already_gone`, `kept` (left, saying why) or `refused`
+    /// (the library's copy failed its check, so nothing was removed).
+    pub state: String,
+    /// Why it waits, or how it ended, in words.
+    pub detail: Option<String>,
+    /// Files removed, where counted.
+    pub files_removed: Option<i32>,
+    /// Bytes removed, where known.
+    pub bytes_removed: Option<i64>,
+    /// Files left because they were not the library's.
+    pub files_kept: Option<i32>,
+    /// When it is tried next, while held off.
+    pub next_attempt_at: Option<String>,
+    /// When it was asked for: when the import completed.
+    pub requested_at: String,
+    /// When it ended.
+    pub ended_at: Option<String>,
+}
+
+impl From<SourceRemovalRecord> for SourceRemovalView {
+    fn from(record: SourceRemovalRecord) -> Self {
+        Self {
+            state: record.state.to_string(),
+            detail: record.detail,
+            files_removed: record.files_removed,
+            bytes_removed: record.bytes_removed,
+            files_kept: record.files_kept,
+            next_attempt_at: record
+                .next_attempt_at
+                .filter(|_| record.state.is_open())
+                .map(rfc3339),
+            requested_at: rfc3339(record.requested_at),
+            ended_at: record.ended_at.map(rfc3339),
+        }
+    }
+}
+
+impl ImportView {
+    /// The view, with its source's removal from `removals` if it has one.
+    fn with_removal(record: ImportJobRecord, removals: &mut Vec<SourceRemovalRecord>) -> Self {
+        let id = *record.id.as_uuid();
+        let mut view = Self::from(record);
+        if let Some(at) = removals.iter().position(|r| r.import_job_id == id) {
+            view.source_removal = Some(SourceRemovalView::from(removals.swap_remove(at)));
+        }
+        view
+    }
 }
 
 impl From<ImportJobRecord> for ImportView {
@@ -151,6 +209,7 @@ impl From<ImportJobRecord> for ImportView {
             created_at: rfc3339(record.created_at),
             updated_at: rfc3339(record.updated_at),
             completed_at: record.completed_at.map(rfc3339),
+            source_removal: None,
         }
     }
 }
@@ -844,10 +903,32 @@ pub async fn list_imports(
         jobs.last().map(|job| encode_cursor(&job.id.to_string()))
     };
 
+    let ids: Vec<uuid::Uuid> = jobs.iter().map(|job| *job.id.as_uuid()).collect();
+    let mut removals = removals_for_imports(state.database().pool(), &ids)
+        .await
+        .map_err(|error| {
+            tracing::error!(error = ?error, "could not read source removals");
+            unavailable("the imports could not be read")
+        })?;
     Ok(Json(ImportPage {
-        items: jobs.into_iter().map(ImportView::from).collect(),
+        items: jobs
+            .into_iter()
+            .map(|job| ImportView::with_removal(job, &mut removals))
+            .collect(),
         next_cursor,
     }))
+}
+
+/// One import as shown, with its source's removal.
+async fn shown(state: &ApiState, id: ImportJobId) -> Result<ImportView, Problem> {
+    let record = load(state, id).await?;
+    let mut removals = removals_for_imports(state.database().pool(), &[*id.as_uuid()])
+        .await
+        .map_err(|error| {
+            tracing::error!(error = ?error, "could not read a source removal");
+            unavailable("the import could not be read")
+        })?;
+    Ok(ImportView::with_removal(record, &mut removals))
 }
 
 async fn load(state: &ApiState, id: ImportJobId) -> Result<ImportJobRecord, Problem> {
@@ -882,7 +963,7 @@ pub async fn get_import(
     Path(import_id): Path<String>,
 ) -> Result<Json<ImportView>, Problem> {
     let id = parse_import(&import_id)?;
-    Ok(Json(ImportView::from(load(&state, id).await?)))
+    Ok(Json(shown(&state, id).await?))
 }
 
 /// Stop an import.

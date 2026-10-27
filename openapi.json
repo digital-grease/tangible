@@ -9060,6 +9060,17 @@
             ],
             "description": "Where it came from, as it may be shown: a watched root and path, or a\nURL without credentials, query or fragment."
           },
+          "source_removal": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SourceRemovalView",
+                "description": "Removing its source from the download client or bucket, where the\nintegration removes after import (docs/plans/source-retention.md)."
+              }
+            ]
+          },
           "state": {
             "type": "string",
             "description": "Lifecycle state."
@@ -11304,6 +11315,69 @@
           "needed": {
             "type": "boolean",
             "description": "True until the first administrator exists."
+          }
+        }
+      },
+      "SourceRemovalView": {
+        "type": "object",
+        "description": "Removing an import's source once the library has a checked copy.",
+        "required": [
+          "state",
+          "requested_at"
+        ],
+        "properties": {
+          "bytes_removed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bytes removed, where known."
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it waits, or how it ended, in words."
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it ended."
+          },
+          "files_kept": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Files left because they were not the library's."
+          },
+          "files_removed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Files removed, where counted."
+          },
+          "next_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it is tried next, while held off."
+          },
+          "requested_at": {
+            "type": "string",
+            "description": "When it was asked for: when the import completed."
+          },
+          "state": {
+            "type": "string",
+            "description": "`verifying` (the library's copy is being checked first), `removing`\n(at the source, tried again until it answers), or how it ended:\n`removed`, `already_gone`, `kept` (left, saying why) or `refused`\n(the library's copy failed its check, so nothing was removed)."
           }
         }
       },

@@ -315,6 +315,114 @@ invariant_test!(
     }
 );
 
+// --- Source removals -----------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_source_removal_is_one_per_import_and_says_consistently_whether_it_ended() {
+    // A second removal of one import could remove a source twice over; an
+    // open removal with an end, or an ended one still leased, would be
+    // taken up again or never.
+    let pool = pool().await;
+    let f = Fixture::new();
+    let mut tx = pool.begin().await.expect("begin");
+    seed(&mut tx, &f).await;
+    let integration = Uuid::now_v7();
+    let import = Uuid::now_v7();
+    tx.execute(
+        format!(
+            "INSERT INTO integrations (id, kind, name, configuration_json) \
+             VALUES ('{integration}', 'qbittorrent', 'removals-{integration}', '{{}}')"
+        )
+        .as_str(),
+    )
+    .await
+    .expect("an integration");
+    tx.execute(
+        format!(
+            "INSERT INTO import_jobs (id, source_kind, source_descriptor_json, created_by) \
+             VALUES ('{import}', 'qbittorrent_job', '{{}}', 'u')"
+        )
+        .as_str(),
+    )
+    .await
+    .expect("an import");
+    let second = Uuid::now_v7();
+    tx.execute(
+        format!(
+            "INSERT INTO import_jobs (id, source_kind, source_descriptor_json, created_by) \
+             VALUES ('{second}', 'qbittorrent_job', '{{}}', 'u')"
+        )
+        .as_str(),
+    )
+    .await
+    .expect("another import");
+    let insert = |state: &str, ended: &str, lease: &str| {
+        format!(
+            "INSERT INTO source_removals \
+                 (id, import_job_id, integration_id, artifact_id, state, ended_at, leased_by, \
+                  leased_until) \
+             VALUES (gen_random_uuid(), '{import}', '{integration}', '{}', '{state}', {ended}, \
+                     {lease})",
+            f.artifact
+        )
+    };
+    for (statement, why) in [
+        (
+            insert("removed", "NULL", "NULL, NULL"),
+            "an ended removal has an end",
+        ),
+        (
+            insert("verifying", "now()", "NULL, NULL"),
+            "an open removal has not ended",
+        ),
+        (
+            insert("removing", "NULL", "'x', NULL"),
+            "a lease has an owner and an expiry",
+        ),
+        (
+            insert("kept", "now()", "'x', now()"),
+            "an ended removal is not leased",
+        ),
+        (
+            insert("deleted", "now()", "NULL, NULL"),
+            "the state is one Tangible knows",
+        ),
+    ] {
+        must_reject(&mut tx, &statement, why).await;
+    }
+    tx.execute(
+        format!(
+            "INSERT INTO integration_jobs \
+                 (id, integration_id, client_job_id, import_job_id, created_by, content_path) \
+             VALUES (gen_random_uuid(), '{integration}', 'abc', '{import}', 'u', 'disc.iso')"
+        )
+        .as_str(),
+    )
+    .await
+    .expect("a job with the path it was imported from");
+    tx.execute(insert("verifying", "NULL", "'x', now()").as_str())
+        .await
+        .expect("an open, leased removal");
+    must_reject(
+        &mut tx,
+        &insert("removing", "NULL", "NULL, NULL"),
+        "one removal per import",
+    )
+    .await;
+    must_reject(
+        &mut tx,
+        &format!(
+            "INSERT INTO integration_jobs \
+                 (id, integration_id, client_job_id, import_job_id, created_by, content_path) \
+             VALUES (gen_random_uuid(), '{integration}', 'def', '{second}', 'u', '')"
+        ),
+        "a recorded content path is not empty",
+    )
+    .await;
+    tx.rollback().await.expect("rollback");
+}
+
 // --- RomM's API --------------------------------------------------------------
 
 #[tokio::test]

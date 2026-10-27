@@ -812,3 +812,27 @@ pub async fn record_integration_job_state(
     .map_err(DbError::Query)?;
     Ok(())
 }
+
+/// Record the path beneath the client's download folder that the job
+/// feeding `import_id` is copied in from, so a removal acts on what was
+/// imported (docs/plans/source-retention.md).
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn record_integration_job_content(
+    pool: &PgPool,
+    import_id: uuid::Uuid,
+    content_path: &str,
+) -> Result<(), DbError> {
+    sqlx::query(
+        "UPDATE integration_jobs SET content_path = $2
+         WHERE import_job_id = $1 AND content_path IS DISTINCT FROM $2",
+    )
+    .bind(import_id)
+    .bind(content_path)
+    .execute(pool)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(())
+}
