@@ -2,6 +2,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
+  import { bestMatchLabel } from '$lib/identification';
   import { apiFetch } from '$lib/session';
   import { onMount } from 'svelte';
   import {
@@ -78,6 +79,7 @@
           <th scope="col">Size</th>
           <th scope="col">Files</th>
           <th scope="col">Validation</th>
+          <th scope="col">Identified as</th>
         </tr>
       </thead>
       <tbody>
@@ -100,6 +102,17 @@
                 <!-- Damage found by an integrity check outranks how the
                      bytes looked when they arrived, so it is said here. -->
                 <br /><strong><span aria-hidden="true">✕</span> Damaged</strong>
+              {/if}
+            </td>
+            <td>
+              {#if artifact.best_match}
+                <!-- The DAT is named in the title as well as the cell, so the
+                     column stays short. -->
+                <span title={`In ${artifact.best_match.dat_name}`}
+                  >{bestMatchLabel(artifact.best_match)}</span
+                >
+              {:else}
+                <span class="none">Not identified</span>
               {/if}
             </td>
           </tr>
@@ -125,6 +138,9 @@
     text-align: left;
     padding: 0.5rem;
     border-bottom: 1px solid currentColor;
+  }
+  .none {
+    opacity: 0.75;
   }
   .visually-hidden {
     position: absolute;

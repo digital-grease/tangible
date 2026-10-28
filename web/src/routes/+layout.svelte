@@ -140,6 +140,11 @@
             >
           </li>
           <li>
+            <a href="/dats" aria-current={page.url.pathname === '/dats' ? 'page' : undefined}
+              >DATs</a
+            >
+          </li>
+          <li>
             <a
               href="/diagnostics"
               aria-current={page.url.pathname === '/diagnostics' ? 'page' : undefined}

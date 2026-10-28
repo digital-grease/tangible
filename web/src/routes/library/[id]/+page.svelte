@@ -3,6 +3,7 @@
 <script lang="ts">
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import FormatReport from '$lib/components/FormatReport.svelte';
+  import Identification from '$lib/components/Identification.svelte';
   import Integrity from '$lib/components/Integrity.svelte';
   import { onMount } from 'svelte';
   import Lineage from '$lib/components/Lineage.svelte';
@@ -109,6 +110,8 @@
       checkedAt={view.data.integrity_checked_at}
       onchecked={reload}
     />
+
+    <Identification artifactId={view.data.id} />
 
     {#if view.data.ripped}
       {@const ripped = view.data.ripped}

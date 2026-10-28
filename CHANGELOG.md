@@ -8,6 +8,14 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
+- The web UI shows what identifies an artifact: its page has an
+  Identification section naming each game of a loaded DAT it matches, in
+  words ("Matches Game (USA), all 2 of its files", "Partly matches...: 1 of
+  2 files"), which track or file matched each of the game's files, and its
+  preservation hashes folded away, with "Hash again" for operators. The
+  library list has an "Identified as" column. Administrators have a DATs
+  page to load a DAT from a file, see what each identifies, and remove one
+  after confirming.
 - DAT matching: an administrator loads a Logiqx XML DAT, such as Redump's
   or No-Intro's (`POST /api/v1/dats`, the XML as the body, up to 64 MiB;
   `GET /api/v1/dats`; `DELETE /api/v1/dats/{id}`; new permission
