@@ -206,7 +206,7 @@ async fn an_issued_token_enrolls_a_worker_once() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
-async fn enrollment_under_a_name_stops_after_five_rejected_tokens() {
+async fn enrollment_under_a_name_refuses_bad_tokens_after_five_and_still_takes_a_good_one() {
     let harness = harness().await;
     let name = format!("guessed-worker-{}", uuid::Uuid::now_v7());
     let attempt = |token: String| {
@@ -227,23 +227,23 @@ async fn enrollment_under_a_name_stops_after_five_rejected_tokens() {
             .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
     }
-    // Even a good token is refused under that name until the window passes,
-    // without being used up.
-    let token = issue_token(&harness.pool).await;
+    // Past the limit, another bad token is answered 429...
     let (status, body) = harness
         .post(
             "/api/v1/worker-enrollments/consume",
             None,
-            attempt(token.clone()),
+            attempt("tgw_enroll_not-a-real-token-again".to_owned()),
         )
         .await;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
     assert_eq!(body["code"], "RATE_LIMITED");
-    assert_eq!(
-        consume(&harness, &token).await,
-        StatusCode::OK,
-        "another name may use it"
-    );
+    // ...and a good one still enrolls, so bad tokens cannot lock out a
+    // worker that has a real one.
+    let token = issue_token(&harness.pool).await;
+    let (status, body) = harness
+        .post("/api/v1/worker-enrollments/consume", None, attempt(token))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
 }
 
 #[tokio::test]

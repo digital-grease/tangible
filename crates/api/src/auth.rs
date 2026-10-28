@@ -988,9 +988,11 @@ pub const ENROLLMENT_WINDOW: Duration = Duration::from_secs(15 * 60);
 /// Limits worker enrollment (AGENTS.md 16), which is unauthenticated: the
 /// one-use token is the credential. Rejected tokens are counted per worker
 /// name, as sign-in counts per username, and in all, so a flood that varies
-/// the name still stops. Tokens are long and random, so this bounds the
-/// load and the log rather than guessing; the address a request came from
-/// is not used, since behind a reverse proxy it is the proxy's.
+/// the name still stops. Tokens are long and random, so this quiets the
+/// log and turns a misconfigured worker away rather than stopping guesses;
+/// a valid token enrolls whatever the count, so nobody can lock enrollment
+/// out. The address a request came from is not used, since behind a
+/// reverse proxy it is the proxy's.
 #[derive(Debug, Clone)]
 pub struct EnrollmentLimiter {
     per_name: LoginLimiter,

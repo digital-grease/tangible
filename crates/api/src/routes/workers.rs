@@ -292,6 +292,21 @@ pub struct EnrollmentResponse {
     pub lease_duration_seconds: i64,
 }
 
+/// A 429 for rejected enrollment tokens past the limit.
+fn rate_limited(wait: std::time::Duration) -> axum::response::Response {
+    let mut response = Problem::new(
+        ErrorCode::RateLimited,
+        "too many rejected enrollment tokens; try again later",
+    )
+    .into_response();
+    if let Ok(value) = axum::http::HeaderValue::from_str(&wait.as_secs().max(1).to_string()) {
+        response
+            .headers_mut()
+            .insert(axum::http::header::RETRY_AFTER, value);
+    }
+    response
+}
+
 /// Exchange a one-use enrollment token for a worker credential.
 ///
 /// The only unauthenticated worker route: the token is the authentication.
@@ -301,8 +316,9 @@ pub struct EnrollmentResponse {
 /// `UNAUTHENTICATED` for any unusable token, deliberately without saying
 /// which way it was unusable, and `CONFLICT` if the name is taken. The token
 /// is settled first, so the two are never distinguishable by name.
-/// `RATE_LIMITED`, with `Retry-After`, after too many rejected tokens for
-/// the name or in all (`EnrollmentLimiter`).
+/// `RATE_LIMITED`, with `Retry-After`, for a rejected token after too many
+/// for the name or in all (`EnrollmentLimiter`); a valid token always
+/// enrolls.
 #[utoipa::path(
     post,
     path = "/api/v1/worker-enrollments/consume",
@@ -345,23 +361,10 @@ pub async fn consume_enrollment_token(
         .chars()
         .take(64)
         .collect();
-    if let Some(wait) = state.enrollment_limiter().retry_after(&limited_as) {
-        tracing::warn!(
-            wait_seconds = wait.as_secs(),
-            "enrollment refused: too many rejected tokens"
-        );
-        let mut response = Problem::new(
-            ErrorCode::RateLimited,
-            "too many rejected enrollment tokens; try again later",
-        )
-        .into_response();
-        if let Ok(value) = axum::http::HeaderValue::from_str(&wait.as_secs().max(1).to_string()) {
-            response
-                .headers_mut()
-                .insert(axum::http::header::RETRY_AFTER, value);
-        }
-        return Ok(response);
-    }
+    // Looked at before the token, applied only if the token is rejected: a
+    // valid token always enrolls, so nobody can lock enrollment out by
+    // sending bad tokens; past the limit, bad ones are answered 429.
+    let limited = state.enrollment_limiter().retry_after(&limited_as);
 
     let supplied = Secret::from_supplied(request.enrollment_token.expose());
     let credential = WorkerCredential::issue().map_err(|error| {
@@ -384,22 +387,41 @@ pub async fn consume_enrollment_token(
     .map_err(|error| {
         tracing::error!(error = ?error, "enrollment failed");
         unavailable("the enrollment could not be recorded")
-    })?
-    .map_err(|outcome| match outcome {
-        EnrollmentOutcome::TokenUnusable => {
+    })?;
+    let worker_id = match worker_id {
+        Ok(worker_id) => worker_id,
+        Err(EnrollmentOutcome::TokenUnusable) => {
+            if let Some(wait) = limited {
+                // Past the limit: answered without a log line each, which is
+                // what a flood would otherwise fill.
+                return Ok(rate_limited(wait));
+            }
             // One message whatever the reason. Distinguishing "already used"
             // from "unknown" would confirm a guessed token once existed.
             tracing::warn!("an enrollment token was rejected");
             state.enrollment_limiter().record_failure(&limited_as);
-            Problem::new(
+            if state
+                .enrollment_limiter()
+                .retry_after(&limited_as)
+                .is_some()
+            {
+                tracing::warn!(
+                    "too many rejected enrollment tokens; further rejections are answered 429 \
+                     until the window passes"
+                );
+            }
+            return Err(Problem::new(
                 ErrorCode::Unauthenticated,
                 "the enrollment token is not valid",
-            )
+            ));
         }
-        EnrollmentOutcome::NameTaken => {
-            Problem::new(ErrorCode::Conflict, "another worker already uses that name")
+        Err(EnrollmentOutcome::NameTaken) => {
+            return Err(Problem::new(
+                ErrorCode::Conflict,
+                "another worker already uses that name",
+            ));
         }
-    })?;
+    };
 
     tracing::info!(worker_id = %worker_id, name = %request.name, "worker enrolled");
 
