@@ -367,6 +367,14 @@ may change between minor versions, and the release notes say how.
 
 ### Fixed
 
+- A database connection can no longer be lent out still inside a
+  transaction. sqlx gave one back that way when a transaction's `BEGIN`
+  was cut short (a client that went away mid-request, a timeout), and every
+  statement run on it afterwards was silently never committed and held its
+  locks: an import could wait forever on a lock held by its own earlier
+  progress update. Each connection given back is now checked and, if inside
+  a transaction, closed, which rolls it back; and PostgreSQL ends any
+  transaction left idle for five minutes.
 - The account list is paged (`limit` and `cursor` on `GET /api/v1/users`,
   `next_cursor` in the answer), like every other list, rather than sent
   whole however many accounts there are. The Accounts page shows the first

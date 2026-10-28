@@ -92,6 +92,73 @@ pub struct Database {
     pool: PgPool,
 }
 
+/// How long the server lets a connection sit idle inside a transaction
+/// before ending it. No transaction here waits on anything but the database
+/// (AGENTS.md 8: none is held across a network call or a subprocess), so
+/// one idle this long has been abandoned, and ending it frees its locks.
+const IDLE_IN_TRANSACTION_TIMEOUT: &str = "300s";
+
+/// The connection settings. Statement logging is downgraded to trace so
+/// routine queries do not dominate normal logs and parameters stay out of
+/// info-level output: logs add context without leaking secrets.
+fn connect_options(config: &DbConfig) -> Result<PgConnectOptions, DbError> {
+    Ok(config
+        .url
+        .expose()
+        .parse::<PgConnectOptions>()
+        .map_err(DbError::InvalidUrl)?
+        .log_statements(tracing::log::LevelFilter::Trace)
+        .options([(
+            "idle_in_transaction_session_timeout",
+            IDLE_IN_TRANSACTION_TIMEOUT,
+        )]))
+}
+
+/// The pool settings, with a check of every connection given back.
+///
+/// sqlx 0.8 can give a connection back still inside a transaction: when a
+/// `begin()` is dropped after sending `BEGIN` and before its answer (a
+/// request whose client went away, a timeout), its guard rolls back only
+/// transactions it has counted, and it has not counted this one yet. Every
+/// statement the next borrower runs then joins that transaction, is never
+/// committed, and holds its row locks: an import runner once waited forever
+/// on a lock its own earlier, uncommitted progress update held. So each
+/// connection given back is asked whether it is in a transaction block, and
+/// one that is, is closed, which rolls the transaction back, rather than
+/// lent again.
+fn pool_options(config: &DbConfig) -> PgPoolOptions {
+    PgPoolOptions::new()
+        .max_connections(config.max_connections)
+        .acquire_timeout(config.acquire_timeout)
+        .after_release(|connection, _| {
+            Box::pin(async move {
+                let open = in_transaction_block(connection).await?;
+                if open {
+                    tracing::warn!(
+                        "a database connection was given back inside a transaction; \
+                         closing it, which rolls the transaction back"
+                    );
+                }
+                Ok(!open)
+            })
+        })
+}
+
+/// Whether `connection` is inside a transaction block. Outside one, a
+/// simple query is its own transaction, which starts when the statement
+/// does; inside one, the transaction started at an earlier statement,
+/// `BEGIN`. It has to be a simple query: under the extended protocol, which
+/// prepared statements use, the statement's time is reset at `Execute`,
+/// after `Parse` started the transaction, so the two never agree.
+async fn in_transaction_block(connection: &mut sqlx::PgConnection) -> Result<bool, sqlx::Error> {
+    use sqlx::{Executor as _, Row as _};
+    // A bare string, with no arguments, goes as a simple query.
+    connection
+        .fetch_one("SELECT transaction_timestamp() <> statement_timestamp()")
+        .await?
+        .try_get(0)
+}
+
 impl Database {
     /// Connect and establish the pool.
     ///
@@ -100,20 +167,8 @@ impl Database {
     /// Returns [`DbError::InvalidUrl`] if the URL cannot be parsed and
     /// [`DbError::Connect`] if no connection can be established in time.
     pub async fn connect(config: &DbConfig) -> Result<Self, DbError> {
-        // Statement logging is downgraded to trace so routine queries do not
-        // dominate normal logs and parameters stay out of info-level output:
-        // logs add context without leaking secrets.
-        let options: PgConnectOptions = config
-            .url
-            .expose()
-            .parse::<PgConnectOptions>()
-            .map_err(DbError::InvalidUrl)?
-            .log_statements(tracing::log::LevelFilter::Trace);
-
-        let pool = PgPoolOptions::new()
-            .max_connections(config.max_connections)
-            .acquire_timeout(config.acquire_timeout)
-            .connect_with(options)
+        let pool = pool_options(config)
+            .connect_with(connect_options(config)?)
             .await
             .map_err(DbError::Connect)?;
 
@@ -132,17 +187,7 @@ impl Database {
     ///
     /// Returns [`DbError::InvalidUrl`] if the URL cannot be parsed.
     pub fn connect_lazy(config: &DbConfig) -> Result<Self, DbError> {
-        let options: PgConnectOptions = config
-            .url
-            .expose()
-            .parse::<PgConnectOptions>()
-            .map_err(DbError::InvalidUrl)?
-            .log_statements(tracing::log::LevelFilter::Trace);
-
-        let pool = PgPoolOptions::new()
-            .max_connections(config.max_connections)
-            .acquire_timeout(config.acquire_timeout)
-            .connect_lazy_with(options);
+        let pool = pool_options(config).connect_lazy_with(connect_options(config)?);
 
         Ok(Self { pool })
     }
