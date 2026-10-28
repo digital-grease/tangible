@@ -47,9 +47,43 @@ export function transformationLabel(transformation: string): string {
       return 'CHD of a DVD';
     case 'decrypt_css':
       return 'Decrypted copy of a DVD, made as it was ripped';
+    case 'cue_bin_from_ccd':
+      return 'CUE/BIN of a CloneCD image';
     default:
       return transformation;
   }
+}
+
+/** How the page offers the derivative that suits an artifact. */
+export type DerivativeOffer = {
+  /** The button. */
+  action: string;
+  /** What it makes, and what it costs. */
+  explanation: string;
+  /** What to say when it was made already. */
+  exists: string;
+};
+
+/** The offer for a suggested transformation. */
+export function derivativeOffer(transformation: string): DerivativeOffer {
+  if (transformation === 'cue_bin_from_ccd') {
+    return {
+      action: 'Make a CUE/BIN',
+      explanation:
+        'Makes a CUE/BIN of this CloneCD image, which can be burned, made into a CHD and sent ' +
+        'to RomM. It drops the subchannel and the raw table of contents, and says so. The BIN ' +
+        'is the same stored bytes as the IMG, so no space is used, and the original is not ' +
+        'changed.',
+      exists: 'A CUE/BIN of this already exists.',
+    };
+  }
+  return {
+    action: 'Make a CHD',
+    explanation:
+      'Makes a new, compressed copy that RomM and its emulators read. The original is not ' +
+      'changed. The copy is kept only if it extracts back identical to this one, track by track.',
+    exists: 'A CHD of this already exists.',
+  };
 }
 
 /**

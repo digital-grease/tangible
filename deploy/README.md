@@ -297,8 +297,10 @@ the CHD, briefly. Set `TANGIBLE_DERIVATION_ENGINE=none` to turn CHDs off.
 chdman does not read CloneCD (CCD/IMG/SUB) images, Tangible's burners do not
 write their subchannel, and not every emulator reads them. So for a CloneCD
 image the derivative offered is a CUE/BIN, made by Tangible itself whatever
-`TANGIBLE_DERIVATION_ENGINE` says (the same request, with
-`{"transformation": "cue_bin_from_ccd"}` or nothing for a CloneCD image).
+`TANGIBLE_DERIVATION_ENGINE` says: "Make a CUE/BIN" on its page in the
+library (or the same request, with `{"transformation": "cue_bin_from_ccd"}`
+or nothing for a CloneCD image). Its page says it is not burned as it is,
+and why, instead of offering a burn.
 The sheet is written from the image's tracks and read back to check it
 says the same; the BIN is the IMG, the same stored bytes, so nothing is
 copied and no extra space is used.

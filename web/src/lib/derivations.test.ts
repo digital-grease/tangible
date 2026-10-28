@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  derivativeOffer,
   isChecked,
   isOpen,
   jobStateLabel,
@@ -74,5 +75,22 @@ describe('derivatives', () => {
       body: {},
     });
     expect(result.kind).toBe('ok');
+  });
+});
+
+describe('what is offered', () => {
+  it('names the CUE/BIN of a CloneCD image and says what it drops', () => {
+    expect(transformationLabel('cue_bin_from_ccd')).toBe('CUE/BIN of a CloneCD image');
+    const offer = derivativeOffer('cue_bin_from_ccd');
+    expect(offer.action).toBe('Make a CUE/BIN');
+    expect(offer.explanation).toContain('drops the subchannel');
+    expect(offer.exists).toBe('A CUE/BIN of this already exists.');
+  });
+
+  it('offers a CHD for everything else', () => {
+    for (const transformation of ['chd_create_cd', 'chd_create_dvd']) {
+      expect(derivativeOffer(transformation).action).toBe('Make a CHD');
+    }
+    expect(derivativeOffer('chd_create_cd').exists).toBe('A CHD of this already exists.');
   });
 });

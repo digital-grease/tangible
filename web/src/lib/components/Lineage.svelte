@@ -6,6 +6,7 @@
     isOpen,
     jobStateLabel,
     loadDerivationJob,
+    derivativeOffer,
     loadLineage,
     lossLabel,
     requestDerivative,
@@ -56,7 +57,11 @@
     }, 3000);
   }
 
-  async function makeChd() {
+  const offer = $derived(
+    lineage?.suggested_transformation ? derivativeOffer(lineage.suggested_transformation) : null,
+  );
+
+  async function makeDerivative() {
     if (asking) return;
     asking = true;
     askProblem = null;
@@ -67,7 +72,7 @@
       return;
     }
     if (result.data.result === 'exists') {
-      status = 'A CHD of this already exists.';
+      status = offer?.exists ?? 'It already exists.';
     } else if (result.data.job) {
       status = `${transformationLabel(result.data.job.transformation)}: ${jobStateLabel(result.data.job)}`;
       follow(artifactId, result.data.job.id);
@@ -120,16 +125,13 @@
       </ul>
     {/if}
 
-    {#if lineage.suggested_transformation}
+    {#if offer}
       <p>
-        <button type="button" onclick={makeChd} disabled={asking}>
-          {asking ? 'Asking…' : 'Make a CHD'}
+        <button type="button" onclick={makeDerivative} disabled={asking}>
+          {asking ? 'Asking…' : offer.action}
         </button>
         <br />
-        <small
-          >Makes a new, compressed copy that RomM and its emulators read. The original is not
-          changed. The copy is kept only if it extracts back identical to this one, track by track.</small
-        >
+        <small>{offer.explanation}</small>
       </p>
     {/if}
     <div role="alert">

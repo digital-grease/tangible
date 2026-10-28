@@ -29,6 +29,10 @@ may change between minor versions, and the release notes say how.
   tool `tangible` for it; database migration 0023 widens their
   transformation constraint, additively. A server without chdman still runs
   derivations, offering only what it can make.
+- The web UI names CloneCD images ("CloneCD (CCD/IMG/SUB)"), offers "Make a
+  CUE/BIN" on a CloneCD image's page, saying it drops the subchannel, and in
+  place of "Create burn job" on an image that keeps a subchannel says why it
+  is not burned as it is and what to burn instead.
 - Integrity checks: an artifact's stored bytes can be read back and
   compared with the digests recorded for them
   (`POST /api/v1/artifacts/{id}/validate`, operators), and so can the whole

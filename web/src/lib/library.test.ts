@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatBytes,
   formatLabel,
+  keepsSubchannel,
   loadArtifact,
   loadLibrary,
   validationLabel,
@@ -192,6 +193,7 @@ describe('labels', () => {
     expect(formatLabel('iso')).toBe('ISO');
     expect(formatLabel('cue_bin')).toBe('CUE/BIN');
     expect(formatLabel('unknown')).toBe('Unrecognised');
+    expect(formatLabel('ccd_img_sub')).toBe('CloneCD (CCD/IMG/SUB)');
   });
 });
 
@@ -240,5 +242,26 @@ describe('describing a disc', () => {
         catalog: '1234567890123',
       } as DiscLayout),
     ).toBe('1 track in 2 sessions, catalogue number 1234567890123.');
+  });
+});
+
+describe('subchannel', () => {
+  const component = (role: string) => ({
+    id: role,
+    logical_path: `disc.${role}`,
+    role,
+    length_bytes: 1,
+    sha256: 'a'.repeat(64),
+  });
+
+  it('is kept only by an artifact with a subchannel component', () => {
+    expect(
+      keepsSubchannel({
+        components: [component('descriptor'), component('track_data'), component('subchannel')],
+      } as never),
+    ).toBe(true);
+    expect(
+      keepsSubchannel({ components: [component('descriptor'), component('track_data')] } as never),
+    ).toBe(false);
   });
 });

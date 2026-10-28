@@ -157,7 +157,7 @@ export function formatLabel(format: string): string {
     case 'toc_bin':
       return 'TOC/BIN';
     case 'ccd_img_sub':
-      return 'CCD/IMG/SUB';
+      return 'CloneCD (CCD/IMG/SUB)';
     case 'mds_mdf':
       return 'MDS/MDF';
     case 'chd':
@@ -173,6 +173,14 @@ export function formatLabel(format: string): string {
     default:
       return format;
   }
+}
+
+/**
+ * Whether an artifact keeps a disc's subchannel, which no burner here
+ * writes: it is not burned as it is (docs/plans/ccd-images.md).
+ */
+export function keepsSubchannel(detail: Pick<ArtifactDetail, 'components'>): boolean {
+  return detail.components.some((component) => component.role === 'subchannel');
 }
 
 export type DiscLayout = components['schemas']['DiscLayout'];

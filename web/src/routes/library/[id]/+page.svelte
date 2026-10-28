@@ -12,6 +12,7 @@
     discSummary,
     formatBytes,
     formatLabel,
+    keepsSubchannel,
     loadArtifact,
     msf,
     trackDetails,
@@ -259,10 +260,18 @@
         Target compatibility unknown. Structural validity does not establish that a written disc
         will be accepted by any particular player, console or drive.
       </p>
-      <p>
-        <a href={`/burns/new?artifact=${view.data.id}`}>Create burn job</a>
-        — queues a burn. Nothing is written until a worker claims it and its preflight passes.
-      </p>
+      {#if keepsSubchannel(view.data)}
+        <p role="note">
+          <strong>Not burned as it is.</strong> This image keeps the disc's subchannel, which Tangible
+          cannot write, so a disc burned from it would not be this image. Make a CUE/BIN of it under Derivatives,
+          which drops the subchannel and says so, and burn that.
+        </p>
+      {:else}
+        <p>
+          <a href={`/burns/new?artifact=${view.data.id}`}>Create burn job</a>
+          — queues a burn. Nothing is written until a worker claims it and its preflight passes.
+        </p>
+      {/if}
     </section>
 
     <section aria-labelledby="manifest-heading">
