@@ -89,6 +89,74 @@ logs a warning at every start, because passwords and session cookies then cross
 the network unencrypted. Put HTTPS in front of Tangible before exposing it to
 any network you do not trust.
 
+## Signing in through an identity provider
+
+Tangible can let people sign in through an OpenID Connect provider you
+already run, such as VoidAuth, Authentik, Keycloak or Authelia: one sign-in,
+the provider's MFA, and accounts switched off in one place. It is off until
+you set it up, and local passwords keep working beside it.
+
+At the provider, register Tangible as an OIDC client:
+
+- a confidential client, authorization code flow, with PKCE (S256);
+- the redirect, or callback, URL `<TANGIBLE_PUBLIC_URL>/api/v1/session/oidc/callback`,
+  exactly, for example `https://tangible.example.lan/api/v1/session/oidc/callback`;
+- scopes `openid profile email`, and whatever the provider needs to put
+  each person's groups in the ID token (often a `groups` scope);
+- the ID token carrying a groups claim: a list of the person's group names.
+
+Keep the client secret it gives you in a file, readable only by the
+server's user, as the integration key is:
+
+```bash
+mkdir -p deploy/secrets
+umask 077
+# Paste the client secret, then Ctrl-D.
+cat > deploy/secrets/tangible-oidc-client-secret
+chmod 0400 deploy/secrets/tangible-oidc-client-secret
+sudo chown 10001 deploy/secrets/tangible-oidc-client-secret
+```
+
+Uncomment `TANGIBLE_OIDC_CLIENT_SECRET_FILE` and the
+`tangible-oidc-client-secret` secret lines in `compose.yaml`, then in `.env`:
+
+```bash
+TANGIBLE_OIDC_ISSUER=https://auth.example.lan
+TANGIBLE_OIDC_CLIENT_ID=tangible
+TANGIBLE_OIDC_DISPLAY_NAME=VoidAuth
+TANGIBLE_OIDC_ADMIN_GROUPS=tangible-admins
+TANGIBLE_OIDC_OPERATOR_GROUPS=tangible-operators
+TANGIBLE_OIDC_VIEWER_GROUPS=family
+```
+
+and restart the server. The sign-in page then offers "Sign in with
+VoidAuth".
+
+- **Roles come from groups**, the highest that matches, read again at every
+  sign-in, so adding someone to a group at the provider takes effect the
+  next time they sign in. **Someone in none of the mapped groups is
+  refused**, not given an account. The groups claim is `groups` unless
+  `TANGIBLE_OIDC_GROUPS_CLAIM` names another, and the scopes asked for are
+  `TANGIBLE_OIDC_SCOPES` (default `openid profile email groups`).
+- **An account is the provider's person, not a name.** The first sign-in
+  makes an account named after the provider's username (with a number
+  after it if a local account already has the name); later ones find it by
+  the provider's identifier for the person. It has no password.
+- **Passwords stay.** With `TANGIBLE_PASSWORD_SIGN_IN=setup-only`, only the
+  administrator setup made can sign in with a password, for when the
+  provider is down; everyone else signs in through it.
+- **Tangible reaches the provider from the server**, for its discovery
+  document, keys and token exchange, held to the same policy as an
+  integration's address: private networks allowed, this machine not. The
+  provider is looked up at the first sign-in, so Tangible starts whether
+  or not it is up.
+- A sign-in that does not work comes back to the sign-in page saying why
+  (no mapped group, account disabled, expired, the provider unreachable or
+  its answer not trusted), is audited, and the server log says more.
+  Diagnostics shows the provider's host, how many groups are mapped, and
+  who may use a password.
+
+
 ## Adding a real drive
 
 Hardware is opt-in and deliberately separate, so no default or development

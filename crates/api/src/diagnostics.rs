@@ -190,6 +190,20 @@ pub struct DiagnosticsSettings {
     /// Whether metrics are served (`TANGIBLE_METRICS_BIND`), and if so
     /// whether a scrape needs a token (`TANGIBLE_METRICS_TOKEN_FILE`).
     pub metrics: MetricsSetting,
+    /// How people sign in (ADR 0018).
+    pub sign_in: SignInSetting,
+}
+
+/// How people sign in, as diagnostics reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SignInSetting {
+    /// The identity provider's host, when one is configured. The host
+    /// only: a report may be shared.
+    pub provider_host: Option<String>,
+    /// How many groups are mapped to a role.
+    pub mapped_groups: usize,
+    /// Whether only the accounts setup made may sign in by password.
+    pub passwords_for_setup_only: bool,
 }
 
 /// How metrics are served.
@@ -602,6 +616,40 @@ fn integrity_check(
         }
     }
     check("Integrity", status, parts.join("; "))
+}
+
+/// How people sign in: by password, through a provider, or both.
+fn sign_in_check(sign_in: &SignInSetting) -> DiagnosticCheck {
+    let passwords = if sign_in.passwords_for_setup_only {
+        "passwords only for the accounts setup made"
+    } else {
+        "by password"
+    };
+    match &sign_in.provider_host {
+        None if sign_in.passwords_for_setup_only => check(
+            "Sign-in",
+            CheckStatus::Warn,
+            "passwords only for the accounts setup made, and no identity provider: nobody else \
+             can sign in (TANGIBLE_OIDC_ISSUER)",
+        ),
+        None => check("Sign-in", CheckStatus::Ok, "by password"),
+        Some(host) if sign_in.mapped_groups == 0 => check(
+            "Sign-in",
+            CheckStatus::Warn,
+            format!(
+                "through {host}, with no group mapped to a role, so nobody signs in through \
+                 it; and {passwords}"
+            ),
+        ),
+        Some(host) => check(
+            "Sign-in",
+            CheckStatus::Ok,
+            format!(
+                "through {host} ({} group(s) mapped to roles), and {passwords}",
+                sign_in.mapped_groups
+            ),
+        ),
+    }
 }
 
 /// Preservation hashes and DATs: how far hashing has got, whether any
@@ -1076,6 +1124,7 @@ fn setting_checks(settings: &DiagnosticsSettings) -> Vec<DiagnosticCheck> {
                 (true, false) => "offered, with addresses kept",
             },
         ),
+        sign_in_check(&settings.sign_in),
         match settings.metrics {
             MetricsSetting::Off => check("Metrics", CheckStatus::Ok, "off"),
             MetricsSetting::BehindToken => {
@@ -1363,6 +1412,7 @@ mod tests {
             removable_roots: Vec::new(),
             preservation_hashes: true,
             metrics: MetricsSetting::Off,
+            sign_in: SignInSetting::default(),
         }
     }
 
@@ -2035,6 +2085,41 @@ mod tests {
             line.detail
         );
         assert!(line.detail.ends_with("no DATs loaded"), "{}", line.detail);
+    }
+
+    #[test]
+    fn sign_in_says_how_and_warns_when_nobody_could() {
+        let facts = healthy();
+        let mut settings = settings();
+        assert_eq!(
+            find(&assess(&settings, &facts, now()), "Sign-in").detail,
+            "by password"
+        );
+        settings.sign_in = SignInSetting {
+            provider_host: Some("auth.example.lan".to_owned()),
+            mapped_groups: 2,
+            passwords_for_setup_only: true,
+        };
+        let line = find(&assess(&settings, &facts, now()), "Sign-in").clone();
+        assert_eq!(line.status, CheckStatus::Ok);
+        assert_eq!(
+            line.detail,
+            "through auth.example.lan (2 group(s) mapped to roles), and passwords only for the \
+             accounts setup made"
+        );
+        settings.sign_in.mapped_groups = 0;
+        assert_eq!(
+            find(&assess(&settings, &facts, now()), "Sign-in").status,
+            CheckStatus::Warn
+        );
+        settings.sign_in = SignInSetting {
+            passwords_for_setup_only: true,
+            ..SignInSetting::default()
+        };
+        assert_eq!(
+            find(&assess(&settings, &facts, now()), "Sign-in").status,
+            CheckStatus::Warn
+        );
     }
 
     #[test]

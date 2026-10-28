@@ -63,6 +63,7 @@ fn settings(root: &Path, reports: ReportSettings) -> DiagnosticsSettings {
         removable_roots: Vec::new(),
         preservation_hashes: true,
         metrics: tangible_api::diagnostics::MetricsSetting::Off,
+        sign_in: tangible_api::diagnostics::SignInSetting::default(),
     }
 }
 

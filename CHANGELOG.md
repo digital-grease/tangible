@@ -8,6 +8,19 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
+- Signing in through an OpenID Connect provider, such as VoidAuth (ADR
+  0018): authorization code flow with PKCE, ID tokens checked for
+  signature, issuer, audience, expiry and nonce, and each sign-in bound to
+  the browser that started it. Roles come from the provider's groups,
+  mapped by `TANGIBLE_OIDC_ADMIN_GROUPS`, `_OPERATOR_GROUPS` and
+  `_VIEWER_GROUPS` and read at every sign-in; someone in no mapped group is
+  refused. Accounts are the provider's person (issuer and subject), never a
+  name. Configured with `TANGIBLE_OIDC_ISSUER`, `_CLIENT_ID` and
+  `_CLIENT_SECRET_FILE`. `TANGIBLE_PASSWORD_SIGN_IN=setup-only` leaves
+  passwords only to the administrator setup made. The sign-in page offers
+  the provider and says why a sign-in failed; the Accounts page says how
+  each account signs in; Diagnostics reports it. Database migration 0026
+  adds two tables and makes the password optional for provider accounts.
 - Diagnostics (the page and `tangible doctor --report`) says how far
   preservation hashing has got, warns of artifacts left failed, counts the
   DATs loaded, and says whether metrics are served and behind a token,

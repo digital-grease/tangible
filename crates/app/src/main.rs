@@ -843,6 +843,15 @@ fn diagnostics_settings(
             (Some(_), true) => tangible_api::diagnostics::MetricsSetting::BehindToken,
             (Some(_), false) => tangible_api::diagnostics::MetricsSetting::Open,
         },
+        sign_in: tangible_api::diagnostics::SignInSetting {
+            provider_host: given(serve.oidc_issuer.as_ref())
+                .and_then(|issuer| url::Url::parse(issuer).ok())
+                .and_then(|issuer| issuer.host_str().map(ToOwned::to_owned)),
+            mapped_groups: list(&serve.oidc_admin_groups).len()
+                + list(&serve.oidc_operator_groups).len()
+                + list(&serve.oidc_viewer_groups).len(),
+            passwords_for_setup_only: serve.password_sign_in == PasswordSignInKind::SetupOnly,
+        },
     }
 }
 
