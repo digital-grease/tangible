@@ -200,7 +200,10 @@ RomM's folder bind-mounted, as above, they are copied, so allow the space.
 For each disc the export takes a checked CHD when the disc has one (see
 "Making CHDs"), otherwise its ISO or CUE/BIN. A disc imported only as a cdrdao
 TOC reaches RomM through its CHD, since RomM's emulators do not read TOC
-files. A CHD that was not checked against its original is never exported.
+files. A CloneCD (CCD/IMG/SUB) image is not exported as it is either, since
+not every emulator reads one; its disc reaches RomM through a CUE/BIN or CHD
+made from it. A CHD that was not checked against its original is never
+exported.
 
 ### Connecting to RomM's API
 

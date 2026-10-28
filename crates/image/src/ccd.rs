@@ -77,6 +77,10 @@ pub const SECTOR_BYTES: u64 = 2352;
 /// Bytes of subchannel per sector in the SUB.
 pub const SUBCHANNEL_BYTES: u64 = 96;
 
+/// How a manifest names the SUB's layout: 96 bytes a sector, the P to W
+/// channels each 12 bytes in turn, not interleaved.
+pub const SUBCHANNEL_REPRESENTATION: &str = "pw96_linear";
+
 /// The last LBA a CD can address: 99 minutes, 59 seconds, 74 frames.
 const MAX_LBA: u64 = 99 * 60 * 75 + 59 * 75 + 74;
 
@@ -1366,6 +1370,47 @@ mod tests {
         assert_eq!(tracks[2].flags, [TrackFlag::DigitalCopyPermitted]);
         assert!(tracks[0].flags.is_empty());
         assert_eq!(laid.layout.total_sectors(), 750);
+    }
+
+    /// GNU ccd2cue's sheet for a fixture, laid out by the CUE parser over an
+    /// image of `sectors`.
+    fn ccd2cue(name: &str, sectors: u64) -> CdLayout {
+        let text = std::fs::read(format!(
+            "{}/../../fixtures/tool-output/ccd2cue/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let sheet = crate::cue::parse(&text).unwrap();
+        crate::cue::layout(&sheet, &[sectors * SECTOR_BYTES]).unwrap()
+    }
+
+    #[test]
+    fn an_independent_reader_lays_the_fixtures_out_the_same() {
+        for (name, count) in [("data-only", 300), ("mixed-mode", 750)] {
+            let document = parse(&fixture(&format!("{name}.ccd"))).unwrap();
+            let (img, sub) = whole(count);
+            let ours = layout(&document, img, sub, &mut sectors(&[0]))
+                .unwrap()
+                .layout;
+            let theirs = ccd2cue(&format!("{name}.cue"), count);
+            assert_eq!(ours.catalog, theirs.catalog, "{name}");
+            assert_eq!(ours.tracks.len(), theirs.tracks.len(), "{name}");
+            for (ours, theirs) in ours.tracks.iter().zip(&theirs.tracks) {
+                let shape = |t: &TrackLayout| {
+                    (
+                        t.number,
+                        t.mode.clone(),
+                        t.file_offset_bytes,
+                        t.start_lba,
+                        t.sector_count,
+                        t.pregap_sectors,
+                        t.indexes.clone(),
+                        t.isrc.clone(),
+                    )
+                };
+                assert_eq!(shape(ours), shape(theirs), "{name} track {}", ours.number);
+            }
+        }
     }
 
     #[test]

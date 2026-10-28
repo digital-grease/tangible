@@ -8,6 +8,17 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
+- CloneCD images (CCD/IMG/SUB) are recognised and imported as one artifact:
+  the `.ccd` is read with a bounded parser (no published specification
+  exists; it follows CloneCD's open-source readers), the IMG and SUB are
+  found by its name, each track's mode is read from the image itself, and a
+  single-session image's tracks are laid out as a CUE sheet's are. The SUB
+  is kept as a `subchannel` component and the manifest says how it is
+  stored (`pw96_linear`). A multi-session or scrambled image is imported
+  whole without a layout. An image that keeps a subchannel is refused for
+  burning, since no engine writes one; and a disc linked only to a CloneCD
+  image says what to make of it before RomM gets it. Fuzzed, and checked
+  against GNU ccd2cue.
 - Integrity checks: an artifact's stored bytes can be read back and
   compared with the digests recorded for them
   (`POST /api/v1/artifacts/{id}/validate`, operators), and so can the whole

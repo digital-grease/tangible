@@ -42,7 +42,7 @@ use tangible_domain::{
     ArtifactId, ComponentId, ImportJobId, ImportState, ImportTransitionError, LogicalPath,
     Sha256Digest,
 };
-use tangible_image::{cue, iso, toc, video_ts};
+use tangible_image::{ccd, cue, iso, toc, video_ts};
 use tangible_storage::{
     FilesystemStore, IngestLimits, ManifestStore, ManifestStoreError, StagingArea, StagingError,
     StagingKind, StagingManager, StorageError,
@@ -343,7 +343,7 @@ impl ImportPipeline {
     ) -> Result<Detection, ImportError> {
         let descriptors: Vec<&LogicalPath> = staged
             .iter()
-            .filter(|path| matches!(path.extension().as_deref(), Some("cue" | "toc")))
+            .filter(|path| matches!(path.extension().as_deref(), Some("cue" | "toc" | "ccd")))
             .collect();
 
         match descriptors.as_slice() {
@@ -351,6 +351,13 @@ impl ImportPipeline {
                 Some(detection) => Ok(detection),
                 None => self.inspect_iso(area, staged, request).await,
             },
+            [only] if only.extension().as_deref() == Some("ccd") => {
+                match self.inspect_ccd(area, staged, only, checkpoint).await? {
+                    Some(detection) => Ok(detection),
+                    // Named `.ccd` and not one: imported, not claimed.
+                    None => self.inspect_iso(area, staged, request).await,
+                }
+            }
             [only] if only.extension().as_deref() == Some("toc") => {
                 match self.inspect_toc(area, staged, only, checkpoint).await? {
                     Some(detection) => Ok(detection),
@@ -548,6 +555,94 @@ impl ImportPipeline {
         Ok(Some(detection))
     }
 
+    /// Read a CloneCD descriptor and lay out its tracks over the image beside
+    /// it (docs/plans/ccd-images.md).
+    ///
+    /// The image and subchannel are found by the descriptor's own name among
+    /// what was staged, never by anything its text says. Each track's mode is
+    /// read from its first sector in the staged image, which CloneCD's own
+    /// descriptors sometimes get wrong.
+    async fn inspect_ccd(
+        &self,
+        area: &StagingArea,
+        staged: &[LogicalPath],
+        descriptor: &LogicalPath,
+        checkpoint: &ImportCheckpoint,
+    ) -> Result<Option<Detection>, ImportError> {
+        let resolved = area.resolve(descriptor).await?;
+        let bytes = read_prefix(&resolved, ccd::MAX_CCD_BYTES + 1)
+            .await
+            .map_err(|source| ImportError::ReadStaged {
+                path: descriptor.to_string(),
+                source,
+            })?;
+        let Ok(document) = ccd::parse(&bytes) else {
+            return Ok(None);
+        };
+
+        let mut detection = Detection::plain(ArtifactFormat::CcdImgSub, document.confidence);
+        detection.descriptor = Some(descriptor.clone());
+        detection.evidence.clone_from(&document.evidence);
+        detection.warnings = document.warnings.iter().map(ToString::to_string).collect();
+
+        let Some((img_name, sub_name)) = ccd::companion_names(descriptor.as_str()) else {
+            return Ok(Some(detection));
+        };
+        let Some(img) = companion(staged, &img_name, &mut detection.warnings) else {
+            detection.warnings.push(format!(
+                "there is no {img_name} beside the descriptor, so no tracks were laid out"
+            ));
+            return Ok(Some(detection));
+        };
+        // Recorded as subchannel data whether or not the tracks lay out: it
+        // is what makes the image one that cannot be burned as it is.
+        detection.subchannel_file = companion(staged, &sub_name, &mut detection.warnings);
+        let size = |path: &LogicalPath| {
+            checkpoint
+                .promoted
+                .get(path.as_str())
+                .map_or(0, |promoted| promoted.length_bytes)
+        };
+        let img_bytes = size(&img);
+        let sub_bytes = detection.subchannel_file.as_ref().map(size);
+        let image = area.resolve(&img).await?;
+        let laid = tokio::task::spawn_blocking(move || {
+            let mut file = std::fs::File::open(&image).ok();
+            let mut header = |sector: u64| sector_header(file.as_mut()?, sector);
+            ccd::layout(&document, img_bytes, sub_bytes, &mut header)
+        })
+        .await;
+
+        match laid {
+            Ok(Ok(laid)) => {
+                detection
+                    .warnings
+                    .extend(laid.warnings.iter().map(ToString::to_string));
+                detection.evidence.push(format!(
+                    "{} track(s) over {} sectors{}",
+                    laid.layout.tracks.len(),
+                    laid.layout.total_sectors(),
+                    if laid.subchannel {
+                        ", with subchannel"
+                    } else {
+                        ""
+                    }
+                ));
+                detection.confidence = 0.99;
+                detection.subchannel_laid = laid.subchannel;
+                detection.layout = Some(laid.layout);
+                detection.track_files = vec![img];
+            }
+            Ok(Err(error)) => detection
+                .warnings
+                .push(format!("the tracks could not be laid out: {error}")),
+            Err(_) => detection
+                .warnings
+                .push("the tracks could not be laid out: reading the image stopped".to_owned()),
+        }
+        Ok(Some(detection))
+    }
+
     /// Read enough of the primary component to classify it.
     async fn inspect_iso(
         &self,
@@ -628,6 +723,8 @@ impl ImportPipeline {
             descriptor: None,
             track_files: Vec::new(),
             layout: None,
+            subchannel_file: None,
+            subchannel_laid: false,
             tree: None,
         })
     }
@@ -742,6 +839,8 @@ impl ImportPipeline {
                 source_filename: request.source_filename.clone(),
                 role: if detection.descriptor.as_ref() == Some(path) {
                     ComponentRole::Descriptor
+                } else if detection.subchannel_file.as_ref() == Some(path) {
+                    ComponentRole::Subchannel
                 } else if detection.track_files.contains(path) {
                     ComponentRole::TrackData
                 } else if detection
@@ -838,11 +937,14 @@ impl ImportPipeline {
                 catalog: layout.catalog.clone(),
                 session_count: layout.session_count,
                 tracks,
-                // A CUE/BIN set carries no subchannel data. Formats that do
-                // are a separate descriptor and a separate detector.
+                // A CUE or TOC set carries no subchannel data; a CloneCD image
+                // may, 96 bytes a sector, the P to W channels each 12 bytes
+                // in turn.
                 subchannel: Some(Subchannel {
-                    present: false,
-                    representation: None,
+                    present: detection.subchannel_laid,
+                    representation: detection
+                        .subchannel_laid
+                        .then(|| ccd::SUBCHANNEL_REPRESENTATION.to_owned()),
                 }),
             };
         }
@@ -916,6 +1018,13 @@ impl ImportPipeline {
                 "toc-parser",
                 "toc-structural",
                 "TOC_STRUCTURAL_WARNING",
+                Some(MediaFamily::Cd),
+            ),
+            // So does a CloneCD descriptor.
+            ArtifactFormat::CcdImgSub => (
+                "ccd-parser",
+                "ccd-structural",
+                "CCD_STRUCTURAL_WARNING",
                 Some(MediaFamily::Cd),
             ),
             // VIDEO_TS is DVD-Video's own directory; nothing else uses it.
@@ -1049,6 +1158,11 @@ struct Detection {
     track_files: Vec<LogicalPath>,
     /// Track extents, when the descriptor could be laid out.
     layout: Option<cue::CdLayout>,
+    /// The subchannel file beside a CloneCD image, when there is one.
+    subchannel_file: Option<LogicalPath>,
+    /// Whether that subchannel was found to fit the layout, so the manifest
+    /// may say how it is stored.
+    subchannel_laid: bool,
     /// A directory tree such as `VIDEO_TS`, when the staged files are one.
     tree: Option<TreeDetection>,
 }
@@ -1079,9 +1193,38 @@ impl Detection {
             descriptor: None,
             track_files: Vec::new(),
             layout: None,
+            subchannel_file: None,
+            subchannel_laid: false,
             tree: None,
         }
     }
+}
+
+/// A file named `wanted` among what was staged: exactly, or failing that by
+/// the same name in another case, saying so.
+fn companion(
+    staged: &[LogicalPath],
+    wanted: &str,
+    warnings: &mut Vec<String>,
+) -> Option<LogicalPath> {
+    if let Some(exact) = staged.iter().find(|path| path.as_str() == wanted) {
+        return Some(exact.clone());
+    }
+    let near = staged
+        .iter()
+        .find(|path| path.as_str().eq_ignore_ascii_case(wanted))?;
+    warnings.push(format!("{wanted} was matched to {near} regardless of case"));
+    Some(near.clone())
+}
+
+/// The first bytes of an image's sector, for telling its mode.
+fn sector_header(file: &mut std::fs::File, sector: u64) -> Option<[u8; ccd::HEADER_BYTES]> {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    file.seek(SeekFrom::Start(sector.checked_mul(ccd::SECTOR_BYTES)?))
+        .ok()?;
+    let mut header = [0_u8; ccd::HEADER_BYTES];
+    file.read_exact(&mut header).ok()?;
+    Some(header)
 }
 
 /// Move the checkpoint forward to `target`, one stage at a time.

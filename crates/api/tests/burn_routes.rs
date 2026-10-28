@@ -1476,3 +1476,43 @@ async fn events_arriving_after_completion_do_not_reopen_the_job() {
         .await;
     assert_eq!(detail["state"], "verified");
 }
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_image_that_keeps_a_subchannel_is_not_burned_saying_what_to_do_instead() {
+    let harness = harness().await;
+    let world = seed(&harness.pool).await;
+    let digest = uuid::Uuid::now_v7().simple().to_string().repeat(2);
+    sqlx::query("INSERT INTO cas_objects (sha256, size_bytes) VALUES ($1, 96)")
+        .bind(&digest)
+        .execute(&harness.pool)
+        .await
+        .expect("seed the subchannel's object");
+    sqlx::query("UPDATE artifacts SET format = 'ccd_img_sub' WHERE id = $1::uuid")
+        .bind(&world.artifact)
+        .execute(&harness.pool)
+        .await
+        .expect("a CloneCD image");
+    sqlx::query(
+        "INSERT INTO artifact_components
+             (id, artifact_id, logical_path, role, length_bytes, sha256, ordinal)
+         VALUES ($1, $2::uuid, 'disc.sub', 'subchannel', 96, $3, 2)",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(&world.artifact)
+    .bind(&digest)
+    .execute(&harness.pool)
+    .await
+    .expect("its subchannel");
+
+    let (status, body) = harness.post("/api/v1/burn-jobs", create_body(&world)).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["code"], "VALIDATION_FAILED");
+    assert!(
+        body["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("make a CUE/BIN"),
+        "{body}"
+    );
+}

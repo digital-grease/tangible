@@ -1373,3 +1373,60 @@ async fn uploads_are_bounded_abandoned_on_request_and_expire_when_idle() {
     let (status, _) = harness.send_part(&idle, 0, &image[..4096], None).await;
     assert_eq!(status, StatusCode::CONFLICT);
 }
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_watched_clonecd_folder_is_catalogued_with_its_subchannel() {
+    let harness = harness().await;
+    let disc = harness.watched.join("CloneCD Disc");
+    std::fs::create_dir(&disc).expect("mkdir");
+    let descriptor = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/images/ccd/data-only.ccd"
+    ))
+    .expect("fixture");
+    std::fs::write(disc.join("disc.ccd"), &descriptor).expect("write");
+    // A distinct image, so this test's artifact is its own.
+    let mut image = vec![0_u8; 300 * 2352];
+    image[..12].copy_from_slice(&[
+        0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0,
+    ]);
+    image[15] = 1;
+    image[16..32].copy_from_slice(uuid::Uuid::now_v7().as_bytes());
+    std::fs::write(disc.join("disc.img"), &image).expect("write");
+    std::fs::write(disc.join("disc.sub"), vec![0_u8; 300 * 96]).expect("write");
+
+    let (status, queued) = harness
+        .post(
+            "/api/v1/imports",
+            json!({ "path_id": "incoming", "relative_path": "CloneCD Disc" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{queued}");
+    let import = queued["id"].as_str().expect("an id").to_owned();
+    let settled = harness.drain_until_settled(&import).await;
+    assert_eq!(settled["state"], "complete", "{settled}");
+
+    let artifact = settled["artifact_id"].as_str().expect("an artifact");
+    let (status, detail) = harness.get(&format!("/api/v1/artifacts/{artifact}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(detail["format"], "ccd_img_sub", "{detail}");
+    let roles: Vec<(&str, &str)> = detail["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            (
+                c["logical_path"].as_str().unwrap(),
+                c["role"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert!(roles.contains(&("disc.sub", "subchannel")), "{roles:?}");
+    assert!(roles.contains(&("disc.img", "track_data")), "{roles:?}");
+    assert_eq!(
+        detail["disc"]["tracks"].as_array().unwrap().len(),
+        1,
+        "{detail}"
+    );
+}

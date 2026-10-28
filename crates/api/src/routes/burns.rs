@@ -524,6 +524,19 @@ fn eligibility(facts: &ArtifactBurnFacts) -> Result<Vec<String>, Problem> {
         ));
     }
 
+    // No engine here writes subchannel data, so a disc burned from an image
+    // that keeps it would not be the artifact (the owner's choice,
+    // 2026-10-27). A CUE/BIN made from it, which says it drops the
+    // subchannel, can be burned instead.
+    if facts.has_subchannel {
+        return Err(Problem::new(
+            ErrorCode::ValidationFailed,
+            "this image keeps subchannel data, which Tangible cannot write, so a disc burned \
+             from it would not be this image; make a CUE/BIN of it, which drops the \
+             subchannel and says so, and burn that",
+        ));
+    }
+
     let mut warnings = Vec::new();
     match facts.validation_state.as_str() {
         "invalid" => warnings.push(
@@ -1246,7 +1259,32 @@ mod tests {
             pending_deletion: false,
             format: "iso".to_owned(),
             total_bytes: 10,
+            has_subchannel: false,
         }
+    }
+
+    #[test]
+    fn an_image_that_keeps_a_subchannel_is_not_burned() {
+        let problem = eligibility(&ArtifactBurnFacts {
+            format: "ccd_img_sub".to_owned(),
+            has_subchannel: true,
+            ..facts()
+        })
+        .expect_err("refused");
+        assert_eq!(problem.code, "VALIDATION_FAILED");
+        assert!(
+            problem.detail.contains("make a CUE/BIN"),
+            "{}",
+            problem.detail
+        );
+        // Without one there is nothing to lose.
+        assert!(
+            eligibility(&ArtifactBurnFacts {
+                format: "ccd_img_sub".to_owned(),
+                ..facts()
+            })
+            .is_ok()
+        );
     }
 
     #[test]

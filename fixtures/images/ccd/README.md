@@ -34,8 +34,7 @@ the format; no code is taken from it). From it:
 - `MODE` is not trusted over the sector itself.
 - The IMG and SUB are named after the `.ccd`.
 
-GNU ccd2cue 0.5 was to be a second, independent reader for these fixtures,
-its CUE for each recorded beside them. Building it ran into this
-environment's limits on executing downloaded code, so it has not been done;
-the layouts here rest on the reading above. A CloneCD image of a real disc
-has not been checked either.
+GNU ccd2cue 0.5 reads them independently: its CUE for each is in
+`fixtures/tool-output/ccd2cue/`, and the single-session layouts agree with
+it track by track (a test checks). A CloneCD image of a real disc has not
+been checked.

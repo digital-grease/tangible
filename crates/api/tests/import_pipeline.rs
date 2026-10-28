@@ -985,3 +985,176 @@ async fn a_file_named_toc_that_is_not_one_imports_unclaimed() {
         .expect("read");
     assert_eq!(manifest.classification.format, ArtifactFormat::Iso);
 }
+
+// --- CloneCD -----------------------------------------------------------------
+
+fn ccd_fixture(name: &str) -> Vec<u8> {
+    std::fs::read(format!(
+        "{}/../../fixtures/images/ccd/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .expect("fixture")
+}
+
+const CCD_SECTOR: usize = 2352;
+
+/// An IMG of `sectors` raw sectors whose first is a mode 1 data sector and
+/// the rest audio.
+fn clonecd_image(sectors: usize) -> Vec<u8> {
+    let mut image = vec![0_u8; sectors * CCD_SECTOR];
+    image[..12].copy_from_slice(&[
+        0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0,
+    ]);
+    image[15] = 1;
+    image
+}
+
+/// Stage a CloneCD set and import it, answering the manifest and what the
+/// checkpoint warned.
+async fn import_clonecd(
+    files: &[(&str, Vec<u8>)],
+    descriptor: &str,
+) -> (tangible_domain::manifest::ArtifactManifest, Vec<String>) {
+    let (_dir, pipeline) = pipeline().await;
+    let import_id = ImportJobId::generate();
+    let area = pipeline.open_area(import_id).await.expect("area");
+    for (name, bytes) in files {
+        area.write(&path(name), bytes).await.expect("stage");
+    }
+    let mut checkpoint = ImportCheckpoint::default();
+    let outcome = pipeline
+        .run(&request(import_id, descriptor), &mut checkpoint)
+        .await
+        .expect("import");
+    let manifest = pipeline
+        .manifests()
+        .read(outcome.artifact_id)
+        .await
+        .expect("read");
+    (manifest, checkpoint.warnings)
+}
+
+fn role_of(manifest: &tangible_domain::manifest::ArtifactManifest, name: &str) -> ComponentRole {
+    manifest
+        .components
+        .iter()
+        .find(|component| component.logical_path.as_str() == name)
+        .unwrap_or_else(|| panic!("{name} is a component"))
+        .role
+}
+
+#[tokio::test]
+async fn a_clonecd_set_imports_as_one_artifact_with_its_tracks_and_subchannel() {
+    let (manifest, warnings) = import_clonecd(
+        &[
+            ("Game.ccd", ccd_fixture("mixed-mode.ccd")),
+            ("Game.img", clonecd_image(750)),
+            ("Game.sub", vec![0_u8; 750 * 96]),
+        ],
+        "Game.ccd",
+    )
+    .await;
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(manifest.classification.format, ArtifactFormat::CcdImgSub);
+    assert_eq!(manifest.classification.media_family, Some(MediaFamily::Cd));
+    assert_eq!(manifest.classification.detectors[0].name, "ccd-parser");
+    assert!(manifest.classification.format_confidence > 0.98);
+    assert_eq!(role_of(&manifest, "Game.ccd"), ComponentRole::Descriptor);
+    assert_eq!(role_of(&manifest, "Game.img"), ComponentRole::TrackData);
+    assert_eq!(role_of(&manifest, "Game.sub"), ComponentRole::Subchannel);
+
+    let Topology::CdTracks {
+        catalog,
+        session_count,
+        tracks,
+        subchannel,
+        ..
+    } = &manifest.topology
+    else {
+        panic!("expected a track topology, got {:?}", manifest.topology);
+    };
+    assert_eq!(catalog.as_deref(), Some("0123456789012"));
+    assert_eq!(*session_count, 1);
+    let shape: Vec<_> = tracks
+        .iter()
+        .map(|t| {
+            (
+                t.number,
+                t.mode.as_str(),
+                t.start_lba,
+                t.sector_count,
+                t.pregap_sectors,
+            )
+        })
+        .collect();
+    assert_eq!(
+        shape,
+        [
+            (1, "MODE1/2352", 0, 300, 0),
+            (2, "AUDIO", 300, 300, 150),
+            (3, "AUDIO", 600, 150, 0),
+        ]
+    );
+    assert_eq!(tracks[1].isrc.as_deref(), Some("USRC17607839"));
+    assert_eq!(tracks[2].flags, vec![TrackFlag::DigitalCopyPermitted]);
+    let subchannel = subchannel.as_ref().expect("recorded");
+    assert!(subchannel.present);
+    assert_eq!(subchannel.representation.as_deref(), Some("pw96_linear"));
+}
+
+#[tokio::test]
+async fn a_clonecd_image_without_its_subchannel_says_so() {
+    let (manifest, warnings) = import_clonecd(
+        &[
+            ("disc.CCD", ccd_fixture("data-only.ccd")),
+            ("disc.img", clonecd_image(300)),
+        ],
+        "disc.CCD",
+    )
+    .await;
+    assert_eq!(manifest.classification.format, ArtifactFormat::CcdImgSub);
+    assert!(
+        warnings.iter().any(|w| w.contains("no subchannel file")),
+        "{warnings:?}"
+    );
+    let Topology::CdTracks {
+        tracks, subchannel, ..
+    } = &manifest.topology
+    else {
+        panic!("{:?}", manifest.topology);
+    };
+    assert_eq!(tracks.len(), 1);
+    assert!(!subchannel.as_ref().expect("recorded").present);
+    assert!(
+        manifest
+            .components
+            .iter()
+            .all(|component| component.role != ComponentRole::Subchannel)
+    );
+}
+
+#[tokio::test]
+async fn a_clonecd_image_that_cannot_be_laid_out_is_kept_whole_and_still_marked_as_subchannel() {
+    let (manifest, warnings) = import_clonecd(
+        &[
+            ("multi.ccd", ccd_fixture("multi-session.ccd")),
+            ("multi.img", clonecd_image(600)),
+            ("multi.sub", vec![0_u8; 600 * 96]),
+        ],
+        "multi.ccd",
+    )
+    .await;
+    assert_eq!(manifest.classification.format, ArtifactFormat::CcdImgSub);
+    assert!(
+        matches!(manifest.topology, Topology::Unknown),
+        "{:?}",
+        manifest.topology
+    );
+    assert!(
+        warnings.iter().any(|w| w.contains("2 sessions")),
+        "{warnings:?}"
+    );
+    assert_eq!(manifest.components.len(), 3, "every file kept");
+    // Still subchannel data, which is what stops it being burned as it is.
+    assert_eq!(role_of(&manifest, "multi.sub"), ComponentRole::Subchannel);
+}

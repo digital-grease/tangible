@@ -1,0 +1,5 @@
+FILE "multi-session.img" BINARY
+  TRACK 1 AUDIO
+    INDEX 01 00:00:00
+  TRACK 2 MODE1/2352
+    INDEX 01 00:00:00

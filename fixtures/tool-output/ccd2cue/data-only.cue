@@ -1,0 +1,3 @@
+FILE "data-only.img" BINARY
+  TRACK 1 MODE1/2352
+    INDEX 01 00:00:00

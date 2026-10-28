@@ -568,6 +568,18 @@ fn missing_image(number: usize, disc: &DiscInputs) -> String {
             "disc {number} is linked only to a TOC/BIN image, which RomM and its emulators do not \
              read; make a CHD of it, or link a CUE/BIN or ISO image of it"
         )
+    } else if disc
+        .artifacts
+        .iter()
+        .any(|link| link.format == ArtifactFormat::CcdImgSub)
+    {
+        // Emulators differ in reading CloneCD images; every one RomM serves
+        // reads CUE/BIN and CHD (docs/plans/ccd-images.md).
+        format!(
+            "disc {number} is linked only to a CloneCD (CCD/IMG/SUB) image, which not every \
+             emulator reads; make a CUE/BIN of it (which drops the subchannel) or a CHD, or \
+             link a CUE/BIN or ISO image of it"
+        )
     } else if disc.artifacts.is_empty() {
         format!("disc {number} has no image linked")
     } else if disc
@@ -723,6 +735,17 @@ mod tests {
                 .contains("TOC/BIN")
         );
         assert_eq!(missing_image(1, &disc(&[])), "disc 1 has no image linked");
+        let clonecd = missing_image(
+            5,
+            &disc(&[(ArtifactFormat::CcdImgSub, "representation_of")]),
+        );
+        assert!(clonecd.contains("CloneCD"), "{clonecd}");
+        assert!(clonecd.contains("make a CUE/BIN"), "{clonecd}");
+        assert_eq!(
+            chosen_artifact(&disc(&[(ArtifactFormat::CcdImgSub, "representation_of")])),
+            None,
+            "a CloneCD image is not sent to RomM as it is"
+        );
         assert!(
             missing_image(3, &disc(&[(ArtifactFormat::Chd, "unknown")])).contains("not checked")
         );

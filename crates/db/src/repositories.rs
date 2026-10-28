@@ -1874,6 +1874,9 @@ pub struct ArtifactBurnFacts {
     pub format: String,
     /// Total size of the artifact.
     pub total_bytes: i64,
+    /// Whether it keeps subchannel data, which no engine writes
+    /// (docs/plans/ccd-images.md).
+    pub has_subchannel: bool,
 }
 
 /// Read the facts a burn decision needs about an artifact.
@@ -1890,7 +1893,10 @@ pub async fn artifact_burn_facts(
     artifact_id: uuid::Uuid,
 ) -> Result<Option<ArtifactBurnFacts>, DbError> {
     let row = sqlx::query(
-        "SELECT validation_state, quarantine_state, pending_deletion, format, total_bytes
+        "SELECT validation_state, quarantine_state, pending_deletion, format, total_bytes,
+                EXISTS (SELECT 1 FROM artifact_components c
+                        WHERE c.artifact_id = artifacts.id AND c.role = 'subchannel')
+                    AS has_subchannel
          FROM artifacts WHERE id = $1",
     )
     .bind(artifact_id)
@@ -1905,6 +1911,7 @@ pub async fn artifact_burn_facts(
         pending_deletion: row.try_get("pending_deletion").map_err(DbError::Query)?,
         format: row.try_get("format").map_err(DbError::Query)?,
         total_bytes: row.try_get("total_bytes").map_err(DbError::Query)?,
+        has_subchannel: row.try_get("has_subchannel").map_err(DbError::Query)?,
     }))
 }
 
