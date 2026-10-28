@@ -44,7 +44,9 @@ async fn an_empty_database_has_every_migration_pending_until_migrated() {
     assert_eq!(fresh.pending_migrations().await.unwrap(), Vec::<i64>::new());
 
     fresh.pool().close().await;
-    sqlx::query(&format!("DROP DATABASE {name}"))
+    // FORCE: a closed connection's server process may not have exited yet,
+    // and a plain DROP then fails with "being accessed by other users".
+    sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)"))
         .execute(admin.pool())
         .await
         .unwrap();
