@@ -5,14 +5,15 @@
 // hot-path error.
 #![allow(clippy::result_large_err)]
 
-//! An artifact's preservation hashes, and what they identify
-//! (docs/plans/dat-matching.md).
+//! An artifact's preservation hashes, and what they identify: the games of
+//! loaded DATs it matches (docs/plans/dat-matching.md).
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Serialize;
+use tangible_db::dats::{MatchRecord, matches_for};
 use tangible_db::identification::{artifact_hashes, request_hashes};
 use tangible_domain::ArtifactId;
 use time::OffsetDateTime;
@@ -73,6 +74,70 @@ pub struct TrackHashesView {
     pub hashes: HashesView,
 }
 
+/// One file of a matched game.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct DatMatchFileView {
+    /// Its name in the DAT.
+    pub name: String,
+    /// Its size in the DAT.
+    pub size: Option<i64>,
+    /// The artifact's track (`track 2`) or file with its SHA-1 and size,
+    /// or null when none has.
+    pub matched_by: Option<String>,
+}
+
+/// A game in a loaded DAT that the artifact is, or partly is.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct DatMatchView {
+    /// The DAT.
+    pub dat_id: String,
+    /// Its name, such as `Sony - PlayStation`.
+    pub dat_name: String,
+    /// Its version.
+    pub dat_version: Option<String>,
+    /// The game's name, such as `Game (USA)`.
+    pub game_name: String,
+    /// Its description.
+    pub description: Option<String>,
+    /// Its category.
+    pub category: Option<String>,
+    /// `exact`: every file of the game (its CUE aside) is a track or file
+    /// of the artifact, and the artifact has none left over. `partial`:
+    /// some are, as when audio tracks were read without offset correction.
+    pub kind: String,
+    /// How many of the game's files matched.
+    pub files_matched: i32,
+    /// How many files the game has, its CUE aside.
+    pub files_total: i32,
+    /// Each of them.
+    pub files: Vec<DatMatchFileView>,
+}
+
+impl From<MatchRecord> for DatMatchView {
+    fn from(record: MatchRecord) -> Self {
+        Self {
+            dat_id: record.dat_id.to_string(),
+            dat_name: record.dat_name,
+            dat_version: record.dat_version,
+            game_name: record.game_name,
+            description: record.description,
+            category: record.category,
+            kind: record.kind,
+            files_matched: record.roms_matched,
+            files_total: record.roms_total,
+            files: record
+                .roms
+                .into_iter()
+                .map(|rom| DatMatchFileView {
+                    name: rom.name,
+                    size: rom.size,
+                    matched_by: rom.matched_by,
+                })
+                .collect(),
+        }
+    }
+}
+
 /// What identifies an artifact.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct IdentificationView {
@@ -86,6 +151,8 @@ pub struct IdentificationView {
     pub components: Vec<ComponentHashesView>,
     /// Each CD track's hashes, for an artifact with a track layout.
     pub tracks: Vec<TrackHashesView>,
+    /// The games of loaded DATs it matches, exact ones first.
+    pub matches: Vec<DatMatchView>,
 }
 
 /// The identification view of `id`, or `NOT_FOUND`.
@@ -97,6 +164,12 @@ async fn view(state: &ApiState, id: ArtifactId) -> Result<IdentificationView, Pr
             unavailable("the hashes could not be read")
         })?
         .ok_or_else(|| Problem::not_found("artifact", &id.to_string()))?;
+    let matches = matches_for(state.database().pool(), *id.as_uuid())
+        .await
+        .map_err(|error| {
+            tracing::error!(error = ?error, "could not read an artifact's DAT matches");
+            unavailable("the matches could not be read")
+        })?;
     Ok(IdentificationView {
         state: found.state,
         error: found.error,
@@ -127,6 +200,7 @@ async fn view(state: &ApiState, id: ArtifactId) -> Result<IdentificationView, Pr
                 },
             })
             .collect(),
+        matches: matches.into_iter().map(DatMatchView::from).collect(),
     })
 }
 
@@ -140,7 +214,8 @@ async fn view(state: &ApiState, id: ArtifactId) -> Result<IdentificationView, Pr
     path = "/api/v1/artifacts/{artifact_id}/identification",
     tag = "library",
     description = "The CRC32, MD5 and SHA-1 of the artifact's components and CD tracks, as \
-                   preservation databases list them, computed in the background after import.",
+                   preservation databases list them, computed in the background after import, \
+                   and the games of loaded DATs they match.",
     params(("artifact_id" = String, Path, description = "Artifact identifier")),
     responses(
         (status = 200, description = "Its identification", body = IdentificationView),

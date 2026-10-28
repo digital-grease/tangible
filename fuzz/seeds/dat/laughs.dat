@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<!DOCTYPE datafile [
+  <!ENTITY lol "lol">
+  <!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">
+  <!ENTITY secret SYSTEM "file:///etc/passwd">
+]>
+<datafile><header><name>&lol2;</name><author>&secret;</author></header></datafile>

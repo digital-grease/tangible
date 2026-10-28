@@ -58,6 +58,21 @@ pub struct ArtifactSummary {
     pub integrity_state: String,
     /// When that check finished.
     pub integrity_checked_at: Option<String>,
+    /// The game of a loaded DAT it best matches, if any
+    /// (docs/plans/dat-matching.md).
+    pub best_match: Option<BestMatchView>,
+}
+
+/// The game of a loaded DAT an artifact best matches: an exact match
+/// first, then the one with the most files matched.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct BestMatchView {
+    /// The game's name, such as `Game (USA)`.
+    pub game_name: String,
+    /// `exact` or `partial`.
+    pub kind: String,
+    /// The DAT's name.
+    pub dat_name: String,
 }
 
 impl From<&ArtifactManifest> for ArtifactSummary {
@@ -73,13 +88,14 @@ impl From<&ArtifactManifest> for ArtifactSummary {
             has_warnings: !manifest.validation.validators.is_empty(),
             integrity_state: "unchecked".to_owned(),
             integrity_checked_at: None,
+            best_match: None,
         }
     }
 }
 
-/// Fill in what integrity checks found, from the catalogue. A database that
-/// cannot answer leaves them unchecked rather than failing the read: the
-/// manifests are the library.
+/// Fill in what integrity checks found, and the best DAT match, from the
+/// catalogue. A database that cannot answer leaves them unchecked and
+/// unmatched rather than failing the read: the manifests are the library.
 async fn with_integrity(state: &ApiState, summaries: &mut [ArtifactSummary]) {
     use time::format_description::well_known::Rfc3339;
     let ids: Vec<uuid::Uuid> = summaries
@@ -88,7 +104,7 @@ async fn with_integrity(state: &ApiState, summaries: &mut [ArtifactSummary]) {
         .collect();
     match tangible_db::integrity::integrity_of(state.database().pool(), &ids).await {
         Ok(found) => {
-            for summary in summaries {
+            for summary in summaries.iter_mut() {
                 if let Some((integrity, checked)) = uuid::Uuid::parse_str(&summary.id)
                     .ok()
                     .and_then(|id| found.get(&id))
@@ -99,6 +115,23 @@ async fn with_integrity(state: &ApiState, summaries: &mut [ArtifactSummary]) {
             }
         }
         Err(error) => tracing::warn!(error = ?error, "integrity states could not be read"),
+    }
+    match tangible_db::dats::best_matches(state.database().pool(), &ids).await {
+        Ok(mut found) => {
+            for summary in summaries {
+                if let Some((game_name, kind, dat_name)) = uuid::Uuid::parse_str(&summary.id)
+                    .ok()
+                    .and_then(|id| found.remove(&id))
+                {
+                    summary.best_match = Some(BestMatchView {
+                        game_name,
+                        kind,
+                        dat_name,
+                    });
+                }
+            }
+        }
+        Err(error) => tracing::warn!(error = ?error, "DAT matches could not be read"),
     }
 }
 

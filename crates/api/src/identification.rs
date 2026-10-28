@@ -17,6 +17,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use tangible_db::dats::rematch;
 use tangible_db::identification::{
     Hashes, claim_for_hashing, claim_next_unhashed, fail_hashing, record_hashes,
 };
@@ -219,10 +220,13 @@ impl IdentificationRunner {
                     .map(|(number, hashes)| (*number, as_row(hashes)))
                     .collect();
                 if record_hashes(pool, artifact, owner, &component_rows, &track_rows).await? {
+                    // Against every loaded DAT, now its hashes are known.
+                    let matches = rematch(pool, Some(&[artifact]), None).await?;
                     tracing::info!(
                         artifact_id = %artifact,
                         components = component_rows.len(),
                         tracks = track_rows.len(),
+                        matches,
                         "preservation hashes recorded"
                     );
                 }

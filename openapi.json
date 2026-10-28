@@ -423,7 +423,7 @@
           "library"
         ],
         "summary": "An artifact's preservation hashes and what they identify.",
-        "description": "The CRC32, MD5 and SHA-1 of the artifact's components and CD tracks, as preservation databases list them, computed in the background after import.",
+        "description": "The CRC32, MD5 and SHA-1 of the artifact's components and CD tracks, as preservation databases list them, computed in the background after import, and the games of loaded DATs they match.",
         "operationId": "get_identification",
         "parameters": [
           {
@@ -1463,6 +1463,130 @@
           },
           "409": {
             "description": "Not in a state that can be retried",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/dats": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Every loaded DAT.",
+        "description": "Every loaded DAT, by name, with how many artifacts each identifies.",
+        "operationId": "list",
+        "responses": {
+          "200": {
+            "description": "The DATs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatList"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Load a DAT.",
+        "description": "Load a Logiqx XML DAT, such as Redump's or No-Intro's, sent as the request body (up to 64 MiB, not zipped). One with the name of a DAT already loaded replaces it. Its games are matched against every artifact's preservation hashes at once. Administrators only.",
+        "operationId": "load",
+        "requestBody": {
+          "description": "The DAT's XML",
+          "content": {
+            "application/xml": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "This very file was already loaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatLoadView"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Loaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatLoadView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not a DAT this server reads",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/dats/{dat_id}": {
+      "delete": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Remove a DAT.",
+        "description": "Remove a DAT, and every match it made. Nothing else changes: matches never renamed or changed anything. Administrators only.",
+        "operationId": "remove",
+        "parameters": [
+          {
+            "name": "dat_id",
+            "in": "path",
+            "description": "DAT identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "404": {
+            "description": "No such DAT",
             "content": {
               "application/json": {
                 "schema": {
@@ -6330,6 +6454,17 @@
             "type": "string",
             "description": "Shape of the artifact."
           },
+          "best_match": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BestMatchView",
+                "description": "The game of a loaded DAT it best matches, if any\n(docs/plans/dat-matching.md)."
+              }
+            ]
+          },
           "component_count": {
             "type": "integer",
             "description": "Number of files.",
@@ -6397,6 +6532,29 @@
               "null"
             ],
             "description": "Cursor for the next page, or null when this is the last."
+          }
+        }
+      },
+      "BestMatchView": {
+        "type": "object",
+        "description": "The game of a loaded DAT an artifact best matches: an exact match\nfirst, then the one with the most files matched.",
+        "required": [
+          "game_name",
+          "kind",
+          "dat_name"
+        ],
+        "properties": {
+          "dat_name": {
+            "type": "string",
+            "description": "The DAT's name."
+          },
+          "game_name": {
+            "type": "string",
+            "description": "The game's name, such as `Game (USA)`."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`exact` or `partial`."
           }
         }
       },
@@ -7544,6 +7702,235 @@
           "version": {
             "type": "string",
             "description": "Its version."
+          }
+        }
+      },
+      "DatList": {
+        "type": "object",
+        "description": "Every loaded DAT.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DatView"
+            },
+            "description": "By name."
+          }
+        }
+      },
+      "DatLoadView": {
+        "type": "object",
+        "description": "What loading a DAT came to.",
+        "required": [
+          "dat",
+          "replaced",
+          "unchanged",
+          "warnings",
+          "warning_count"
+        ],
+        "properties": {
+          "dat": {
+            "$ref": "#/components/schemas/DatView",
+            "description": "The DAT as loaded."
+          },
+          "replaced": {
+            "type": "boolean",
+            "description": "Whether it replaced a DAT of the same name."
+          },
+          "unchanged": {
+            "type": "boolean",
+            "description": "Whether this very file was already loaded, so nothing changed."
+          },
+          "warning_count": {
+            "type": "integer",
+            "description": "How many warnings in all.",
+            "minimum": 0
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What in the file was left out and why, the first fifty."
+          }
+        }
+      },
+      "DatMatchFileView": {
+        "type": "object",
+        "description": "One file of a matched game.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "matched_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The artifact's track (`track 2`) or file with its SHA-1 and size,\nor null when none has."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name in the DAT."
+          },
+          "size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Its size in the DAT."
+          }
+        }
+      },
+      "DatMatchView": {
+        "type": "object",
+        "description": "A game in a loaded DAT that the artifact is, or partly is.",
+        "required": [
+          "dat_id",
+          "dat_name",
+          "game_name",
+          "kind",
+          "files_matched",
+          "files_total",
+          "files"
+        ],
+        "properties": {
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its category."
+          },
+          "dat_id": {
+            "type": "string",
+            "description": "The DAT."
+          },
+          "dat_name": {
+            "type": "string",
+            "description": "Its name, such as `Sony - PlayStation`."
+          },
+          "dat_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its version."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its description."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DatMatchFileView"
+            },
+            "description": "Each of them."
+          },
+          "files_matched": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many of the game's files matched."
+          },
+          "files_total": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many files the game has, its CUE aside."
+          },
+          "game_name": {
+            "type": "string",
+            "description": "The game's name, such as `Game (USA)`."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`exact`: every file of the game (its CUE aside) is a track or file\nof the artifact, and the artifact has none left over. `partial`:\nsome are, as when audio tracks were read without offset correction."
+          }
+        }
+      },
+      "DatView": {
+        "type": "object",
+        "description": "A loaded DAT.",
+        "required": [
+          "id",
+          "name",
+          "source_sha256",
+          "game_count",
+          "rom_count",
+          "loaded_by",
+          "loaded_at",
+          "matched_artifacts"
+        ],
+        "properties": {
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who made it."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its description."
+          },
+          "game_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many games it lists."
+          },
+          "homepage": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where it is from."
+          },
+          "id": {
+            "type": "string",
+            "description": "Its id."
+          },
+          "loaded_at": {
+            "type": "string",
+            "description": "When."
+          },
+          "loaded_by": {
+            "type": "string",
+            "description": "Who loaded it."
+          },
+          "matched_artifacts": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many artifacts it identifies, exactly or in part."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its header name, such as `Sony - PlayStation`, which identifies it."
+          },
+          "rom_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many files, all games together."
+          },
+          "source_sha256": {
+            "type": "string",
+            "description": "The SHA-256 of the file loaded."
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its version, often a date."
           }
         }
       },
@@ -9050,7 +9437,8 @@
         "required": [
           "state",
           "components",
-          "tracks"
+          "tracks",
+          "matches"
         ],
         "properties": {
           "components": {
@@ -9073,6 +9461,13 @@
               "null"
             ],
             "description": "When they were computed."
+          },
+          "matches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DatMatchView"
+            },
+            "description": "The games of loaded DATs it matches, exact ones first."
           },
           "state": {
             "type": "string",

@@ -130,6 +130,9 @@ pub const API_BASE: &str = "/api/v1";
         routes::derivations::cancel_derivation_job_route,
         routes::identification::get_identification,
         routes::identification::rehash,
+        routes::dats::load,
+        routes::dats::list,
+        routes::dats::remove,
         routes::reports::report_settings,
         routes::reports::burn_attempt_report,
         routes::reports::prepare_error_report,
@@ -244,6 +247,12 @@ pub const API_BASE: &str = "/api/v1";
         routes::identification::HashesView,
         routes::identification::ComponentHashesView,
         routes::identification::TrackHashesView,
+        routes::identification::DatMatchView,
+        routes::identification::DatMatchFileView,
+        routes::artifacts::BestMatchView,
+        routes::dats::DatView,
+        routes::dats::DatLoadView,
+        routes::dats::DatList,
         routes::reports::ReportSettingsView,
         report::IssueReport,
         report::IssueReportField,
@@ -475,6 +484,7 @@ pub fn router(state: ApiState) -> Router {
         .nest(API_BASE, routes::rips::router())
         .nest(API_BASE, routes::derivations::router())
         .nest(API_BASE, routes::identification::router())
+        .nest(API_BASE, routes::dats::router())
         // Applied per route, after routing, so the rule is looked up by the
         // matched pattern rather than by a raw path a caller could disguise.
         .layer(axum::middleware::from_fn_with_state(

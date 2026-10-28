@@ -9,6 +9,9 @@ publish = false
 [dependencies]
 async-trait = "0.1.91"
 hex = "0.4.3"
+# Reads Logiqx XML DATs (docs/plans/dat-matching.md H2). No features: no
+# serde, no encodings but UTF-8, and it expands no entity but XML's own.
+quick-xml = "0.42.0"
 serde = { version = "1.0.229", features = ["derive"] }
 sha2 = "0.11.0"
 tangible-domain = { version = "0.1.0", path = "../domain" }

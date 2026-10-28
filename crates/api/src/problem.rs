@@ -115,6 +115,8 @@ pub enum ErrorCode {
     /// The server has too little free space for what was asked, such as an
     /// upload of this size.
     InsufficientSpace,
+    /// A file sent as a DAT is not a Logiqx XML DAT this server reads.
+    DatInvalid,
     /// Anything unanticipated.
     Internal,
 }
@@ -154,6 +156,7 @@ impl ErrorCode {
             Self::IntegrationBadResponse => "INTEGRATION_BAD_RESPONSE",
             Self::IntegrationAddressRefused => "INTEGRATION_ADDRESS_REFUSED",
             Self::InsufficientSpace => "INSUFFICIENT_SPACE",
+            Self::DatInvalid => "DAT_INVALID",
             Self::Internal => "INTERNAL",
         }
     }
@@ -179,7 +182,8 @@ impl ErrorCode {
             | Self::ValidationFailed
             | Self::ReferenceNotFound
             | Self::ImportSsrfBlocked
-            | Self::IntegrationAddressRefused => StatusCode::UNPROCESSABLE_ENTITY,
+            | Self::IntegrationAddressRefused
+            | Self::DatInvalid => StatusCode::UNPROCESSABLE_ENTITY,
             // Worker routes only ever answer 401: they have no notion of an
             // authenticated-but-unauthorised caller. Operator routes answer
             // 403 when the account is known and its role is not enough.
@@ -242,6 +246,7 @@ impl ErrorCode {
             Self::IntegrationBadResponse => "The download client answered unexpectedly",
             Self::IntegrationAddressRefused => "The server will not reach that address",
             Self::InsufficientSpace => "Not enough free space",
+            Self::DatInvalid => "Not a DAT this server reads",
             Self::Internal => "Internal error",
         }
     }
@@ -401,6 +406,7 @@ mod tests {
             ErrorCode::IntegrationBadResponse,
             ErrorCode::IntegrationAddressRefused,
             ErrorCode::InsufficientSpace,
+            ErrorCode::DatInvalid,
             ErrorCode::Internal,
         ];
         let mut seen = std::collections::BTreeSet::new();

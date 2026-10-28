@@ -101,3 +101,10 @@ path = "fuzz_targets/video_ts.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "dat"
+path = "fuzz_targets/dat.rs"
+test = false
+doc = false
+bench = false

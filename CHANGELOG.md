@@ -8,6 +8,20 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
+- DAT matching: an administrator loads a Logiqx XML DAT, such as Redump's
+  or No-Intro's (`POST /api/v1/dats`, the XML as the body, up to 64 MiB;
+  `GET /api/v1/dats`; `DELETE /api/v1/dats/{id}`; new permission
+  `manage_dats`), and every artifact is matched against it by SHA-1 and
+  size: its CD tracks, or its image files. A game whose every file (its CUE
+  aside) matched, with nothing left over, is an exact match; some, a
+  partial one, as an audio CD read without offset correction is. An
+  artifact's identification lists its matches and which track or file
+  matched each file; the library list shows each artifact's best match.
+  Matching renames nothing. The DAT parser is bounded, fuzzed, and expands
+  no entity beyond XML's own; a file that is not a DAT is refused with
+  `DAT_INVALID`. A DAT with the name of one already loaded replaces it.
+  Tangible never downloads DATs. Database migration 0025 adds tables,
+  additively.
 - Preservation hashes: the CRC32, MD5 and SHA-1 of every artifact's files,
   and of every CD track's bytes as Redump cuts them (pregap in the file
   included), computed in the background by reading the stored bytes once,

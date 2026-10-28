@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<!DOCTYPE datafile PUBLIC "-//Logiqx//DTD ROM Management Datafile//EN" "http://www.logiqx.com/Dats/datafile.dtd">
+<datafile>
+	<header>
+		<name>Example - Discs</name>
+		<description>Example - Discs - Datfile (2) (2026-10-27 12-00-00)</description>
+		<version>2026-10-27 12-00-00</version>
+		<author>Tangible &amp; friends</author>
+		<homepage>redump.org</homepage>
+		<url>http://redump.org/</url>
+	</header>
+	<game name="Mixed Disc (World)">
+		<category>Games</category>
+		<description>Mixed Disc (World)</description>
+		<rom name="Mixed Disc (World).cue" size="242" crc="0a1b2c3d" md5="00112233445566778899aabbccddeeff" sha1="00112233445566778899aabbccddeeff00112233"/>
+		<rom name="Mixed Disc (World) (Track 1).bin" size="705600" crc="414FA339" md5="9E107D9D372BB6826BD81D3542A419D6" sha1="2FD4E1C67A2D28FCED849EE1BB76E7391B93EB12"/>
+		<rom name="Mixed Disc (World) (Track 2).bin" size="352800" crc="deadbeef" sha1="da39a3ee5e6b4b0d3255bfef95601890afd80709" status="verified"/>
+	</game>
+	<machine name="Odd &lt;Name&gt; &#x26; &#65;">
+		<description><![CDATA[In <CDATA>]]></description>
+		<rom name="odd.iso" size="2048" sha1="not-a-hash" crc="12345678"/>
+		<rom name="sized.iso" size="big" sha256="E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"/>
+		<rom size="1"/>
+	</machine>
+</datafile>

@@ -7,6 +7,7 @@ pub mod accounts;
 pub mod artifacts;
 pub mod burns;
 pub mod catalog;
+pub mod dats;
 pub mod derivations;
 pub mod diagnostics;
 pub mod erasures;

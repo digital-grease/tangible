@@ -143,7 +143,7 @@ export interface paths {
         };
         /**
          * An artifact's preservation hashes and what they identify.
-         * @description The CRC32, MD5 and SHA-1 of the artifact's components and CD tracks, as preservation databases list them, computed in the background after import.
+         * @description The CRC32, MD5 and SHA-1 of the artifact's components and CD tracks, as preservation databases list them, computed in the background after import, and the games of loaded DATs they match.
          */
         get: operations["get_identification"];
         put?: never;
@@ -468,6 +468,50 @@ export interface paths {
          */
         post: operations["retry_job"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every loaded DAT.
+         * @description Every loaded DAT, by name, with how many artifacts each identifies.
+         */
+        get: operations["list"];
+        put?: never;
+        /**
+         * Load a DAT.
+         * @description Load a Logiqx XML DAT, such as Redump's or No-Intro's, sent as the request body (up to 64 MiB, not zipped). One with the name of a DAT already loaded replaces it. Its games are matched against every artifact's preservation hashes at once. Administrators only.
+         */
+        post: operations["load"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dats/{dat_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a DAT.
+         * @description Remove a DAT, and every match it made. Nothing else changes: matches never renamed or changed anything. Administrators only.
+         */
+        delete: operations["remove"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1967,6 +2011,7 @@ export interface components {
         ArtifactSummary: {
             /** @description Shape of the artifact. */
             artifact_kind: string;
+            best_match?: null | components["schemas"]["BestMatchView"];
             /** @description Number of files. */
             component_count: number;
             /** @description Detected container format. */
@@ -2008,6 +2053,18 @@ export interface components {
             items: components["schemas"]["ArtifactSummary"][];
             /** @description Cursor for the next page, or null when this is the last. */
             next_cursor?: string | null;
+        };
+        /**
+         * @description The game of a loaded DAT an artifact best matches: an exact match
+         *     first, then the one with the most files matched.
+         */
+        BestMatchView: {
+            /** @description The DAT's name. */
+            dat_name: string;
+            /** @description The game's name, such as `Game (USA)`. */
+            game_name: string;
+            /** @description `exact` or `partial`. */
+            kind: string;
         };
         /** @description One attempt with the reports it produced. */
         BurnAttemptDetail: components["schemas"]["BurnAttemptView"] & {
@@ -2508,6 +2565,108 @@ export interface components {
             tool_version: string;
             /** @description Its version. */
             version: string;
+        };
+        /** @description Every loaded DAT. */
+        DatList: {
+            /** @description By name. */
+            items: components["schemas"]["DatView"][];
+        };
+        /** @description What loading a DAT came to. */
+        DatLoadView: {
+            /** @description The DAT as loaded. */
+            dat: components["schemas"]["DatView"];
+            /** @description Whether it replaced a DAT of the same name. */
+            replaced: boolean;
+            /** @description Whether this very file was already loaded, so nothing changed. */
+            unchanged: boolean;
+            /** @description How many warnings in all. */
+            warning_count: number;
+            /** @description What in the file was left out and why, the first fifty. */
+            warnings: string[];
+        };
+        /** @description One file of a matched game. */
+        DatMatchFileView: {
+            /**
+             * @description The artifact's track (`track 2`) or file with its SHA-1 and size,
+             *     or null when none has.
+             */
+            matched_by?: string | null;
+            /** @description Its name in the DAT. */
+            name: string;
+            /**
+             * Format: int64
+             * @description Its size in the DAT.
+             */
+            size?: number | null;
+        };
+        /** @description A game in a loaded DAT that the artifact is, or partly is. */
+        DatMatchView: {
+            /** @description Its category. */
+            category?: string | null;
+            /** @description The DAT. */
+            dat_id: string;
+            /** @description Its name, such as `Sony - PlayStation`. */
+            dat_name: string;
+            /** @description Its version. */
+            dat_version?: string | null;
+            /** @description Its description. */
+            description?: string | null;
+            /** @description Each of them. */
+            files: components["schemas"]["DatMatchFileView"][];
+            /**
+             * Format: int32
+             * @description How many of the game's files matched.
+             */
+            files_matched: number;
+            /**
+             * Format: int32
+             * @description How many files the game has, its CUE aside.
+             */
+            files_total: number;
+            /** @description The game's name, such as `Game (USA)`. */
+            game_name: string;
+            /**
+             * @description `exact`: every file of the game (its CUE aside) is a track or file
+             *     of the artifact, and the artifact has none left over. `partial`:
+             *     some are, as when audio tracks were read without offset correction.
+             */
+            kind: string;
+        };
+        /** @description A loaded DAT. */
+        DatView: {
+            /** @description Who made it. */
+            author?: string | null;
+            /** @description Its description. */
+            description?: string | null;
+            /**
+             * Format: int32
+             * @description How many games it lists.
+             */
+            game_count: number;
+            /** @description Where it is from. */
+            homepage?: string | null;
+            /** @description Its id. */
+            id: string;
+            /** @description When. */
+            loaded_at: string;
+            /** @description Who loaded it. */
+            loaded_by: string;
+            /**
+             * Format: int64
+             * @description How many artifacts it identifies, exactly or in part.
+             */
+            matched_artifacts: number;
+            /** @description Its header name, such as `Sony - PlayStation`, which identifies it. */
+            name: string;
+            /**
+             * Format: int32
+             * @description How many files, all games together.
+             */
+            rom_count: number;
+            /** @description The SHA-256 of the file loaded. */
+            source_sha256: string;
+            /** @description Its version, often a date. */
+            version?: string | null;
         };
         /**
          * @description What a worker can decrypt. Library and tool versions only: a worker never
@@ -3186,6 +3345,8 @@ export interface components {
             error?: string | null;
             /** @description When they were computed. */
             hashed_at?: string | null;
+            /** @description The games of loaded DATs it matches, exact ones first. */
+            matches: components["schemas"]["DatMatchView"][];
             /** @description `pending` (waiting for the background runner), `done` or `failed`. */
             state: string;
             /** @description Each CD track's hashes, for an artifact with a track layout. */
@@ -5544,6 +5705,99 @@ export interface operations {
             };
             /** @description Not in a state that can be retried */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The DATs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatList"];
+                };
+            };
+        };
+    };
+    load: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The DAT's XML */
+        requestBody: {
+            content: {
+                "application/xml": string;
+            };
+        };
+        responses: {
+            /** @description This very file was already loaded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatLoadView"];
+                };
+            };
+            /** @description Loaded */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatLoadView"];
+                };
+            };
+            /** @description Not a DAT this server reads */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    remove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description DAT identifier */
+                dat_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such DAT */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

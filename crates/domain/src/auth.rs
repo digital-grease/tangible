@@ -61,6 +61,11 @@ pub enum Permission {
     /// Administrators only: a full scrub reads every byte the library holds,
     /// which is a load on the disks somebody should decide on.
     MaintainStorage,
+    /// Load and remove preservation DATs (docs/plans/dat-matching.md).
+    ///
+    /// Administrators only: a DAT is a large untrusted file the server
+    /// parses, and loading one matches it against the whole library.
+    ManageDats,
 }
 
 impl Permission {
@@ -79,6 +84,7 @@ impl Permission {
             Self::Diagnose => "diagnose",
             Self::ManageIntegrations => "manage_integrations",
             Self::MaintainStorage => "maintain_storage",
+            Self::ManageDats => "manage_dats",
         }
     }
 
@@ -93,7 +99,8 @@ impl Permission {
             | Self::ManageUsers
             | Self::Diagnose
             | Self::ManageIntegrations
-            | Self::MaintainStorage => Role::Administrator,
+            | Self::MaintainStorage
+            | Self::ManageDats => Role::Administrator,
         }
     }
 }
@@ -188,6 +195,7 @@ mod tests {
             Permission::Diagnose,
             Permission::ManageIntegrations,
             Permission::MaintainStorage,
+            Permission::ManageDats,
         ] {
             assert!(!Role::Viewer.allows(permission), "{permission:?}");
         }
@@ -209,6 +217,7 @@ mod tests {
         assert!(!Role::Operator.allows(Permission::Diagnose));
         assert!(!Role::Operator.allows(Permission::ManageIntegrations));
         assert!(!Role::Operator.allows(Permission::MaintainStorage));
+        assert!(!Role::Operator.allows(Permission::ManageDats));
     }
 
     #[test]
@@ -223,6 +232,7 @@ mod tests {
             Permission::Diagnose,
             Permission::ManageIntegrations,
             Permission::MaintainStorage,
+            Permission::ManageDats,
         ] {
             assert!(Role::Administrator.allows(permission), "{permission:?}");
         }

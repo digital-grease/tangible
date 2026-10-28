@@ -21,7 +21,7 @@ use tangible_domain::LogicalPath;
 use tangible_domain::logical_path::{MAX_PATH_BYTES, MAX_SEGMENT_BYTES};
 use tangible_domain::manifest::ArtifactManifest;
 use tangible_domain::report::{self, ScrubContext};
-use tangible_image::{ccd, cue, iso, toc, video_ts};
+use tangible_image::{ccd, cue, dat, iso, toc, video_ts};
 use tangible_integrations::romm;
 
 /// One target: what it is called, and what it runs.
@@ -40,6 +40,7 @@ pub const TARGETS: &[Target] = &[
     ("romm_names", romm_names),
     ("report_scrub", report_scrub),
     ("video_ts", video_ts_tree),
+    ("dat", dat_file),
 ];
 
 /// Fixture directories, relative to the repository root, that also seed a
@@ -53,6 +54,56 @@ pub const FIXTURE_SEEDS: &[(&str, &str)] = &[
     ("report_scrub", "fixtures/tool-output/cdrdao"),
     ("report_scrub", "fixtures/tool-output/xorriso"),
 ];
+
+/// A Logiqx DAT. What it accepts has a name, and every text and hash it
+/// keeps is bounded and of its shape: lowercase hex of the algorithm's
+/// length, nothing a terminal would act on.
+pub fn dat_file(data: &[u8]) {
+    let Ok(file) = dat::parse(data) else {
+        return;
+    };
+    let clean = |text: &str| {
+        assert!(text.chars().count() <= 2048, "text is bounded");
+        assert!(!text.chars().any(char::is_control), "no control characters");
+        assert_eq!(text, text.trim(), "text is trimmed");
+    };
+    let hash = |value: &Option<String>, digits: usize| {
+        if let Some(value) = value {
+            assert_eq!(value.len(), digits, "a hash is its algorithm's length");
+            assert!(
+                value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+                "a hash is lowercase hex"
+            );
+        }
+    };
+    assert!(!file.header.name.is_empty(), "an accepted DAT has a name");
+    clean(&file.header.name);
+    for text in [
+        &file.header.description,
+        &file.header.version,
+        &file.header.author,
+        &file.header.homepage,
+        &file.header.url,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        clean(text);
+    }
+    for game in &file.games {
+        assert!(!game.name.is_empty(), "a kept game has a name");
+        clean(&game.name);
+        for rom in &game.roms {
+            assert!(!rom.name.is_empty(), "a kept file has a name");
+            clean(&rom.name);
+            hash(&rom.crc32, 8);
+            hash(&rom.md5, 32);
+            hash(&rom.sha1, 40);
+            hash(&rom.sha256, 64);
+        }
+    }
+    assert!(file.warnings.len() <= 1001, "warnings are bounded");
+}
 
 /// File sizes to lay a descriptor out against: plausible, empty, one sector
 /// short, and as large as a `u64` goes, where an unchecked sum would wrap.

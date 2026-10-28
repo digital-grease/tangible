@@ -387,6 +387,88 @@ async fn preservation_hashes_are_well_formed_and_an_artifact_says_consistently_w
     tx.rollback().await.expect("rollback");
 }
 
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn dat_files_are_well_formed_an_exact_match_is_whole_and_removing_a_dat_takes_its_matches() {
+    // A malformed hash in a DAT would never match; an exact match that left
+    // files out would claim more than was found; and a removed DAT's games
+    // must not keep naming artifacts.
+    let pool = pool().await;
+    let f = Fixture::new();
+    let mut tx = pool.begin().await.expect("begin");
+    seed(&mut tx, &f).await;
+    let artifact = f.artifact;
+    let dat = uuid::Uuid::now_v7();
+    let game = uuid::Uuid::now_v7();
+    let sha256 = "0".repeat(64);
+    tx.execute(
+        format!(
+            "INSERT INTO dat_files (id, name, source_sha256, game_count, rom_count, loaded_by) \
+             VALUES ('{dat}', 'schema-{dat}', '{sha256}', 1, 1, 'tests'); \
+             INSERT INTO dat_games (id, dat_id, name) VALUES ('{game}', '{dat}', 'Game'); \
+             INSERT INTO dat_roms (game_id, name, size, sha1) \
+             VALUES ('{game}', 'Game.bin', 2352, '2fd4e1c67a2d28fced849ee1bb76e7391b93eb12'); \
+             INSERT INTO artifact_dat_matches (artifact_id, game_id, kind, roms_matched, roms_total) \
+             VALUES ('{artifact}', '{game}', 'exact', 1, 1)"
+        )
+        .as_str(),
+    )
+    .await
+    .expect("a DAT, a game, a file and a match");
+    let rom = |column: &str, value: &str| {
+        format!("INSERT INTO dat_roms (game_id, name, {column}) VALUES ('{game}', 'r', '{value}')")
+    };
+    for (statement, why) in [
+        (
+            rom("sha1", "2FD4E1C67A2D28FCED849EE1BB76E7391B93EB12"),
+            "hashes are lowercase hex",
+        ),
+        (rom("crc32", "414fa33"), "a CRC32 is eight digits"),
+        (rom("md5", "x"), "an MD5 is 32 digits"),
+        (rom("sha256", "abc"), "a SHA-256 is 64 digits"),
+        (
+            format!(
+                "INSERT INTO dat_files (id, name, source_sha256, game_count, rom_count, loaded_by) \
+                 VALUES ('{}', 'schema-{dat}', '{sha256}', 0, 0, 'tests')",
+                uuid::Uuid::now_v7()
+            ),
+            "one DAT per name",
+        ),
+        (
+            format!(
+                "UPDATE artifact_dat_matches SET roms_total = 2 WHERE artifact_id = '{artifact}'"
+            ),
+            "an exact match matched every file",
+        ),
+        (
+            format!(
+                "UPDATE artifact_dat_matches SET roms_matched = 0, kind = 'partial' \
+                 WHERE artifact_id = '{artifact}'"
+            ),
+            "a match matched a file",
+        ),
+        (
+            format!(
+                "UPDATE artifact_dat_matches SET kind = 'probable' WHERE artifact_id = '{artifact}'"
+            ),
+            "the kind is one Tangible knows",
+        ),
+    ] {
+        must_reject(&mut tx, &statement, why).await;
+    }
+    tx.execute(format!("DELETE FROM dat_files WHERE id = '{dat}'").as_str())
+        .await
+        .expect("remove the DAT");
+    let left: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM artifact_dat_matches WHERE artifact_id = $1")
+            .bind(artifact)
+            .fetch_one(&mut *tx)
+            .await
+            .expect("count");
+    assert_eq!(left, 0, "its games' matches went with it");
+    tx.rollback().await.expect("rollback");
+}
+
 // --- Source removals -----------------------------------------------------------
 
 #[tokio::test]

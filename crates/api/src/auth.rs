@@ -149,8 +149,8 @@ pub enum Access {
 
 use Access::{Public, Signed, SignedOrLeaseholder, Worker};
 use Permission::{
-    Burn, Catalog, Diagnose, Erase, Import, ImportUrl, MaintainStorage, ManageIntegrations,
-    ManageUsers, ManageWorkers, Read,
+    Burn, Catalog, Diagnose, Erase, Import, ImportUrl, MaintainStorage, ManageDats,
+    ManageIntegrations, ManageUsers, ManageWorkers, Read,
 };
 
 /// Every operation the server answers, and what it requires.
@@ -357,6 +357,11 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
         "/api/v1/artifacts/{artifact_id}/identification/rehash",
         Signed(Import),
     ),
+    // DATs: anyone may see which are loaded, as they see what they matched;
+    // loading or removing one is an administrator's.
+    ("GET", "/api/v1/dats", Signed(Read)),
+    ("POST", "/api/v1/dats", Signed(ManageDats)),
+    ("DELETE", "/api/v1/dats/{dat_id}", Signed(ManageDats)),
     (
         "POST",
         "/api/v1/derivation-jobs/{job_id}/cancel",

@@ -8,6 +8,7 @@
 //! asserts it actually rejects. Typed repositories follow in epic E2.
 
 pub mod accounts;
+pub mod dats;
 pub mod derivations;
 pub mod diagnostics;
 pub mod erasures;

@@ -901,6 +901,38 @@ left failed, saying why; an integrity check says what is wrong with them.
 After restoring them, ask again
 (`POST /api/v1/artifacts/{id}/identification/rehash`).
 
+To learn what an image is, and whether it is a known good dump, load the
+DATs you use. Tangible never downloads one: get the Logiqx XML DAT from
+Redump, No-Intro or wherever you trust, unzip it, and, signed in as an
+administrator (the cookie jar and `csrf_token` from "First sign-in" above),
+send it:
+
+```bash
+curl -sS -b "$jar" -H 'Content-Type: application/xml' \
+  -H 'X-CSRF-Token: <csrf_token>' \
+  --data-binary @'Sony - PlayStation - Datfile.dat' \
+  http://localhost:8080/api/v1/dats
+```
+
+A DAT may be up to 64 MiB; it is read with a bounded
+parser that never fetches or expands anything a document type declares,
+and refused with `DAT_INVALID` if it is not a DAT. Loading a DAT with the
+name of one already loaded replaces it, so a newer Redump DAT updates the
+old one; loading the same file again changes nothing.
+
+Every artifact is matched against every loaded DAT by SHA-1 and size: its
+CD tracks, or for an image without tracks its image files. A CUE sheet's
+hash is never used, since a DAT's CUE follows from the DAT's own file
+names. A game matches **exactly** when each of its files (its CUE aside) is
+a track or file of the artifact and the artifact has none left over, and
+**partly** when only some are: an audio CD read without offset correction
+matches its data track and not its audio tracks. The artifact's
+identification lists its matches and which track or file matched each of
+the game's files; the library list shows each artifact's best match.
+Matches are recomputed when a DAT is loaded and when an artifact is
+hashed, and removing a DAT (`DELETE /api/v1/dats/{id}`) removes its
+matches. A match renames nothing and changes nothing else.
+
 
 ## Upgrading
 
