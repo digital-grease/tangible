@@ -9,6 +9,7 @@
 
 mod config;
 mod gc;
+mod manifest;
 mod restore_check;
 mod scrub;
 mod telemetry;
@@ -31,8 +32,8 @@ use tangible_db::{Database, DbConfig};
 use tangible_storage::{FilesystemStore, ManifestStore, StagingManager, WatchRoots};
 
 use crate::config::{
-    BurnEngineKind, CommonConfig, DerivationEngineKind, DoctorConfig, GcConfig, RestoreCheckConfig,
-    RotateConfig, ScrubConfig, SecretsCommand, ServeConfig, WorkerConfig,
+    BurnEngineKind, CommonConfig, DerivationEngineKind, DoctorConfig, GcConfig, ManifestCommand,
+    RestoreCheckConfig, RotateConfig, ScrubConfig, SecretsCommand, ServeConfig, WorkerConfig,
 };
 
 /// Self-hosted disc-image preservation, management, and burning.
@@ -59,7 +60,8 @@ enum Command {
     /// removed.
     Gc(Box<GcConfig>),
     /// Inspect and validate artifact manifests.
-    Manifest,
+    #[command(subcommand)]
+    Manifest(ManifestCommand),
     /// Apply pending database migrations.
     Migrate,
     /// Write the generated OpenAPI document to stdout.
@@ -98,8 +100,9 @@ async fn main() -> Result<()> {
         }
         Command::Doctor(doctor) => doctor_command(&cli.common, &doctor).await,
         Command::BurnWorker(worker) => burn_worker_command(&worker).await,
-        Command::Manifest => {
-            anyhow::bail!("`manifest` is not implemented yet; it arrives with epic E3")
+        Command::Manifest(ManifestCommand::Show(show)) => manifest::show_command(&show).await,
+        Command::Manifest(ManifestCommand::Validate(validate)) => {
+            manifest::validate_command(&validate)
         }
     }
 }

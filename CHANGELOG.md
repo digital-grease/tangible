@@ -8,6 +8,10 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
+- `tangible manifest show <artifact>` prints an artifact's stored manifest;
+  `tangible manifest validate <file>` (or `-`) checks a manifest the way the
+  server reads one and says whether it is in the canonical form the server
+  writes. The subcommand existed and did nothing until now.
 - Audit events for loading and removing a DAT (`dat.loaded`, with its
   name, games, files and whether it replaced one; `dat.removed`), for
   asking for an artifact's hashes again (`artifact.rehash_requested`), and

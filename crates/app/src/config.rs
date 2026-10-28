@@ -325,6 +325,39 @@ pub struct ScrubConfig {
     pub storage_root: PathBuf,
 }
 
+/// `tangible manifest`.
+#[derive(Debug, Clone, Subcommand)]
+pub enum ManifestCommand {
+    /// Print an artifact's stored manifest, exactly as the library holds it.
+    Show(ManifestShowConfig),
+    /// Check a manifest file (or `-` for standard input) as the server
+    /// reads one, and say whether it is in canonical form. Exits non-zero
+    /// when it is not valid.
+    Validate(ManifestValidateConfig),
+}
+
+/// Settings for `tangible manifest show`.
+#[derive(Debug, Clone, Args)]
+pub struct ManifestShowConfig {
+    /// The artifact.
+    pub artifact: tangible_domain::ArtifactId,
+
+    /// Root of the content-addressed store.
+    #[arg(
+        long,
+        env = "TANGIBLE_STORAGE_ROOT",
+        default_value = ".dev-data/library"
+    )]
+    pub storage_root: PathBuf,
+}
+
+/// Settings for `tangible manifest validate`.
+#[derive(Debug, Clone, Args)]
+pub struct ManifestValidateConfig {
+    /// The manifest file, or `-` for standard input.
+    pub file: PathBuf,
+}
+
 /// Settings for `tangible restore-check`.
 #[derive(Debug, Clone, Args)]
 pub struct RestoreCheckConfig {
