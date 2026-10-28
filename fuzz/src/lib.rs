@@ -100,6 +100,9 @@ pub fn dat_file(data: &[u8]) {
             hash(&rom.md5, 32);
             hash(&rom.sha1, 40);
             hash(&rom.sha256, 64);
+            if let Some(status) = &rom.status {
+                assert!(status.chars().count() <= 64, "a status fits the catalogue");
+            }
         }
     }
     assert!(file.warnings.len() <= 1001, "warnings are bounded");

@@ -60,8 +60,8 @@ may change between minor versions, and the release notes say how.
   artifact's identification lists its matches and which track or file
   matched each file; the library list shows each artifact's best match.
   Matching renames nothing. The DAT parser is bounded, fuzzed, and expands
-  no entity beyond XML's own; a file that is not a DAT is refused with
-  `DAT_INVALID`. A DAT with the name of one already loaded replaces it.
+  no entity beyond XML's own; a file that is not a DAT, or one cut short,
+  is refused with `DAT_INVALID`. A DAT with the name of one already loaded replaces it.
   Tangible never downloads DATs. Database migration 0025 adds tables,
   additively.
 - Preservation hashes: the CRC32, MD5 and SHA-1 of every artifact's files,

@@ -23,17 +23,24 @@ use quick_xml::{Reader, XmlVersion};
 /// Largest DAT read. Redump's largest are a few megabytes; No-Intro's tens.
 pub const MAX_DAT_BYTES: usize = 64 << 20;
 
-/// Most games one DAT may hold.
-const MAX_GAMES: usize = 500_000;
+/// Most games one DAT may hold. Redump's and No-Intro's largest hold tens
+/// of thousands.
+const MAX_GAMES: usize = 200_000;
 
-/// Most roms one DAT may hold, all games together.
-const MAX_ROMS: usize = 4_000_000;
+/// Most roms one DAT may hold, all games together. Each parsed costs a few
+/// hundred bytes, and loading one copies it into rows, so this bounds the
+/// memory a load takes, not only the file.
+const MAX_ROMS: usize = 1_000_000;
 
 /// Deepest elements nest. A Logiqx DAT goes four deep.
 const MAX_DEPTH: usize = 16;
 
 /// Longest text or attribute value kept.
 const MAX_TEXT: usize = 2048;
+
+/// Longest status kept, such as `verified` or `baddump`; the catalogue keeps
+/// no more.
+const MAX_STATUS: usize = 64;
 
 /// A DAT's header.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -157,6 +164,9 @@ pub enum DatError {
     /// Past a bound.
     #[error("the file holds more {0} than a DAT is allowed")]
     TooMany(&'static str),
+    /// Ends with elements still open: a download or upload cut short.
+    #[error("the file ends before its datafile element closes; it looks cut short")]
+    Truncated,
 }
 
 /// A parsed DAT.
@@ -275,7 +285,7 @@ impl Builder {
                         }),
                     }
                 }
-                "status" => rom.status = Some(value),
+                "status" => rom.status = Some(value.chars().take(MAX_STATUS).collect()),
                 _ => {}
             }
         }
@@ -502,6 +512,11 @@ pub fn parse(bytes: &[u8]) -> Result<DatFile, DatError> {
     if !saw_root {
         return Err(DatError::NotLogiqx);
     }
+    // The reader stops at the end of the bytes whatever is open; a file cut
+    // between tags or inside text would otherwise load what came before.
+    if !stack.is_empty() {
+        return Err(DatError::Truncated);
+    }
     if builder.file.header.name.is_empty() {
         return Err(DatError::NoName);
     }
@@ -683,6 +698,46 @@ mod tests {
         );
         let dat = parse(long.as_bytes()).expect("parse");
         assert_eq!(dat.header.name.len(), MAX_TEXT);
+    }
+
+    #[test]
+    fn refuses_a_file_cut_short_wherever_it_was_cut() {
+        let whole = REDUMP.as_bytes();
+        assert!(parse(whole).is_ok());
+        // Between tags, inside text, after the last game: each is refused,
+        // never loaded as the games before the cut.
+        for cut in [
+            REDUMP.find("<game name=\"Odd").unwrap(),
+            REDUMP.find("Mixed Disc (World)</description>").unwrap() + 5,
+            REDUMP.rfind("</datafile>").unwrap(),
+        ] {
+            let error = parse(&whole[..cut]).unwrap_err();
+            assert!(
+                matches!(error, DatError::Truncated | DatError::Xml { .. }),
+                "cut at {cut}: {error:?}"
+            );
+        }
+        assert_eq!(
+            parse(&whole[..REDUMP.rfind("</datafile>").unwrap()]).unwrap_err(),
+            DatError::Truncated
+        );
+    }
+
+    #[test]
+    fn keeps_a_status_no_longer_than_the_catalogue_does() {
+        let dat = parse(
+            format!(
+                "<datafile><header><name>x</name></header><game name=\"g\">\
+                 <rom name=\"r\" status=\"{}\"/></game></datafile>",
+                "s".repeat(500)
+            )
+            .as_bytes(),
+        )
+        .expect("parse");
+        assert_eq!(
+            dat.games[0].roms[0].status.as_deref().map(str::len),
+            Some(64)
+        );
     }
 
     #[test]
