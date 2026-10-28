@@ -290,8 +290,23 @@ DVD CHDs, and it misreads a cdrdao TOC whose track has its pregap in the file,
 so such a TOC is refused rather than converted wrongly.
 
 A conversion needs room in the staging volume for a copy of the original and
-the CHD, briefly. Set `TANGIBLE_DERIVATION_ENGINE=none` to turn conversions
-off.
+the CHD, briefly. Set `TANGIBLE_DERIVATION_ENGINE=none` to turn CHDs off.
+
+### A CUE/BIN of a CloneCD image
+
+chdman does not read CloneCD (CCD/IMG/SUB) images, Tangible's burners do not
+write their subchannel, and not every emulator reads them. So for a CloneCD
+image the derivative offered is a CUE/BIN, made by Tangible itself whatever
+`TANGIBLE_DERIVATION_ENGINE` says (the same request, with
+`{"transformation": "cue_bin_from_ccd"}` or nothing for a CloneCD image).
+The sheet is written from the image's tracks and read back to check it
+says the same; the BIN is the IMG, the same stored bytes, so nothing is
+copied and no extra space is used.
+
+The CUE/BIN drops the subchannel and the raw table of contents, and its
+lineage records it as lossy, saying so. It then works as any CUE/BIN: it can
+be burned, made into a CHD, and sent to RomM. The CloneCD image itself is
+kept as it was.
 
 ## Importing from a URL
 

@@ -25,6 +25,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::fmt::Write as _;
 
 use tangible_domain::LogicalPath;
 use tangible_domain::cd::{SampleByteOrder, TrackFlag};
@@ -1577,6 +1578,97 @@ pub fn layout(sheet: &CueSheet, file_sizes: &[u64]) -> Result<CdLayout, LayoutEr
         session_count,
         warnings,
     })
+}
+
+/// Why a layout could not be written as a sheet.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SheetError {
+    /// No tracks to write.
+    #[error("the layout has no tracks")]
+    NoTracks,
+    /// A file name a sheet cannot quote.
+    #[error("the file name cannot be written in a sheet")]
+    UnquotableName,
+    /// A layout this writer does not express: more than one file, a sector
+    /// size other than 2352, or a gap the burner would have to generate.
+    #[error("track {track}: {reason}")]
+    NotExpressible {
+        /// The track.
+        track: u32,
+        /// Why.
+        reason: &'static str,
+    },
+}
+
+/// A sector count as a sheet's `mm:ss:ff`.
+fn timecode(sectors: u64) -> String {
+    let frames = sectors % FRAMES_PER_SECOND;
+    let seconds = (sectors / FRAMES_PER_SECOND) % SECONDS_PER_MINUTE;
+    let minutes = sectors / (FRAMES_PER_SECOND * SECONDS_PER_MINUTE);
+    format!("{minutes:02}:{seconds:02}:{frames:02}")
+}
+
+/// Write a CUE sheet for a layout of raw 2352-byte tracks in one file, named
+/// `file_name`: the catalogue number, then per track its mode, flags, ISRC
+/// and index points, at their positions in the file.
+///
+/// Only a layout the sheet says exactly is written: one file, every track's
+/// pregap inside the file, and a sector size of 2352. Read back with
+/// [`parse`] and [`layout`], the sheet gives the same tracks.
+///
+/// # Errors
+///
+/// [`SheetError`] for a layout the sheet could not say exactly.
+pub fn write_sheet(laid: &CdLayout, file_name: &str) -> Result<String, SheetError> {
+    if laid.tracks.is_empty() {
+        return Err(SheetError::NoTracks);
+    }
+    if file_name.is_empty()
+        || file_name.len() > 255
+        || file_name.contains('"')
+        || file_name.chars().any(char::is_control)
+    {
+        return Err(SheetError::UnquotableName);
+    }
+    let mut sheet = String::new();
+    if let Some(catalog) = &laid.catalog {
+        let _ = writeln!(sheet, "CATALOG {catalog}");
+    }
+    let _ = writeln!(sheet, "FILE \"{file_name}\" BINARY");
+    for track in &laid.tracks {
+        let refuse = |reason| SheetError::NotExpressible {
+            track: track.number,
+            reason,
+        };
+        if track.file != 0 {
+            return Err(refuse("it is in another file"));
+        }
+        if !matches!(track.mode.as_str(), "AUDIO" | "MODE1/2352" | "MODE2/2352") {
+            return Err(refuse("its sectors are not 2352 bytes"));
+        }
+        if track.file_offset_bytes != track.start_lba.saturating_mul(2352) {
+            return Err(refuse("part of its pregap is not in the file"));
+        }
+        if track.number == 0 || track.number > 99 {
+            return Err(refuse("its number is not 1 to 99"));
+        }
+        let _ = writeln!(sheet, "  TRACK {:02} {}", track.number, track.mode);
+        if !track.flags.is_empty() {
+            let flags: Vec<&str> = track.flags.iter().map(|flag| flag.as_str()).collect();
+            let _ = writeln!(sheet, "    FLAGS {}", flags.join(" "));
+        }
+        if let Some(isrc) = &track.isrc {
+            let _ = writeln!(sheet, "    ISRC {isrc}");
+        }
+        for (number, relative) in &track.indexes {
+            let _ = writeln!(
+                sheet,
+                "    INDEX {number:02} {}",
+                timecode(track.start_lba.saturating_add(*relative))
+            );
+        }
+    }
+    Ok(sheet)
 }
 
 /// Why a sheet's file names could not be rewritten.

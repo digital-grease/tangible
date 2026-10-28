@@ -72,6 +72,14 @@ struct Harness {
 }
 
 async fn harness_with(engine: Option<Arc<dyn DerivationEngine>>) -> Harness {
+    harness_using(Some(
+        engine.unwrap_or_else(|| Arc::new(FakeDeriver::default())),
+    ))
+    .await
+}
+
+/// A harness whose derivations run with `engine`, or with none.
+async fn harness_using(engine: Option<Arc<dyn DerivationEngine>>) -> Harness {
     let dir = TempDir::new().unwrap();
     let objects = FilesystemStore::open(dir.path().join("library"))
         .await
@@ -84,12 +92,12 @@ async fn harness_with(engine: Option<Arc<dyn DerivationEngine>>) -> Harness {
     let database = support::database().await;
     let session = support::administrator(database.pool()).await;
 
-    let derivations = Derivations::new(DerivationPipeline::new(
-        staging,
-        objects.clone(),
-        manifests.clone(),
-        engine.unwrap_or_else(|| Arc::new(FakeDeriver::default())),
-    ));
+    let derivations = Derivations::new(match engine {
+        Some(engine) => {
+            DerivationPipeline::new(staging, objects.clone(), manifests.clone(), engine)
+        }
+        None => DerivationPipeline::without_engine(staging, objects.clone(), manifests.clone()),
+    });
     let runner = DerivationRunner::new(
         database.clone(),
         derivations.clone(),
@@ -556,4 +564,227 @@ async fn a_server_without_an_engine_refuses_to_derive() {
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
+}
+
+/// A CloneCD set of the mixed-mode fixture: its descriptor, an IMG of 750
+/// sectors (the first a mode 1 data sector, tagged so the image is this
+/// test's own) and a SUB.
+fn clonecd_disc(tag: &str) -> Vec<(&'static str, Vec<u8>)> {
+    let descriptor = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/images/ccd/mixed-mode.ccd"
+    ))
+    .unwrap();
+    let mut image = vec![0_u8; RAW * 750];
+    image[..12].copy_from_slice(&[
+        0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0,
+    ]);
+    image[15] = 1;
+    image[16..16 + tag.len()].copy_from_slice(tag.as_bytes());
+    vec![
+        ("Game.ccd", descriptor),
+        ("Game.img", image),
+        ("Game.sub", vec![0_u8; 96 * 750]),
+    ]
+}
+
+/// The stripped-down shape of a manifest's tracks, without component ids.
+fn track_shapes(manifest: &Value) -> Vec<Value> {
+    manifest["topology"]["tracks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| {
+            json!([
+                t["number"],
+                t["mode"],
+                t["file_offset_bytes"],
+                t["start_lba"],
+                t["sector_count"],
+                t["pregap_sectors"],
+                t["indexes"],
+                t["isrc"],
+                t["flags"]
+            ])
+        })
+        .collect()
+}
+
+fn component<'a>(manifest: &'a Value, name: &str) -> &'a Value {
+    manifest["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["logical_path"] == name)
+        .unwrap_or_else(|| panic!("{name} in {manifest}"))
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+#[allow(clippy::too_many_lines)]
+async fn a_clonecd_image_becomes_a_cue_bin_that_drops_its_subchannel_and_says_so() {
+    // No engine: Tangible makes this one itself.
+    let h = harness_using(None).await;
+    let _queue = exclusive_queue(h.pool()).await;
+    let parent = h
+        .import(&clonecd_disc(&uuid::Uuid::now_v7().simple().to_string()))
+        .await;
+    let (_, before) = h
+        .send("GET", &format!("/api/v1/artifacts/{parent}/manifest"), None)
+        .await;
+    let (_, lineage) = h
+        .send("GET", &format!("/api/v1/artifacts/{parent}/lineage"), None)
+        .await;
+    assert_eq!(
+        lineage["suggested_transformation"], "cue_bin_from_ccd",
+        "{lineage}"
+    );
+
+    let (status, asked) = h.derive(&parent, json!({})).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{asked}");
+    assert_eq!(asked["job"]["transformation"], "cue_bin_from_ccd");
+    assert_eq!(asked["job"]["tool_name"], "tangible");
+    assert_eq!(asked["job"]["options"], json!({}));
+    let job = asked["job"]["id"].as_str().unwrap().to_owned();
+    assert!(h.runner.step().await.unwrap(), "the runner found the job");
+    let (_, done) = h
+        .send("GET", &format!("/api/v1/derivation-jobs/{job}"), None)
+        .await;
+    assert_eq!(done["state"], "complete", "{done}");
+    let child = done["child_artifact_id"].as_str().unwrap().to_owned();
+
+    let (_, manifest) = h
+        .send("GET", &format!("/api/v1/artifacts/{child}/manifest"), None)
+        .await;
+    assert_eq!(manifest["classification"]["format"], "cue_bin");
+    assert_eq!(manifest["classification"]["media_family"], "cd");
+    assert_eq!(manifest["validation"]["state"], "valid");
+    assert_eq!(manifest["lineage"]["transformation"], "cue_bin_from_ccd");
+    assert_eq!(manifest["lineage"]["loss_character"], "lossy");
+    assert_eq!(manifest["lineage"]["parent_artifact_id"], parent.as_str());
+    let evidence = manifest["classification"]["detectors"][0]["evidence"].to_string();
+    assert!(
+        evidence.contains("not carried: the subchannel"),
+        "{evidence}"
+    );
+    assert_eq!(manifest["topology"]["subchannel"]["present"], false);
+    assert_eq!(manifest["topology"]["catalog"], "0123456789012");
+    assert_eq!(
+        track_shapes(&manifest),
+        track_shapes(&before),
+        "the same tracks"
+    );
+
+    // The BIN is the IMG, the same stored object.
+    let bin = component(&manifest, "Game.bin");
+    assert_eq!(bin["role"], "track_data");
+    assert_eq!(
+        bin["content"]["sha256"],
+        component(&before, "Game.img")["content"]["sha256"]
+    );
+    let cue = component(&manifest, "Game.cue");
+    assert_eq!(cue["role"], "descriptor");
+    let digest: tangible_domain::Sha256Digest =
+        cue["content"]["sha256"].as_str().unwrap().parse().unwrap();
+    let sheet = std::fs::read_to_string(h.objects.object_path(&digest)).unwrap();
+    assert_eq!(
+        sheet,
+        "CATALOG 0123456789012\nFILE \"Game.bin\" BINARY\n  TRACK 01 MODE1/2352\n    \
+         INDEX 01 00:00:00\n  TRACK 02 AUDIO\n    ISRC USRC17607839\n    INDEX 00 00:04:00\n    \
+         INDEX 01 00:06:00\n  TRACK 03 AUDIO\n    FLAGS DCP\n    INDEX 01 00:08:00\n"
+    );
+
+    // Catalogued, with no subchannel left to stop a burn.
+    let (status, artifact) = h
+        .send("GET", &format!("/api/v1/artifacts/{child}"), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{artifact}");
+    let facts = tangible_db::repositories::artifact_burn_facts(
+        h.pool(),
+        uuid::Uuid::parse_str(&child).unwrap(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(!facts.has_subchannel);
+
+    // Asked again: the derivative already made.
+    let (status, again) = h.derive(&parent, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["result"], "exists");
+
+    // It takes no options, and with no engine a CHD is not offered.
+    let (status, refused) = h
+        .derive(
+            &parent,
+            json!({ "transformation": "cue_bin_from_ccd", "hunk_bytes": 19584 }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert!(
+        refused["detail"]
+            .as_str()
+            .unwrap()
+            .contains("takes no options"),
+        "{refused}"
+    );
+    let (_, lineage) = h
+        .send("GET", &format!("/api/v1/artifacts/{child}/lineage"), None)
+        .await;
+    assert_eq!(
+        lineage["suggested_transformation"],
+        Value::Null,
+        "{lineage}"
+    );
+    let (status, refused) = h.derive(&child, json!({})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert!(
+        refused["detail"]
+            .as_str()
+            .unwrap()
+            .contains("TANGIBLE_DERIVATION_ENGINE"),
+        "{refused}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn the_cue_bin_of_a_clonecd_image_can_be_made_into_a_chd() {
+    let h = harness().await;
+    let _queue = exclusive_queue(h.pool()).await;
+    let parent = h
+        .import(&clonecd_disc(&uuid::Uuid::now_v7().simple().to_string()))
+        .await;
+    // chdman does not read CloneCD: the CUE/BIN is what suits it.
+    let (_, lineage) = h
+        .send("GET", &format!("/api/v1/artifacts/{parent}/lineage"), None)
+        .await;
+    assert_eq!(lineage["suggested_transformation"], "cue_bin_from_ccd");
+    let (status, refused) = h
+        .derive(&parent, json!({ "transformation": "chd_create_cd" }))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+
+    let (_, asked) = h.derive(&parent, json!({})).await;
+    assert!(h.runner.step().await.unwrap());
+    let job = asked["job"]["id"].as_str().unwrap().to_owned();
+    let (_, done) = h
+        .send("GET", &format!("/api/v1/derivation-jobs/{job}"), None)
+        .await;
+    let child = done["child_artifact_id"].as_str().unwrap().to_owned();
+    let (_, lineage) = h
+        .send("GET", &format!("/api/v1/artifacts/{child}/lineage"), None)
+        .await;
+    assert_eq!(
+        lineage["suggested_transformation"], "chd_create_cd",
+        "{lineage}"
+    );
+    let (status, chd) = h.derive(&child, json!({})).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{chd}");
+    assert!(h.runner.step().await.unwrap());
+    let chd_job = chd["job"]["id"].as_str().unwrap().to_owned();
+    let (_, chd_done) = h
+        .send("GET", &format!("/api/v1/derivation-jobs/{chd_job}"), None)
+        .await;
+    assert_eq!(chd_done["state"], "complete", "{chd_done}");
 }

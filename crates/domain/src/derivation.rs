@@ -35,8 +35,12 @@ use crate::manifest::ToolRef;
 /// fingerprint changes this, so old and new fingerprints can never collide.
 pub const FINGERPRINT_SCHEMA: &str = "org.tangible.derivation/v1";
 
-/// The program every current transformation runs.
+/// The program the CHD transformations run.
 pub const CHDMAN: &str = "chdman";
+
+/// The name a transformation Tangible does itself, with no program, records
+/// as its tool, beside Tangible's own version.
+pub const TANGIBLE: &str = "tangible";
 
 /// Why a transformation cannot be applied to an artifact.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -67,13 +71,31 @@ impl Transformation {
     /// The format of what it produces.
     #[must_use]
     pub const fn output_format(self) -> ArtifactFormat {
-        ArtifactFormat::Chd
+        match self {
+            Self::ChdCreateCd | Self::ChdCreateDvd => ArtifactFormat::Chd,
+            Self::CueBinFromCcd => ArtifactFormat::CueBin,
+        }
     }
 
-    /// The program that runs it.
+    /// The program that runs it, or [`TANGIBLE`] for one done in-process.
     #[must_use]
     pub const fn tool_name(self) -> &'static str {
-        CHDMAN
+        match self {
+            Self::ChdCreateCd | Self::ChdCreateDvd => CHDMAN,
+            Self::CueBinFromCcd => TANGIBLE,
+        }
+    }
+
+    /// Whether Tangible does it itself, needing no derivation engine.
+    #[must_use]
+    pub const fn is_in_process(self) -> bool {
+        matches!(self, Self::CueBinFromCcd)
+    }
+
+    /// Whether it takes options: only the CHD transformations do.
+    #[must_use]
+    pub const fn takes_options(self) -> bool {
+        matches!(self, Self::ChdCreateCd | Self::ChdCreateDvd)
     }
 
     /// Whether it can be applied to an artifact of this format and media.
@@ -98,8 +120,10 @@ impl Transformation {
             }
         };
         match (self, format) {
-            // A sheet or a table of contents is a CD by construction.
-            (Self::ChdCreateCd, ArtifactFormat::CueBin | ArtifactFormat::TocBin) => Ok(()),
+            // A sheet or a table of contents is a CD by construction, and so
+            // is a CloneCD image.
+            (Self::ChdCreateCd, ArtifactFormat::CueBin | ArtifactFormat::TocBin)
+            | (Self::CueBinFromCcd, ArtifactFormat::CcdImgSub) => Ok(()),
             (Self::ChdCreateCd, ArtifactFormat::Iso) => media_must_be(&[MediaFamily::Cd]),
             (Self::ChdCreateDvd, ArtifactFormat::Iso) => {
                 media_must_be(&[MediaFamily::Dvd, MediaFamily::Bluray])
@@ -116,9 +140,14 @@ impl Transformation {
     /// For the "make a CHD of this" request that does not name one.
     #[must_use]
     pub fn suited_to(format: ArtifactFormat, media: MediaFamily) -> Option<Self> {
-        [Self::ChdCreateCd, Self::ChdCreateDvd]
+        Self::all_suited_to(format, media).next()
+    }
+
+    /// Every transformation that applies, in the order preferred.
+    pub fn all_suited_to(format: ArtifactFormat, media: MediaFamily) -> impl Iterator<Item = Self> {
+        [Self::ChdCreateCd, Self::ChdCreateDvd, Self::CueBinFromCcd]
             .into_iter()
-            .find(|t| t.check_applies(format, media).is_ok())
+            .filter(move |t| t.check_applies(format, media).is_ok())
     }
 }
 
@@ -159,6 +188,12 @@ pub enum OptionsError {
         /// The codec.
         codec: ChdCodec,
     },
+    /// Options given to a transformation that takes none.
+    #[error("{0} takes no options")]
+    TakesNone(Transformation),
+    /// No options for a transformation that needs them.
+    #[error("{0} needs its options")]
+    Missing(Transformation),
     /// A hunk size the transformation cannot use.
     #[error(
         "{transformation} needs a hunk size that is a whole number of {unit}-byte units, from {unit} to 1 MiB, not {hunk_bytes}"
@@ -190,7 +225,9 @@ impl ChdOptions {
     #[must_use]
     pub fn defaults(transformation: Transformation) -> Self {
         match transformation {
-            Transformation::ChdCreateCd => Self {
+            // Takes none; a CD's defaults stand in for a caller that asks
+            // anyway, and [`DerivationSpec::new`] refuses them.
+            Transformation::ChdCreateCd | Transformation::CueBinFromCcd => Self {
                 compression: vec![ChdCodec::Cdlz, ChdCodec::Cdzl, ChdCodec::Cdfl],
                 hunk_bytes: 8 * CD_FRAME_BYTES,
             },
@@ -247,8 +284,9 @@ impl ChdOptions {
 pub struct DerivationSpec {
     /// What is done.
     pub transformation: Transformation,
-    /// How, every option filled in.
-    pub options: ChdOptions,
+    /// How, every option filled in; `None` for a transformation that takes
+    /// none.
+    pub options: Option<ChdOptions>,
     /// By which program, at which version.
     pub tool: ToolRef,
 }
@@ -265,10 +303,15 @@ impl DerivationSpec {
     /// [`OptionsError`] when the options do not suit the transformation.
     pub fn new(
         transformation: Transformation,
-        options: ChdOptions,
+        options: Option<ChdOptions>,
         tool: ToolRef,
     ) -> Result<Self, OptionsError> {
-        options.validate(transformation)?;
+        match (&options, transformation.takes_options()) {
+            (Some(options), true) => options.validate(transformation)?,
+            (None, true) => return Err(OptionsError::Missing(transformation)),
+            (Some(_), false) => return Err(OptionsError::TakesNone(transformation)),
+            (None, false) => {}
+        }
         Ok(Self {
             transformation,
             options,
@@ -280,10 +323,13 @@ impl DerivationSpec {
     #[must_use]
     pub fn normalized_options(&self) -> BTreeMap<String, serde_json::Value> {
         let mut map = BTreeMap::new();
+        let Some(options) = &self.options else {
+            return map;
+        };
         map.insert(
             "compression".to_owned(),
             serde_json::Value::Array(
-                self.options
+                options
                     .compression
                     .iter()
                     .map(|c| serde_json::Value::String(c.to_string()))
@@ -292,7 +338,7 @@ impl DerivationSpec {
         );
         map.insert(
             "hunk_bytes".to_owned(),
-            serde_json::Value::from(self.options.hunk_bytes),
+            serde_json::Value::from(options.hunk_bytes),
         );
         map
     }
@@ -410,6 +456,50 @@ pub fn content_digest<'a>(
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_cue_bin_is_made_from_a_clonecd_image_by_tangible_with_no_options() {
+        let t = Transformation::CueBinFromCcd;
+        assert_eq!(t.output_format(), ArtifactFormat::CueBin);
+        assert_eq!(t.tool_name(), TANGIBLE);
+        assert!(t.is_in_process() && !t.takes_options());
+        assert!(
+            t.check_applies(ArtifactFormat::CcdImgSub, MediaFamily::Cd)
+                .is_ok()
+        );
+        for format in [
+            ArtifactFormat::CueBin,
+            ArtifactFormat::Iso,
+            ArtifactFormat::TocBin,
+        ] {
+            assert!(
+                t.check_applies(format, MediaFamily::Cd).is_err(),
+                "{format}"
+            );
+        }
+        assert_eq!(
+            Transformation::suited_to(ArtifactFormat::CcdImgSub, MediaFamily::Cd),
+            Some(t),
+            "chdman does not read CloneCD, so the CUE/BIN is what suits"
+        );
+        let tool = ToolRef {
+            name: TANGIBLE.to_owned(),
+            version: "0.1.0".to_owned(),
+        };
+        let spec = DerivationSpec::new(t, None, tool.clone()).unwrap();
+        assert!(spec.normalized_options().is_empty());
+        assert_eq!(
+            DerivationSpec::new(t, Some(ChdOptions::defaults(t)), tool.clone()),
+            Err(OptionsError::TakesNone(t))
+        );
+        assert_eq!(
+            DerivationSpec::new(Transformation::ChdCreateCd, None, tool),
+            Err(OptionsError::Missing(Transformation::ChdCreateCd))
+        );
+        // Asking twice of the same content answers the first.
+        assert_eq!(spec.fingerprint(&digest(1)), spec.fingerprint(&digest(1)));
+        assert_ne!(spec.fingerprint(&digest(1)), spec.fingerprint(&digest(2)));
+    }
+
     fn digest(byte: u8) -> Sha256Digest {
         Sha256Digest::from_bytes([byte; 32])
     }
@@ -428,7 +518,7 @@ mod tests {
     fn cd_spec(version: &str) -> DerivationSpec {
         DerivationSpec::new(
             Transformation::ChdCreateCd,
-            ChdOptions::defaults(Transformation::ChdCreateCd),
+            Some(ChdOptions::defaults(Transformation::ChdCreateCd)),
             chdman(version),
         )
         .unwrap()
@@ -546,9 +636,10 @@ mod tests {
         assert_ne!(base, cd_spec("0.252").fingerprint(&parent), "tool version");
         let mut options = ChdOptions::defaults(Transformation::ChdCreateCd);
         options.compression.reverse();
-        let reordered = DerivationSpec::new(Transformation::ChdCreateCd, options, chdman("0.251"))
-            .unwrap()
-            .fingerprint(&parent);
+        let reordered =
+            DerivationSpec::new(Transformation::ChdCreateCd, Some(options), chdman("0.251"))
+                .unwrap()
+                .fingerprint(&parent);
         assert_ne!(base, reordered, "codec order is a preference, so it counts");
     }
 

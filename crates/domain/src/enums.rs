@@ -645,6 +645,10 @@ string_enum! {
         ChdCreateCd => "chd_create_cd",
         /// A DVD or Blu-ray ISO to a DVD CHD.
         ChdCreateDvd => "chd_create_dvd",
+        /// A CloneCD image to a CUE/BIN, made by Tangible itself: a sheet
+        /// written from its tracks, and its IMG as the BIN. Drops the
+        /// subchannel (docs/plans/ccd-images.md).
+        CueBinFromCcd => "cue_bin_from_ccd",
     }
 }
 

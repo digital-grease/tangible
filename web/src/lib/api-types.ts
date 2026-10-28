@@ -3721,8 +3721,10 @@ export interface components {
              */
             hunk_bytes?: number | null;
             /**
-             * @description `chd_create_cd` or `chd_create_dvd`. Omitted, the one that suits the
-             *     artifact.
+             * @description `chd_create_cd`, `chd_create_dvd`, or `cue_bin_from_ccd` (a CUE/BIN
+             *     of a CloneCD image, which drops its subchannel, made by Tangible
+             *     itself and taking no options). Omitted, the one that suits the
+             *     artifact and that this server can run.
              */
             transformation?: string | null;
         };

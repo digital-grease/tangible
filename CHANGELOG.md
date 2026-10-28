@@ -19,6 +19,16 @@ may change between minor versions, and the release notes say how.
   burning, since no engine writes one; and a disc linked only to a CloneCD
   image says what to make of it before RomM gets it. Fuzzed, and checked
   against GNU ccd2cue.
+- A CloneCD image can be made into a CUE/BIN (`cue_bin_from_ccd`, asked
+  for like a CHD, and suggested for a CloneCD image): made by Tangible
+  itself, with no derivation engine needed, its sheet written from the
+  image's tracks and read back to check it gives the same tracks, and its
+  BIN the IMG's own stored bytes, so nothing is copied. Its lineage says it
+  is lossy and that the subchannel and raw TOC are not carried. It burns,
+  makes CHDs and exports like any CUE/BIN. Derivation jobs now record the
+  tool `tangible` for it; database migration 0023 widens their
+  transformation constraint, additively. A server without chdman still runs
+  derivations, offering only what it can make.
 - Integrity checks: an artifact's stored bytes can be read back and
   compared with the digests recorded for them
   (`POST /api/v1/artifacts/{id}/validate`, operators), and so can the whole

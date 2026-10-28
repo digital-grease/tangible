@@ -178,8 +178,10 @@ pub struct LineageView {
 #[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RequestDerivation {
-    /// `chd_create_cd` or `chd_create_dvd`. Omitted, the one that suits the
-    /// artifact.
+    /// `chd_create_cd`, `chd_create_dvd`, or `cue_bin_from_ccd` (a CUE/BIN
+    /// of a CloneCD image, which drops its subchannel, made by Tangible
+    /// itself and taking no options). Omitted, the one that suits the
+    /// artifact and that this server can run.
     pub transformation: Option<String>,
     /// Codecs, in the order chdman should try them. Omitted, chdman's
     /// defaults for the transformation.
@@ -360,12 +362,14 @@ pub async fn artifact_lineage(
     };
     let found = lineage(pool, id).await.map_err(read_failed)?;
     let jobs = derivation_jobs_for(pool, id).await.map_err(read_failed)?;
-    let suggested_transformation = state.derivations().and_then(|_| {
-        Transformation::suited_to(
-            manifest.classification.format,
-            manifest.classification.media_family.unwrap_or_default(),
-        )
-        .map(|t| t.to_string())
+    let suggested_transformation = state.derivations().and_then(|derivations| {
+        derivations
+            .pipeline()
+            .suggested(
+                manifest.classification.format,
+                manifest.classification.media_family.unwrap_or_default(),
+            )
+            .map(|t| t.to_string())
     });
     Ok(Json(LineageView {
         derived_from: found.derived_from.map(Into::into),

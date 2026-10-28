@@ -497,20 +497,19 @@ fn start_derivations(
     parts: DerivationPipelineParts,
     engine: Option<Arc<dyn tangible_image::derive::DerivationEngine>>,
 ) -> (ApiState, Option<Stoppable>) {
-    let Some(engine) = engine else {
-        return (state, None);
+    // Without an engine there are still the derivatives Tangible makes
+    // itself (a CUE/BIN of a CloneCD image), so the runner always runs.
+    let pipeline = if let Some(engine) = engine {
+        tracing::info!(
+            tool = engine.tool_name(),
+            version = %engine.tool_version(),
+            "derivations enabled"
+        );
+        DerivationPipeline::new(parts.staging, parts.objects, parts.manifests, engine)
+    } else {
+        DerivationPipeline::without_engine(parts.staging, parts.objects, parts.manifests)
     };
-    tracing::info!(
-        tool = engine.tool_name(),
-        version = %engine.tool_version(),
-        "derivations enabled"
-    );
-    let derivations = Derivations::new(DerivationPipeline::new(
-        parts.staging,
-        parts.objects,
-        parts.manifests,
-        engine,
-    ));
+    let derivations = Derivations::new(pipeline);
     let mut runner = DerivationRunner::new(
         database.clone(),
         derivations.clone(),

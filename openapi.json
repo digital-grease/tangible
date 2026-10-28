@@ -10247,7 +10247,7 @@
               "string",
               "null"
             ],
-            "description": "`chd_create_cd` or `chd_create_dvd`. Omitted, the one that suits the\nartifact."
+            "description": "`chd_create_cd`, `chd_create_dvd`, or `cue_bin_from_ccd` (a CUE/BIN\nof a CloneCD image, which drops its subchannel, made by Tangible\nitself and taking no options). Omitted, the one that suits the\nartifact and that this server can run."
           }
         },
         "additionalProperties": false

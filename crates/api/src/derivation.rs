@@ -4,12 +4,17 @@
 //! Making derivatives in the background.
 //!
 //! A request becomes a job (see `tangible_db::derivations`); this module works
-//! the jobs. For each one it copies the parent's files out of the
+//! the jobs. For a CHD it copies the parent's files out of the
 //! content-addressed store into a staging area, runs the engine there,
 //! promotes the single output file into the store, writes the child's
 //! manifest with its lineage, catalogues the child and records the
 //! derivation. The parent is read, never written: no tool runs against a
 //! canonical object, and the copy it does run against is discarded after.
+//!
+//! A CUE/BIN of a CloneCD image is made by Tangible itself, with no engine
+//! (docs/plans/ccd-images.md): a sheet written from the parent's tracks,
+//! read back to check it gives the same tracks, and the parent's IMG as the
+//! BIN, the same stored object, so no bytes are copied.
 //!
 //! The queue discipline is the import queue's. A claim takes a lease, a
 //! worker that dies leaves a job that becomes claimable again, and a
@@ -33,9 +38,11 @@ use tangible_domain::enums::{
 };
 use tangible_domain::manifest::{
     ArtifactManifest, BurnSupport, Classification, Compatibility, Component, ContentHashes,
-    Detector, Extensions, Lineage, Origin, SCHEMA_ID, StorageRef, ToolRef, Topology, Validation,
+    Detector, Extensions, Lineage, Origin, SCHEMA_ID, StorageRef, Subchannel, ToolRef, Topology,
+    Track, TrackIndex, Validation, ValidatorResult,
 };
 use tangible_domain::{ArtifactId, ComponentId, LogicalPath, LossCharacter, Transformation};
+use tangible_image::cue;
 use tangible_image::derive::{DerivationEngine, DeriveError, DeriveRequest};
 use tangible_storage::{
     FilesystemStore, IngestLimits, ManifestStore, ManifestStoreError, StagingError, StagingKind,
@@ -155,21 +162,31 @@ pub struct DerivationPipeline {
     staging: StagingManager,
     objects: FilesystemStore,
     manifests: ManifestStore,
-    engine: Arc<dyn DerivationEngine>,
+    /// The engine for CHDs, when this server has one; the transformations
+    /// Tangible does itself need none.
+    engine: Option<Arc<dyn DerivationEngine>>,
     limits: IngestLimits,
 }
 
 impl std::fmt::Debug for DerivationPipeline {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DerivationPipeline")
-            .field("tool", &self.engine.tool_name())
-            .field("version", &self.engine.tool_version())
+            .field("tool", &self.engine.as_ref().map(|e| e.tool_name()))
+            .field("version", &self.engine.as_ref().map(|e| e.tool_version()))
             .finish_non_exhaustive()
     }
 }
 
+/// The tool a transformation Tangible does itself is recorded as.
+fn tangible_tool() -> ToolRef {
+    ToolRef {
+        name: tangible_domain::derivation::TANGIBLE.to_owned(),
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+    }
+}
+
 impl DerivationPipeline {
-    /// Assemble a pipeline.
+    /// Assemble a pipeline with an engine for CHDs.
     #[must_use]
     pub fn new(
         staging: StagingManager,
@@ -181,15 +198,63 @@ impl DerivationPipeline {
             staging,
             objects,
             manifests,
-            engine,
+            engine: Some(engine),
             limits: IngestLimits::default(),
         }
     }
 
-    /// The engine.
+    /// Assemble a pipeline with no engine: it makes only what Tangible makes
+    /// itself, a CUE/BIN of a CloneCD image.
     #[must_use]
-    pub fn engine(&self) -> &dyn DerivationEngine {
-        self.engine.as_ref()
+    pub fn without_engine(
+        staging: StagingManager,
+        objects: FilesystemStore,
+        manifests: ManifestStore,
+    ) -> Self {
+        Self {
+            staging,
+            objects,
+            manifests,
+            engine: None,
+            limits: IngestLimits::default(),
+        }
+    }
+
+    /// The engine, when there is one.
+    #[must_use]
+    pub fn engine(&self) -> Option<&dyn DerivationEngine> {
+        self.engine.as_deref()
+    }
+
+    /// The tool that would run `transformation` here, or why none can.
+    ///
+    /// # Errors
+    ///
+    /// [`PlanError::Unsupported`] when no engine here runs it.
+    pub fn tool_for(&self, transformation: Transformation) -> Result<ToolRef, PlanError> {
+        if transformation.is_in_process() {
+            return Ok(tangible_tool());
+        }
+        let engine = self.engine.as_ref().ok_or_else(|| {
+            PlanError::Unsupported(
+                "this server runs no derivation engine for CHDs; see TANGIBLE_DERIVATION_ENGINE"
+                    .to_owned(),
+            )
+        })?;
+        engine
+            .check_supported(transformation)
+            .map_err(PlanError::Unsupported)?;
+        Ok(ToolRef {
+            name: engine.tool_name().to_owned(),
+            version: engine.tool_version(),
+        })
+    }
+
+    /// The transformation to offer for an artifact: the first that applies
+    /// and that this server can run.
+    #[must_use]
+    pub fn suggested(&self, format: ArtifactFormat, media: MediaFamily) -> Option<Transformation> {
+        Transformation::all_suited_to(format, media).find(|t| self.tool_for(*t).is_ok())
     }
 
     /// Where manifests are kept.
@@ -219,21 +284,20 @@ impl DerivationPipeline {
                 t.check_applies(format, media)?;
                 t
             }
-            None => Transformation::suited_to(format, media)
+            None => self
+                .suggested(format, media)
+                .or_else(|| Transformation::suited_to(format, media))
                 .ok_or(PlanError::NothingSuits { format, media })?,
         };
-        self.engine
-            .check_supported(transformation)
-            .map_err(PlanError::Unsupported)?;
-        let options = options.unwrap_or_else(|| ChdOptions::defaults(transformation));
-        let spec = DerivationSpec::new(
-            transformation,
-            options,
-            ToolRef {
-                name: self.engine.tool_name().to_owned(),
-                version: self.engine.tool_version(),
-            },
-        )?;
+        let tool = self.tool_for(transformation)?;
+        let options = if transformation.takes_options() {
+            Some(options.unwrap_or_else(|| ChdOptions::defaults(transformation)))
+        } else {
+            // Kept as given, so options sent to a transformation that takes
+            // none are refused rather than ignored.
+            options
+        };
+        let spec = DerivationSpec::new(transformation, options, tool)?;
         let parent_content = content_digest(
             parent
                 .components
@@ -260,24 +324,33 @@ impl DerivationPipeline {
         &self,
         job: &DerivationJobRecord,
     ) -> Result<DerivationOutcome, DerivationError> {
-        let running = self.engine.tool_version();
-        if job.tool_version != running || job.tool_name != self.engine.tool_name() {
+        let running = self.tool_for(job.transformation)?;
+        if job.tool_version != running.version || job.tool_name != running.name {
             return Err(DerivationError::ToolChanged {
                 requested: format!("{} {}", job.tool_name, job.tool_version),
-                running: format!("{} {running}", self.engine.tool_name()),
+                running: format!("{} {}", running.name, running.version),
             });
         }
         let parent = self.manifests.read(job.parent_artifact_id).await?;
-        let options: ChdOptions = serde_json::from_value(job.options.clone())
-            .map_err(|_| DerivationError::Plan(PlanError::Options(OptionsError::CodecCount(0))))?;
+        let options: Option<ChdOptions> = if job.transformation.takes_options() {
+            Some(serde_json::from_value(job.options.clone()).map_err(|_| {
+                DerivationError::Plan(PlanError::Options(OptionsError::CodecCount(0)))
+            })?)
+        } else {
+            None
+        };
         // Checked again here, not only when asked: the parent's manifest is
         // the authority, and a job outlives the request that made it.
-        let planned = self.plan(&parent, Some(job.transformation), Some(options))?;
+        let planned = self.plan(&parent, Some(job.transformation), options)?;
 
         let id = job.id.to_string();
         let _ = self.staging.discard(StagingKind::Derivatives, &id).await;
         let area = self.staging.create(StagingKind::Derivatives, &id).await?;
-        let result = self.derive_in(&area, job, &parent, &planned).await;
+        let result = if planned.spec.transformation.is_in_process() {
+            self.cue_from_ccd(&area, job, &parent, &planned).await
+        } else {
+            self.derive_in(&area, job, &parent, &planned).await
+        };
         if let Err(error) = self.staging.discard(StagingKind::Derivatives, &id).await {
             tracing::warn!(job_id = %job.id, error = ?error, "could not remove a derivation's staging area");
         }
@@ -291,6 +364,11 @@ impl DerivationPipeline {
         parent: &ArtifactManifest,
         planned: &PlannedDerivation,
     ) -> Result<DerivationOutcome, DerivationError> {
+        let (Some(engine), Some(options)) = (&self.engine, &planned.spec.options) else {
+            return Err(DerivationError::Plan(PlanError::Unsupported(
+                "this server runs no derivation engine for CHDs".to_owned(),
+            )));
+        };
         let input_dir = area.path().join("input");
         for component in &parent.components {
             self.materialize(component, &input_dir).await?;
@@ -302,11 +380,10 @@ impl DerivationPipeline {
         let output = area.prepare_parent(&output_logical).await?;
 
         let started = OffsetDateTime::now_utc();
-        let report = self
-            .engine
+        let report = engine
             .derive(&DeriveRequest {
                 transformation: planned.spec.transformation,
-                options: &planned.spec.options,
+                options,
                 input_dir: &input_dir,
                 input: &input.logical_path,
                 output: &output,
@@ -330,15 +407,114 @@ impl DerivationPipeline {
             notes: &report.notes,
             started,
             completed,
-            tool: ToolRef {
-                name: self.engine.tool_name().to_owned(),
-                version: self.engine.tool_version(),
-            },
+            tool: planned.spec.tool.clone(),
         });
         self.manifests.write(&manifest).await?;
         Ok(DerivationOutcome {
             child_artifact_id: child,
             loss_character: report.loss_character,
+        })
+    }
+
+    /// Make a CUE/BIN of a CloneCD image, in-process: a sheet written from
+    /// the parent's tracks and read back to check it says the same, stored;
+    /// the parent's IMG, already stored, as the BIN.
+    async fn cue_from_ccd(
+        &self,
+        area: &tangible_storage::StagingArea,
+        job: &DerivationJobRecord,
+        parent: &ArtifactManifest,
+        planned: &PlannedDerivation,
+    ) -> Result<DerivationOutcome, DerivationError> {
+        let started = OffsetDateTime::now_utc();
+        let failed = |code: &'static str, detail: String| {
+            DerivationError::Engine(DeriveError::Failed {
+                code,
+                detail,
+                retryable: false,
+            })
+        };
+        let Topology::CdTracks {
+            descriptor_component_id,
+            catalog,
+            session_count,
+            tracks,
+            subchannel,
+        } = &parent.topology
+        else {
+            return Err(DerivationError::NoInput("track layout"));
+        };
+        let image_id = tracks
+            .first()
+            .map(|track| track.component_id)
+            .ok_or(DerivationError::NoInput("track layout"))?;
+        if tracks.iter().any(|track| track.component_id != image_id) {
+            return Err(failed(
+                "DERIVATION_NOT_EXPRESSIBLE",
+                "the tracks are in more than one file".to_owned(),
+            ));
+        }
+        let image = parent
+            .components
+            .iter()
+            .find(|component| component.id == image_id)
+            .ok_or(DerivationError::NoInput("image"))?;
+        let stem = parent
+            .components
+            .iter()
+            .find(|component| component.id == *descriptor_component_id)
+            .map_or_else(
+                || "disc".to_owned(),
+                |component| file_stem(&component.logical_path),
+            );
+        let bin_name = format!("{stem}.bin");
+        let cue_name = LogicalPath::parse(&format!("{stem}.cue"))
+            .map_err(|e| DerivationError::Materialize(e.to_string()))?;
+        let bin_path = LogicalPath::parse(&bin_name)
+            .map_err(|e| DerivationError::Materialize(e.to_string()))?;
+
+        let laid = cue::CdLayout {
+            catalog: catalog.clone(),
+            tracks: tracks.iter().map(track_layout).collect(),
+            session_count: *session_count,
+            warnings: Vec::new(),
+        };
+        let (sheet, back) = checked_sheet(&laid, &bin_name, image.length_bytes)?;
+
+        let staged = LogicalPath::parse(&format!("output/{}", cue_name.as_str()))
+            .map_err(|e| DerivationError::Materialize(e.to_string()))?;
+        let at = area.prepare_parent(&staged).await?;
+        tokio::fs::write(&at, sheet.as_bytes())
+            .await
+            .map_err(|e| DerivationError::Materialize(format!("could not write the sheet: {e}")))?;
+        let ingested = area.promote(&staged, &self.objects, self.limits).await?;
+        let completed = OffsetDateTime::now_utc();
+
+        let mut dropped = vec!["the raw table of contents".to_owned()];
+        if subchannel.as_ref().is_some_and(|s| s.present) {
+            dropped.insert(0, "the subchannel".to_owned());
+        }
+        let notes = vec![
+            format!("not carried: {}", dropped.join(" and ")),
+            "the sheet was read back and gives the same tracks".to_owned(),
+        ];
+        let child = ArtifactId::generate();
+        let manifest = cue_bin_manifest(&CueBinManifest {
+            child,
+            job,
+            parent,
+            planned,
+            cue: (cue_name, ingested.digest, ingested.size_bytes),
+            bin: (bin_path, image),
+            layout: &back,
+            notes: &notes,
+            started,
+            completed,
+        });
+        self.manifests.write(&manifest).await?;
+        Ok(DerivationOutcome {
+            child_artifact_id: child,
+            loss_character: LossCharacter::Lossy,
         })
     }
 
@@ -398,6 +574,239 @@ fn tool_input(parent: &ArtifactManifest) -> Result<&Component, DerivationError> 
         .iter()
         .find(|c| c.role == role)
         .ok_or(DerivationError::NoInput(what))
+}
+
+/// A sheet for `laid`, naming `bin_name`, and the layout it reads back as
+/// over a BIN of `bin_bytes`, through the parser every import uses: it must
+/// give exactly the tracks it was written from.
+fn checked_sheet(
+    laid: &cue::CdLayout,
+    bin_name: &str,
+    bin_bytes: u64,
+) -> Result<(String, cue::CdLayout), DerivationError> {
+    let failed = |code: &'static str, detail: String| {
+        DerivationError::Engine(DeriveError::Failed {
+            code,
+            detail,
+            retryable: false,
+        })
+    };
+    let sheet = cue::write_sheet(laid, bin_name)
+        .map_err(|e| failed("DERIVATION_NOT_EXPRESSIBLE", e.to_string()))?;
+    let back = cue::parse(sheet.as_bytes())
+        .map_err(|e| failed("DERIVATION_NOT_EQUIVALENT", e.to_string()))
+        .and_then(|parsed| {
+            cue::layout(&parsed, &[bin_bytes])
+                .map_err(|e| failed("DERIVATION_NOT_EQUIVALENT", e.to_string()))
+        })?;
+    if back.tracks != laid.tracks || back.catalog != laid.catalog {
+        return Err(failed(
+            "DERIVATION_NOT_EQUIVALENT",
+            "the sheet written does not read back as the same tracks".to_owned(),
+        ));
+    }
+    Ok((sheet, back))
+}
+
+/// A file's name without its directory or extension.
+fn file_stem(path: &LogicalPath) -> String {
+    let last = path.as_str().rsplit('/').next().unwrap_or("disc");
+    last.rsplit_once('.')
+        .map_or(last, |(stem, _)| stem)
+        .to_owned()
+}
+
+/// A manifest track as the CUE writer takes it, all in one file.
+fn track_layout(track: &Track) -> cue::TrackLayout {
+    cue::TrackLayout {
+        number: track.number,
+        session: track.session,
+        mode: track.mode.clone(),
+        file: 0,
+        file_offset_bytes: track.file_offset_bytes,
+        start_lba: track.start_lba,
+        sector_count: track.sector_count,
+        pregap_sectors: track.pregap_sectors,
+        indexes: track
+            .indexes
+            .iter()
+            .map(|index| (index.number, index.relative_lba))
+            .collect(),
+        isrc: track.isrc.clone(),
+        sample_byte_order: track.sample_byte_order,
+        flags: track.flags.clone(),
+    }
+}
+
+/// A layout's tracks as a manifest records them, all in `component`.
+fn manifest_tracks(layout: &cue::CdLayout, component: ComponentId) -> Vec<Track> {
+    layout
+        .tracks
+        .iter()
+        .map(|track| Track {
+            number: track.number,
+            session: track.session,
+            mode: track.mode.clone(),
+            component_id: component,
+            file_offset_bytes: track.file_offset_bytes,
+            start_lba: track.start_lba,
+            sector_count: track.sector_count,
+            pregap_sectors: track.pregap_sectors,
+            isrc: track.isrc.clone(),
+            sample_byte_order: track.sample_byte_order,
+            flags: track.flags.clone(),
+            indexes: track
+                .indexes
+                .iter()
+                .map(|(number, relative_lba)| TrackIndex {
+                    number: *number,
+                    relative_lba: *relative_lba,
+                })
+                .collect(),
+            hashes: std::collections::BTreeMap::new(),
+        })
+        .collect()
+}
+
+struct CueBinManifest<'a> {
+    child: ArtifactId,
+    job: &'a DerivationJobRecord,
+    parent: &'a ArtifactManifest,
+    planned: &'a PlannedDerivation,
+    /// The sheet: its name, digest and length.
+    cue: (LogicalPath, tangible_domain::Sha256Digest, u64),
+    /// The BIN: its name, and the parent's IMG it is.
+    bin: (LogicalPath, &'a Component),
+    layout: &'a cue::CdLayout,
+    notes: &'a [String],
+    started: OffsetDateTime,
+    completed: OffsetDateTime,
+}
+
+/// A CUE/BIN derivative's two components: the sheet, a new object, and the
+/// BIN, the parent's IMG under a new name.
+fn cue_bin_components(input: &CueBinManifest<'_>) -> (Component, Component) {
+    let (cue_name, cue_digest, cue_length) = &input.cue;
+    let (bin_name, image) = &input.bin;
+    let descriptor = Component {
+        id: ComponentId::generate(),
+        logical_path: cue_name.clone(),
+        source_filename: Some(cue_name.as_str().to_owned()),
+        role: ComponentRole::Descriptor,
+        ordinal: 0,
+        length_bytes: *cue_length,
+        storage: StorageRef::for_digest(cue_digest),
+        content: ContentHashes {
+            sha256: *cue_digest,
+            sha1: None,
+            md5: None,
+            crc32: None,
+        },
+        media_type: None,
+        attributes: Extensions::new(),
+    };
+    let data = Component {
+        id: ComponentId::generate(),
+        logical_path: bin_name.clone(),
+        source_filename: Some(bin_name.as_str().to_owned()),
+        role: ComponentRole::TrackData,
+        ordinal: 1,
+        // The same stored object as the parent's IMG: nothing is copied.
+        ..(*image).clone()
+    };
+    (descriptor, data)
+}
+
+/// A CUE/BIN derivative's manifest: the sheet and the BIN as components,
+/// the tracks the sheet reads back as, and its lineage, lossy.
+fn cue_bin_manifest(input: &CueBinManifest<'_>) -> ArtifactManifest {
+    let (cue_name, _, cue_length) = &input.cue;
+    let (descriptor, data) = cue_bin_components(input);
+    let tracks = manifest_tracks(input.layout, data.id);
+    let tool = &input.planned.spec.tool;
+    let mut evidence = vec![format!(
+        "made by {} {} from artifact {}",
+        tool.name, tool.version, input.parent.artifact_id
+    )];
+    evidence.extend(input.notes.iter().cloned());
+    let total_bytes = cue_length.saturating_add(data.length_bytes);
+    ArtifactManifest {
+        schema: SCHEMA_ID.to_owned(),
+        artifact_id: input.child,
+        created_at: input.completed,
+        origin: Origin {
+            kind: ArtifactOrigin::Derived,
+            source_kind: "derivation".to_owned(),
+            source_reference: Some(input.job.id.to_string()),
+            source_filename: Some(cue_name.as_str().to_owned()),
+            acquired_at: Some(input.completed),
+            operator_note: None,
+            physical_dump: None,
+        },
+        classification: Classification {
+            artifact_kind: ArtifactKind::MultiFileImage,
+            format: ArtifactFormat::CueBin,
+            format_confidence: 1.0,
+            detectors: vec![Detector {
+                name: tool.name.clone(),
+                version: tool.version.clone(),
+                evidence,
+            }],
+            media_family: Some(MediaFamily::Cd),
+            total_bytes,
+        },
+        topology: Topology::CdTracks {
+            descriptor_component_id: descriptor.id,
+            catalog: input.layout.catalog.clone(),
+            session_count: input.layout.session_count,
+            tracks,
+            subchannel: Some(Subchannel {
+                present: false,
+                representation: None,
+            }),
+        },
+        components: vec![descriptor, data],
+        // Read back by the CUE parser and found to give the same tracks.
+        validation: Validation {
+            state: ValidationState::Valid,
+            validated_at: Some(input.completed),
+            validators: vec![ValidatorResult {
+                name: "cue-structural".to_owned(),
+                version: env!("CARGO_PKG_VERSION").to_owned(),
+                result: "pass".to_owned(),
+                code: "CUE_READ_BACK_IDENTICAL".to_owned(),
+                details: Extensions::new(),
+            }],
+        },
+        lineage: Some(Lineage {
+            parent_artifact_id: input.parent.artifact_id,
+            transformation: input.planned.spec.transformation.to_string(),
+            tool: tool.clone(),
+            normalized_options: input
+                .planned
+                .spec
+                .normalized_options()
+                .into_iter()
+                .collect(),
+            command_fingerprint: input.planned.fingerprint.clone(),
+            loss_character: LossCharacter::Lossy,
+            started_at: Some(input.started),
+            completed_at: Some(input.completed),
+        }),
+        associations: vec![],
+        compatibility: Compatibility {
+            structurally_valid: true,
+            burn_support: BurnSupport {
+                // As for an imported CUE/BIN: no engine has been consulted.
+                state: "unknown".to_owned(),
+                profiles: vec![],
+                engines: vec![],
+                warnings: vec![],
+            },
+            target_claims: vec![],
+        },
+        extensions: Extensions::new(),
+    }
 }
 
 /// The derivative's file name: the input's name with a `.chd` extension.
