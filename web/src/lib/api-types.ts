@@ -4799,6 +4799,11 @@ export interface components {
             last_signed_in_at?: string | null;
             /** @description `viewer`, `operator` or `administrator`. */
             role: string;
+            /**
+             * @description How it signs in: `password`, or `provider` for an account an identity
+             *     provider vouches for (ADR 0018).
+             */
+            signs_in_with: string;
             /** @description The username, lowercase. */
             username: string;
         };

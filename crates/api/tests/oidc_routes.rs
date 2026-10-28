@@ -339,6 +339,32 @@ async fn a_person_in_a_mapped_group_signs_in_and_their_role_follows_the_provider
     let who = session(&h, &cookie).await;
     assert_eq!(who["username"], format!("alice-{}", h.tag));
     assert_eq!(who["role"], "administrator");
+
+    // The Accounts list says she signs in through the provider. Paged from
+    // just before her id, since the shared database holds many others.
+    let alice = tangible_db::oidc::user_for_identity(
+        h.database.pool(),
+        &format!("http://{}", h.provider.address),
+        &format!("alice-{}", h.tag),
+    )
+    .await
+    .unwrap()
+    .expect("her account");
+    let before = uuid::Uuid::from_u128(alice.id.as_u128() - 1).to_string();
+    let cursor = tangible_api::pagination::encode_cursor(&before);
+    let response = h
+        .get(
+            &format!("/api/v1/users?limit=1&cursor={cursor}"),
+            Some(&cookie),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    let page: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(page["items"][0]["username"], format!("alice-{}", h.tag));
+    assert_eq!(page["items"][0]["signs_in_with"], "provider");
 }
 
 #[tokio::test]

@@ -12648,7 +12648,8 @@
           "username",
           "role",
           "disabled",
-          "created_at"
+          "created_at",
+          "signs_in_with"
         ],
         "properties": {
           "created_at": {
@@ -12673,6 +12674,10 @@
           "role": {
             "type": "string",
             "description": "`viewer`, `operator` or `administrator`."
+          },
+          "signs_in_with": {
+            "type": "string",
+            "description": "How it signs in: `password`, or `provider` for an account an identity\nprovider vouches for (ADR 0018)."
           },
           "username": {
             "type": "string",

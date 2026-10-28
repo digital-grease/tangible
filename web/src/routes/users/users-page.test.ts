@@ -39,6 +39,7 @@ function user(n: number) {
     disabled: false,
     last_signed_in_at: null,
     created_at: '2026-10-24T12:00:00Z',
+    signs_in_with: n === 2 ? 'provider' : 'password',
   };
 }
 
@@ -51,6 +52,9 @@ describe('Accounts page', () => {
     render(UsersPage);
     expect(await screen.findByRole('rowheader', { name: 'user1' })).toBeTruthy();
     expect(screen.queryByRole('rowheader', { name: 'user3' })).toBeNull();
+    // How each signs in, in words.
+    expect(screen.getAllByText('Password').length).toBeGreaterThan(0);
+    expect(screen.getByText('Identity provider')).toBeTruthy();
 
     await fireEvent.click(screen.getByRole('button', { name: 'Show more accounts' }));
     expect(await screen.findByRole('rowheader', { name: 'user3' })).toBeTruthy();

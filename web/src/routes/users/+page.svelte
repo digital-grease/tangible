@@ -111,6 +111,7 @@
         <tr>
           <th scope="col">Username</th>
           <th scope="col">Role</th>
+          <th scope="col">Signs in with</th>
           <th scope="col">Status</th>
           <th scope="col">Last signed in</th>
           <th scope="col">Created</th>
@@ -121,6 +122,7 @@
           <tr>
             <th scope="row">{user.username}</th>
             <td>{roleLabel(user.role)}</td>
+            <td>{user.signs_in_with === 'provider' ? 'Identity provider' : 'Password'}</td>
             <td>{user.disabled ? 'Disabled' : 'Active'}</td>
             <td>{when(user.last_signed_in_at)}</td>
             <td>{when(user.created_at)}</td>

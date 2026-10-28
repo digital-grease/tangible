@@ -245,3 +245,30 @@ describe('accounts', () => {
     expect(roleLabel('something-new')).toBe('something-new');
   });
 });
+
+describe('signing in through an identity provider', () => {
+  it('starts at the provider and comes back only to a path here', async () => {
+    const { oidcStartUrl } = await import('./session');
+    expect(oidcStartUrl('/library?x=1')).toBe(
+      '/api/v1/session/oidc/start?return_to=%2Flibrary%3Fx%3D1',
+    );
+    for (const bad of ['https://evil.example', '//evil.example', '/\\evil', null, '/login']) {
+      expect(oidcStartUrl(bad)).toBe('/api/v1/session/oidc/start?return_to=%2F');
+    }
+  });
+
+  it('says why a provider sign-in or a password was refused', async () => {
+    const { oidcRefusal, signInRefusal } = await import('./session');
+    expect(oidcRefusal('OIDC_NO_ROLE', 'VoidAuth')).toMatch(/^VoidAuth signed you in, but/);
+    expect(oidcRefusal('OIDC_UNAVAILABLE', null)).toMatch(/the identity provider could not/);
+    expect(oidcRefusal('SOMETHING_NEW', 'X')).toBe(
+      'Signing in through X did not work (SOMETHING_NEW).',
+    );
+    expect(
+      signInRefusal(
+        { type: 'about:blank', title: 't', status: 403, code: 'PASSWORD_SIGN_IN_OFF', detail: 'd' },
+        null,
+      ),
+    ).toMatch(/signs in through the identity provider/);
+  });
+});

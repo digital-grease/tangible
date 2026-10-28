@@ -76,6 +76,9 @@ pub struct UserView {
     pub last_signed_in_at: Option<String>,
     /// When it was created.
     pub created_at: String,
+    /// How it signs in: `password`, or `provider` for an account an identity
+    /// provider vouches for (ADR 0018).
+    pub signs_in_with: String,
 }
 
 impl From<UserRecord> for UserView {
@@ -87,6 +90,7 @@ impl From<UserRecord> for UserView {
             disabled: user.disabled,
             last_signed_in_at: user.last_signed_in_at.map(rfc3339),
             created_at: rfc3339(user.created_at),
+            signs_in_with: "password".to_owned(),
         }
     }
 }
@@ -474,7 +478,24 @@ pub async fn list_accounts(
         tracing::error!(error = ?error, "could not list accounts");
         unavailable("accounts could not be read")
     })?;
-    let items = users.into_iter().map(UserView::from).collect();
+    let ids: Vec<uuid::Uuid> = users.iter().map(|user| user.id).collect();
+    let through_provider = tangible_db::oidc::identity_users(state.database().pool(), &ids)
+        .await
+        .map_err(|error| {
+            tracing::error!(error = ?error, "could not read how accounts sign in");
+            unavailable("accounts could not be read")
+        })?;
+    let items = users
+        .into_iter()
+        .map(|user| {
+            let provider = through_provider.contains(&user.id);
+            let mut view = UserView::from(user);
+            if provider {
+                "provider".clone_into(&mut view.signs_in_with);
+            }
+            view
+        })
+        .collect();
     Ok(Json(Page::new(items, limit, |user| user.id.clone()).into()))
 }
 

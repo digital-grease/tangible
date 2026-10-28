@@ -93,7 +93,50 @@ export function signInRefusal(problem: Problem, retryAfterSeconds: number | null
       : 'Too many failed attempts for this username. Try again later.';
   }
   if (problem.code === 'UNAUTHENTICATED') return 'The username or password is incorrect.';
+  if (problem.code === 'PASSWORD_SIGN_IN_OFF') {
+    return 'This account signs in through the identity provider, not with a password. Use the button below.';
+  }
   return problem.detail;
+}
+
+export type OidcStatus = components['schemas']['OidcStatusView'];
+
+/** Whether sign-in through an identity provider is offered here. */
+export function loadOidcStatus(fetcher: typeof fetch = apiFetch): Promise<Result<OidcStatus>> {
+  return apiCall(fetcher, '/api/v1/session/oidc');
+}
+
+/**
+ * Where a browser goes to sign in through the provider, coming back to
+ * `next` (a path on Tangible; the server checks again).
+ */
+export function oidcStartUrl(next: string | null | undefined): string {
+  return `/api/v1/session/oidc/start?return_to=${encodeURIComponent(safeNext(next))}`;
+}
+
+/** Why signing in through the provider did not work, from the code it came back with. */
+export function oidcRefusal(code: string, provider: string | null | undefined): string {
+  const name = provider || 'the identity provider';
+  switch (code) {
+    case 'OIDC_NO_ROLE':
+      return `${name} signed you in, but you are in none of the groups Tangible gives access to. Ask an administrator to add you to one.`;
+    case 'ACCOUNT_DISABLED':
+      return 'Your account here has been disabled. Ask an administrator.';
+    case 'OIDC_STATE_UNKNOWN':
+      return 'That sign-in had expired or was already used. Try again.';
+    case 'OIDC_BROWSER_MISMATCH':
+      return 'That sign-in was started in another browser or window, or its cookie was blocked. Try again from here.';
+    case 'OIDC_REFUSED':
+      return `${name} did not sign you in.`;
+    case 'OIDC_INVALID_TOKEN':
+      return `${name} answered with a sign-in Tangible could not trust. An administrator should check the server log.`;
+    case 'OIDC_UNAVAILABLE':
+      return `${name} could not be reached. Try again, or sign in with a password if you have one.`;
+    case 'OIDC_OFF':
+      return 'Signing in through an identity provider is not set up here.';
+    default:
+      return `Signing in through ${name} did not work (${code}).`;
+  }
 }
 
 /** A role, as a person reads it. */
