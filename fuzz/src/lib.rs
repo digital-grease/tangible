@@ -21,7 +21,7 @@ use tangible_domain::LogicalPath;
 use tangible_domain::logical_path::{MAX_PATH_BYTES, MAX_SEGMENT_BYTES};
 use tangible_domain::manifest::ArtifactManifest;
 use tangible_domain::report::{self, ScrubContext};
-use tangible_image::{ccd, cue, dat, iso, toc, video_ts};
+use tangible_image::{ccd, cue, dat, iso, mds, toc, video_ts};
 use tangible_integrations::romm;
 
 /// One target: what it is called, and what it runs.
@@ -41,6 +41,7 @@ pub const TARGETS: &[Target] = &[
     ("report_scrub", report_scrub),
     ("video_ts", video_ts_tree),
     ("dat", dat_file),
+    ("mds", mds_descriptor),
 ];
 
 /// Fixture directories, relative to the repository root, that also seed a
@@ -49,11 +50,46 @@ pub const TARGETS: &[Target] = &[
 pub const FIXTURE_SEEDS: &[(&str, &str)] = &[
     ("toc", "fixtures/tool-output/cdrdao/toc"),
     ("ccd", "fixtures/images/ccd"),
+    ("mds", "fixtures/images/mds"),
     ("cdrdao_output", "fixtures/tool-output/cdrdao"),
     ("xorriso_output", "fixtures/tool-output/xorriso"),
     ("report_scrub", "fixtures/tool-output/cdrdao"),
     ("report_scrub", "fixtures/tool-output/xorriso"),
 ];
+
+/// An MDS descriptor. What it accepts has 1 to 99 tracks numbered 1 to 99,
+/// each with plain file names; what it lays out, against data files of
+/// several sizes, is in order on the disc and in the file, and inside it.
+pub fn mds_descriptor(data: &[u8]) {
+    let Ok(descriptor) = mds::parse(data) else {
+        return;
+    };
+    assert!(!descriptor.tracks.is_empty() && descriptor.tracks.len() <= 99);
+    for track in &descriptor.tracks {
+        assert!((1..=99).contains(&track.number), "a track number");
+        for file in &track.files {
+            assert!(
+                !file.contains(['/', '\\', ':']) && file != ".." && !file.is_empty(),
+                "a plain file name: {file:?}"
+            );
+        }
+    }
+    for size in [0_u64, 2352 * 300, 2352 * 1000, u64::MAX] {
+        let Ok(laid) = mds::layout(&descriptor, size) else {
+            continue;
+        };
+        let mut disc = 0_u64;
+        let mut file = 0_u64;
+        for track in &laid.tracks {
+            assert!(track.start_lba >= disc, "tracks in order on the disc");
+            assert!(track.file_offset_bytes >= file, "tracks in order in the file");
+            assert!(track.sector_count > 0);
+            disc = track.start_lba + track.sector_count;
+            file = track.file_offset_bytes;
+            assert!(file <= size, "inside the data file");
+        }
+    }
+}
 
 /// A Logiqx DAT. What it accepts has a name, and every text and hash it
 /// keeps is bounded and of its shape: lowercase hex of the algorithm's

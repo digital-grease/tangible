@@ -108,3 +108,10 @@ path = "fuzz_targets/dat.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "mds"
+path = "fuzz_targets/mds.rs"
+test = false
+doc = false
+bench = false

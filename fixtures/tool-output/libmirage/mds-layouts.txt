@@ -1,0 +1,15 @@
+single-data.mds: medium cd sessions 1
+  session 1 track 1 type mode1 start -150 length 450 pregap 150 ctl 4 | len=150 off=0 size=0 sub=0 ; len=300 off=0 size=2352 sub=0
+mixed-mode.mds: medium cd sessions 1
+  session 1 track 1 type mode1 start -150 length 450 pregap 150 ctl 4 | len=150 off=0 size=0 sub=0 ; len=300 off=0 size=2352 sub=0
+  session 1 track 2 type audio start 300 length 250 pregap 150 ctl 0 | len=150 off=0 size=0 sub=0 ; len=100 off=705600 size=2352 sub=0
+  session 1 track 3 type audio start 550 length 50 pregap 0 ctl 0 | len=50 off=940800 size=2352 sub=0
+subchannel.mds: medium cd sessions 1
+  session 1 track 1 type mode1 start -150 length 250 pregap 150 ctl 4 | len=150 off=0 size=0 sub=0 ; len=100 off=0 size=2352 sub=96
+dvd.mds: medium dvd sessions 1
+  session 1 track 1 type mode1 start 0 length 64 pregap 0 ctl 4 | len=64 off=0 size=2048 sub=0
+wide-name.mds: medium cd sessions 1
+  session 1 track 1 type mode1 start -150 length 200 pregap 150 ctl 4 | len=150 off=0 size=0 sub=0 ; len=50 off=0 size=2352 sub=0
+two-sessions.mds: medium cd sessions 2
+  session 1 track 1 type mode1 start -150 length 250 pregap 150 ctl 4 | len=150 off=0 size=0 sub=0 ; len=100 off=0 size=2352 sub=0
+  session 2 track 2 type mode1 start 11500 length 200 pregap 150 ctl 4 | len=150 off=0 size=0 sub=0 ; len=50 off=235200 size=2352 sub=0
