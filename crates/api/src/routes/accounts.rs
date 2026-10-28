@@ -337,8 +337,10 @@ pub async fn sign_in(
                 unavailable("accounts could not be read")
             })?
     };
+    // An account with no password (one a provider vouches for) checks
+    // against nothing, as an unknown name does, and costs the same time.
     let (user, stored) = match account {
-        Some((user, hash)) => (Some(user), Some(hash)),
+        Some(record) => (Some(record.user), record.password_hash),
         None => (None, None),
     };
     let password_ok = verify_password(request.password, stored).await?;

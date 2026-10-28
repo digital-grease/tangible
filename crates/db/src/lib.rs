@@ -17,6 +17,7 @@ pub mod identification;
 pub mod integrations;
 pub mod integrity;
 pub mod metrics;
+pub mod oidc;
 pub mod repositories;
 pub mod restore;
 pub mod rips;

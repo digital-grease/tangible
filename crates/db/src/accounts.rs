@@ -64,7 +64,7 @@ pub enum CreateUserOutcome {
     NameTaken,
 }
 
-fn user_from_row(row: &sqlx::postgres::PgRow) -> Result<UserRecord, DbError> {
+pub(crate) fn user_from_row(row: &sqlx::postgres::PgRow) -> Result<UserRecord, DbError> {
     let role: String = row.try_get("role").map_err(DbError::Query)?;
     Ok(UserRecord {
         id: row.try_get("id").map_err(DbError::Query)?,
@@ -82,7 +82,8 @@ fn user_from_row(row: &sqlx::postgres::PgRow) -> Result<UserRecord, DbError> {
     })
 }
 
-const USER_COLUMNS: &str = "id, username, role, disabled_at, last_signed_in_at, created_at";
+pub(crate) const USER_COLUMNS: &str =
+    "id, username, role, disabled_at, last_signed_in_at, created_at";
 
 /// How many accounts exist, disabled ones included.
 ///
@@ -222,7 +223,29 @@ pub async fn list_users(
     rows.iter().map(user_from_row).collect()
 }
 
-/// An account and its password hash, for checking a sign-in.
+/// An account as a password sign-in sees it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SignInRecord {
+    /// The account.
+    pub user: UserRecord,
+    /// Its password hash; none for an account a provider vouches for.
+    pub password_hash: Option<String>,
+    /// Whether setup made it: the break-glass administrator, who may always
+    /// sign in by password (ADR 0018).
+    pub made_by_setup: bool,
+}
+
+impl std::fmt::Debug for SignInRecord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SignInRecord")
+            .field("user", &self.user)
+            .field("has_password", &self.password_hash.is_some())
+            .field("made_by_setup", &self.made_by_setup)
+            .finish()
+    }
+}
+
+/// An account and how it may sign in by password.
 ///
 /// # Errors
 ///
@@ -230,17 +253,21 @@ pub async fn list_users(
 pub async fn user_for_sign_in(
     pool: &PgPool,
     username: &str,
-) -> Result<Option<(UserRecord, String)>, DbError> {
+) -> Result<Option<SignInRecord>, DbError> {
     let row = sqlx::query(&format!(
-        "SELECT {USER_COLUMNS}, password_hash FROM users WHERE username = $1"
+        "SELECT {USER_COLUMNS}, password_hash, created_by FROM users WHERE username = $1"
     ))
     .bind(username)
     .fetch_optional(pool)
     .await
     .map_err(DbError::Query)?;
     row.map(|row| {
-        let hash: String = row.try_get("password_hash").map_err(DbError::Query)?;
-        Ok((user_from_row(&row)?, hash))
+        let created_by: String = row.try_get("created_by").map_err(DbError::Query)?;
+        Ok(SignInRecord {
+            user: user_from_row(&row)?,
+            password_hash: row.try_get("password_hash").map_err(DbError::Query)?,
+            made_by_setup: created_by == "setup",
+        })
     })
     .transpose()
 }
@@ -397,7 +424,7 @@ pub async fn record_failed_sign_in(pool: &PgPool, username: &str) -> Result<(), 
 }
 
 /// Write an audit row for a person's action, inside the caller's transaction.
-async fn audit(
+pub(crate) async fn audit(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     actor: &str,
     action: &str,
