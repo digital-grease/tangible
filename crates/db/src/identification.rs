@@ -84,8 +84,10 @@ pub async fn claim_for_hashing(
     Ok(done.rows_affected() > 0)
 }
 
-/// Record an artifact's hashes, replacing any it had, and mark it done, if
-/// `owner` still holds it. Answers whether it did.
+/// Record an artifact's hashes, replacing any it had, match it against
+/// every loaded DAT, and mark it done, all in one transaction, if `owner`
+/// still holds it. Answers how many matches it made, or `None` when it no
+/// longer held the artifact.
 ///
 /// # Errors
 ///
@@ -96,7 +98,7 @@ pub async fn record_hashes(
     owner: &str,
     components: &[(uuid::Uuid, Hashes<'_>)],
     tracks: &[(u32, Hashes<'_>)],
-) -> Result<bool, DbError> {
+) -> Result<Option<u64>, DbError> {
     let mut tx = pool.begin().await.map_err(DbError::Query)?;
     let held = sqlx::query(
         "UPDATE artifacts SET hashes_state = 'done', hashed_at = now(), hashes_error = NULL,
@@ -109,7 +111,7 @@ pub async fn record_hashes(
     .await
     .map_err(DbError::Query)?;
     if held.rows_affected() == 0 {
-        return Ok(false);
+        return Ok(None);
     }
     sqlx::query(
         "DELETE FROM artifact_hashes
@@ -160,8 +162,9 @@ pub async fn record_hashes(
         .await
         .map_err(DbError::Query)?;
     }
+    let matches = crate::dats::rematch_in(&mut tx, Some(&[artifact_id]), None).await?;
     tx.commit().await.map_err(DbError::Query)?;
-    Ok(true)
+    Ok(Some(matches))
 }
 
 /// Record that hashing an artifact held by `owner` failed: tried again after

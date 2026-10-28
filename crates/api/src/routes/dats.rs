@@ -23,7 +23,7 @@ use axum::{Json, Router};
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 use tangible_db::dats::{
-    DatRecord, NewDat, NewGame, NewRom, delete_dat, get_dat, list_dats, load_dat, rematch,
+    DatRecord, NewDat, NewGame, NewRom, delete_dat, get_dat, list_dats, load_dat,
 };
 use tangible_image::dat::{self, DatError, DatFile, MAX_DAT_BYTES};
 use time::format_description::well_known::Rfc3339;
@@ -227,9 +227,7 @@ pub async fn load(
     let loaded = load_dat(pool, &rows(&parsed, &source_sha256, &user.username))
         .await
         .map_err(unavailable("the DAT could not be stored"))?;
-    let matches = rematch(pool, None, Some(loaded.id))
-        .await
-        .map_err(unavailable("the DAT was stored but could not be matched"))?;
+    let matches = loaded.matches;
     tracing::info!(
         dat_id = %loaded.id,
         name = %parsed.header.name,

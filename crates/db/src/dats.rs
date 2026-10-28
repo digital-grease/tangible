@@ -114,13 +114,17 @@ pub struct Loaded {
     pub id: uuid::Uuid,
     /// Whether it replaced one of the same name.
     pub replaced: bool,
+    /// How many matches its games made with the library's artifacts.
+    pub matches: u64,
 }
 
 fn count(value: usize) -> i32 {
     i32::try_from(value).unwrap_or(i32::MAX)
 }
 
-/// Load a DAT, replacing any of the same name, in one transaction.
+/// Load a DAT, replacing any of the same name, and match it against every
+/// hashed artifact, in one transaction: a load cut short (a client that went
+/// away, a failure) leaves the DAT it would have replaced, matches and all.
 ///
 /// # Errors
 ///
@@ -192,8 +196,13 @@ pub async fn load_dat(pool: &PgPool, dat: &NewDat<'_>) -> Result<Loaded, DbError
     .execute(&mut *tx)
     .await
     .map_err(DbError::Query)?;
+    let matches = rematch_in(&mut tx, None, Some(id)).await?;
     tx.commit().await.map_err(DbError::Query)?;
-    Ok(Loaded { id, replaced })
+    Ok(Loaded {
+        id,
+        replaced,
+        matches,
+    })
 }
 
 async fn insert_games(
@@ -367,8 +376,8 @@ const UNITS: &str = "units AS (
 
 /// Recompute the matches of `artifacts` (every hashed artifact when
 /// `None`) against the games of `dat` (every DAT when `None`), replacing
-/// those already recorded in that scope. Answers how many matches there are
-/// now in it.
+/// those already recorded in that scope, in a transaction of its own.
+/// Answers how many matches there are now in it.
 ///
 /// # Errors
 ///
@@ -379,6 +388,33 @@ pub async fn rematch(
     dat: Option<uuid::Uuid>,
 ) -> Result<u64, DbError> {
     let mut tx = pool.begin().await.map_err(DbError::Query)?;
+    let matches = rematch_in(&mut tx, artifacts, dat).await?;
+    tx.commit().await.map_err(DbError::Query)?;
+    Ok(matches)
+}
+
+/// [`rematch`], inside the caller's transaction, so what changed the
+/// matches (a DAT loaded, an artifact hashed) and the matches commit
+/// together or not at all.
+///
+/// How many of a game's files an artifact matches: within one SHA-1, any
+/// unit can stand for any rom, so each SHA-1 matches as many files as the
+/// fewer of its roms and its units (two identical silent tracks in the DAT
+/// and one in the artifact match one file, not two). A game is `exact`
+/// when that is every file it has, its CUE aside, and the artifact has no
+/// units left over.
+///
+/// A match another transaction recorded meanwhile is updated rather than
+/// duplicated, so an artifact hashed while a DAT loads loses neither.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn rematch_in(
+    tx: &mut Transaction<'_, Postgres>,
+    artifacts: Option<&[uuid::Uuid]>,
+    dat: Option<uuid::Uuid>,
+) -> Result<u64, DbError> {
     sqlx::query(
         "DELETE FROM artifact_dat_matches m
          USING dat_games g
@@ -388,20 +424,26 @@ pub async fn rematch(
     )
     .bind(artifacts)
     .bind(dat)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .map_err(DbError::Query)?;
     let inserted = sqlx::query(&format!(
         "WITH {UNITS},
          unit_counts AS (SELECT artifact_id, count(*) AS n FROM units GROUP BY artifact_id),
-         hits AS (
-             SELECT u.artifact_id, r.game_id, count(DISTINCT r.id) AS matched
+         classes AS (
+             SELECT u.artifact_id, r.game_id, r.sha1,
+                    count(DISTINCT r.id) AS roms, count(DISTINCT u.unit) AS units
              FROM units u
              JOIN dat_roms r ON r.sha1 = u.sha1 AND NOT r.is_cue
                             AND (r.size IS NULL OR r.size = u.length_bytes)
              JOIN dat_games g ON g.id = r.game_id
              WHERE $2::uuid IS NULL OR g.dat_id = $2
-             GROUP BY u.artifact_id, r.game_id
+             GROUP BY u.artifact_id, r.game_id, r.sha1
+         ),
+         hits AS (
+             SELECT artifact_id, game_id, sum(LEAST(roms, units)) AS matched
+             FROM classes
+             GROUP BY artifact_id, game_id
          ),
          totals AS (
              SELECT r.game_id, count(*) AS total
@@ -415,14 +457,16 @@ pub async fn rematch(
                 LEAST(h.matched, t.total), t.total
          FROM hits h
          JOIN totals t ON t.game_id = h.game_id
-         JOIN unit_counts u ON u.artifact_id = h.artifact_id"
+         JOIN unit_counts u ON u.artifact_id = h.artifact_id
+         ON CONFLICT (artifact_id, game_id) DO UPDATE
+             SET kind = EXCLUDED.kind, roms_matched = EXCLUDED.roms_matched,
+                 roms_total = EXCLUDED.roms_total"
     ))
     .bind(artifacts)
     .bind(dat)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .map_err(DbError::Query)?;
-    tx.commit().await.map_err(DbError::Query)?;
     Ok(inserted.rows_affected())
 }
 
@@ -507,15 +551,28 @@ pub async fn matches_for(pool: &PgPool, artifact: uuid::Uuid) -> Result<Vec<Matc
         return Ok(matches);
     }
     let games: Vec<uuid::Uuid> = matches.iter().map(|m| m.game_id).collect();
+    // Each file paired with at most one unit, and each unit with at most
+    // one file: within a SHA-1, the k-th file (by its order in the DAT) with
+    // the k-th unit, as the counting in rematch_in assumes.
     let files = sqlx::query(&format!(
-        "WITH {UNITS}
-         SELECT r.game_id, r.name, r.size,
-                (SELECT u.unit FROM units u
-                 WHERE u.sha1 = r.sha1 AND (r.size IS NULL OR r.size = u.length_bytes)
-                 ORDER BY u.unit LIMIT 1) AS matched_by
-         FROM dat_roms r
-         WHERE r.game_id = ANY($2) AND NOT r.is_cue
-         ORDER BY r.game_id, r.id"
+        "WITH {UNITS},
+         ranked_units AS (
+             SELECT sha1, length_bytes, unit,
+                    row_number() OVER (PARTITION BY sha1 ORDER BY unit) AS k
+             FROM units
+         ),
+         ranked_roms AS (
+             SELECT r.game_id, r.id, r.name, r.size, r.sha1,
+                    row_number() OVER (PARTITION BY r.game_id, r.sha1 ORDER BY r.id) AS k
+             FROM dat_roms r
+             WHERE r.game_id = ANY($2) AND NOT r.is_cue
+         )
+         SELECT rr.game_id, rr.name, rr.size, ru.unit AS matched_by
+         FROM ranked_roms rr
+         LEFT JOIN ranked_units ru
+           ON ru.sha1 = rr.sha1 AND ru.k = rr.k
+          AND (rr.size IS NULL OR rr.size = ru.length_bytes)
+         ORDER BY rr.game_id, rr.id"
     ))
     .bind(vec![artifact])
     .bind(&games)

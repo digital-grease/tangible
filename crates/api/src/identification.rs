@@ -17,7 +17,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tangible_db::dats::rematch;
 use tangible_db::identification::{
     Hashes, claim_for_hashing, claim_next_unhashed, fail_hashing, record_hashes,
 };
@@ -219,16 +218,30 @@ impl IdentificationRunner {
                     .iter()
                     .map(|(number, hashes)| (*number, as_row(hashes)))
                     .collect();
-                if record_hashes(pool, artifact, owner, &component_rows, &track_rows).await? {
-                    // Against every loaded DAT, now its hashes are known.
-                    let matches = rematch(pool, Some(&[artifact]), None).await?;
-                    tracing::info!(
+                match record_hashes(pool, artifact, owner, &component_rows, &track_rows).await {
+                    Ok(Some(matches)) => tracing::info!(
                         artifact_id = %artifact,
                         components = component_rows.len(),
                         tracks = track_rows.len(),
                         matches,
                         "preservation hashes recorded"
-                    );
+                    ),
+                    Ok(None) => {}
+                    // Counted as a failed attempt, so an artifact whose hashes
+                    // the catalogue will not take is tried a few times and then
+                    // left failed, saying why, rather than retried for ever.
+                    Err(error) => {
+                        tracing::warn!(artifact_id = %artifact, error = ?error, "hashes could not be recorded");
+                        fail_hashing(
+                            pool,
+                            artifact,
+                            owner,
+                            &format!("the hashes could not be recorded: {error}"),
+                            seconds(self.settings.retry_after),
+                            self.settings.max_attempts,
+                        )
+                        .await?;
+                    }
                 }
             }
             Err(why) => {

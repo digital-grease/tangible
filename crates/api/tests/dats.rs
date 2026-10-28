@@ -371,6 +371,87 @@ async fn a_merged_and_a_split_image_of_one_disc_both_match_its_game_exactly() {
     );
 }
 
+/// A three-track disc whose tracks 2 and 3 are the same bytes, as two
+/// silent tracks are, unless `corrupt_track_3`.
+fn twin_tracks(tag: &str, corrupt_track_3: bool) -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
+    let track1 = sectors(100, tag);
+    let mut twin = vec![0_u8; 100 * RAW];
+    twin[..tag.len()].copy_from_slice(tag.as_bytes());
+    twin[200] = 1;
+    let mut track3 = twin.clone();
+    if corrupt_track_3 {
+        track3[300] = 0xff;
+    }
+    let image = [track1.clone(), twin.clone(), track3.clone()].concat();
+    (image, track1, twin, track3)
+}
+
+const TWIN_SHEET: &[u8] =
+    b"FILE \"disc.bin\" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n  \
+    TRACK 02 AUDIO\n    INDEX 01 00:01:25\n  TRACK 03 AUDIO\n    INDEX 01 00:02:50\n";
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn two_identical_files_need_two_matching_tracks_to_be_exact() {
+    let h = harness().await;
+    let tag = tag();
+    let (image, track1, twin, _) = twin_tracks(&tag, false);
+    let good = h
+        .artifact(&[("disc.cue", TWIN_SHEET.to_vec()), ("disc.bin", image)])
+        .await;
+    let (image, _, _, _) = twin_tracks(&tag, true);
+    let bad = h
+        .artifact(&[("disc.cue", TWIN_SHEET.to_vec()), ("disc.bin", image)])
+        .await;
+    let game = format!("Twins {tag}");
+    let (status, loaded) = h
+        .load(&dat(
+            &format!("Tests - Twins {tag}"),
+            &[(
+                &game,
+                vec![
+                    rom("Track 1.bin", &hash_bytes(&track1)),
+                    rom("Track 2.bin", &hash_bytes(&twin)),
+                    rom("Track 3.bin", &hash_bytes(&twin)),
+                ],
+            )],
+        ))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{loaded}");
+
+    let matches = h.matches(&good).await;
+    assert_eq!(matches[0]["kind"], "exact", "{matches:?}");
+    let by: Vec<&Value> = matches[0]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| &file["matched_by"])
+        .collect();
+    assert_eq!(by, ["track 1", "track 2", "track 3"]);
+
+    // Track 3 corrupt: track 2 matches one of the two identical files, not
+    // both, so the dump is not called exact.
+    let matches = h.matches(&bad).await;
+    assert_eq!(matches[0]["kind"], "partial", "{matches:?}");
+    assert_eq!(matches[0]["files_matched"], 2);
+    assert_eq!(matches[0]["files_total"], 3);
+    let by: Vec<&Value> = matches[0]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| &file["matched_by"])
+        .collect();
+    assert_eq!(
+        by,
+        [
+            &Value::from("track 1"),
+            &Value::from("track 2"),
+            &Value::Null
+        ]
+    );
+    h.remove(loaded["dat"]["id"].as_str().unwrap()).await;
+}
+
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
 async fn a_disc_whose_audio_differs_partly_matches_saying_which_track() {
