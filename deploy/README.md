@@ -805,8 +805,24 @@ database names is in the copy. A backup is not a backup until a restore from
 it has been tried.
 
 To restore: stop the stack, restore the `library` volume, start only
-PostgreSQL, restore the dump with `pg_restore --clean --if-exists`, then start
-the rest.
+PostgreSQL, restore the dump with `pg_restore --clean --if-exists`, then check
+that the two agree before starting the rest:
+
+```bash
+docker compose -f deploy/compose.yaml run --rm server restore-check
+```
+
+It looks at every object and manifest the catalogue names, at the size
+recorded, and at every manifest in the library, in seconds rather than the
+hours reading them takes. An artifact imported after the dump was taken is
+in the library and not the catalogue; `restore-check --register-missing`
+catalogues it again from its manifest, once every object it names is there
+(its import's history and any burns since are not in the dump, and stay
+lost). An object missing or at the wrong size means the library copy is
+older than the dump or damaged: restore a later copy. Work the dump records
+as under way is listed; its leases lapse and the server and workers take it
+up or say why. It exits non-zero when anything needs you. Then start the
+rest, and run `tangible scrub`, which reads every byte.
 
 ## Checking stored bytes
 

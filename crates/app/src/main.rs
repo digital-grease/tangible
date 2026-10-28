@@ -9,6 +9,7 @@
 
 mod config;
 mod gc;
+mod restore_check;
 mod scrub;
 mod telemetry;
 
@@ -30,8 +31,8 @@ use tangible_db::{Database, DbConfig};
 use tangible_storage::{FilesystemStore, ManifestStore, StagingManager, WatchRoots};
 
 use crate::config::{
-    BurnEngineKind, CommonConfig, DerivationEngineKind, DoctorConfig, GcConfig, RotateConfig,
-    ScrubConfig, SecretsCommand, ServeConfig, WorkerConfig,
+    BurnEngineKind, CommonConfig, DerivationEngineKind, DoctorConfig, GcConfig, RestoreCheckConfig,
+    RotateConfig, ScrubConfig, SecretsCommand, ServeConfig, WorkerConfig,
 };
 
 /// Self-hosted disc-image preservation, management, and burning.
@@ -63,6 +64,10 @@ enum Command {
     Migrate,
     /// Write the generated OpenAPI document to stdout.
     Openapi,
+    /// After restoring a backup, say whether the catalogue and the library
+    /// agree: every object and manifest the catalogue names is there, and
+    /// every manifest in the library is catalogued. Exits non-zero when not.
+    RestoreCheck(Box<RestoreCheckConfig>),
     /// Read stored objects back against their digests, for the whole library
     /// or one artifact, and say what was found. Exits non-zero when anything
     /// was.
@@ -83,6 +88,9 @@ async fn main() -> Result<()> {
         Command::Openapi => openapi_command(),
         Command::Gc(gc) => gc::gc_command(&cli.common, &gc).await,
         Command::Scrub(scrub) => scrub::scrub_command(&cli.common, &scrub).await,
+        Command::RestoreCheck(check) => {
+            restore_check::restore_check_command(&cli.common, &check).await
+        }
         Command::Secrets(SecretsCommand::Generate) => generate_secret_key(),
         Command::Secrets(SecretsCommand::Rotate(rotate)) => {
             rotate_secrets(&cli.common, &rotate).await

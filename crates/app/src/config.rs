@@ -325,6 +325,27 @@ pub struct ScrubConfig {
     pub storage_root: PathBuf,
 }
 
+/// Settings for `tangible restore-check`.
+#[derive(Debug, Clone, Args)]
+pub struct RestoreCheckConfig {
+    /// Catalogue again, from its manifest, each artifact the library has and
+    /// the catalogue lacks, once every object its manifest names is there.
+    #[arg(long)]
+    pub register_missing: bool,
+
+    /// Print the report as JSON.
+    #[arg(long)]
+    pub json: bool,
+
+    /// Root of the content-addressed store.
+    #[arg(
+        long,
+        env = "TANGIBLE_STORAGE_ROOT",
+        default_value = ".dev-data/library"
+    )]
+    pub storage_root: PathBuf,
+}
+
 /// Settings for `tangible gc`.
 #[derive(Debug, Clone, Args)]
 pub struct GcConfig {

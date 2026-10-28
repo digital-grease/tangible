@@ -18,6 +18,7 @@ pub mod integrations;
 pub mod integrity;
 pub mod metrics;
 pub mod repositories;
+pub mod restore;
 pub mod rips;
 pub mod romm;
 pub mod romm_api;

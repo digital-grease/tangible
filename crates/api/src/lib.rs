@@ -28,6 +28,7 @@ pub mod pagination;
 pub mod problem;
 pub mod report;
 pub mod request_id;
+pub mod restore_check;
 pub mod romm_export;
 pub mod romm_link;
 pub mod romm_sync;

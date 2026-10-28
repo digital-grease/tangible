@@ -8,6 +8,14 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
+- `tangible restore-check`, for after restoring a backup: whether every
+  object and manifest the catalogue names is in the library at the size
+  recorded, whether the library holds artifacts the catalogue lacks
+  (imported after the database was dumped), and what work the catalogue
+  records as unfinished, in seconds, without reading the bytes.
+  `--register-missing` catalogues those artifacts again from their
+  manifests once their objects are all there. It exits non-zero when
+  anything needs attention.
 - Prometheus metrics, on a listener of their own, off unless
   `TANGIBLE_METRICS_BIND` is set: artifacts and stored bytes, jobs of every
   kind by state and the age of the oldest waiting, burn attempts and their
