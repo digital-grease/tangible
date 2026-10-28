@@ -8,6 +8,10 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
+- Every command warns, at start, of each `TANGIBLE_` environment variable
+  that is set and that nothing reads, which is most often a mistyped
+  setting otherwise silently ignored. Only the name is logged, never the
+  value.
 - `tangible restore-check`, for after restoring a backup: whether every
   object and manifest the catalogue names is in the library at the size
   recorded, whether the library holds artifacts the catalogue lacks

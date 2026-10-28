@@ -81,6 +81,7 @@ enum Command {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     telemetry::init(&cli.common)?;
+    warn_of_unknown_variables();
 
     match cli.command {
         Command::Serve(serve) => serve_command(&cli.common, &serve).await,
@@ -101,6 +102,54 @@ async fn main() -> Result<()> {
             anyhow::bail!("`manifest` is not implemented yet; it arrives with epic E3")
         }
     }
+}
+
+/// Name the project's environment variables nothing reads, which are most
+/// often a typo of one that something does (ARCHITECTURE.md 11): a setting
+/// mistyped would otherwise be silently ignored. Only the name is said,
+/// never the value, which may be a secret.
+fn warn_of_unknown_variables() {
+    use clap::CommandFactory as _;
+    let mut declared = std::collections::BTreeSet::new();
+    declared_variables(&Cli::command(), &mut declared);
+    let present = std::env::vars_os().map(|(name, _)| name.to_string_lossy().into_owned());
+    for name in unknown_variables(&declared, present) {
+        tracing::warn!(
+            variable = %name,
+            "{name} is set but nothing reads it; check the name for a typo"
+        );
+    }
+}
+
+/// Every variable an argument of `command` or its subcommands reads.
+fn declared_variables(command: &clap::Command, found: &mut std::collections::BTreeSet<String>) {
+    for arg in command.get_arguments() {
+        if let Some(env) = arg.get_env() {
+            found.insert(env.to_string_lossy().into_owned());
+        }
+    }
+    for sub in command.get_subcommands() {
+        declared_variables(sub, found);
+    }
+}
+
+/// Of `present`, the project's variables that are not `declared` and not
+/// one of those only the test suites read (`TANGIBLE_TEST_*`, the hardware
+/// gates, and the tool paths and switches the tool tests take).
+fn unknown_variables(
+    declared: &std::collections::BTreeSet<String>,
+    present: impl Iterator<Item = String>,
+) -> Vec<String> {
+    const TEST_PREFIXES: [&str; 3] = ["TANGIBLE_TEST_", "TANGIBLE_HARDWARE_", "TANGIBLE_HW_"];
+    const TEST_SUFFIXES: [&str; 3] = ["_BIN", "_TESTS", "_WORKDIR"];
+    let mut unknown: Vec<String> = present
+        .filter(|name| name.starts_with("TANGIBLE_"))
+        .filter(|name| !declared.contains(name))
+        .filter(|name| !TEST_PREFIXES.iter().any(|prefix| name.starts_with(prefix)))
+        .filter(|name| !TEST_SUFFIXES.iter().any(|suffix| name.ends_with(suffix)))
+        .collect();
+    unknown.sort();
+    unknown
 }
 
 /// The watched roots configured, said at start.
@@ -1266,6 +1315,32 @@ mod tests {
         "TANGIBLE_WORKER_NAME",
         "TANGIBLE_WORKER_STATE_DIR",
     ];
+
+    #[test]
+    fn a_mistyped_variable_is_named_and_a_real_one_is_not() {
+        let mut declared = std::collections::BTreeSet::new();
+        declared_variables(&Cli::command(), &mut declared);
+        assert!(
+            declared.contains("TANGIBLE_METRICS_BIND"),
+            "subcommands are read"
+        );
+        assert!(declared.contains("TANGIBLE_ENROLLMENT_TOKEN"));
+        let present = [
+            "TANGIBLE_PUBLIC_URL",
+            "TANGIBLE_PUBLC_URL",
+            "TANGIBLE_TEST_DATABASE_URL",
+            "TANGIBLE_HARDWARE_TESTS",
+            "TANGIBLE_XORRISO_BIN",
+            "TANGIBLE_HTTP_PORT",
+            "PATH",
+        ]
+        .into_iter()
+        .map(ToOwned::to_owned);
+        assert_eq!(
+            unknown_variables(&declared, present),
+            vec!["TANGIBLE_HTTP_PORT", "TANGIBLE_PUBLC_URL"]
+        );
+    }
 
     #[test]
     fn the_metrics_token_is_the_first_line_and_never_empty() {
