@@ -5923,6 +5923,16 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Too many rejected tokens; see Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         }
       }

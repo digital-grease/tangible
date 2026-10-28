@@ -8,6 +8,11 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
+- Worker enrollment is rate limited, as AGENTS.md requires of worker
+  registration: after five rejected tokens under one worker name in
+  fifteen minutes, or sixty in all, enrollment answers 429 `RATE_LIMITED`
+  with `Retry-After` until the window passes, without using up the token
+  presented. Tokens were never guessable; this bounds the load and the log.
 - Every command warns, at start, of each `TANGIBLE_` environment variable
   that is set and that nothing reads, which is most often a mistyped
   setting otherwise silently ignored. Only the name is logged, never the

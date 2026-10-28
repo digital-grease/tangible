@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tangible_db::Database;
 use tangible_storage::{ManifestStore, WatchRoots};
 
-use crate::auth::{ActionLimiter, AuthSettings, LoginLimiter};
+use crate::auth::{ActionLimiter, AuthSettings, EnrollmentLimiter, LoginLimiter};
 use crate::derivation::Derivations;
 use crate::diagnostics::DiagnosticsSettings;
 use crate::import::ImportPipeline;
@@ -40,6 +40,7 @@ struct Inner {
     auth: AuthSettings,
     /// Failed sign-ins, shared by every clone of the state.
     login_limiter: LoginLimiter,
+    enrollment_limiter: EnrollmentLimiter,
     /// URL imports per account (ADR 0016), likewise shared.
     url_import_limiter: ActionLimiter,
     /// Uploads started per account, likewise shared.
@@ -102,6 +103,7 @@ impl ApiState {
                 imports: None,
                 auth: AuthSettings::default(),
                 login_limiter: LoginLimiter::default(),
+                enrollment_limiter: EnrollmentLimiter::default(),
                 url_import_limiter: ActionLimiter::url_imports(),
                 upload_limiter: ActionLimiter::uploads(),
                 web: None,
@@ -128,6 +130,7 @@ impl ApiState {
                 imports: None,
                 auth: AuthSettings::default(),
                 login_limiter: LoginLimiter::default(),
+                enrollment_limiter: EnrollmentLimiter::default(),
                 url_import_limiter: ActionLimiter::url_imports(),
                 upload_limiter: ActionLimiter::uploads(),
                 web: None,
@@ -341,6 +344,12 @@ impl ApiState {
     #[must_use]
     pub fn login_limiter(&self) -> &LoginLimiter {
         &self.inner.login_limiter
+    }
+
+    /// The limiter for worker enrollment.
+    #[must_use]
+    pub fn enrollment_limiter(&self) -> &EnrollmentLimiter {
+        &self.inner.enrollment_limiter
     }
 
     /// URL imports per account.

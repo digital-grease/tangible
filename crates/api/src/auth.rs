@@ -903,20 +903,39 @@ fn hashing_failed() -> Problem {
 ///
 /// In memory: the server runs as one instance, and a restart forgetting a
 /// few failures costs an attacker a restart they cannot cause.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct LoginLimiter {
+    allowed: u32,
+    window: Duration,
     failures: Arc<Mutex<HashMap<String, (u32, Instant)>>>,
 }
 
+impl Default for LoginLimiter {
+    /// Sign-in's: five failures per username in fifteen minutes.
+    fn default() -> Self {
+        Self::new(LOGIN_FAILURES_ALLOWED, LOGIN_WINDOW)
+    }
+}
+
 impl LoginLimiter {
+    /// At most `allowed` failures per name in each `window`.
+    #[must_use]
+    pub fn new(allowed: u32, window: Duration) -> Self {
+        Self {
+            allowed,
+            window,
+            failures: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
     /// How long until `username` may try again, if it is locked out.
     #[must_use]
     pub fn retry_after(&self, username: &str) -> Option<Duration> {
         let failures = self.failures.lock().ok()?;
         let (count, since) = failures.get(username)?;
         let elapsed = since.elapsed();
-        (*count >= LOGIN_FAILURES_ALLOWED && elapsed < LOGIN_WINDOW)
-            .then(|| LOGIN_WINDOW.saturating_sub(elapsed))
+        (*count >= self.allowed && elapsed < self.window)
+            .then(|| self.window.saturating_sub(elapsed))
     }
 
     /// Count a failure.
@@ -925,7 +944,7 @@ impl LoginLimiter {
             return;
         };
         if failures.len() >= LOGIN_TRACKED_NAMES {
-            failures.retain(|_, (_, since)| since.elapsed() < LOGIN_WINDOW);
+            failures.retain(|_, (_, since)| since.elapsed() < self.window);
         }
         if failures.len() >= LOGIN_TRACKED_NAMES && !failures.contains_key(username) {
             // Still full of live entries: somebody is spraying names. Drop
@@ -941,7 +960,7 @@ impl LoginLimiter {
         let entry = failures
             .entry(username.to_owned())
             .or_insert((0, Instant::now()));
-        if entry.1.elapsed() >= LOGIN_WINDOW {
+        if entry.1.elapsed() >= self.window {
             *entry = (0, Instant::now());
         }
         entry.0 = entry.0.saturating_add(1);
@@ -952,6 +971,58 @@ impl LoginLimiter {
         if let Ok(mut failures) = self.failures.lock() {
             failures.remove(username);
         }
+    }
+}
+
+/// Rejected enrollment tokens allowed per worker name within
+/// [`ENROLLMENT_WINDOW`].
+pub const ENROLLMENT_FAILURES_PER_NAME: u32 = 5;
+
+/// Rejected enrollment tokens allowed in all within [`ENROLLMENT_WINDOW`]:
+/// a ceiling on a flood that varies the name.
+pub const ENROLLMENT_FAILURES_IN_ALL: u32 = 60;
+
+/// How long rejected enrollment tokens are remembered.
+pub const ENROLLMENT_WINDOW: Duration = Duration::from_secs(15 * 60);
+
+/// Limits worker enrollment (AGENTS.md 16), which is unauthenticated: the
+/// one-use token is the credential. Rejected tokens are counted per worker
+/// name, as sign-in counts per username, and in all, so a flood that varies
+/// the name still stops. Tokens are long and random, so this bounds the
+/// load and the log rather than guessing; the address a request came from
+/// is not used, since behind a reverse proxy it is the proxy's.
+#[derive(Debug, Clone)]
+pub struct EnrollmentLimiter {
+    per_name: LoginLimiter,
+    in_all: LoginLimiter,
+}
+
+impl Default for EnrollmentLimiter {
+    fn default() -> Self {
+        Self {
+            per_name: LoginLimiter::new(ENROLLMENT_FAILURES_PER_NAME, ENROLLMENT_WINDOW),
+            in_all: LoginLimiter::new(ENROLLMENT_FAILURES_IN_ALL, ENROLLMENT_WINDOW),
+        }
+    }
+}
+
+impl EnrollmentLimiter {
+    /// The key all enrollments share.
+    const ALL: &'static str = "*";
+
+    /// How long until an enrollment under `name` may be tried, if it may
+    /// not be now.
+    #[must_use]
+    pub fn retry_after(&self, name: &str) -> Option<Duration> {
+        let per_name = self.per_name.retry_after(name);
+        let in_all = self.in_all.retry_after(Self::ALL);
+        per_name.max(in_all)
+    }
+
+    /// Count a rejected token.
+    pub fn record_failure(&self, name: &str) {
+        self.per_name.record_failure(name);
+        self.in_all.record_failure(Self::ALL);
     }
 }
 
@@ -1278,6 +1349,29 @@ mod tests {
         assert!(quick.try_acquire("alice").is_ok());
         assert!(quick.try_acquire("alice").is_ok());
         assert_eq!(ActionLimiter::url_imports().allowed, URL_IMPORTS_ALLOWED);
+    }
+
+    #[test]
+    fn enrollment_stops_for_a_name_after_five_rejected_tokens_and_for_all_after_sixty() {
+        let limiter = EnrollmentLimiter::default();
+        for _ in 0..ENROLLMENT_FAILURES_PER_NAME - 1 {
+            limiter.record_failure("burner-1");
+        }
+        assert!(limiter.retry_after("burner-1").is_none());
+        limiter.record_failure("burner-1");
+        let wait = limiter.retry_after("burner-1").expect("locked");
+        assert!(wait <= ENROLLMENT_WINDOW && wait > Duration::ZERO);
+        assert!(limiter.retry_after("burner-2").is_none(), "per name");
+
+        let flood = EnrollmentLimiter::default();
+        for n in 0..ENROLLMENT_FAILURES_IN_ALL {
+            assert!(flood.retry_after(&format!("name-{n}")).is_none());
+            flood.record_failure(&format!("name-{n}"));
+        }
+        assert!(
+            flood.retry_after("a-name-never-tried").is_some(),
+            "a flood varying the name stops everyone"
+        );
     }
 
     #[test]

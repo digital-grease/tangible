@@ -206,6 +206,48 @@ async fn an_issued_token_enrolls_a_worker_once() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
+async fn enrollment_under_a_name_stops_after_five_rejected_tokens() {
+    let harness = harness().await;
+    let name = format!("guessed-worker-{}", uuid::Uuid::now_v7());
+    let attempt = |token: String| {
+        serde_json::json!({
+            "enrollment_token": token,
+            "name": name,
+            "protocol_versions": ["1alpha1"],
+            "software_version": "0.1.0",
+        })
+    };
+    for n in 0..5 {
+        let (status, body) = harness
+            .post(
+                "/api/v1/worker-enrollments/consume",
+                None,
+                attempt(format!("tgw_enroll_not-a-real-token-{n}")),
+            )
+            .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    }
+    // Even a good token is refused under that name until the window passes,
+    // without being used up.
+    let token = issue_token(&harness.pool).await;
+    let (status, body) = harness
+        .post(
+            "/api/v1/worker-enrollments/consume",
+            None,
+            attempt(token.clone()),
+        )
+        .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    assert_eq!(body["code"], "RATE_LIMITED");
+    assert_eq!(
+        consume(&harness, &token).await,
+        StatusCode::OK,
+        "another name may use it"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn a_token_lasts_fifteen_minutes_unless_asked_and_never_past_an_hour() {
     let harness = harness().await;
     let lifetime = |issued: &serde_json::Value| {
