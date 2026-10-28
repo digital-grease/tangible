@@ -3140,6 +3140,12 @@ export interface components {
              */
             max_upload_bytes: number;
             /**
+             * @description Those of them Tangible may delete imported Usenet downloads in
+             *     (`TANGIBLE_REMOVABLE_ROOTS`, ADR 0017), for a SABnzbd or NZBGet set
+             *     to remove after import. Identifiers only.
+             */
+            removable_roots: string[];
+            /**
              * @description S3 integrations an administrator configured and turned on, and the
              *     buckets each allows (`POST /imports/s3`).
              */

@@ -231,6 +231,10 @@ pub struct ImportSources {
     /// Identifiers only. The paths behind them are the host's business and
     /// are never exposed.
     pub watch_roots: Vec<String>,
+    /// Those of them Tangible may delete imported Usenet downloads in
+    /// (`TANGIBLE_REMOVABLE_ROOTS`, ADR 0017), for a SABnzbd or NZBGet set
+    /// to remove after import. Identifiers only.
+    pub removable_roots: Vec<String>,
     /// Largest upload the server will accept, in bytes.
     pub max_upload_bytes: i64,
     /// Whether operators may import from a URL here (ADR 0016).
@@ -413,6 +417,7 @@ pub async fn list_sources(State(state): State<ApiState>) -> Result<Json<ImportSo
         download_clients,
         s3_sources,
         watch_roots: imports.roots.ids(),
+        removable_roots: imports.roots.removable_ids(),
         max_upload_bytes: i64::try_from(imports.max_upload_bytes).unwrap_or(i64::MAX),
         url_imports: imports.outbound.is_some(),
         url_imports_allow_http: imports

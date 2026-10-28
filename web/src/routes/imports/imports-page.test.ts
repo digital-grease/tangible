@@ -351,3 +351,35 @@ describe('Imports page, importing from S3', () => {
     expect(screen.getByText('S3')).toBeTruthy();
   });
 });
+
+describe('Imports page, removing sources', () => {
+  it('says where removing an import from its client stands, in words', async () => {
+    const imported = {
+      ...DOWNLOADING,
+      id: 'i2',
+      source_kind: 'sabnzbd_job',
+      source_reference: 'sabnzbd:SABnzbd_nzo_x',
+      state: 'complete',
+      is_settled: true,
+      artifact_id: 'a1',
+      source_removal: {
+        state: 'kept',
+        detail: 'SABnzbd has moved the download since it was imported, so it was left',
+        files_removed: null,
+        bytes_removed: null,
+        files_kept: null,
+        next_attempt_at: null,
+        requested_at: '2026-10-27T20:00:00Z',
+        ended_at: '2026-10-27T20:01:00Z',
+      },
+    };
+    server({
+      '/api/v1/import-sources': sources(false),
+      '/api/v1/imports': { status: 200, body: { items: [imported] } },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    render(ImportsPage);
+    expect(await screen.findByText('Left in SABnzbd.')).toBeTruthy();
+    expect(screen.getByText(/has moved the download since it was imported/)).toBeTruthy();
+  });
+});

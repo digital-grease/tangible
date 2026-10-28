@@ -10,6 +10,7 @@ import {
   importFromWatchedRoot,
   importStateLabel,
   importStateMark,
+  sourceRemovalLabel,
   loadImportSources,
   loadImports,
   retryImport,
@@ -217,6 +218,45 @@ describe('labels', () => {
     for (const state of ['requested', 'complete', 'failed_terminal', 'canceled', 'anything']) {
       expect(importStateMark(state).length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('source removal', () => {
+  const removal = (state: string, detail: string | null = null) => ({
+    state,
+    detail,
+    files_removed: null,
+    bytes_removed: null,
+    files_kept: null,
+    next_attempt_at: null,
+    requested_at: '2026-10-27T20:00:00Z',
+    ended_at: null,
+  });
+
+  it('says nothing for an import whose source is kept', () => {
+    expect(sourceRemovalLabel({ source_kind: 'qbittorrent_job', source_removal: null })).toBeNull();
+  });
+
+  it('says where each removal stands, naming the client or bucket', () => {
+    const label = (source_kind: string, state: string, detail: string | null = null) =>
+      sourceRemovalLabel({ source_kind, source_removal: removal(state, detail) });
+    expect(label('qbittorrent_job', 'verifying')?.headline).toBe(
+      "Checking the library's copy before removing it from qBittorrent",
+    );
+    expect(label('sabnzbd_job', 'removing')?.headline).toBe('Removing it from SABnzbd');
+    expect(label('sabnzbd_job', 'removing', 'SABnzbd could not be reached')).toEqual({
+      headline: 'Not removed from SABnzbd yet; it will be tried again',
+      detail: 'SABnzbd could not be reached',
+    });
+    expect(label('s3_object', 'removed', 'Deleted the object from bucket discs')).toEqual({
+      headline: 'Removed from its bucket',
+      detail: 'Deleted the object from bucket discs',
+    });
+    expect(label('nzbget_job', 'already_gone')?.headline).toBe('Already gone from NZBGet');
+    expect(label('qbittorrent_job', 'kept', 'moved')?.headline).toBe('Left in qBittorrent');
+    expect(label('nzbget_job', 'refused')?.headline).toBe(
+      "Not removed from NZBGet: the library's copy failed its check",
+    );
   });
 });
 

@@ -8920,6 +8920,7 @@
         "description": "Where imports may be taken from.",
         "required": [
           "watch_roots",
+          "removable_roots",
           "max_upload_bytes",
           "url_imports",
           "url_imports_allow_http",
@@ -8938,6 +8939,13 @@
             "type": "integer",
             "format": "int64",
             "description": "Largest upload the server will accept, in bytes."
+          },
+          "removable_roots": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Those of them Tangible may delete imported Usenet downloads in\n(`TANGIBLE_REMOVABLE_ROOTS`, ADR 0017), for a SABnzbd or NZBGet set\nto remove after import. Identifiers only."
           },
           "s3_sources": {
             "type": "array",

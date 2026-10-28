@@ -1251,6 +1251,14 @@ fn own_image(mark: u8) -> Vec<u8> {
 #[ignore = "requires PostgreSQL"]
 async fn a_sabnzbd_download_is_deleted_by_tangible_once_the_copy_is_checked() {
     let harness = harness().await;
+    let (_, sources) = harness
+        .send(&harness.admin, Method::GET, "/api/v1/import-sources", None)
+        .await;
+    assert_eq!(
+        sources["removable_roots"],
+        json!(["downloads"]),
+        "{sources}"
+    );
     let integration = harness.removing_sabnzbd().await;
     let (import_id, nzo_id, folder) = harness
         .imported_from_sabnzbd(&integration, &iso_image())

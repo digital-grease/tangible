@@ -10,6 +10,7 @@
   import { loadImportSources } from '$lib/imports';
   import {
     CLIENT_KINDS,
+    afterImportWording,
     clientFormFrom,
     clientWording,
     createClientRequest,
@@ -21,6 +22,8 @@
     isClientKind,
     kindLabel,
     loadIntegrations,
+    removalBlocked,
+    removesAfterImport,
     secretsLabel,
     testIntegration,
     testOutcome,
@@ -42,6 +45,8 @@
   let view = $state<View>({ kind: 'loading' });
   /** The watched roots a download folder may be mapped to; `null` if unknown. */
   let roots = $state<string[] | null>(null);
+  /** Those Tangible may delete imported Usenet downloads in. */
+  let removableRoots = $state<string[]>([]);
 
   /** The integration being edited, or `null` while adding one. */
   let editing = $state<IntegrationView | null>(null);
@@ -51,6 +56,16 @@
   let done = $state<string | null>(null);
 
   const wording = $derived(clientWording(form.kind));
+  const after = $derived(afterImportWording(form.kind));
+  /** Why removing is not offered, when it is not. */
+  const blocked = $derived(removalBlocked(form, removableRoots));
+  // A root changed to one Tangible may not delete in takes the choice back,
+  // once the roots are known.
+  $effect(() => {
+    if (roots !== null && blocked !== null && form.afterImport === 'remove') {
+      form.afterImport = 'keep';
+    }
+  });
   /** What the secret is called in sentences: "password" or "API key". */
   const secretNoun = $derived(
     form.kind === 's3'
@@ -93,6 +108,8 @@
   onMount(async () => {
     const [, sources] = await Promise.all([refresh(), loadImportSources()]);
     roots = sources.kind === 'ready' ? sources.data.watch_roots : null;
+    // A server from before removal says nothing: none.
+    removableRoots = sources.kind === 'ready' ? (sources.data.removable_roots ?? []) : [];
     if (!editing) form = emptyClientForm(form.kind, roots ?? []);
   });
 
@@ -183,7 +200,8 @@
   Download clients you already run, which Tangible will hand a torrent or an NZB to and import from
   when it finishes; S3-compatible storage operators may import objects from; and the API of the RomM
   the export writes into. Tangible never searches for anything, never asks a client to run a script,
-  only reads from a bucket, and never changes anything in RomM.
+  and never changes anything in RomM. It removes what it imported from a client or bucket only where
+  you choose that below, and only once the library's copy has been checked.
 </p>
 
 <section aria-live="polite" aria-busy={view.kind === 'loading'}>
@@ -443,7 +461,7 @@
           ></textarea>
           <br />
           <small id="buckets-hint"
-            >One a line. Tangible only reads from them: it never lists, writes or deletes.</small
+            >One a line. Tangible never lists or writes them, and deletes only as chosen below.</small
           >
         </p>
       {:else if form.kind === 'romm_api'}
@@ -535,9 +553,40 @@
           </select>
           <br />
           <small id="local-root-hint">
-            The watched root where Tangible's container sees that folder, read-only.
+            The watched root where Tangible's container sees that folder, read-only unless it is
+            listed in <code>TANGIBLE_REMOVABLE_ROOTS</code>.
           </small>
         </p>
+      {/if}
+      {#if removesAfterImport(form.kind)}
+        <fieldset aria-describedby="after-import-hint">
+          <legend>After an import is in the library</legend>
+          <p>
+            <label>
+              <input type="radio" name="after_import" value="keep" bind:group={form.afterImport} />
+              {after.keep}
+            </label>
+            <br />
+            <label>
+              <input
+                type="radio"
+                name="after_import"
+                value="remove"
+                bind:group={form.afterImport}
+                disabled={blocked !== null}
+              />
+              {after.remove}
+            </label>
+          </p>
+          <small id="after-import-hint">
+            Removing happens only after an integrity check reads the library's copy back and finds
+            it whole, and only for imports made while this is chosen. Anything moved or changed
+            since it was imported is left, and the import says why. {after.needs}
+          </small>
+          {#if blocked !== null}
+            <p role="note"><small>{blocked}</small></p>
+          {/if}
+        </fieldset>
       {/if}
       <p>
         <label>

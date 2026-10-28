@@ -12,6 +12,7 @@
     importFromUrl,
     importFromWatchedRoot,
     importStateLabel,
+    sourceRemovalLabel,
     importStateMark,
     loadImportSources,
     loadImports,
@@ -548,6 +549,15 @@
                   {job.error_detail}
                 {:else}
                   —
+                {/if}
+                {#if sourceRemovalLabel(job)}
+                  {@const removal = sourceRemovalLabel(job)}
+                  <p class="removal">
+                    <small
+                      ><strong>{removal?.headline}.</strong>
+                      {#if removal?.detail}{removal.detail}.{/if}</small
+                    >
+                  </p>
                 {/if}
                 {#if job.warnings.length > 0}
                   <details>

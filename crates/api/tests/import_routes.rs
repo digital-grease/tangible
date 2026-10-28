@@ -625,6 +625,11 @@ async fn the_configured_sources_are_discoverable() {
     let (status, sources) = harness.get("/api/v1/import-sources").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(sources["watch_roots"][0], "incoming");
+    assert_eq!(
+        sources["removable_roots"],
+        serde_json::json!([]),
+        "only read, unless TANGIBLE_REMOVABLE_ROOTS says"
+    );
     assert!(sources["max_upload_bytes"].as_i64().expect("a limit") > 0);
     assert!(
         !sources

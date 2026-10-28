@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  afterImportWording,
   clientFormFrom,
   clientWording,
   createClientRequest,
@@ -10,6 +11,8 @@ import {
   emptyClientForm,
   isClientKind,
   parseBuckets,
+  removalBlocked,
+  removesAfterImport,
   integrationRefusal,
   integrationStatusLabel,
   kindLabel,
@@ -88,6 +91,7 @@ describe('the download client form', () => {
         category: 'tangible',
         client_path: '/downloads/tangible',
         local_root: 'downloads',
+        after_import: 'keep',
       },
     });
     expect(createClientRequest({ ...form, secret: ' secret ' }).secrets).toEqual({
@@ -143,6 +147,7 @@ describe('the download client form', () => {
         region: 'us-east-1',
         path_style: true,
         buckets: ['discs', 'old-discs'],
+        after_import: 'keep',
       },
       secrets: { access_key_id: 'AKID', secret_access_key: 'shh' },
     });
@@ -330,5 +335,43 @@ describe('trying an integration', () => {
     }) as typeof fetch;
     await testIntegration('a/b', fetcher);
     expect(seen).toEqual(['POST /api/v1/integrations/a%2Fb/test']);
+  });
+});
+
+describe('removing after import', () => {
+  it('is offered for download clients and S3, and not for RomM', () => {
+    for (const kind of ['qbittorrent', 'sabnzbd', 'nzbget', 's3'] as const) {
+      expect(removesAfterImport(kind)).toBe(true);
+      expect(afterImportWording(kind).remove).not.toBe('');
+    }
+    expect(removesAfterImport('romm_api')).toBe(false);
+    expect(afterImportWording('sabnzbd').needs).toContain('TANGIBLE_REMOVABLE_ROOTS');
+    expect(afterImportWording('s3').needs).toContain('s3:DeleteObject');
+  });
+
+  it('reads a stored choice back and sends it on every save', () => {
+    const removing = clientFormFrom({
+      ...qbittorrent({ settings: { ...qbittorrent().settings, after_import: 'remove' } }),
+      kind: 'qbittorrent',
+    });
+    expect(removing.afterImport).toBe('remove');
+    expect(updateClientRequest(removing).settings?.after_import).toBe('remove');
+    const keeping = clientFormFrom({ ...qbittorrent(), kind: 'qbittorrent' });
+    expect(keeping.afterImport).toBe('keep');
+    expect(createClientRequest(keeping).settings.after_import).toBe('keep');
+    expect(
+      createClientRequest(emptyClientForm('romm_api', [])).settings.after_import,
+    ).toBeUndefined();
+  });
+
+  it('needs a removable root for a Usenet client, and nothing more for the others', () => {
+    const sab = { ...emptyClientForm('sabnzbd', []), localRoot: 'downloads' };
+    expect(removalBlocked(sab, ['usenet'])).toContain('TANGIBLE_REMOVABLE_ROOTS');
+    expect(removalBlocked({ ...sab, localRoot: 'usenet' }, ['usenet'])).toBeNull();
+    expect(removalBlocked({ ...sab, localRoot: '' }, ['usenet'])).toBe(
+      'Choose the watched root first.',
+    );
+    expect(removalBlocked(emptyClientForm('qbittorrent', ['downloads']), [])).toBeNull();
+    expect(removalBlocked(emptyClientForm('s3', []), [])).toBeNull();
   });
 });

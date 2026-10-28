@@ -104,6 +104,13 @@ may change between minor versions, and the release notes say how.
   delete, and then the folders left empty. Anything else stays and is
   counted. SABnzbd is then asked to forget the job (it archives it), NZBGet
   to hide it. Diagnostics gains a "Removable roots" check (ADR 0017).
+- The web UI offers it: on the Integrations page, each download client and
+  S3 integration has "After an import is in the library", keep or remove,
+  saying what goes and when; a SABnzbd or NZBGet offers removing only on a
+  root Tangible may delete in, and says why not otherwise. The Imports page
+  says where each removal stands. `GET /api/v1/import-sources` gains
+  `removable_roots` (ids only). Saving an integration from the page now
+  keeps its `after_import` rather than turning removal off.
 
 - Groundwork for issue reports: text is scrubbed of credentials, paths,
   serial numbers, library file names and LAN addresses before anyone can

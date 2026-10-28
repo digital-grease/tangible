@@ -260,7 +260,68 @@ export type ClientForm = {
   webUrl: string;
   /** RomM's API only: ask RomM to scan what the export changed. */
   scanAfterExport: boolean;
+  /** Download clients and S3: what becomes of a source once its import is in the library. */
+  afterImport: AfterImport;
 };
+
+/** What becomes of an import's source once the library holds a checked copy. */
+export type AfterImport = 'keep' | 'remove';
+
+/** Whether a kind can remove its sources after import. */
+export function removesAfterImport(kind: ClientKind): boolean {
+  return kind !== 'romm_api';
+}
+
+/** How the two choices read for a kind, and what removing takes. */
+export function afterImportWording(kind: ClientKind): {
+  keep: string;
+  remove: string;
+  needs: string;
+} {
+  const client = kindLabel(kind);
+  switch (kind) {
+    case 'qbittorrent':
+      return {
+        keep: 'Keep the torrent in qBittorrent, seeding as qBittorrent is set to',
+        remove: 'Remove the torrent and its files from qBittorrent',
+        needs: 'qBittorrent deletes the files itself; the folder stays read-only here.',
+      };
+    case 'sabnzbd':
+    case 'nzbget':
+      return {
+        keep: `Keep the download in ${client}'s folder`,
+        remove: `Delete the downloaded files, and remove the job from ${client}'s history`,
+        needs:
+          `${client} cannot delete them, so Tangible does: only the files whose bytes the ` +
+          'library holds, and only in a watched root listed in TANGIBLE_REMOVABLE_ROOTS and ' +
+          'mounted read-write.',
+      };
+    case 's3':
+      return {
+        keep: 'Keep the object in its bucket',
+        remove: 'Delete the version of the object that was imported',
+        needs:
+          'Only while it is unchanged; a newer version is left. The access key then needs ' +
+          's3:DeleteObject, and s3:DeleteObjectVersion for a versioned bucket.',
+      };
+    case 'romm_api':
+      return { keep: '', remove: '', needs: '' };
+  }
+}
+
+/**
+ * Why removing is not offered for this form, or `null` when it is: a Usenet
+ * client deletes only in a watched root Tangible may delete in.
+ */
+export function removalBlocked(form: ClientForm, removableRoots: string[]): string | null {
+  if (form.kind !== 'sabnzbd' && form.kind !== 'nzbget') return null;
+  if (form.localRoot === '') return 'Choose the watched root first.';
+  if (removableRoots.includes(form.localRoot)) return null;
+  return (
+    `The watched root ${form.localRoot} is not one Tangible may delete in. List it in ` +
+    'TANGIBLE_REMOVABLE_ROOTS, mount it read-write and restart the server to offer this.'
+  );
+}
 
 /** An empty form for `kind`, with the server's defaults. */
 export function emptyClientForm(kind: ClientKind, roots: string[]): ClientForm {
@@ -281,6 +342,7 @@ export function emptyClientForm(kind: ClientKind, roots: string[]): ClientForm {
     buckets: '',
     webUrl: '',
     scanAfterExport: true,
+    afterImport: 'keep',
   };
 }
 
@@ -311,6 +373,7 @@ export function clientFormFrom(view: IntegrationView & { kind: ClientKind }): Cl
       : '',
     webUrl: text(view.settings, 'web_url'),
     scanAfterExport: view.settings.scan_after_export !== false,
+    afterImport: view.settings.after_import === 'remove' ? 'remove' : 'keep',
   };
 }
 
@@ -332,12 +395,15 @@ function clientSettings(form: ClientForm): Record<string, unknown> {
     if (form.webUrl.trim() !== '') settings.web_url = form.webUrl.trim();
     return settings;
   }
+  // Always sent: settings are saved whole, so leaving it out would turn
+  // removal off on every edit.
   if (form.kind === 's3') {
     return {
       endpoint: form.baseUrl.trim(),
       region: form.region.trim() || 'us-east-1',
       path_style: form.pathStyle,
       buckets: parseBuckets(form.buckets),
+      after_import: form.afterImport,
     };
   }
   const settings: Record<string, unknown> = {
@@ -345,6 +411,7 @@ function clientSettings(form: ClientForm): Record<string, unknown> {
     category: form.category.trim() || 'tangible',
     client_path: form.clientPath.trim(),
     local_root: form.localRoot,
+    after_import: form.afterImport,
   };
   // SABnzbd takes no user, and refuses a settings field it does not know.
   if (clientWording(form.kind).usernameLabel !== null) settings.username = form.username.trim();

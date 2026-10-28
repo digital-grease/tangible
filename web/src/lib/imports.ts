@@ -512,6 +512,48 @@ export function importStateLabel(
   }
 }
 
+/** Removing an import's source, as the server reports it. */
+export type SourceRemoval = NonNullable<ImportView['source_removal']>;
+
+/**
+ * Where an import's removal stands, in words: a headline, and the server's
+ * detail when it says more. `null` for an import with none.
+ */
+export function sourceRemovalLabel(
+  job: Pick<ImportView, 'source_kind' | 'source_removal'>,
+): { headline: string; detail: string | null } | null {
+  const removal = job.source_removal;
+  if (!removal) return null;
+  const where =
+    clientOfSource(job.source_kind) ??
+    (job.source_kind === 's3_object' ? 'its bucket' : 'its source');
+  const detail = removal.detail ?? null;
+  switch (removal.state) {
+    case 'verifying':
+      return {
+        headline: `Checking the library's copy before removing it from ${where}`,
+        detail: null,
+      };
+    case 'removing':
+      return detail
+        ? { headline: `Not removed from ${where} yet; it will be tried again`, detail }
+        : { headline: `Removing it from ${where}`, detail: null };
+    case 'removed':
+      return { headline: `Removed from ${where}`, detail };
+    case 'already_gone':
+      return { headline: `Already gone from ${where}`, detail };
+    case 'kept':
+      return { headline: `Left in ${where}`, detail };
+    case 'refused':
+      return {
+        headline: `Not removed from ${where}: the library's copy failed its check`,
+        detail: null,
+      };
+    default:
+      return { headline: removal.state, detail };
+  }
+}
+
 /** A short symbol accompanying a state, so status is never colour alone. */
 export function importStateMark(state: string): string {
   switch (state) {

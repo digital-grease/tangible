@@ -363,10 +363,11 @@ folder ends the import.
 
 ### Removing torrents once imported
 
-Off by default. With the integration's `after_import` setting at `remove`
-(`PATCH /api/v1/integrations/{id}`, its settings with `"after_import":
-"remove"`), each torrent imported from then on is removed from qBittorrent,
-with its files, once the library has it:
+Off by default. On the Integrations page, choose "Remove the torrent and its
+files from qBittorrent" under "After an import is in the library" (in the
+API, the integration's `after_import` setting at `remove`). Each torrent
+imported from then on is removed from qBittorrent, with its files, once the
+library has it:
 
 1. When the import completes, Tangible checks the library's copy (an
    integrity check of the new artifact, which reads every stored byte back).
@@ -379,12 +380,12 @@ with its files, once the library has it:
 3. qBittorrent removes the torrent and deletes its files itself; Tangible's
    read-only mount stays read-only.
 
-The import shows where this stands: checking the copy, removing, removed,
-already gone, or left and why. An unreachable qBittorrent is tried again,
-waiting longer each time up to an hour. Setting `after_import` back to
-`keep` stops every removal not yet made; torrents imported before it was
-`remove` are never removed. Each removal is in the audit log
-(`integration.source_deleted`).
+The Imports page shows where this stands for each import: checking the
+library's copy, removing, removed, already gone, or left and why (the API's
+`source_removal`). An unreachable qBittorrent is tried again, waiting longer
+each time up to an hour. Choosing to keep again stops every removal not yet
+made; torrents imported before removal was chosen are never removed. Each
+removal is in the audit log (`integration.source_deleted`).
 
 ## Sending NZBs to SABnzbd
 
@@ -425,8 +426,11 @@ deletes them itself, and needs two things for that:
    watched root stays read-only; the server refuses to start if the setting
    names a root that is not watched. Diagnostics says whether each such root
    is writable.
-2. On the integration: `after_import` set to `remove`. The server refuses
-   that for a root not in `TANGIBLE_REMOVABLE_ROOTS`.
+2. On the Integrations page: "Delete the downloaded files, and remove the
+   job from SABnzbd's history" (or NZBGet's) under "After an import is in
+   the library" (`after_import: remove` in the API). It is offered only for
+   a root in `TANGIBLE_REMOVABLE_ROOTS`, and the server refuses it for any
+   other.
 
 Then each download imported from then on is deleted once the library has
 it: an integrity check of the new artifact first, reading every stored byte
@@ -490,8 +494,9 @@ content.
 
 ### Deleting objects once imported
 
-Off by default. With the integration's `after_import` setting at `remove`,
-each object imported from then on is deleted from its bucket once the
+Off by default. With "Delete the version of the object that was imported"
+chosen on the Integrations page (`after_import: remove` in the API), each
+object imported from then on is deleted from its bucket once the
 library has a checked copy, as for torrents above: an integrity check of the
 artifact first, nothing deleted if it finds a problem. Then:
 

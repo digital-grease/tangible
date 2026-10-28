@@ -94,6 +94,102 @@ async function fill(label: string | RegExp, value: string) {
 }
 
 describe('Integrations page', () => {
+  it('removes a torrent after import only when asked, saying what goes and when', async () => {
+    const asked = server({
+      'GET /api/v1/integrations': [list([]), list([nas()])],
+      'GET /api/v1/import-sources': sources,
+      'POST /api/v1/integrations': { status: 201, body: nas() },
+    });
+    render(IntegrationsPage);
+    await screen.findByText(/No integrations yet/);
+    const group = screen.getByRole('group', { name: 'After an import is in the library' });
+    const keep = within(group).getByLabelText(
+      /Keep the torrent in qBittorrent/,
+    ) as HTMLInputElement;
+    const remove = within(group).getByLabelText(
+      'Remove the torrent and its files from qBittorrent',
+    ) as HTMLInputElement;
+    expect(keep.checked).toBe(true);
+    expect(remove.disabled).toBe(false);
+    expect(group.textContent).toContain('integrity check reads the library');
+    await fill('Name', 'NAS');
+    await fill('WebUI address', 'http://192.168.1.13:8080');
+    await fill('WebUI user', 'tangible');
+    await fill('Download folder, as qBittorrent sees it', '/downloads/tangible');
+    await fireEvent.click(remove);
+    await fireEvent.click(screen.getByRole('button', { name: 'Add qBittorrent' }));
+    expect(await screen.findByText('Added NAS.')).toBeTruthy();
+    const post = asked.find((a) => a.method === 'POST');
+    expect((post?.body as { settings: Record<string, unknown> }).settings.after_import).toBe(
+      'remove',
+    );
+  });
+
+  it('offers deleting Usenet downloads only in a root Tangible may delete in', async () => {
+    server({
+      'GET /api/v1/integrations': list([]),
+      'GET /api/v1/import-sources': {
+        status: 200,
+        body: {
+          ...sources.body,
+          watch_roots: ['downloads', 'usenet'],
+          removable_roots: ['usenet'],
+        },
+      },
+    });
+    render(IntegrationsPage);
+    await screen.findByText(/No integrations yet/);
+    await fireEvent.change(screen.getByLabelText('Kind'), { target: { value: 'sabnzbd' } });
+    const deleting = () =>
+      screen.getByLabelText(
+        "Delete the downloaded files, and remove the job from SABnzbd's history",
+      ) as HTMLInputElement;
+    expect(deleting().disabled).toBe(true);
+    expect(screen.getByText('Choose the watched root first.')).toBeTruthy();
+    await fireEvent.change(screen.getByLabelText('The same folder, as mounted here'), {
+      target: { value: 'downloads' },
+    });
+    expect(deleting().disabled).toBe(true);
+    expect(screen.getByText(/downloads is not one Tangible may delete in/)).toBeTruthy();
+    await fireEvent.change(screen.getByLabelText('The same folder, as mounted here'), {
+      target: { value: 'usenet' },
+    });
+    expect(deleting().disabled).toBe(false);
+    await fireEvent.click(deleting());
+    expect(deleting().checked).toBe(true);
+    // Back to a root it may not delete in: the choice goes back to keeping.
+    await fireEvent.change(screen.getByLabelText('The same folder, as mounted here'), {
+      target: { value: 'downloads' },
+    });
+    expect(deleting().checked).toBe(false);
+  });
+
+  it('keeps a stored removal when an integration is edited', async () => {
+    const asked = server({
+      'GET /api/v1/integrations': [
+        list([nas({ settings: { ...nas().settings, after_import: 'remove' } })]),
+        list([nas()]),
+      ],
+      'GET /api/v1/import-sources': sources,
+      'PATCH /api/v1/integrations/i1': { status: 200, body: nas() },
+    });
+    render(IntegrationsPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit NAS' }));
+    expect(
+      (
+        screen.getByLabelText(
+          'Remove the torrent and its files from qBittorrent',
+        ) as HTMLInputElement
+      ).checked,
+    ).toBe(true);
+    await fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(await screen.findByText('Saved NAS.')).toBeTruthy();
+    const patch = asked.find((a) => a.method === 'PATCH');
+    expect((patch?.body as { settings: Record<string, unknown> }).settings.after_import).toBe(
+      'remove',
+    );
+  });
+
   it('lists integrations in words, and leaves the RomM export alone', async () => {
     server({
       'GET /api/v1/integrations': list([nas(), romm], false),
@@ -140,6 +236,7 @@ describe('Integrations page', () => {
         category: 'tangible',
         client_path: '/downloads/tangible',
         local_root: 'downloads',
+        after_import: 'keep',
       },
       secrets: { password: 'hunter2' },
     });
@@ -260,6 +357,7 @@ describe('Integrations page', () => {
         category: 'tangible',
         client_path: '/downloads/complete/tangible',
         local_root: 'downloads',
+        after_import: 'keep',
       },
       secrets: { api_key: 'the-key' },
     });
@@ -294,6 +392,7 @@ describe('Integrations page', () => {
         region: 'us-east-1',
         path_style: true,
         buckets: ['discs', 'old-discs'],
+        after_import: 'keep',
       },
       secrets: { access_key_id: 'AKID', secret_access_key: 'shh' },
     });
