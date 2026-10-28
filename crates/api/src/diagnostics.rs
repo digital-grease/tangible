@@ -24,6 +24,7 @@ use serde::Serialize;
 use tangible_db::Database;
 use tangible_db::diagnostics::{Failure, WorkerDiagnostic};
 use tangible_db::erasures::DriveRecord;
+use tangible_db::identification::IdentificationSummary;
 use tangible_db::integrity::IntegritySummary;
 use tangible_db::romm_api::{ScanRecord, ScanState};
 use tangible_domain::IntegrityCheckState;
@@ -148,6 +149,9 @@ pub enum DerivationStatus {
 /// The server's settings that diagnostics reports on. The paths are used to
 /// look at the directories and never appear in the report.
 #[derive(Debug, Clone)]
+// Each bool is a separate switch the deployment sets; grouping them
+// would only hide which is which.
+#[allow(clippy::struct_excessive_bools)]
 pub struct DiagnosticsSettings {
     /// The build.
     pub build: BuildIdentity,
@@ -180,6 +184,23 @@ pub struct DiagnosticsSettings {
     /// The watched roots Tangible may delete in
     /// (`TANGIBLE_REMOVABLE_ROOTS`, ADR 0017), to see that each is writable.
     pub removable_roots: Vec<PathBuf>,
+    /// Whether preservation hashes are computed
+    /// (`TANGIBLE_PRESERVATION_HASHES`).
+    pub preservation_hashes: bool,
+    /// Whether metrics are served (`TANGIBLE_METRICS_BIND`), and if so
+    /// whether a scrape needs a token (`TANGIBLE_METRICS_TOKEN_FILE`).
+    pub metrics: MetricsSetting,
+}
+
+/// How metrics are served.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetricsSetting {
+    /// Not served.
+    Off,
+    /// Served; a scrape must carry the token.
+    BehindToken,
+    /// Served to anyone who can reach the listener.
+    Open,
 }
 
 /// How URL imports are set, when they are on (ADR 0016).
@@ -226,6 +247,8 @@ pub struct Facts {
     pub sealed_secrets: Answer<Vec<(String, i64)>>,
     /// What integrity checks have found, summed up.
     pub integrity: Answer<IntegritySummary>,
+    /// Preservation hashes and DATs, counted.
+    pub identification: Answer<IdentificationSummary>,
     /// RomM's API, when an administrator configured it.
     pub romm_api: Answer<Option<RommApiFacts>>,
     /// Each watched root Tangible may delete in.
@@ -276,6 +299,11 @@ pub async fn collect(database: &Database, settings: &DiagnosticsSettings) -> Fac
     let database_answer = bounded(database.ping()).await.map(|()| ());
     // Once the database is known to be down, the queries that follow would
     // each wait out the timeout to say the same thing.
+    let identification = if let Answer::Unavailable(reason) = &database_answer {
+        skipped(reason)
+    } else {
+        bounded(tangible_db::identification::identification_summary(pool)).await
+    };
     let (pending_migrations, workers, drives, failures, sealed_secrets, integrity, romm_api) =
         if let Answer::Unavailable(reason) = &database_answer {
             (
@@ -321,6 +349,7 @@ pub async fn collect(database: &Database, settings: &DiagnosticsSettings) -> Fac
         failures,
         sealed_secrets,
         integrity,
+        identification,
         romm_api,
         removable_roots,
     }
@@ -372,6 +401,7 @@ pub fn assess(settings: &DiagnosticsSettings, facts: &Facts, now: OffsetDateTime
                 directory_check("Library", &facts.library),
                 directory_check("Staging", &facts.staging),
                 integrity_check(settings.scrub_interval_days, &facts.integrity, now),
+                identification_check(settings.preservation_hashes, &facts.identification),
                 removable_roots_check(&facts.removable_roots),
             ],
         },
@@ -572,6 +602,45 @@ fn integrity_check(
         }
     }
     check("Integrity", status, parts.join("; "))
+}
+
+/// Preservation hashes and DATs: how far hashing has got, whether any
+/// artifact was left failed, and how many DATs there are to match against.
+fn identification_check(
+    enabled: bool,
+    identification: &Answer<IdentificationSummary>,
+) -> DiagnosticCheck {
+    let summary = match identification {
+        Answer::Found(summary) => summary,
+        Answer::Unavailable(reason) => {
+            return check("Identification", CheckStatus::Warn, reason.clone());
+        }
+    };
+    let mut status = CheckStatus::Ok;
+    let mut parts = vec![format!("{} artifact(s) hashed", summary.done)];
+    if summary.pending > 0 {
+        parts.push(if enabled {
+            format!("{} waiting, hashed in the background", summary.pending)
+        } else {
+            format!(
+                "{} waiting, and hashing is off (TANGIBLE_PRESERVATION_HASHES)",
+                summary.pending
+            )
+        });
+    }
+    if summary.failed > 0 {
+        status = CheckStatus::Warn;
+        parts.push(format!(
+            "{} could not be hashed and were left failed: each artifact's page says why",
+            summary.failed
+        ));
+    }
+    parts.push(match summary.dats {
+        0 => "no DATs loaded".to_owned(),
+        1 => "1 DAT loaded".to_owned(),
+        n => format!("{n} DATs loaded"),
+    });
+    check("Identification", status, parts.join("; "))
 }
 
 fn space_status(space: Space) -> CheckStatus {
@@ -1007,6 +1076,17 @@ fn setting_checks(settings: &DiagnosticsSettings) -> Vec<DiagnosticCheck> {
                 (true, false) => "offered, with addresses kept",
             },
         ),
+        match settings.metrics {
+            MetricsSetting::Off => check("Metrics", CheckStatus::Ok, "off"),
+            MetricsSetting::BehindToken => {
+                check("Metrics", CheckStatus::Ok, "served, behind a token")
+            }
+            MetricsSetting::Open => check(
+                "Metrics",
+                CheckStatus::Warn,
+                "served without a token: anyone who can reach TANGIBLE_METRICS_BIND can read them",
+            ),
+        },
         check(
             "Rip decryption",
             CheckStatus::Ok,
@@ -1281,6 +1361,8 @@ mod tests {
             secret_key_id: None,
             scrub_interval_days: 0,
             removable_roots: Vec::new(),
+            preservation_hashes: true,
+            metrics: MetricsSetting::Off,
         }
     }
 
@@ -1348,6 +1430,7 @@ mod tests {
                 active_scrub: None,
                 damaged_artifacts: 0,
             }),
+            identification: Answer::Found(IdentificationSummary::default()),
             romm_api: Answer::Found(None),
             removable_roots: Vec::new(),
         }
@@ -1917,6 +2000,58 @@ mod tests {
             error_code: (state == IntegrityCheckState::Failed)
                 .then(|| "storage_unavailable".to_owned()),
         }
+    }
+
+    #[test]
+    fn identification_counts_hashing_and_dats_and_warns_of_failures() {
+        let mut facts = healthy();
+        facts.identification = Answer::Found(IdentificationSummary {
+            done: 40,
+            pending: 3,
+            failed: 0,
+            dats: 2,
+        });
+        let line = find(&assess(&settings(), &facts, now()), "Identification").clone();
+        assert_eq!(line.status, CheckStatus::Ok);
+        assert_eq!(
+            line.detail,
+            "40 artifact(s) hashed; 3 waiting, hashed in the background; 2 DATs loaded"
+        );
+
+        facts.identification = Answer::Found(IdentificationSummary {
+            done: 40,
+            pending: 3,
+            failed: 1,
+            dats: 0,
+        });
+        let mut off = settings();
+        off.preservation_hashes = false;
+        let line = find(&assess(&off, &facts, now()), "Identification").clone();
+        assert_eq!(line.status, CheckStatus::Warn);
+        assert!(line.detail.contains("hashing is off"), "{}", line.detail);
+        assert!(
+            line.detail.contains("1 could not be hashed"),
+            "{}",
+            line.detail
+        );
+        assert!(line.detail.ends_with("no DATs loaded"), "{}", line.detail);
+    }
+
+    #[test]
+    fn metrics_served_without_a_token_is_a_warning() {
+        let facts = healthy();
+        let mut settings = settings();
+        assert_eq!(
+            find(&assess(&settings, &facts, now()), "Metrics").detail,
+            "off"
+        );
+        settings.metrics = MetricsSetting::BehindToken;
+        let line = find(&assess(&settings, &facts, now()), "Metrics").clone();
+        assert_eq!(line.status, CheckStatus::Ok);
+        settings.metrics = MetricsSetting::Open;
+        let line = find(&assess(&settings, &facts, now()), "Metrics").clone();
+        assert_eq!(line.status, CheckStatus::Warn);
+        assert!(line.detail.contains("without a token"), "{}", line.detail);
     }
 
     #[test]

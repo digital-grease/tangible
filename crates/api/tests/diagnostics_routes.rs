@@ -61,6 +61,8 @@ fn settings(root: &Path, reports: ReportSettings) -> DiagnosticsSettings {
         secret_key_id: None,
         scrub_interval_days: 0,
         removable_roots: Vec::new(),
+        preservation_hashes: true,
+        metrics: tangible_api::diagnostics::MetricsSetting::Off,
     }
 }
 

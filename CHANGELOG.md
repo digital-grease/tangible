@@ -8,6 +8,10 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
+- Diagnostics (the page and `tangible doctor --report`) says how far
+  preservation hashing has got, warns of artifacts left failed, counts the
+  DATs loaded, and says whether metrics are served and behind a token,
+  warning when they are served without one.
 - `tangible manifest show <artifact>` prints an artifact's stored manifest;
   `tangible manifest validate <file>` (or `-`) checks a manifest the way the
   server reads one and says whether it is in the canonical form the server

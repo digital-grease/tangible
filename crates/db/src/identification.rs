@@ -362,3 +362,41 @@ pub async fn artifact_hashes(
         tracks,
     }))
 }
+
+/// Artifacts by the state of their preservation hashes, and DATs loaded,
+/// for diagnostics.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct IdentificationSummary {
+    /// Hashed.
+    pub done: i64,
+    /// Waiting to be hashed.
+    pub pending: i64,
+    /// Left failed.
+    pub failed: i64,
+    /// DATs loaded.
+    pub dats: i64,
+}
+
+/// Count artifacts by hash state, and DATs.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn identification_summary(pool: &PgPool) -> Result<IdentificationSummary, DbError> {
+    let (done, pending, failed, dats): (i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT count(*) FILTER (WHERE hashes_state = 'done'),
+                count(*) FILTER (WHERE hashes_state = 'pending'),
+                count(*) FILTER (WHERE hashes_state = 'failed'),
+                (SELECT count(*) FROM dat_files)
+         FROM artifacts",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(IdentificationSummary {
+        done,
+        pending,
+        failed,
+        dats,
+    })
+}

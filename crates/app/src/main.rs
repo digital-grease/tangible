@@ -825,6 +825,18 @@ fn diagnostics_settings(
             .with_removable(serve.removable_roots.split(','))
             .map(|roots| roots.removable_paths())
             .unwrap_or_default(),
+        preservation_hashes: serve.preservation_hashes,
+        metrics: match (
+            serve.metrics_bind,
+            serve
+                .metrics_token_file
+                .as_deref()
+                .is_some_and(|path| !path.as_os_str().is_empty()),
+        ) {
+            (None, _) => tangible_api::diagnostics::MetricsSetting::Off,
+            (Some(_), true) => tangible_api::diagnostics::MetricsSetting::BehindToken,
+            (Some(_), false) => tangible_api::diagnostics::MetricsSetting::Open,
+        },
     }
 }
 
