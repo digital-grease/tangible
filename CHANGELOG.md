@@ -8,6 +8,14 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
+- Prometheus metrics, on a listener of their own, off unless
+  `TANGIBLE_METRICS_BIND` is set: artifacts and stored bytes, jobs of every
+  kind by state and the age of the oldest waiting, burn attempts and their
+  durations, workers and drives, integrity, preservation hashes, DAT
+  matches and integrations, all read from the catalogue at each scrape and
+  reused for five seconds. `TANGIBLE_METRICS_TOKEN_FILE` makes a scrape
+  carry a bearer token. `deploy/grafana/tangible.json` is a dashboard
+  built on them.
 - The web UI shows what identifies an artifact: its page has an
   Identification section naming each game of a loaded DAT it matches, in
   words ("Matches Game (USA), all 2 of its files", "Partly matches...: 1 of

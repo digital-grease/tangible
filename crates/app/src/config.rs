@@ -291,6 +291,18 @@ pub struct ServeConfig {
         action = clap::ArgAction::Set
     )]
     pub preservation_hashes: bool,
+
+    /// Address to serve Prometheus metrics on (`GET /metrics`), such as
+    /// `0.0.0.0:9464`. Unset, the default, serves none. A listener of its
+    /// own, so it can stay unpublished; it serves nothing but metrics.
+    #[arg(long, env = "TANGIBLE_METRICS_BIND")]
+    pub metrics_bind: Option<SocketAddr>,
+
+    /// A file holding the token a scrape must send as
+    /// `Authorization: Bearer <token>`. Unset, anyone who can reach the
+    /// metrics listener may read it. The path is not secret; the file is.
+    #[arg(long, env = "TANGIBLE_METRICS_TOKEN_FILE")]
+    pub metrics_token_file: Option<PathBuf>,
 }
 
 /// Settings for `tangible scrub`.

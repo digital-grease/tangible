@@ -23,6 +23,7 @@ pub mod identification;
 pub mod import;
 pub mod import_runner;
 pub mod integrity;
+pub mod metrics;
 pub mod pagination;
 pub mod problem;
 pub mod report;

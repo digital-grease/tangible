@@ -242,14 +242,69 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
     serve_until_shutdown(serve, state, runners).await
 }
 
+/// The metrics listener, when `TANGIBLE_METRICS_BIND` names an address
+/// (docs/plans/metrics.md). A bind that fails stops the server: the
+/// operator asked for metrics and should not find them silently missing.
+async fn start_metrics(serve: &ServeConfig, state: &ApiState) -> Result<Option<Stoppable>> {
+    let Some(address) = serve.metrics_bind else {
+        return Ok(None);
+    };
+    let path = serve
+        .metrics_token_file
+        .as_deref()
+        .filter(|path| !path.as_os_str().is_empty());
+    let token = if let Some(path) = path {
+        Some(read_metrics_token(path)?)
+    } else {
+        tracing::warn!(
+            "metrics are served without a token; anyone who can reach \
+             TANGIBLE_METRICS_BIND can read them (set TANGIBLE_METRICS_TOKEN_FILE)"
+        );
+        None
+    };
+    let listener = tokio::net::TcpListener::bind(address)
+        .await
+        .with_context(|| format!("binding TANGIBLE_METRICS_BIND ({address})"))?;
+    let bound = listener
+        .local_addr()
+        .context("reading the metrics socket address")?;
+    tracing::info!(address = %bound, token = token.is_some(), "metrics listening");
+    let metrics = tangible_api::metrics::Metrics::new(state.database().clone(), token);
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let task = tokio::spawn(async move {
+        let shutdown = async {
+            let _ = stopped.await;
+        };
+        if let Err(error) = tangible_api::metrics::serve(listener, metrics, shutdown).await {
+            tracing::error!(error = %error, "the metrics listener stopped");
+        }
+    });
+    Ok(Some((stop, task)))
+}
+
+/// The metrics token: the file's first line, which must not be empty.
+fn read_metrics_token(path: &std::path::Path) -> Result<String> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("reading TANGIBLE_METRICS_TOKEN_FILE ({})", path.display()))?;
+    let token = text.lines().next().unwrap_or_default().trim().to_owned();
+    if token.is_empty() {
+        anyhow::bail!(
+            "TANGIBLE_METRICS_TOKEN_FILE ({}) is empty; put the token on its first line",
+            path.display()
+        );
+    }
+    Ok(token)
+}
+
 /// Listen and serve until asked to stop, then stop the background runners,
 /// letting work already running finish: abandoning an import would leave
 /// staged bytes and a lease behind for no gain.
 async fn serve_until_shutdown(
     serve: &ServeConfig,
     state: ApiState,
-    runners: Vec<Stoppable>,
+    mut runners: Vec<Stoppable>,
 ) -> Result<()> {
+    runners.extend(start_metrics(serve, &state).await?);
     let listener = tokio::net::TcpListener::bind(serve.bind)
         .await
         .with_context(|| format!("binding {}", serve.bind))?;
@@ -1178,6 +1233,9 @@ mod tests {
         "TANGIBLE_LOG",
         "TANGIBLE_LOG_JSON",
         "TANGIBLE_MAX_UPLOAD_BYTES",
+        "TANGIBLE_METRICS_BIND",
+        // The path to the token file, which is secret; the path is not.
+        "TANGIBLE_METRICS_TOKEN_FILE",
         "TANGIBLE_MIGRATE_ON_START",
         "TANGIBLE_OUTBOUND_ALLOW",
         "TANGIBLE_PRESERVATION_HASHES",
@@ -1200,6 +1258,22 @@ mod tests {
         "TANGIBLE_WORKER_NAME",
         "TANGIBLE_WORKER_STATE_DIR",
     ];
+
+    #[test]
+    fn the_metrics_token_is_the_first_line_and_never_empty() {
+        let path = std::env::temp_dir().join(format!(
+            "tangible-metrics-token-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, "  abc123  \nsecond line\n").unwrap();
+        assert_eq!(read_metrics_token(&path).unwrap(), "abc123");
+        std::fs::write(&path, "\n").unwrap();
+        let error = read_metrics_token(&path).unwrap_err().to_string();
+        assert!(error.contains("is empty"), "{error}");
+        std::fs::remove_file(&path).unwrap();
+        assert!(read_metrics_token(&path).is_err(), "a missing file");
+    }
 
     fn every_arg(command: &clap::Command, found: &mut Vec<(String, bool)>) {
         for arg in command.get_arguments() {

@@ -934,6 +934,54 @@ hashed, and removing a DAT (`DELETE /api/v1/dats/{id}`) removes its
 matches. A match renames nothing and changes nothing else.
 
 
+## Metrics
+
+The server can serve Prometheus metrics, read from its catalogue at each
+scrape: artifacts by format and the bytes stored; jobs of every kind by
+state, and how long the oldest one has waited to start; burn attempts by
+state and how long they took; workers and drives by status, and how long
+since each worker was heard from; artifacts by integrity and by
+preservation-hash state; DATs and matches; integrations by status. Nothing
+is counted in memory, so a restart loses nothing, and one scrape is reused
+for five seconds.
+
+It is off unless `TANGIBLE_METRICS_BIND` is set, and it listens on its own
+port, serving `/metrics` and nothing else. Uncomment
+`TANGIBLE_METRICS_BIND` in `compose.yaml` and restart the server. A
+Prometheus on the same Compose network scrapes it without the port being
+published:
+
+```yaml
+scrape_configs:
+  - job_name: tangible
+    static_configs:
+      - targets: ["server:9464"]
+```
+
+Anyone who can reach the port can read the metrics. None of them is a
+secret, but worker names and versions describe the deployment, so before
+publishing the port, set a token. Make it like the integration key, then
+uncomment `TANGIBLE_METRICS_TOKEN_FILE` and the `tangible-metrics-token`
+secret lines:
+
+```bash
+docker compose -f deploy/compose.yaml run --rm --no-deps server \
+  secrets generate > deploy/secrets/tangible-metrics-token
+chmod 0400 deploy/secrets/tangible-metrics-token
+sudo chown 10001 deploy/secrets/tangible-metrics-token
+```
+
+and give Prometheus the same token:
+
+```yaml
+    authorization:
+      credentials_file: /etc/prometheus/tangible-metrics-token
+```
+
+`deploy/grafana/tangible.json` is a Grafana dashboard built on these
+metrics: import it and choose your Prometheus data source.
+
+
 ## Upgrading
 
 1. Read the release notes, especially anything about migrations.
