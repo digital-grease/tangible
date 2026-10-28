@@ -99,6 +99,30 @@ pub struct AuthSettings {
     pub idle_timeout: Duration,
     /// How long a session lasts however much it is used.
     pub absolute_timeout: Duration,
+    /// Who may sign in with a password (ADR 0018).
+    pub password_sign_in: PasswordSignIn,
+}
+
+/// Who may sign in with a password (`TANGIBLE_PASSWORD_SIGN_IN`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PasswordSignIn {
+    /// Every account that has one.
+    #[default]
+    All,
+    /// Only the accounts setup made: the administrator who signs in while
+    /// the identity provider is down. Everyone else signs in through it.
+    SetupOnly,
+}
+
+impl PasswordSignIn {
+    /// Its name, as the setting and the API write it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::SetupOnly => "setup-only",
+        }
+    }
 }
 
 impl Default for AuthSettings {
@@ -107,6 +131,7 @@ impl Default for AuthSettings {
             secure_cookie: true,
             idle_timeout: Duration::from_secs(12 * 60 * 60),
             absolute_timeout: Duration::from_secs(7 * 24 * 60 * 60),
+            password_sign_in: PasswordSignIn::All,
         }
     }
 }
@@ -121,6 +146,15 @@ impl AuthSettings {
                 .get(..7)
                 .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://")),
             ..Self::default()
+        }
+    }
+
+    /// The same, with who may sign in by password.
+    #[must_use]
+    pub const fn with_password_sign_in(self, password_sign_in: PasswordSignIn) -> Self {
+        Self {
+            password_sign_in,
+            ..self
         }
     }
 }
@@ -167,6 +201,11 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
     ("GET", "/api/v1/session", Signed(Read)),
     ("POST", "/api/v1/session", Public),
     ("DELETE", "/api/v1/session", Signed(Read)),
+    // Through an identity provider (ADR 0018): browser navigations, each
+    // guarded by its state, the browser cookie, the nonce and PKCE.
+    ("GET", "/api/v1/session/oidc", Public),
+    ("GET", "/api/v1/session/oidc/start", Public),
+    ("GET", "/api/v1/session/oidc/callback", Public),
     ("GET", "/api/v1/users", Signed(ManageUsers)),
     ("POST", "/api/v1/users", Signed(ManageUsers)),
     // The library.

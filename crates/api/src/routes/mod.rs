@@ -16,6 +16,7 @@ pub mod imports;
 pub mod integration_jobs;
 pub mod integrations;
 pub mod integrity;
+pub mod oidc;
 pub mod physical_copies;
 pub mod reports;
 pub mod rips;

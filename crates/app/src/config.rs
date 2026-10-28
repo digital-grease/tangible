@@ -36,6 +36,17 @@ pub enum DerivationEngineKind {
     Chdman,
 }
 
+/// Who may sign in with a password (ADR 0018).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum PasswordSignInKind {
+    /// Every account that has a password.
+    All,
+    /// Only the accounts setup made, for when the identity provider is down;
+    /// everyone else signs in through the provider.
+    SetupOnly,
+}
+
 /// Which burn engine executes write operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "kebab-case")]
@@ -303,6 +314,64 @@ pub struct ServeConfig {
     /// metrics listener may read it. The path is not secret; the file is.
     #[arg(long, env = "TANGIBLE_METRICS_TOKEN_FILE")]
     pub metrics_token_file: Option<PathBuf>,
+
+    /// The OpenID Connect provider people may sign in through, by its issuer
+    /// URL, such as `https://auth.example.lan` (ADR 0018). Unset, the
+    /// default, offers none.
+    #[arg(long, env = "TANGIBLE_OIDC_ISSUER")]
+    pub oidc_issuer: Option<String>,
+
+    /// Tangible's client id at the provider.
+    #[arg(long, env = "TANGIBLE_OIDC_CLIENT_ID")]
+    pub oidc_client_id: Option<String>,
+
+    /// A file holding Tangible's client secret at the provider, on its first
+    /// line. The path is not secret; the file is.
+    #[arg(long, env = "TANGIBLE_OIDC_CLIENT_SECRET_FILE")]
+    pub oidc_client_secret_file: Option<PathBuf>,
+
+    /// What the sign-in page calls the provider.
+    #[arg(
+        long,
+        env = "TANGIBLE_OIDC_DISPLAY_NAME",
+        default_value = "single sign-on"
+    )]
+    pub oidc_display_name: String,
+
+    /// The scopes asked for, separated by spaces; `openid` is always asked.
+    #[arg(
+        long,
+        env = "TANGIBLE_OIDC_SCOPES",
+        default_value = "openid profile email groups"
+    )]
+    pub oidc_scopes: String,
+
+    /// The ID token claim that lists a person's groups.
+    #[arg(long, env = "TANGIBLE_OIDC_GROUPS_CLAIM", default_value = "groups")]
+    pub oidc_groups_claim: String,
+
+    /// Groups whose members are administrators, separated by commas.
+    #[arg(long, env = "TANGIBLE_OIDC_ADMIN_GROUPS", default_value = "")]
+    pub oidc_admin_groups: String,
+
+    /// Groups whose members are operators, separated by commas.
+    #[arg(long, env = "TANGIBLE_OIDC_OPERATOR_GROUPS", default_value = "")]
+    pub oidc_operator_groups: String,
+
+    /// Groups whose members are viewers, separated by commas. Someone in no
+    /// mapped group is refused.
+    #[arg(long, env = "TANGIBLE_OIDC_VIEWER_GROUPS", default_value = "")]
+    pub oidc_viewer_groups: String,
+
+    /// Who may sign in with a password: `all`, or `setup-only` (only the
+    /// accounts setup made, for when the provider is down).
+    #[arg(
+        long,
+        env = "TANGIBLE_PASSWORD_SIGN_IN",
+        value_enum,
+        default_value = "all"
+    )]
+    pub password_sign_in: PasswordSignInKind,
 }
 
 /// Settings for `tangible scrub`.

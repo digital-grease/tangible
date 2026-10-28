@@ -1538,6 +1538,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/session/oidc": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether sign-in through a provider is offered, for the sign-in page.
+         * @description Whether an identity provider is configured, what to call it, and who may sign in with a password.
+         */
+        get: operations["status"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/session/oidc/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Where the identity provider sends the browser back.
+         * @description A navigation, not an API call: the provider's redirect back. Starts a session and redirects to the page that asked, or to the sign-in page with `oidc_error`.
+         */
+        get: operations["callback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/session/oidc/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Send the browser to the identity provider to sign in.
+         * @description A navigation, not an API call: redirects the browser to the identity provider, or to the sign-in page with `oidc_error` when it cannot.
+         */
+        get: operations["start"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/setup": {
         parameters: {
             query?: never;
@@ -3737,6 +3797,18 @@ export interface components {
             warnings: string[];
             /** @description Whether it could be written. */
             writable: boolean;
+        };
+        /** @description Whether sign-in through a provider is offered. */
+        OidcStatusView: {
+            /** @description What the sign-in page calls it. */
+            display_name?: string | null;
+            /** @description Whether a provider is configured. */
+            enabled: boolean;
+            /**
+             * @description Who may sign in with a password: `all`, or `setup-only` (the accounts
+             *     setup made).
+             */
+            password_sign_in: string;
         };
         /** @description A disc with its check history. */
         PhysicalCopyDetail: components["schemas"]["PhysicalCopyView"] & {
@@ -8087,6 +8159,72 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Problem"];
                 };
+            };
+        };
+    };
+    status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description How sign-in works here */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OidcStatusView"];
+                };
+            };
+        };
+    };
+    callback: {
+        parameters: {
+            query?: {
+                /** @description The authorization code. */
+                code?: string | null;
+                /** @description The state Tangible sent. */
+                state?: string | null;
+                /** @description The provider's error code, when it refused. */
+                error?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Signed in, or back with oidc_error */
+            303: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    start: {
+        parameters: {
+            query?: {
+                /** @description A path on Tangible; anything else is `/`. */
+                return_to?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description To the provider, or back with oidc_error */
+            303: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

@@ -41,6 +41,10 @@ uuid = { version = "1.24.0", features = ["v7"] }
 workspace = true
 
 [dev-dependencies]
+# A fake identity provider's signing key and ID tokens, for the OIDC route
+# tests: the aws-lc that verification uses.
+aws-lc-rs = "1.18.0"
+jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs"] }
 async-trait = "0.1.91"
 # Makes the buckets and objects the S3 import tests read, signed the same
 # way the integrations crate signs.

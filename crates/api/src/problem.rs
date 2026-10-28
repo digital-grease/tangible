@@ -117,6 +117,9 @@ pub enum ErrorCode {
     InsufficientSpace,
     /// A file sent as a DAT is not a Logiqx XML DAT this server reads.
     DatInvalid,
+    /// The password was right, and this account signs in through the
+    /// identity provider instead (`TANGIBLE_PASSWORD_SIGN_IN=setup-only`).
+    PasswordSignInOff,
     /// Anything unanticipated.
     Internal,
 }
@@ -157,6 +160,7 @@ impl ErrorCode {
             Self::IntegrationAddressRefused => "INTEGRATION_ADDRESS_REFUSED",
             Self::InsufficientSpace => "INSUFFICIENT_SPACE",
             Self::DatInvalid => "DAT_INVALID",
+            Self::PasswordSignInOff => "PASSWORD_SIGN_IN_OFF",
             Self::Internal => "INTERNAL",
         }
     }
@@ -188,7 +192,9 @@ impl ErrorCode {
             // authenticated-but-unauthorised caller. Operator routes answer
             // 403 when the account is known and its role is not enough.
             Self::Unauthenticated => StatusCode::UNAUTHORIZED,
-            Self::Forbidden | Self::CsrfTokenInvalid => StatusCode::FORBIDDEN,
+            Self::Forbidden | Self::CsrfTokenInvalid | Self::PasswordSignInOff => {
+                StatusCode::FORBIDDEN
+            }
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             Self::Conflict
             | Self::IdempotencyConflict
@@ -247,6 +253,7 @@ impl ErrorCode {
             Self::IntegrationAddressRefused => "The server will not reach that address",
             Self::InsufficientSpace => "Not enough free space",
             Self::DatInvalid => "Not a DAT this server reads",
+            Self::PasswordSignInOff => "This account signs in through the identity provider",
             Self::Internal => "Internal error",
         }
     }
@@ -407,6 +414,7 @@ mod tests {
             ErrorCode::IntegrationAddressRefused,
             ErrorCode::InsufficientSpace,
             ErrorCode::DatInvalid,
+            ErrorCode::PasswordSignInOff,
             ErrorCode::Internal,
         ];
         let mut seen = std::collections::BTreeSet::new();

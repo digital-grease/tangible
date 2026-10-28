@@ -74,6 +74,7 @@ pub async fn sign_in(pool: &PgPool, role: Role) -> Session {
         &session.token_hash,
         &session.csrf_token,
         time::OffsetDateTime::now_utc() + time::Duration::hours(1),
+        "test",
     )
     .await
     .expect("start a test session");

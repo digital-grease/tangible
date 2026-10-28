@@ -2518,11 +2518,13 @@ version = "0.1.0"
 dependencies = [
  "argon2",
  "async-trait",
+ "aws-lc-rs",
  "axum",
  "base64 0.23.1",
  "futures-util",
  "getrandom 0.4.3",
  "hex",
+ "jsonwebtoken",
  "reqwest",
  "ring",
  "rusty-s3",
@@ -2569,6 +2571,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 

@@ -31,9 +31,13 @@ use tangible_api::{
 use tangible_db::{Database, DbConfig};
 use tangible_storage::{FilesystemStore, ManifestStore, StagingManager, WatchRoots};
 
+use tangible_api::auth::PasswordSignIn;
+use tangible_integrations::outbound::OutboundClient;
+
 use crate::config::{
     BurnEngineKind, CommonConfig, DerivationEngineKind, DoctorConfig, GcConfig, ManifestCommand,
-    RestoreCheckConfig, RotateConfig, ScrubConfig, SecretsCommand, ServeConfig, WorkerConfig,
+    PasswordSignInKind, RestoreCheckConfig, RotateConfig, ScrubConfig, SecretsCommand, ServeConfig,
+    WorkerConfig,
 };
 
 /// Self-hosted disc-image preservation, management, and burning.
@@ -217,8 +221,9 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
     let pipeline = ImportPipeline::new(staging.clone(), objects.clone(), manifests.clone());
     let outbound = url_import_client(serve)?;
     let integrations = integration_client(serve)?;
-    let auth = AuthSettings::for_public_url(&serve.public_url);
+    let auth = auth_settings(serve);
     warn_if_plain_http(auth, &serve.public_url);
+    let oidc = oidc_sign_in(serve, &integrations)?;
     // Before anything waits on the database, so a mistyped address fails at
     // once rather than after a connection timeout.
     let reports = report_settings(common, serve)?;
@@ -244,6 +249,7 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
             upload_part_bytes: tangible_domain::upload::PART_BYTES,
         })
         .with_auth(auth)
+        .with_oidc_if(oidc)
         .with_reports(reports)
         .with_diagnostics(diagnostics)
         .with_decryption_allowed(serve.allow_decryption);
@@ -860,6 +866,115 @@ async fn warn_if_schema_behind(database: &Database) {
     }
 }
 
+/// How sessions behave, and who may sign in by password.
+fn auth_settings(serve: &ServeConfig) -> AuthSettings {
+    let password_sign_in = match serve.password_sign_in {
+        PasswordSignInKind::All => PasswordSignIn::All,
+        PasswordSignInKind::SetupOnly => PasswordSignIn::SetupOnly,
+    };
+    AuthSettings::for_public_url(&serve.public_url).with_password_sign_in(password_sign_in)
+}
+
+/// A setting's value, unless unset or empty (as Compose passes an unset
+/// variable).
+fn given(value: Option<&String>) -> Option<&str> {
+    value.map(|v| v.trim()).filter(|v| !v.is_empty())
+}
+
+/// A comma list, trimmed, without empties.
+fn list(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// Sign-in through an identity provider, when one is configured (ADR 0018).
+/// Half a configuration stops the server; the provider itself is reached at
+/// the first sign-in, so it may be down when Tangible starts.
+fn oidc_sign_in(
+    serve: &ServeConfig,
+    integrations: &OutboundClient,
+) -> Result<Option<Arc<tangible_api::oidc::Oidc>>> {
+    let Some(issuer) = given(serve.oidc_issuer.as_ref()) else {
+        if serve.password_sign_in == PasswordSignInKind::SetupOnly {
+            tracing::warn!(
+                "TANGIBLE_PASSWORD_SIGN_IN=setup-only and no identity provider \
+                 (TANGIBLE_OIDC_ISSUER): only the accounts setup made can sign in"
+            );
+        }
+        return Ok(None);
+    };
+    let issuer = url::Url::parse(issuer).context("TANGIBLE_OIDC_ISSUER is not a URL")?;
+    let client_id = given(serve.oidc_client_id.as_ref())
+        .context("TANGIBLE_OIDC_ISSUER is set without TANGIBLE_OIDC_CLIENT_ID")?
+        .to_owned();
+    let secret_file = serve
+        .oidc_client_secret_file
+        .as_deref()
+        .filter(|path| !path.as_os_str().is_empty())
+        .context("TANGIBLE_OIDC_ISSUER is set without TANGIBLE_OIDC_CLIENT_SECRET_FILE")?;
+    let client_secret = std::fs::read_to_string(secret_file)
+        .with_context(|| {
+            format!(
+                "reading TANGIBLE_OIDC_CLIENT_SECRET_FILE ({})",
+                secret_file.display()
+            )
+        })?
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    if client_secret.is_empty() {
+        anyhow::bail!(
+            "TANGIBLE_OIDC_CLIENT_SECRET_FILE ({}) is empty",
+            secret_file.display()
+        );
+    }
+    let redirect_uri = url::Url::parse(&format!(
+        "{}/api/v1/session/oidc/callback",
+        serve.public_url.trim_end_matches('/')
+    ))
+    .context("TANGIBLE_PUBLIC_URL does not make a callback URL")?;
+    let settings = tangible_api::oidc::OidcSettings {
+        provider: tangible_integrations::oidc::ProviderConfig {
+            issuer,
+            client_id,
+            client_secret,
+            redirect_uri,
+            scopes: serve
+                .oidc_scopes
+                .split_whitespace()
+                .map(ToOwned::to_owned)
+                .collect(),
+            groups_claim: serve.oidc_groups_claim.trim().to_owned(),
+        },
+        display_name: serve.oidc_display_name.trim().to_owned(),
+        admin_groups: list(&serve.oidc_admin_groups),
+        operator_groups: list(&serve.oidc_operator_groups),
+        viewer_groups: list(&serve.oidc_viewer_groups),
+    };
+    if settings.mapped_groups() == 0 {
+        tracing::warn!(
+            "an identity provider is configured and no group is mapped to a role \
+             (TANGIBLE_OIDC_ADMIN_GROUPS and the others): nobody can sign in through it"
+        );
+    }
+    tracing::info!(
+        issuer = %settings.provider.issuer,
+        callback = %settings.provider.redirect_uri,
+        mapped_groups = settings.mapped_groups(),
+        "sign-in through an identity provider offered"
+    );
+    Ok(Some(Arc::new(tangible_api::oidc::Oidc::new(
+        settings,
+        integrations.clone(),
+    ))))
+}
+
 /// Say at every start that a plain HTTP server sends passwords in the clear.
 fn warn_if_plain_http(auth: AuthSettings, public_url: &str) {
     if !auth.secure_cookie {
@@ -1305,6 +1420,17 @@ mod tests {
         "TANGIBLE_LOG",
         "TANGIBLE_LOG_JSON",
         "TANGIBLE_MAX_UPLOAD_BYTES",
+        "TANGIBLE_OIDC_ADMIN_GROUPS",
+        "TANGIBLE_OIDC_CLIENT_ID",
+        // The path to the secret, which is in the file; the path is not.
+        "TANGIBLE_OIDC_CLIENT_SECRET_FILE",
+        "TANGIBLE_OIDC_DISPLAY_NAME",
+        "TANGIBLE_OIDC_GROUPS_CLAIM",
+        "TANGIBLE_OIDC_ISSUER",
+        "TANGIBLE_OIDC_OPERATOR_GROUPS",
+        "TANGIBLE_OIDC_SCOPES",
+        "TANGIBLE_OIDC_VIEWER_GROUPS",
+        "TANGIBLE_PASSWORD_SIGN_IN",
         "TANGIBLE_METRICS_BIND",
         // The path to the token file, which is secret; the path is not.
         "TANGIBLE_METRICS_TOKEN_FILE",

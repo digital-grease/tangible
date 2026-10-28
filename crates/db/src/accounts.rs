@@ -286,6 +286,7 @@ pub async fn create_session(
     token_hash: &str,
     csrf_token: &str,
     expires_at: OffsetDateTime,
+    method: &str,
 ) -> Result<uuid::Uuid, DbError> {
     let mut tx = pool.begin().await.map_err(DbError::Query)?;
     let id = uuid::Uuid::now_v7();
@@ -311,7 +312,7 @@ pub async fn create_session(
         &user.username,
         "session.started",
         &id.to_string(),
-        serde_json::json!({}),
+        serde_json::json!({ "method": method }),
     )
     .await?;
     tx.commit().await.map_err(DbError::Query)?;

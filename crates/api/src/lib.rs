@@ -24,6 +24,7 @@ pub mod import;
 pub mod import_runner;
 pub mod integrity;
 pub mod metrics;
+pub mod oidc;
 pub mod pagination;
 pub mod problem;
 pub mod report;
@@ -132,6 +133,9 @@ pub const API_BASE: &str = "/api/v1";
         routes::derivations::cancel_derivation_job_route,
         routes::identification::get_identification,
         routes::identification::rehash,
+        routes::oidc::status,
+        routes::oidc::start,
+        routes::oidc::callback,
         routes::dats::load,
         routes::dats::list,
         routes::dats::remove,
@@ -252,6 +256,7 @@ pub const API_BASE: &str = "/api/v1";
         routes::identification::DatMatchView,
         routes::identification::DatMatchFileView,
         routes::artifacts::BestMatchView,
+        routes::oidc::OidcStatusView,
         routes::dats::DatView,
         routes::dats::DatLoadView,
         routes::dats::DatList,
@@ -487,6 +492,7 @@ pub fn router(state: ApiState) -> Router {
         .nest(API_BASE, routes::derivations::router())
         .nest(API_BASE, routes::identification::router())
         .nest(API_BASE, routes::dats::router())
+        .nest(API_BASE, routes::oidc::router())
         // Applied per route, after routing, so the rule is looked up by the
         // matched pattern rather than by a raw path a caller could disguise.
         .layer(axum::middleware::from_fn_with_state(

@@ -69,6 +69,8 @@ struct Inner {
     integrity: Option<crate::integrity::Integrity>,
     /// Wakes the identification runner, when this server runs one.
     identification: Option<crate::identification::IdentificationHandle>,
+    /// The identity provider people may sign in through (ADR 0018).
+    oidc: Option<Arc<crate::oidc::Oidc>>,
 }
 
 /// What the import routes need beyond the database.
@@ -116,6 +118,7 @@ impl ApiState {
                 integration_client: None,
                 integrity: None,
                 identification: None,
+                oidc: None,
             }),
         }
     }
@@ -143,6 +146,7 @@ impl ApiState {
                 integration_client: None,
                 integrity: None,
                 identification: None,
+                oidc: None,
             }),
         }
     }
@@ -284,6 +288,31 @@ impl ApiState {
         Self {
             inner: Arc::new(inner),
         }
+    }
+
+    /// Let people sign in through an identity provider.
+    #[must_use]
+    pub fn with_oidc(self, oidc: Arc<crate::oidc::Oidc>) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.oidc = Some(oidc);
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Let people sign in through an identity provider, when one is given.
+    #[must_use]
+    pub fn with_oidc_if(self, oidc: Option<Arc<crate::oidc::Oidc>>) -> Self {
+        match oidc {
+            Some(oidc) => self.with_oidc(oidc),
+            None => self,
+        }
+    }
+
+    /// The identity provider, when one is configured.
+    #[must_use]
+    pub fn oidc(&self) -> Option<&Arc<crate::oidc::Oidc>> {
+        self.inner.oidc.as_ref()
     }
 
     /// The identification runner's handle, when this server runs one.

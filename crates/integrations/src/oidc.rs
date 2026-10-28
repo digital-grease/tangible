@@ -435,11 +435,19 @@ impl Provider {
     }
 
     async fn exchange(&self, code: &str, verifier: &str) -> Result<String, OidcError> {
-        let mut form = url::form_urlencoded::Serializer::new(String::new());
-        form.append_pair("grant_type", "authorization_code")
-            .append_pair("code", code)
-            .append_pair("redirect_uri", self.config.redirect_uri.as_str())
-            .append_pair("code_verifier", verifier);
+        // Written out before anything awaits: the serializer is not Send.
+        let body = {
+            let mut form = url::form_urlencoded::Serializer::new(String::new());
+            form.append_pair("grant_type", "authorization_code")
+                .append_pair("code", code)
+                .append_pair("redirect_uri", self.config.redirect_uri.as_str())
+                .append_pair("code_verifier", verifier);
+            if self.auth == ClientAuth::Post {
+                form.append_pair("client_id", &self.config.client_id)
+                    .append_pair("client_secret", &self.config.client_secret);
+            }
+            form.finish()
+        };
         let mut request = self
             .client
             .request(reqwest::Method::POST, &self.discovery.token_endpoint)
@@ -449,30 +457,24 @@ impl Provider {
                 reqwest::header::CONTENT_TYPE,
                 "application/x-www-form-urlencoded",
             );
-        match self.auth {
-            ClientAuth::Basic => {
-                // RFC 6749 2.3.1: each form-encoded before joining.
-                let encode = |value: &str| {
-                    url::form_urlencoded::byte_serialize(value.as_bytes()).collect::<String>()
-                };
-                let pair = format!(
-                    "{}:{}",
-                    encode(&self.config.client_id),
-                    encode(&self.config.client_secret)
-                );
-                request = request.header(
-                    reqwest::header::AUTHORIZATION,
-                    format!("Basic {}", STANDARD.encode(pair)),
-                );
-            }
-            ClientAuth::Post => {
-                form.append_pair("client_id", &self.config.client_id)
-                    .append_pair("client_secret", &self.config.client_secret);
-            }
+        if self.auth == ClientAuth::Basic {
+            // RFC 6749 2.3.1: each form-encoded before joining.
+            let encode = |value: &str| {
+                url::form_urlencoded::byte_serialize(value.as_bytes()).collect::<String>()
+            };
+            let pair = format!(
+                "{}:{}",
+                encode(&self.config.client_id),
+                encode(&self.config.client_secret)
+            );
+            request = request.header(
+                reqwest::header::AUTHORIZATION,
+                format!("Basic {}", STANDARD.encode(pair)),
+            );
         }
         let response = self
             .client
-            .send(request.body(form.finish()))
+            .send(request.body(body))
             .await
             .map_err(|error| ClientError::from_outbound(PROVIDER, error))?;
         let status = response.status();

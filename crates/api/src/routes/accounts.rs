@@ -30,8 +30,8 @@ use time::format_description::well_known::Rfc3339;
 use utoipa::ToSchema;
 
 use crate::auth::{
-    CurrentUser, NewSession, SignedIn, clear_cookie, hash_password, session_cookie_value,
-    set_cookie, verify_password,
+    CurrentUser, NewSession, PasswordSignIn, SignedIn, clear_cookie, hash_password,
+    session_cookie_value, set_cookie, verify_password,
 };
 use crate::pagination::{Page, PageQuery};
 use crate::problem::{ErrorCode, Problem};
@@ -166,11 +166,13 @@ pub struct CreateUserRequest {
 // --- signing in ----------------------------------------------------------------
 
 /// Start a session for `user` and build the response that hands it over.
-async fn start_session(
+/// Start a session for `user`, who signed in by `method` (`password`,
+/// `setup` or `oidc`): the cookie to set, and what the session is.
+pub(crate) async fn issue_session(
     state: &ApiState,
     user: &UserRecord,
-    status: StatusCode,
-) -> Result<Response, Problem> {
+    method: &str,
+) -> Result<(String, SessionView), Problem> {
     let session = NewSession::generate()?;
     let settings = state.auth();
     let lifetime =
@@ -182,13 +184,14 @@ async fn start_session(
         &session.token_hash,
         &session.csrf_token,
         expires_at,
+        method,
     )
     .await
     .map_err(|error| {
         tracing::error!(error = ?error, "could not start a session");
         unavailable("the session could not be started")
     })?;
-    tracing::info!(user = %user.username, %session_id, "signed in");
+    tracing::info!(user = %user.username, %session_id, method, "signed in");
 
     let view = SessionView {
         username: user.username.clone(),
@@ -196,11 +199,18 @@ async fn start_session(
         csrf_token: session.csrf_token,
         expires_at: rfc3339(expires_at),
     };
+    Ok((session_cookie_value(settings, &session.token), view))
+}
+
+async fn start_session(
+    state: &ApiState,
+    user: &UserRecord,
+    status: StatusCode,
+    method: &str,
+) -> Result<Response, Problem> {
+    let (cookie, view) = issue_session(state, user, method).await?;
     let mut response = (status, Json(view)).into_response();
-    set_cookie(
-        &mut response,
-        &session_cookie_value(settings, &session.token),
-    );
+    set_cookie(&mut response, &cookie);
     Ok(response)
 }
 
@@ -274,7 +284,7 @@ pub async fn complete_setup(
         })?
         .ok_or(already)?;
     tracing::warn!(user = %user.username, "first administrator created; setup is closed");
-    start_session(&state, &user, StatusCode::CREATED).await
+    start_session(&state, &user, StatusCode::CREATED, "setup").await
 }
 
 /// Sign in.
@@ -339,16 +349,29 @@ pub async fn sign_in(
     };
     // An account with no password (one a provider vouches for) checks
     // against nothing, as an unknown name does, and costs the same time.
-    let (user, stored) = match account {
-        Some(record) => (Some(record.user), record.password_hash),
-        None => (None, None),
+    let (user, stored, made_by_setup) = match account {
+        Some(record) => (
+            Some(record.user),
+            record.password_hash,
+            record.made_by_setup,
+        ),
+        None => (None, None, false),
     };
     let password_ok = verify_password(request.password, stored).await?;
 
     match user {
         Some(user) if password_ok && !user.disabled => {
             limiter.record_success(&name);
-            start_session(&state, &user, StatusCode::OK).await
+            // Checked only once the password is right, so the answer says
+            // nothing about an account to someone who does not know it.
+            if state.auth().password_sign_in == PasswordSignIn::SetupOnly && !made_by_setup {
+                tracing::info!(username = %name, "password sign-in refused: provider accounts only");
+                return Err(Problem::new(
+                    ErrorCode::PasswordSignInOff,
+                    "this account signs in through the identity provider",
+                ));
+            }
+            start_session(&state, &user, StatusCode::OK, "password").await
         }
         _ => {
             limiter.record_failure(&name);

@@ -276,3 +276,31 @@ pub async fn identity_users(
             .map_err(DbError::Query)?;
     Ok(found.into_iter().collect())
 }
+
+/// Record a sign-in through the provider that was refused, and why (a
+/// stable code, such as `OIDC_NO_ROLE`), as a refused password sign-in is.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn record_refused(
+    pool: &PgPool,
+    issuer: &str,
+    subject: Option<&str>,
+    reason: &str,
+) -> Result<(), DbError> {
+    let actor: String = subject.unwrap_or("-").chars().take(200).collect();
+    sqlx::query(
+        "INSERT INTO audit_events (id, actor_type, actor_id, action, target_type, outcome, metadata)
+         VALUES ($1, 'user', $2, 'session.refused', 'session', 'denied',
+                 jsonb_build_object('via', 'oidc', 'issuer', $3::text, 'reason', $4::text))",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(actor)
+    .bind(issuer)
+    .bind(reason)
+    .execute(pool)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(())
+}

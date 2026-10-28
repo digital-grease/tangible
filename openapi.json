@@ -4943,6 +4943,110 @@
         ]
       }
     },
+    "/api/v1/session/oidc": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Whether sign-in through a provider is offered, for the sign-in page.",
+        "description": "Whether an identity provider is configured, what to call it, and who may sign in with a password.",
+        "operationId": "status",
+        "responses": {
+          "200": {
+            "description": "How sign-in works here",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OidcStatusView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/session/oidc/callback": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Where the identity provider sends the browser back.",
+        "description": "A navigation, not an API call: the provider's redirect back. Starts a session and redirects to the page that asked, or to the sign-in page with `oidc_error`.",
+        "operationId": "callback",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "description": "The authorization code.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "The state Tangible sent.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "error",
+            "in": "query",
+            "description": "The provider's error code, when it refused.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Signed in, or back with oidc_error"
+          }
+        }
+      }
+    },
+    "/api/v1/session/oidc/start": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Send the browser to the identity provider to sign in.",
+        "description": "A navigation, not an API call: redirects the browser to the identity provider, or to the sign-in page with `oidc_error` when it cannot.",
+        "operationId": "start",
+        "parameters": [
+          {
+            "name": "return_to",
+            "in": "query",
+            "description": "A path on Tangible; anything else is `/`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "To the provider, or back with oidc_error"
+          }
+        }
+      }
+    },
     "/api/v1/setup": {
       "get": {
         "tags": [
@@ -10334,6 +10438,31 @@
           "writable": {
             "type": "boolean",
             "description": "Whether it could be written."
+          }
+        }
+      },
+      "OidcStatusView": {
+        "type": "object",
+        "description": "Whether sign-in through a provider is offered.",
+        "required": [
+          "enabled",
+          "password_sign_in"
+        ],
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the sign-in page calls it."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether a provider is configured."
+          },
+          "password_sign_in": {
+            "type": "string",
+            "description": "Who may sign in with a password: `all`, or `setup-only` (the accounts\nsetup made)."
           }
         }
       },
