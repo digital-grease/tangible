@@ -10,6 +10,7 @@ pub mod catalog;
 pub mod derivations;
 pub mod diagnostics;
 pub mod erasures;
+pub mod identification;
 pub mod imports;
 pub mod integration_jobs;
 pub mod integrations;

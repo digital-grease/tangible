@@ -66,6 +66,8 @@ struct Inner {
     integration_client: Option<tangible_integrations::outbound::OutboundClient>,
     /// Wakes the integrity runner, when this server runs one.
     integrity: Option<crate::integrity::Integrity>,
+    /// Wakes the identification runner, when this server runs one.
+    identification: Option<crate::identification::IdentificationHandle>,
 }
 
 /// What the import routes need beyond the database.
@@ -111,6 +113,7 @@ impl ApiState {
                 secret_key: None,
                 integration_client: None,
                 integrity: None,
+                identification: None,
             }),
         }
     }
@@ -136,6 +139,7 @@ impl ApiState {
                 secret_key: None,
                 integration_client: None,
                 integrity: None,
+                identification: None,
             }),
         }
     }
@@ -264,6 +268,25 @@ impl ApiState {
         Self {
             inner: Arc::new(inner),
         }
+    }
+
+    /// Wake the identification runner when hashes are asked for again.
+    #[must_use]
+    pub fn with_identification(
+        self,
+        identification: crate::identification::IdentificationHandle,
+    ) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.identification = Some(identification);
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// The identification runner's handle, when this server runs one.
+    #[must_use]
+    pub fn identification(&self) -> Option<&crate::identification::IdentificationHandle> {
+        self.inner.identification.as_ref()
     }
 
     /// The integrity runner's handle, when this server runs one.

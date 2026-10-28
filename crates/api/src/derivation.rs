@@ -982,6 +982,7 @@ pub struct DerivationRunner {
     derivations: Derivations,
     settings: DerivationRunnerSettings,
     romm: Option<crate::romm_export::RommExport>,
+    identification: Option<crate::identification::IdentificationHandle>,
 }
 
 impl DerivationRunner {
@@ -997,7 +998,19 @@ impl DerivationRunner {
             derivations,
             settings,
             romm: None,
+            identification: None,
         }
+    }
+
+    /// Wake the identification runner after each derivative, so its hashes
+    /// are computed at once rather than at the next poll.
+    #[must_use]
+    pub fn with_identification(
+        mut self,
+        identification: crate::identification::IdentificationHandle,
+    ) -> Self {
+        self.identification = Some(identification);
+        self
     }
 
     /// Wake the RomM exporter after each derivative, so a game already in
@@ -1098,6 +1111,9 @@ impl DerivationRunner {
                 );
                 if let Some(romm) = &self.romm {
                     romm.nudge();
+                }
+                if let Some(identification) = &self.identification {
+                    identification.nudge();
                 }
             }
             Ok(false) => {

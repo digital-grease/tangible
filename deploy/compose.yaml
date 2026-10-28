@@ -60,6 +60,10 @@ services:
       # Days after a full integrity scrub ends before the next is queued
       # (deploy/README.md, "Checking stored bytes"). Off (0) unless set.
       TANGIBLE_SCRUB_INTERVAL_DAYS: ${TANGIBLE_SCRUB_INTERVAL_DAYS:-0}
+      # CRC32, MD5 and SHA-1 of every artifact's files and CD tracks, for
+      # matching against DATs (deploy/README.md, "Identifying discs with
+      # DATs"). On unless set to false.
+      TANGIBLE_PRESERVATION_HASHES: ${TANGIBLE_PRESERVATION_HASHES:-true}
       # RomM's roms directory, to show chosen games in RomM (deploy/README.md,
       # "Showing games in RomM"). Off unless set: uncomment this and the
       # matching volume below. Tangible writes only folders it marks as its

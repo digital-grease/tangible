@@ -89,6 +89,9 @@ pub struct ImportRunnerSettings {
     /// The remover to wake when an import completes, which may have queued
     /// its source's removal (docs/plans/source-retention.md).
     pub source_removal: Option<SourceRemovalHandle>,
+    /// The identification runner to wake when an import completes, so the
+    /// new artifact's preservation hashes are computed at once.
+    pub identification: Option<crate::identification::IdentificationHandle>,
 }
 
 impl Default for ImportRunnerSettings {
@@ -108,6 +111,7 @@ impl Default for ImportRunnerSettings {
             secret_key: None,
             torrent_poll: Duration::from_secs(30),
             source_removal: None,
+            identification: None,
         }
     }
 }
@@ -323,9 +327,7 @@ impl ImportRunner {
                                 "the import's staging area could not be removed"
                             );
                         }
-                        if let Some(remover) = &self.settings.source_removal {
-                            remover.nudge();
-                        }
+                        self.announce_completed();
                     }
                     Err(error) => tracing::error!(
                         import_id = %job.id,
@@ -345,6 +347,18 @@ impl ImportRunner {
                 self.fail(&job, retryable, failure_code(&error), &error.to_string())
                     .await;
             }
+        }
+    }
+
+    /// Wake what follows a completed import: the remover, which may have a
+    /// source to remove, and the identification runner, which has a new
+    /// artifact to hash.
+    fn announce_completed(&self) {
+        if let Some(remover) = &self.settings.source_removal {
+            remover.nudge();
+        }
+        if let Some(identification) = &self.settings.identification {
+            identification.nudge();
         }
     }
 

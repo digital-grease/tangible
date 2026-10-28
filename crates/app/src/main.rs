@@ -201,11 +201,11 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         (Some(integrations.clone()), secret_key.clone()),
     )
     .await?;
-    let (state, integrity) = start_integrity(
+    let (state, readers) = start_library_readers(
         state,
         &database,
         (objects.clone(), manifests.clone()),
-        serve.scrub_interval_days,
+        serve,
     );
     let (state, derivations) = start_derivations(
         state,
@@ -229,21 +229,16 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
             integrations: Some(integrations),
             secret_key,
             source_removal: Some(removal),
+            identification: state.identification().cloned(),
             ..ImportRunnerSettings::default()
         },
     );
 
-    let runners = [
-        Some(imports),
-        Some(integrity),
-        Some(remover),
-        romm,
-        romm_sync,
-        derivations,
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
+    let runners = [Some(imports), Some(remover), romm, romm_sync, derivations]
+        .into_iter()
+        .flatten()
+        .chain(readers)
+        .collect();
     serve_until_shutdown(serve, state, runners).await
 }
 
@@ -486,6 +481,45 @@ fn start_integrity(
     (state.with_integrity(integrity), (stop, task))
 }
 
+/// Start what reads the library back in the background: the integrity
+/// runner, and the identification runner unless preservation hashes are
+/// turned off (`TANGIBLE_PRESERVATION_HASHES`).
+fn start_library_readers(
+    state: ApiState,
+    database: &Database,
+    (objects, manifests): (FilesystemStore, ManifestStore),
+    serve: &ServeConfig,
+) -> (ApiState, Vec<Stoppable>) {
+    let (state, integrity) = start_integrity(
+        state,
+        database,
+        (objects.clone(), manifests.clone()),
+        serve.scrub_interval_days,
+    );
+    if !serve.preservation_hashes {
+        tracing::info!(
+            "preservation hashes are off (TANGIBLE_PRESERVATION_HASHES); nothing is matched against DATs"
+        );
+        return (state, vec![integrity]);
+    }
+    let handle = tangible_api::identification::IdentificationHandle::new();
+    let runner = tangible_api::identification::IdentificationRunner::new(
+        database.clone(),
+        objects,
+        manifests,
+        handle.clone(),
+        tangible_api::identification::IdentificationSettings::default(),
+    );
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(runner.run(async {
+        let _ = stopped.await;
+    }));
+    (
+        state.with_identification(handle),
+        vec![integrity, (stop, task)],
+    )
+}
+
 /// How long after a full scrub ends the next is queued; 0 days is never.
 fn scrub_interval(days: u32) -> Option<std::time::Duration> {
     (days > 0).then(|| std::time::Duration::from_secs(u64::from(days) * 24 * 60 * 60))
@@ -517,6 +551,9 @@ fn start_derivations(
     );
     if let Some(romm) = state.romm() {
         runner = runner.with_romm(romm.clone());
+    }
+    if let Some(identification) = state.identification() {
+        runner = runner.with_identification(identification.clone());
     }
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(runner.run(async {
@@ -1143,6 +1180,7 @@ mod tests {
         "TANGIBLE_MAX_UPLOAD_BYTES",
         "TANGIBLE_MIGRATE_ON_START",
         "TANGIBLE_OUTBOUND_ALLOW",
+        "TANGIBLE_PRESERVATION_HASHES",
         "TANGIBLE_PUBLIC_URL",
         "TANGIBLE_REMOVABLE_ROOTS",
         "TANGIBLE_REPORT_ISSUES_URL",

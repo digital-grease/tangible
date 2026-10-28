@@ -345,6 +345,18 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
         Signed(Read),
     ),
     ("GET", "/api/v1/derivation-jobs/{job_id}", Signed(Read)),
+    // Preservation hashes: reading them is reading the catalogue; asking
+    // for them again reads the library, as a check does.
+    (
+        "GET",
+        "/api/v1/artifacts/{artifact_id}/identification",
+        Signed(Read),
+    ),
+    (
+        "POST",
+        "/api/v1/artifacts/{artifact_id}/identification/rehash",
+        Signed(Import),
+    ),
     (
         "POST",
         "/api/v1/derivation-jobs/{job_id}/cancel",

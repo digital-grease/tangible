@@ -2633,9 +2633,12 @@ dependencies = [
 name = "tangible-storage"
 version = "0.1.0"
 dependencies = [
+ "crc",
  "hex",
+ "md-5",
  "rustix",
  "serde_json",
+ "sha1",
  "sha2 0.11.0",
  "tangible-domain",
  "tempfile",

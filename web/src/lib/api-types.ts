@@ -134,6 +134,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/artifacts/{artifact_id}/identification": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * An artifact's preservation hashes and what they identify.
+         * @description The CRC32, MD5 and SHA-1 of the artifact's components and CD tracks, as preservation databases list them, computed in the background after import.
+         */
+        get: operations["get_identification"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/artifacts/{artifact_id}/identification/rehash": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compute an artifact's preservation hashes again.
+         * @description Compute the artifact's preservation hashes again, in the background: after a failure, or after its stored bytes were restored from a backup.
+         */
+        post: operations["rehash"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/artifacts/{artifact_id}/lineage": {
         parameters: {
             query?: never;
@@ -2307,6 +2347,11 @@ export interface components {
             /** @description The disc recorded, when the attempt consumed media. */
             physical_copy_id?: string | null;
         };
+        /** @description One component's hashes. */
+        ComponentHashesView: components["schemas"]["HashesView"] & {
+            /** @description Its path in the artifact. */
+            logical_path: string;
+        };
         /** @description One file within an artifact. */
         ComponentView: {
             /** @description Opaque identifier, for downloading it. */
@@ -3112,12 +3157,39 @@ export interface components {
             /** @description Entries in the object tree that are not objects. Never collected. */
             unrecognized: components["schemas"]["Tally"];
         };
+        /** @description CRC32, MD5 and SHA-1 of some bytes, as preservation databases list them. */
+        HashesView: {
+            /** @description CRC32, eight lowercase hex digits. */
+            crc32?: string | null;
+            /**
+             * Format: int64
+             * @description Bytes covered.
+             */
+            length_bytes: number;
+            /** @description MD5. */
+            md5?: string | null;
+            /** @description SHA-1. */
+            sha1?: string | null;
+        };
         /** @description What the server tells a worker on each heartbeat. */
         HeartbeatResponse: {
             /** @description Whether the worker should stop taking new work. */
             drain: boolean;
             /** @description The server's clock, so a worker can notice drift. */
             server_time: string;
+        };
+        /** @description What identifies an artifact. */
+        IdentificationView: {
+            /** @description Each component's hashes. */
+            components: components["schemas"]["ComponentHashesView"][];
+            /** @description Why computing them last failed. */
+            error?: string | null;
+            /** @description When they were computed. */
+            hashed_at?: string | null;
+            /** @description `pending` (waiting for the background runner), `done` or `failed`. */
+            state: string;
+            /** @description Each CD track's hashes, for an artifact with a track layout. */
+            tracks: components["schemas"]["TrackHashesView"][];
         };
         /** @description A page of imports. */
         ImportPage: {
@@ -4278,6 +4350,17 @@ export interface components {
             /** @description What it sorts as. */
             sort_title: string;
         };
+        /**
+         * @description One CD track's hashes: of its bytes from its first in the file (its
+         *     pregap included, when the file holds it), as Redump cuts a track.
+         */
+        TrackHashesView: components["schemas"]["HashesView"] & {
+            /**
+             * Format: int32
+             * @description The track.
+             */
+            number: number;
+        };
         /** @description An index point. */
         TrackIndexView: {
             /**
@@ -4788,6 +4871,70 @@ export interface operations {
             };
             /** @description Reports are off, or the image was recognised without doubts */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_identification: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Artifact identifier */
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Its identification */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdentificationView"];
+                };
+            };
+            /** @description No such artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    rehash: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Artifact identifier */
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdentificationView"];
+                };
+            };
+            /** @description No such artifact */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

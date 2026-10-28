@@ -12,6 +12,7 @@ pub mod derivations;
 pub mod diagnostics;
 pub mod erasures;
 pub mod gc;
+pub mod identification;
 pub mod integrations;
 pub mod integrity;
 pub mod repositories;

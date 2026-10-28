@@ -8,6 +8,16 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
+- Preservation hashes: the CRC32, MD5 and SHA-1 of every artifact's files,
+  and of every CD track's bytes as Redump cuts them (pregap in the file
+  included), computed in the background by reading the stored bytes once,
+  for new imports and derivatives as they arrive and for the library
+  already there. `GET /api/v1/artifacts/{id}/identification` shows them;
+  `POST .../identification/rehash` asks again. An unreadable artifact is
+  tried three times, an hour apart, then left failed, saying why.
+  `TANGIBLE_PRESERVATION_HASHES` (on by default) turns it off. Database
+  migration 0024 adds a table and columns, additively; every existing
+  artifact starts pending.
 - CloneCD images (CCD/IMG/SUB) are recognised and imported as one artifact:
   the `.ccd` is read with a bounded parser (no published specification
   exists; it follows CloneCD's open-source readers), the IMG and SUB are

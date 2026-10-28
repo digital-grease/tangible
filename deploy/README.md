@@ -882,6 +882,26 @@ The plan only reads; it removes nothing. If you remove a listed file by
 hand, stop the server first: an import that has just stored the same bytes
 again may not have recorded them yet.
 
+## Identifying discs with DATs
+
+Preservation databases such as Redump and No-Intro list each known good dump
+by the CRC32, MD5 and SHA-1 of its files, and for a CD of each track. The
+server computes these for every artifact in the background, reading its
+stored bytes once: new imports as they arrive, and what is already in the
+library, a few at a time, when the server first starts with this. A CD's
+tracks are hashed as Redump cuts them, from each track's first byte in the
+image (its pregap, when the image holds it) to the next track's, so a
+single-BIN image, a split one and a CloneCD image all give the same track
+hashes. An artifact's page shows them, and so does
+`GET /api/v1/artifacts/{id}/identification`. Set
+`TANGIBLE_PRESERVATION_HASHES=false` to turn this off.
+
+An artifact whose bytes cannot be read is tried again after an hour, then
+left failed, saying why; an integrity check says what is wrong with them.
+After restoring them, ask again
+(`POST /api/v1/artifacts/{id}/identification/rehash`).
+
+
 ## Upgrading
 
 1. Read the release notes, especially anything about migrations.

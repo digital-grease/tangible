@@ -18,6 +18,7 @@ pub mod filesystem;
 pub mod inventory;
 pub mod manifest_store;
 pub mod object_key;
+pub mod preservation;
 pub mod space;
 pub mod staging;
 pub mod watch_roots;

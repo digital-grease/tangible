@@ -315,6 +315,78 @@ invariant_test!(
     }
 );
 
+// --- Preservation hashes -------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn preservation_hashes_are_well_formed_and_an_artifact_says_consistently_when_they_were_made()
+{
+    // A malformed hash would never match a DAT and never say why; a done
+    // artifact without a time, or a lease without an owner, would be taken
+    // up again or never.
+    let pool = pool().await;
+    let f = Fixture::new();
+    let mut tx = pool.begin().await.expect("begin");
+    seed(&mut tx, &f).await;
+    let artifact = f.artifact;
+    tx.execute(
+        format!(
+            "INSERT INTO artifact_track_hashes (artifact_id, track_number, length_bytes, crc32, md5, sha1) \
+             VALUES ('{artifact}', 1, 2352, '414fa339', '9e107d9d372bb6826bd81d3542a419d6', \
+                     '2fd4e1c67a2d28fced849ee1bb76e7391b93eb12')"
+        )
+        .as_str(),
+    )
+    .await
+    .expect("a track's hashes");
+    let track = |number: &str, crc: &str, md5: &str, sha1: &str| {
+        format!(
+            "INSERT INTO artifact_track_hashes (artifact_id, track_number, length_bytes, crc32, md5, sha1) \
+             VALUES ('{artifact}', {number}, 1, '{crc}', '{md5}', '{sha1}')"
+        )
+    };
+    let md5 = "9e107d9d372bb6826bd81d3542a419d6";
+    let sha1 = "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12";
+    for (statement, why) in [
+        (
+            track("2", "414FA339", md5, sha1),
+            "hashes are lowercase hex",
+        ),
+        (track("2", "414fa33", md5, sha1), "a CRC32 is eight digits"),
+        (track("2", "414fa339", "x", sha1), "an MD5 is 32 digits"),
+        (track("2", "414fa339", md5, "abc"), "a SHA-1 is 40 digits"),
+        (track("0", "414fa339", md5, sha1), "tracks are 1 to 99"),
+        (track("1", "414fa339", md5, sha1), "one row per track"),
+        (
+            format!("UPDATE artifacts SET hashes_state = 'done' WHERE id = '{artifact}'"),
+            "a done artifact says when",
+        ),
+        (
+            format!("UPDATE artifacts SET hashed_at = now() WHERE id = '{artifact}'"),
+            "a pending artifact has no time",
+        ),
+        (
+            format!("UPDATE artifacts SET hashes_lease_owner = 'x' WHERE id = '{artifact}'"),
+            "a lease has an expiry",
+        ),
+        (
+            format!("UPDATE artifacts SET hashes_state = 'hashing' WHERE id = '{artifact}'"),
+            "the state is one Tangible knows",
+        ),
+    ] {
+        must_reject(&mut tx, &statement, why).await;
+    }
+    tx.execute(
+        format!(
+            "UPDATE artifacts SET hashes_state = 'done', hashed_at = now() WHERE id = '{artifact}'"
+        )
+        .as_str(),
+    )
+    .await
+    .expect("done, saying when");
+    tx.rollback().await.expect("rollback");
+}
+
 // --- Source removals -----------------------------------------------------------
 
 #[tokio::test]

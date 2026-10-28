@@ -417,6 +417,102 @@
         ]
       }
     },
+    "/api/v1/artifacts/{artifact_id}/identification": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "An artifact's preservation hashes and what they identify.",
+        "description": "The CRC32, MD5 and SHA-1 of the artifact's components and CD tracks, as preservation databases list them, computed in the background after import.",
+        "operationId": "get_identification",
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "description": "Artifact identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Its identification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentificationView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/artifacts/{artifact_id}/identification/rehash": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Compute an artifact's preservation hashes again.",
+        "description": "Compute the artifact's preservation hashes again, in the background: after a failure, or after its stored bytes were restored from a backup.",
+        "operationId": "rehash",
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "description": "Artifact identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentificationView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/artifacts/{artifact_id}/lineage": {
       "get": {
         "tags": [
@@ -7052,6 +7148,27 @@
           }
         }
       },
+      "ComponentHashesView": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/HashesView",
+            "description": "Its hashes, once computed."
+          },
+          {
+            "type": "object",
+            "required": [
+              "logical_path"
+            ],
+            "properties": {
+              "logical_path": {
+                "type": "string",
+                "description": "Its path in the artifact."
+              }
+            }
+          }
+        ],
+        "description": "One component's hashes."
+      },
       "ComponentView": {
         "type": "object",
         "description": "One file within an artifact.",
@@ -8874,6 +8991,41 @@
           }
         }
       },
+      "HashesView": {
+        "type": "object",
+        "description": "CRC32, MD5 and SHA-1 of some bytes, as preservation databases list them.",
+        "required": [
+          "length_bytes"
+        ],
+        "properties": {
+          "crc32": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "CRC32, eight lowercase hex digits."
+          },
+          "length_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes covered."
+          },
+          "md5": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "MD5."
+          },
+          "sha1": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SHA-1."
+          }
+        }
+      },
       "HeartbeatResponse": {
         "type": "object",
         "description": "What the server tells a worker on each heartbeat.",
@@ -8889,6 +9041,49 @@
           "server_time": {
             "type": "string",
             "description": "The server's clock, so a worker can notice drift."
+          }
+        }
+      },
+      "IdentificationView": {
+        "type": "object",
+        "description": "What identifies an artifact.",
+        "required": [
+          "state",
+          "components",
+          "tracks"
+        ],
+        "properties": {
+          "components": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ComponentHashesView"
+            },
+            "description": "Each component's hashes."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why computing them last failed."
+          },
+          "hashed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When they were computed."
+          },
+          "state": {
+            "type": "string",
+            "description": "`pending` (waiting for the background runner), `done` or `failed`."
+          },
+          "tracks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TrackHashesView"
+            },
+            "description": "Each CD track's hashes, for an artifact with a track layout."
           }
         }
       },
@@ -11508,6 +11703,28 @@
             "description": "What it sorts as."
           }
         }
+      },
+      "TrackHashesView": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/HashesView",
+            "description": "Its hashes."
+          },
+          {
+            "type": "object",
+            "required": [
+              "number"
+            ],
+            "properties": {
+              "number": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The track."
+              }
+            }
+          }
+        ],
+        "description": "One CD track's hashes: of its bytes from its first in the file (its\npregap included, when the file holds it), as Redump cuts a track."
       },
       "TrackIndexView": {
         "type": "object",

@@ -279,6 +279,18 @@ pub struct ServeConfig {
         value_parser = clap::value_parser!(u32).range(0..=3650)
     )]
     pub scrub_interval_days: u32,
+
+    /// Whether to compute every artifact's preservation hashes (CRC32, MD5
+    /// and SHA-1 of its files and CD tracks) in the background, for matching
+    /// against DATs. On by default; each artifact's stored bytes are read
+    /// once, those already in the library included.
+    #[arg(
+        long,
+        env = "TANGIBLE_PRESERVATION_HASHES",
+        default_value_t = true,
+        action = clap::ArgAction::Set
+    )]
+    pub preservation_hashes: bool,
 }
 
 /// Settings for `tangible scrub`.
