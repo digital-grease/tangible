@@ -578,6 +578,35 @@ async fn a_dat_of_the_same_name_replaces_it_and_the_same_file_changes_nothing() 
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
+async fn a_dat_larger_than_the_default_body_limit_loads() {
+    // axum refuses bodies over 2 MB unless a route says otherwise; Redump's
+    // and No-Intro's DATs are often larger.
+    let h = harness().await;
+    let tag = tag();
+    let games: Vec<(String, Vec<String>)> = (0..12_000)
+        .map(|n| {
+            let name = format!("Game {n} {tag}");
+            let bytes = format!("{tag}-{n}");
+            (
+                name.clone(),
+                vec![rom(&format!("{name}.iso"), &hash_bytes(bytes.as_bytes()))],
+            )
+        })
+        .collect();
+    let refs: Vec<(&str, Vec<String>)> = games
+        .iter()
+        .map(|(name, roms)| (name.as_str(), roms.clone()))
+        .collect();
+    let xml = dat(&format!("Tests - Large {tag}"), &refs);
+    assert!(xml.len() > 2_500_000, "{} bytes", xml.len());
+    let (status, loaded) = h.load(&xml).await;
+    assert_eq!(status, StatusCode::CREATED, "{loaded}");
+    assert_eq!(loaded["dat"]["game_count"], 12_000);
+    h.remove(loaded["dat"]["id"].as_str().unwrap()).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn only_administrators_load_dats_and_only_dats_are_taken() {
     let h = harness().await;
     let xml = dat(&format!("Tests - Refused {}", tag()), &[]);
