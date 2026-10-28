@@ -21,7 +21,7 @@ use tangible_domain::LogicalPath;
 use tangible_domain::logical_path::{MAX_PATH_BYTES, MAX_SEGMENT_BYTES};
 use tangible_domain::manifest::ArtifactManifest;
 use tangible_domain::report::{self, ScrubContext};
-use tangible_image::{cue, iso, toc, video_ts};
+use tangible_image::{ccd, cue, iso, toc, video_ts};
 use tangible_integrations::romm;
 
 /// One target: what it is called, and what it runs.
@@ -31,6 +31,7 @@ pub type Target = (&'static str, fn(&[u8]));
 pub const TARGETS: &[Target] = &[
     ("cue", cue_sheet),
     ("toc", toc_file),
+    ("ccd", ccd_file),
     ("iso", iso_head),
     ("manifest", manifest),
     ("logical_path", logical_path),
@@ -46,6 +47,7 @@ pub const TARGETS: &[Target] = &[
 /// rather than copied into `seeds/`.
 pub const FIXTURE_SEEDS: &[(&str, &str)] = &[
     ("toc", "fixtures/tool-output/cdrdao/toc"),
+    ("ccd", "fixtures/images/ccd"),
     ("cdrdao_output", "fixtures/tool-output/cdrdao"),
     ("xorriso_output", "fixtures/tool-output/xorriso"),
     ("report_scrub", "fixtures/tool-output/cdrdao"),
@@ -147,6 +149,52 @@ pub fn toc_file(data: &[u8]) {
     assert_resolution_stays_staged(&cue::resolve_names(&document.files, &staged), &staged);
     for sizes in size_sets(document.files.len()) {
         let _ = toc::layout(&document, &sizes);
+    }
+}
+
+/// A CloneCD descriptor, laid out over images of several sizes, with and
+/// without a subchannel, each sector header taken from the input itself.
+/// Every track laid out must lie inside the image, in order, without
+/// overlapping the one before.
+pub fn ccd_file(data: &[u8]) {
+    let Ok(document) = ccd::parse(data) else {
+        return;
+    };
+    for sectors in [0_u64, 1, 150, 300, 750, 4500, u64::MAX / ccd::SECTOR_BYTES] {
+        let img = sectors.saturating_mul(ccd::SECTOR_BYTES);
+        for sub in [None, Some(sectors.saturating_mul(ccd::SUBCHANNEL_BYTES))] {
+            let mut header = |at: u64| {
+                let start = usize::try_from(at % 64).unwrap_or(0);
+                let mut bytes = [0_u8; ccd::HEADER_BYTES];
+                for (i, byte) in bytes.iter_mut().enumerate() {
+                    *byte = data.get(start + i).copied().unwrap_or(0);
+                }
+                Some(bytes)
+            };
+            let Ok(laid) = ccd::layout(&document, img, sub, &mut header) else {
+                continue;
+            };
+            assert_eq!(laid.subchannel, sub.is_some(), "the SUB is used as given");
+            let mut end = 0_u64;
+            for track in &laid.layout.tracks {
+                assert!(track.start_lba >= end, "tracks are in order");
+                assert!(track.sector_count > 0, "tracks hold sectors");
+                end = track
+                    .start_lba
+                    .checked_add(track.sector_count)
+                    .expect("track ends without overflow");
+                assert!(
+                    end <= sectors,
+                    "track {} lies inside the image",
+                    track.number
+                );
+                assert_eq!(track.file_offset_bytes, track.start_lba * ccd::SECTOR_BYTES);
+                assert!(
+                    track.pregap_sectors < track.sector_count,
+                    "INDEX 1 is inside the track"
+                );
+            }
+        }
     }
 }
 

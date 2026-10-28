@@ -1,0 +1,16 @@
+[CloneCD]
+Version=3
+[Entry 0]
+Session=1
+Point=0xa2
+Control=0x04
+PLBA=4294967295
+[Entry 1]
+Session=1
+Point=0x01
+Control=0x04
+PLBA=0
+[TRACK 1]
+MODE=1
+INDEX 0=0
+INDEX 1=445574

@@ -8,6 +8,7 @@ tools.
 |---|---|---|
 | `cue` | CUE sheet bytes | references resolve only to staged files; layout survives huge and empty file sizes; a sheet the RomM export rewrites still parses and names exactly the new files |
 | `toc` | cdrdao TOC bytes | references resolve only to staged files; layout survives huge and empty file sizes |
+| `ccd` | CloneCD descriptor bytes | layout over images of many sizes, with and without a subchannel, keeps every track inside the image, in order, with its INDEX 1 inside it; the subchannel is used exactly when one is given |
 | `iso` | ISO volume descriptors, after a zeroed system area | confidence stays a probability |
 | `manifest` | manifest JSON | an accepted manifest survives being written and read back unchanged |
 | `logical_path` | a path string | an accepted path is relative, normalised, free of `..`, NUL, backslashes and control characters, within the length limits, and parses to itself |

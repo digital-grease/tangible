@@ -112,6 +112,7 @@ fuzz target seconds="300":
     # (FIXTURE_SEEDS in fuzz/src/lib.rs).
     case "{{target}}" in
         toc) fixtures=(../fixtures/tool-output/cdrdao/toc) ;;
+        ccd) fixtures=(../fixtures/images/ccd) ;;
         cdrdao_output) fixtures=(../fixtures/tool-output/cdrdao) ;;
         xorriso_output) fixtures=(../fixtures/tool-output/xorriso) ;;
         *) fixtures=() ;;

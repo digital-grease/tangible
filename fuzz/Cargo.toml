@@ -40,6 +40,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "ccd"
+path = "fuzz_targets/ccd.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "iso"
 path = "fuzz_targets/iso.rs"
 test = false

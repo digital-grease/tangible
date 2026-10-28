@@ -8,8 +8,10 @@
 //! image is ever mounted.
 //!
 //! In place: ISO 9660 and UDF detection, CUE sheet and cdrdao TOC parsing
-//! with track layout, and DVD-Video `VIDEO_TS` trees.
+//! with track layout, CloneCD (CCD/IMG/SUB) descriptors, and DVD-Video
+//! `VIDEO_TS` trees.
 
+pub mod ccd;
 pub mod chdman;
 pub mod cue;
 pub mod derive;
