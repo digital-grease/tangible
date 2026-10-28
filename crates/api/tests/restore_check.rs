@@ -199,6 +199,31 @@ async fn artifacts_the_library_has_and_the_catalogue_lacks_are_found_and_catalog
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
+async fn a_manifest_filed_under_another_artifact_is_not_catalogued() {
+    let h = harness().await;
+    let catalogued = h.artifact(&bytes(4096), true).await;
+    // A copy gone wrong: the catalogued artifact's manifest, filed under an
+    // artifact the catalogue has never heard of.
+    let stray = uuid::Uuid::now_v7().to_string();
+    let source = h.manifests.manifest_path(catalogued.parse().unwrap());
+    let target = h.manifests.manifest_path(stray.parse().unwrap());
+    std::fs::copy(&source, &target).unwrap();
+
+    let report = h.check(true).await;
+    let outcome = uncatalogued(&report, &stray).expect("the stray file is found");
+    assert!(
+        outcome.contains(&format!("describes artifact {catalogued} instead")),
+        "{outcome}"
+    );
+    assert!(
+        report.uncatalogued.count > report.registered,
+        "still needs attention"
+    );
+    assert!(report.needs_attention());
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn objects_lost_or_cut_short_in_the_restore_are_named() {
     let h = harness().await;
     let lost = bytes(4096);

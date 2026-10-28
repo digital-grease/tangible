@@ -229,9 +229,15 @@ pub async fn restore_check(
         let artifact = ArtifactId::from_uuid(*id);
         let outcome = if settings.register {
             match catalogue_again(database, objects, manifests, artifact).await {
-                Ok(()) => {
+                Ok(true) => {
                     report.registered += 1;
                     "registered".to_owned()
+                }
+                // Catalogued by something else since it was listed: as
+                // fixed as if this had done it.
+                Ok(false) => {
+                    report.registered += 1;
+                    "already catalogued".to_owned()
                 }
                 Err(why) => why,
             }
@@ -252,18 +258,28 @@ pub async fn restore_check(
     Ok(report)
 }
 
-/// Catalogue one artifact again from its manifest, once every object the
-/// manifest names is in the library at its length; or say why not.
+/// Catalogue one artifact again from its manifest, once the manifest is the
+/// artifact's own and every object it names is in the library at its
+/// length; or say why not. Answers whether this catalogued it.
 async fn catalogue_again(
     database: &Database,
     objects: &FilesystemStore,
     manifests: &ManifestStore,
     artifact: ArtifactId,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let manifest = manifests
         .read(artifact)
         .await
         .map_err(|error| format!("its manifest could not be read: {error}"))?;
+    // A manifest filed under one artifact that describes another (a copy
+    // gone wrong) would otherwise catalogue the other one and report this
+    // one fixed.
+    if manifest.artifact_id != artifact {
+        return Err(format!(
+            "its manifest file describes artifact {} instead; not catalogued",
+            manifest.artifact_id
+        ));
+    }
     for component in &manifest.components {
         match objects.stat(&component.content.sha256).await {
             Ok(Some(stat)) if stat.size_bytes == component.length_bytes => {}
@@ -293,7 +309,7 @@ async fn catalogue_again(
         tracing::warn!(artifact_id = %artifact, error = ?error, "the re-cataloguing could not be audited");
     }
     tracing::info!(artifact_id = %artifact, "artifact catalogued again from its manifest after a restore");
-    Ok(())
+    Ok(registered.created)
 }
 
 #[cfg(test)]
