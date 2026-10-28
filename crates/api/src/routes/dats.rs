@@ -301,7 +301,7 @@ pub async fn remove(
     Path(dat_id): Path<String>,
 ) -> Result<StatusCode, Problem> {
     let id = parse_id(&dat_id)?;
-    let removed = delete_dat(state.database().pool(), id)
+    let removed = delete_dat(state.database().pool(), id, &user.username)
         .await
         .map_err(unavailable("the DAT could not be removed"))?;
     if !removed {

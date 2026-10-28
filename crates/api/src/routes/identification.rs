@@ -253,7 +253,7 @@ pub async fn rehash(
     Path(artifact_id): Path<String>,
 ) -> Result<(StatusCode, Json<IdentificationView>), Problem> {
     let id = parse_artifact(&artifact_id)?;
-    let found = request_hashes(state.database().pool(), *id.as_uuid())
+    let found = request_hashes(state.database().pool(), *id.as_uuid(), &user.username)
         .await
         .map_err(|error| {
             tracing::error!(error = ?error, "could not ask for hashes");

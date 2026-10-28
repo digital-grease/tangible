@@ -299,6 +299,15 @@ async fn an_unreadable_object_fails_saying_why_and_can_be_asked_for_again() {
         .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{queued}");
     assert_eq!(queued["state"], "pending");
+    let audited: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events
+         WHERE action = 'artifact.rehash_requested' AND target_id = $1 AND actor_type = 'user'",
+    )
+    .bind(&artifact)
+    .fetch_one(h.database.pool())
+    .await
+    .unwrap();
+    assert_eq!(audited, 1, "asking again is audited");
     h.identify(&artifact).await;
     let view = h.identification(&artifact).await;
     assert_eq!(view["state"], "done", "{view}");

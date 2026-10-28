@@ -8,6 +8,11 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
+- Audit events for loading and removing a DAT (`dat.loaded`, with its
+  name, games, files and whether it replaced one; `dat.removed`), for
+  asking for an artifact's hashes again (`artifact.rehash_requested`), and
+  for `restore-check` cataloguing an artifact again
+  (`artifact.recatalogued`, by the system).
 - Worker enrollment is rate limited, as AGENTS.md requires of worker
   registration: after five rejected tokens under one worker name in
   fifteen minutes, or sixty in all, enrollment answers 429 `RATE_LIMITED`

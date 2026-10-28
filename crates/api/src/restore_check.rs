@@ -21,7 +21,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use tangible_db::gc::catalogue_marks;
-use tangible_db::restore::{catalogued_artifacts, unfinished_jobs};
+use tangible_db::restore::{catalogued_artifacts, record_recatalogued, unfinished_jobs};
 use tangible_db::{Database, DbError};
 use tangible_domain::{ArtifactId, Sha256Digest};
 use tangible_storage::{FilesystemStore, ManifestStore, ManifestStoreError, StorageError};
@@ -284,9 +284,14 @@ async fn catalogue_again(
             }
         }
     }
-    register_manifest(database, &manifest)
+    let registered = register_manifest(database, &manifest)
         .await
         .map_err(|error| format!("it could not be catalogued: {error}"))?;
+    if registered.created
+        && let Err(error) = record_recatalogued(database.pool(), *artifact.as_uuid()).await
+    {
+        tracing::warn!(artifact_id = %artifact, error = ?error, "the re-cataloguing could not be audited");
+    }
     tracing::info!(artifact_id = %artifact, "artifact catalogued again from its manifest after a restore");
     Ok(())
 }

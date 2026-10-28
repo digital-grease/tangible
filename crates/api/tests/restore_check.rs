@@ -178,6 +178,19 @@ async fn artifacts_the_library_has_and_the_catalogue_lacks_are_found_and_catalog
             .await
             .unwrap();
     assert_eq!(present, vec![uuid::Uuid::parse_str(&newer).unwrap()]);
+    let audited: Vec<String> = sqlx::query_scalar(
+        "SELECT actor_id FROM audit_events
+         WHERE action = 'artifact.recatalogued' AND target_id = $1",
+    )
+    .bind(&newer)
+    .fetch_all(h.database.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        audited,
+        vec!["restore-check"],
+        "cataloguing again is audited"
+    );
 
     let after = h.check(false).await;
     assert_eq!(uncatalogued(&after, &newer), None, "catalogued now");

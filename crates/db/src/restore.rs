@@ -76,3 +76,22 @@ pub async fn unfinished_jobs(pool: &PgPool) -> Result<Vec<(&'static str, String,
     }
     Ok(found)
 }
+
+/// Record that `artifact` was catalogued again from its manifest by a
+/// restore check, which no person signed in to ask for.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn record_recatalogued(pool: &PgPool, artifact: uuid::Uuid) -> Result<(), DbError> {
+    sqlx::query(
+        "INSERT INTO audit_events (id, actor_type, actor_id, action, target_type, target_id, outcome)
+         VALUES ($1, 'system', 'restore-check', 'artifact.recatalogued', 'artifact', $2, 'success')",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(artifact.to_string())
+    .execute(pool)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(())
+}

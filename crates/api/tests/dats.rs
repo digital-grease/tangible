@@ -176,6 +176,18 @@ impl Harness {
         .0
     }
 
+    /// The audit events about a DAT: each action and the name recorded.
+    async fn audited(&self, dat: &str) -> Vec<(String, String)> {
+        sqlx::query_as(
+            "SELECT action, metadata->>'name' FROM audit_events
+             WHERE target_type = 'dat' AND target_id = $1 ORDER BY created_at, action",
+        )
+        .bind(dat)
+        .fetch_all(self.database.pool())
+        .await
+        .unwrap()
+    }
+
     async fn matches(&self, artifact: &str) -> Vec<Value> {
         let (status, view) = send(
             &self.operator,
@@ -348,6 +360,14 @@ async fn a_merged_and_a_split_image_of_one_disc_both_match_its_game_exactly() {
     assert_eq!(
         h.remove(loaded["dat"]["id"].as_str().unwrap()).await,
         StatusCode::NOT_FOUND
+    );
+    // Loading and removing are both audited, with the DAT's name.
+    assert_eq!(
+        h.audited(loaded["dat"]["id"].as_str().unwrap()).await,
+        vec![
+            ("dat.loaded".to_owned(), name.clone()),
+            ("dat.removed".to_owned(), name.clone())
+        ]
     );
 }
 

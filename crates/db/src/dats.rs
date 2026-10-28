@@ -174,6 +174,24 @@ pub async fn load_dat(pool: &PgPool, dat: &NewDat<'_>) -> Result<Loaded, DbError
     if !pending.is_empty() {
         insert_roms(&mut tx, &pending).await?;
     }
+    sqlx::query(
+        "INSERT INTO audit_events
+             (id, actor_type, actor_id, action, target_type, target_id, outcome, metadata)
+         VALUES ($1, 'user', $2, 'dat.loaded', 'dat', $3, 'success',
+                 jsonb_build_object('name', $4::text, 'games', $5::int, 'files', $6::int,
+                                    'replaced', $7::bool, 'source_sha256', $8::text))",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(dat.loaded_by)
+    .bind(id.to_string())
+    .bind(dat.name)
+    .bind(count(dat.games.len()))
+    .bind(count(rom_count))
+    .bind(replaced)
+    .bind(dat.source_sha256)
+    .execute(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
     tx.commit().await.map_err(DbError::Query)?;
     Ok(Loaded { id, replaced })
 }
@@ -294,18 +312,38 @@ pub async fn get_dat(pool: &PgPool, id: uuid::Uuid) -> Result<Option<DatRecord>,
     row.as_ref().map(dat_from_row).transpose()
 }
 
-/// Remove a DAT, its games, files and matches. Answers whether there was one.
+/// Remove a DAT, its games, files and matches, as `actor`. Answers whether
+/// there was one.
 ///
 /// # Errors
 ///
 /// [`DbError::Query`] on a database failure.
-pub async fn delete_dat(pool: &PgPool, id: uuid::Uuid) -> Result<bool, DbError> {
-    let done = sqlx::query("DELETE FROM dat_files WHERE id = $1")
-        .bind(id)
-        .execute(pool)
-        .await
-        .map_err(DbError::Query)?;
-    Ok(done.rows_affected() > 0)
+pub async fn delete_dat(pool: &PgPool, id: uuid::Uuid, actor: &str) -> Result<bool, DbError> {
+    let mut tx = pool.begin().await.map_err(DbError::Query)?;
+    let name: Option<String> =
+        sqlx::query_scalar("DELETE FROM dat_files WHERE id = $1 RETURNING name")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(DbError::Query)?;
+    let Some(name) = name else {
+        return Ok(false);
+    };
+    sqlx::query(
+        "INSERT INTO audit_events
+             (id, actor_type, actor_id, action, target_type, target_id, outcome, metadata)
+         VALUES ($1, 'user', $2, 'dat.removed', 'dat', $3, 'success',
+                 jsonb_build_object('name', $4::text))",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(actor)
+    .bind(id.to_string())
+    .bind(name)
+    .execute(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
+    tx.commit().await.map_err(DbError::Query)?;
+    Ok(true)
 }
 
 /// The units of the artifacts in `$1` (all hashed artifacts when null): CD

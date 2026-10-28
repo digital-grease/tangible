@@ -207,17 +207,36 @@ pub async fn fail_hashing(
 /// # Errors
 ///
 /// [`DbError::Query`] on a database failure.
-pub async fn request_hashes(pool: &PgPool, artifact_id: uuid::Uuid) -> Result<bool, DbError> {
+pub async fn request_hashes(
+    pool: &PgPool,
+    artifact_id: uuid::Uuid,
+    actor: &str,
+) -> Result<bool, DbError> {
+    let mut tx = pool.begin().await.map_err(DbError::Query)?;
     let done = sqlx::query(
         "UPDATE artifacts SET hashes_state = 'pending', hashed_at = NULL, hashes_error = NULL,
              hashes_attempts = 0, hashes_lease_owner = NULL, hashes_lease_until = NULL
          WHERE id = $1",
     )
     .bind(artifact_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(DbError::Query)?;
-    Ok(done.rows_affected() > 0)
+    if done.rows_affected() == 0 {
+        return Ok(false);
+    }
+    sqlx::query(
+        "INSERT INTO audit_events (id, actor_type, actor_id, action, target_type, target_id, outcome)
+         VALUES ($1, 'user', $2, 'artifact.rehash_requested', 'artifact', $3, 'success')",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(actor)
+    .bind(artifact_id.to_string())
+    .execute(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
+    tx.commit().await.map_err(DbError::Query)?;
+    Ok(true)
 }
 
 /// A component's hashes, as recorded.
