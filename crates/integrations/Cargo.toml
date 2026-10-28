@@ -11,6 +11,13 @@ publish = false
 # API crate uses.
 base64 = "0.23.1"
 hex = "0.4.3"
+# The random state, nonce and PKCE verifier of an OIDC sign-in; the same
+# version the API crate uses.
+getrandom = "0.4.3"
+# Verifies OpenID Connect ID tokens (ADR 0018, docs/plans/oidc.md): their
+# signatures, on aws-lc, which rustls already brings, and registered claims.
+# Not the rust_crypto backend, which brings `rsa` and RUSTSEC-2023-0071.
+jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs"] }
 # The outbound client (ADR 0016): the same reqwest the worker already uses,
 # with rustls, and its own resolver.
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls"] }
@@ -34,6 +41,9 @@ url = "2.5.7"
 workspace = true
 
 [dev-dependencies]
+# Signing keys for the fake identity provider in the OIDC tests: the same
+# aws-lc that jsonwebtoken verifies with.
+aws-lc-rs = "1.18.0"
 # The CUE rewriter the server passes to the planner, so the tests plan with
 # the real one. A test dependency only: the planner itself does not depend
 # on the image crate.

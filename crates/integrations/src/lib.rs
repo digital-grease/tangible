@@ -15,6 +15,7 @@ pub mod download;
 pub mod fetch;
 pub mod nzb;
 pub mod nzbget;
+pub mod oidc;
 pub mod outbound;
 pub mod qbittorrent;
 pub mod romm;
