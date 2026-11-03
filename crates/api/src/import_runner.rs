@@ -1109,6 +1109,10 @@ fn is_retryable(error: &ImportError) -> bool {
         ImportError::Storage(storage) => matches!(storage, StorageError::Io { .. }),
         ImportError::Manifest(manifest) => matches!(manifest, ManifestStoreError::Io { .. }),
         ImportError::ReadStaged { .. } => true,
+        // The archive is what it is: only the disk can do better next time.
+        ImportError::Archive(archive) => {
+            matches!(archive, tangible_image::archive::ArchiveError::Io { .. })
+        }
     }
 }
 
@@ -1121,6 +1125,7 @@ fn failure_code(error: &ImportError) -> &'static str {
         ImportError::Manifest(_) => "IMPORT_MANIFEST_FAILED",
         ImportError::Transition(_) => "IMPORT_TRANSITION_REFUSED",
         ImportError::ReadStaged { .. } => "IMPORT_READ_FAILED",
+        ImportError::Archive(archive) => archive.code(),
     }
 }
 

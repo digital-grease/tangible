@@ -1404,3 +1404,213 @@ async fn a_chd_this_reader_cannot_read_is_still_a_chd_and_says_why() {
     let (manifest, _) = import_set(&[("fake.chd", vec![0_u8; 4096])], "fake.chd").await;
     assert_ne!(manifest.classification.format, ArtifactFormat::Chd);
 }
+
+// --- archives (docs/plans/archives.md) -----------------------------------------
+
+fn archive_fixture(name: &str) -> Vec<u8> {
+    std::fs::read(format!(
+        "{}/../../fixtures/images/archives/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .expect("fixture")
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest as _;
+    hex::encode(sha2::Sha256::digest(bytes))
+}
+
+#[tokio::test]
+async fn an_archive_is_unpacked_and_its_disc_imported_with_the_archive_recorded() {
+    for name in [
+        "game.zip",
+        "game.7z",
+        "game.tar",
+        "game.tar.gz",
+        "game.tar.xz",
+    ] {
+        let bytes = archive_fixture(name);
+        let (dir, pipeline) = pipeline().await;
+        let import_id = ImportJobId::generate();
+        let area = pipeline.open_area(import_id).await.expect("area");
+        area.write(&path(name), &bytes).await.expect("stage");
+        let mut checkpoint = ImportCheckpoint::default();
+        let outcome = pipeline
+            .run(&request(import_id, name), &mut checkpoint)
+            .await
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let manifest = pipeline
+            .manifests()
+            .read(outcome.artifact_id)
+            .await
+            .expect("read");
+
+        assert_eq!(
+            manifest.classification.format,
+            ArtifactFormat::CueBin,
+            "{name}"
+        );
+        let mut paths: Vec<&str> = manifest
+            .components
+            .iter()
+            .map(|component| component.logical_path.as_str())
+            .collect();
+        paths.sort_unstable();
+        assert_eq!(paths, ["Game/Game.bin", "Game/Game.cue"], "{name}");
+        let container = manifest
+            .origin
+            .container
+            .as_ref()
+            .expect("the archive is recorded");
+        assert_eq!(container.sha256.to_hex(), sha256_hex(&bytes), "{name}");
+        assert_eq!(container.length_bytes, bytes.len() as u64);
+        assert_eq!(container.files, 2);
+        assert_eq!(
+            manifest.origin.source_filename.as_deref(),
+            Some(name),
+            "the name it was received under"
+        );
+        // Nothing of Tangible's own is left among what was imported.
+        assert!(
+            area.entries()
+                .await
+                .expect("entries")
+                .iter()
+                .all(|path| !path.as_str().starts_with(".tangible-archive")
+                    || path.as_str() == ".tangible-archive.json"),
+            "{name}"
+        );
+        assert!(!area.path().join(".tangible-archive").exists(), "{name}");
+        drop(dir);
+    }
+    let formats: Vec<String> = ["game.zip", "game.7z"]
+        .iter()
+        .map(|name| {
+            tangible_image::archive::detect(std::path::Path::new(&format!(
+                "{}/../../fixtures/images/archives/{name}",
+                env!("CARGO_MANIFEST_DIR")
+            )))
+            .unwrap()
+            .unwrap()
+            .as_str()
+            .to_owned()
+        })
+        .collect();
+    assert_eq!(formats, ["zip", "7z"]);
+}
+
+#[tokio::test]
+async fn a_refused_archive_says_why_and_imports_nothing() {
+    for (name, code) in [
+        ("encrypted.7z", "ARCHIVE_ENCRYPTED"),
+        ("escape.zip", "ARCHIVE_UNSAFE_ENTRY"),
+        ("hardlink.tar", "ARCHIVE_UNSAFE_ENTRY"),
+    ] {
+        let (_dir, pipeline) = pipeline().await;
+        let import_id = ImportJobId::generate();
+        let area = pipeline.open_area(import_id).await.expect("area");
+        area.write(&path(name), &archive_fixture(name))
+            .await
+            .expect("stage");
+        let mut checkpoint = ImportCheckpoint::default();
+        let error = pipeline
+            .run(&request(import_id, name), &mut checkpoint)
+            .await
+            .expect_err("refused");
+        let ImportError::Archive(archive) = &error else {
+            panic!("{name}: {error:?}");
+        };
+        assert_eq!(archive.code(), code, "{name}: {archive}");
+        assert_eq!(checkpoint.artifact_id, None);
+        assert!(checkpoint.promoted.is_empty(), "nothing was stored");
+    }
+}
+
+#[tokio::test]
+async fn an_unpacking_that_stopped_part_way_starts_again() {
+    let (_dir, pipeline) = pipeline().await;
+    let import_id = ImportJobId::generate();
+    let area = pipeline.open_area(import_id).await.expect("area");
+    // As a run that set the archive aside and stopped while unpacking.
+    area.write(&path(".tangible-archive"), &archive_fixture("game.zip"))
+        .await
+        .expect("stage");
+    area.write(&path(".tangible-unpacking/Game/Game.bin"), b"half")
+        .await
+        .expect("stage");
+    area.write(&path("Game/Game.cue"), b"moved before it stopped")
+        .await
+        .expect("stage");
+    let mut checkpoint = ImportCheckpoint::default();
+    let outcome = pipeline
+        .run(&request(import_id, "game.zip"), &mut checkpoint)
+        .await
+        .expect("import");
+    let manifest = pipeline
+        .manifests()
+        .read(outcome.artifact_id)
+        .await
+        .expect("read");
+    assert_eq!(manifest.classification.format, ArtifactFormat::CueBin);
+    let bin = manifest
+        .components
+        .iter()
+        .find(|component| component.logical_path.as_str() == "Game/Game.bin")
+        .expect("the bin");
+    assert_eq!(bin.length_bytes, 2352 * 4, "unpacked whole, not the half");
+    assert!(manifest.origin.container.is_some());
+}
+
+#[tokio::test]
+async fn an_unpacking_that_finished_but_kept_its_archive_finishes() {
+    let (_dir, pipeline) = pipeline().await;
+    let import_id = ImportJobId::generate();
+    let area = pipeline.open_area(import_id).await.expect("area");
+    let first = ImportJobId::generate();
+    // The files in place and the record written, the archive not yet gone:
+    // made by unpacking in another area, then copied.
+    let donor = pipeline.open_area(first).await.expect("area");
+    donor
+        .write(&path("game.zip"), &archive_fixture("game.zip"))
+        .await
+        .expect("stage");
+    let mut donor_checkpoint = ImportCheckpoint::default();
+    tangible_api::unpack::open_archive(&donor, &mut donor_checkpoint, 1 << 30)
+        .await
+        .expect("unpack");
+    for name in ["Game/Game.bin", "Game/Game.cue", ".tangible-archive.json"] {
+        let bytes = std::fs::read(donor.path().join(name)).unwrap();
+        area.write(&path(name), &bytes).await.expect("stage");
+    }
+    area.write(&path(".tangible-archive"), &archive_fixture("game.zip"))
+        .await
+        .expect("stage");
+
+    let mut checkpoint = ImportCheckpoint::default();
+    let outcome = pipeline
+        .run(&request(import_id, "game.zip"), &mut checkpoint)
+        .await
+        .expect("import");
+    assert!(!area.path().join(".tangible-archive").exists());
+    let manifest = pipeline
+        .manifests()
+        .read(outcome.artifact_id)
+        .await
+        .expect("read");
+    assert_eq!(
+        manifest.origin.container.expect("recorded").sha256.to_hex(),
+        sha256_hex(&archive_fixture("game.zip"))
+    );
+    assert_eq!(
+        manifest.components.len(),
+        2,
+        "the record is not a component"
+    );
+}
+
+#[tokio::test]
+async fn a_file_that_is_not_an_archive_is_imported_as_it_is() {
+    let (manifest, _) = import_set(&[("disc.iso", iso_image("DISC", 64))], "disc.iso").await;
+    assert!(manifest.origin.container.is_none());
+    assert_eq!(manifest.classification.format, ArtifactFormat::Iso);
+}

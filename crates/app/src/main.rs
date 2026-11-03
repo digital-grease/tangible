@@ -218,7 +218,9 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
     let roots = watched_roots(serve)?;
     say_decryption(serve);
 
-    let pipeline = ImportPipeline::new(staging.clone(), objects.clone(), manifests.clone());
+    // An archive unpacks to no more than an upload may be (docs/plans/archives.md).
+    let pipeline = ImportPipeline::new(staging.clone(), objects.clone(), manifests.clone())
+        .with_unpack_limit(serve.max_upload_bytes);
     let outbound = url_import_client(serve)?;
     let integrations = integration_client(serve)?;
     let auth = auth_settings(serve);

@@ -1302,6 +1302,7 @@ fn cue_bin_manifest(input: &CueBinManifest<'_>) -> ArtifactManifest {
             acquired_at: Some(input.completed),
             operator_note: None,
             physical_dump: None,
+            container: None,
         },
         classification: Classification {
             artifact_kind: ArtifactKind::MultiFileImage,
@@ -1419,6 +1420,7 @@ fn iso_manifest(input: &IsoManifest<'_>) -> ArtifactManifest {
             acquired_at: Some(input.completed),
             operator_note: None,
             physical_dump: None,
+            container: None,
         },
         classification: Classification {
             artifact_kind: ArtifactKind::SingleFileImage,
@@ -1583,6 +1585,7 @@ fn child_manifest(input: &ChildManifest<'_>) -> ArtifactManifest {
             acquired_at: Some(input.completed),
             operator_note: None,
             physical_dump: None,
+            container: None,
         },
         classification: Classification {
             artifact_kind: ArtifactKind::SingleFileImage,

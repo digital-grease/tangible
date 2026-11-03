@@ -7990,6 +7990,17 @@
                 "type": "string",
                 "description": "Where the bytes came from."
               },
+              "unpacked_from": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/UnpackedFromView",
+                    "description": "The archive its files arrived in, when the import unpacked one\n(docs/plans/archives.md). The archive itself is not kept."
+                  }
+                ]
+              },
               "warnings": {
                 "type": "array",
                 "items": {
@@ -14414,6 +14425,46 @@
             "format": "int64",
             "description": "Its first present sector, counted from the start of the image.",
             "minimum": 0
+          }
+        }
+      },
+      "UnpackedFromView": {
+        "type": "object",
+        "description": "An archive an import was unpacked from.",
+        "required": [
+          "format",
+          "sha256",
+          "length_bytes",
+          "files",
+          "notes"
+        ],
+        "properties": {
+          "files": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many files came out of it.",
+            "minimum": 0
+          },
+          "format": {
+            "type": "string",
+            "description": "`zip`, `7z`, `tar`, `tar_gz` or `tar_xz`."
+          },
+          "length_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its length.",
+            "minimum": 0
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What unpacking said: what was left out, archives inside it."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "The archive's SHA-256, as received."
           }
         }
       },

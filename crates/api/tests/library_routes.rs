@@ -828,3 +828,33 @@ async fn the_library_is_filtered_by_format_origin_and_whether_linked() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
     }
 }
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_artifact_unpacked_from_an_archive_says_what_it_came_in() {
+    let archive = std::fs::read(format!(
+        "{}/../../fixtures/images/archives/game.7z",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .expect("fixture");
+    let harness = harness_with(vec![vec![("game.7z".to_owned(), archive.clone())]]).await;
+    let id = &harness.artifact_ids[0];
+    let (status, body, _) = get(&harness.router, &format!("/api/v1/artifacts/{id}")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["format"], "cue_bin");
+    assert_eq!(body["source_filename"], "game.7z");
+    let from = &body["unpacked_from"];
+    assert_eq!(from["format"], "7z", "{body}");
+    assert_eq!(from["files"], 2);
+    assert_eq!(from["length_bytes"], archive.len());
+    assert_eq!(from["sha256"].as_str().map(str::len), Some(64));
+
+    // Anything not unpacked says nothing.
+    let plain = harness_with(vec![vec![("disc.iso".to_owned(), iso_image("VOL", 20))]]).await;
+    let (_, body, _) = get(
+        &plain.router,
+        &format!("/api/v1/artifacts/{}", plain.artifact_ids[0]),
+    )
+    .await;
+    assert!(body["unpacked_from"].is_null(), "{body}");
+}

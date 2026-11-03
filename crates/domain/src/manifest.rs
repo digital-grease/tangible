@@ -237,6 +237,29 @@ pub struct Origin {
     /// before rips recorded it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub physical_dump: Option<PhysicalDump>,
+    /// The archive the files arrived in, for an import unpacked from one
+    /// (docs/plans/archives.md). The archive itself is not kept. Absent on
+    /// everything else, and from manifests written before archives were
+    /// unpacked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container: Option<Container>,
+}
+
+/// An archive an import was unpacked from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Container {
+    /// `zip`, `7z`, `tar`, `tar_gz` or `tar_xz`.
+    pub format: String,
+    /// The archive's SHA-256, as received.
+    pub sha256: Sha256Digest,
+    /// Its length.
+    pub length_bytes: u64,
+    /// How many files came out of it.
+    pub files: u64,
+    /// What unpacking it had to say: what was left out, archives inside it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 /// How an artifact was read from a disc in a worker's drive.
@@ -989,6 +1012,7 @@ mod tests {
                 acquired_at: None,
                 operator_note: None,
                 physical_dump: None,
+                container: None,
             },
             classification: Classification {
                 artifact_kind: ArtifactKind::SingleFileImage,

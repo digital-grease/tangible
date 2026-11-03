@@ -252,6 +252,24 @@ pub struct ArtifactDetail {
     pub disc: Option<DiscLayout>,
     /// How it was ripped, when a worker read it from a disc in a drive.
     pub ripped: Option<RippedView>,
+    /// The archive its files arrived in, when the import unpacked one
+    /// (docs/plans/archives.md). The archive itself is not kept.
+    pub unpacked_from: Option<UnpackedFromView>,
+}
+
+/// An archive an import was unpacked from.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct UnpackedFromView {
+    /// `zip`, `7z`, `tar`, `tar_gz` or `tar_xz`.
+    pub format: String,
+    /// The archive's SHA-256, as received.
+    pub sha256: String,
+    /// Its length.
+    pub length_bytes: u64,
+    /// How many files came out of it.
+    pub files: u64,
+    /// What unpacking said: what was left out, archives inside it.
+    pub notes: Vec<String>,
 }
 
 /// How an artifact was read from a disc in a drive (ADR 0013). Library and
@@ -729,6 +747,17 @@ pub async fn get_artifact(
         components: manifest.components.iter().map(component_view).collect(),
         disc: disc_view(&manifest),
         ripped: ripped_view(&manifest),
+        unpacked_from: manifest
+            .origin
+            .container
+            .as_ref()
+            .map(|container| UnpackedFromView {
+                format: container.format.clone(),
+                sha256: container.sha256.to_hex(),
+                length_bytes: container.length_bytes,
+                files: container.files,
+                notes: container.notes.clone(),
+            }),
     }))
 }
 

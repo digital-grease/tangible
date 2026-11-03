@@ -106,6 +106,10 @@ pub struct ImportCheckpoint {
     /// Absent for every other source, and from checkpoints written before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub download: Option<DownloadCheckpoint>,
+    /// The archive the import was unpacked from, once it has been
+    /// (docs/plans/archives.md).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archive: Option<crate::unpack::UnpackedArchive>,
 }
 
 /// What a URL import's fetch needs to resume, and what it found.
@@ -134,6 +138,7 @@ impl Default for ImportCheckpoint {
             warnings: Vec::new(),
             evidence: Vec::new(),
             download: None,
+            archive: None,
         }
     }
 }
@@ -186,6 +191,10 @@ pub enum ImportError {
         #[source]
         source: std::io::Error,
     },
+
+    /// The archive the import arrived in was not unpacked.
+    #[error(transparent)]
+    Archive(tangible_image::archive::ArchiveError),
 }
 
 /// Runs imports.
@@ -194,7 +203,12 @@ pub struct ImportPipeline {
     staging: StagingManager,
     objects: FilesystemStore,
     manifests: ManifestStore,
+    /// The most an archive may unpack to (docs/plans/archives.md).
+    unpack_limit: u64,
 }
+
+/// What an archive may unpack to, unless the server says otherwise.
+pub const DEFAULT_UNPACK_LIMIT: u64 = 64 << 30;
 
 impl ImportPipeline {
     /// Assemble a pipeline from its collaborators.
@@ -208,7 +222,15 @@ impl ImportPipeline {
             staging,
             objects,
             manifests,
+            unpack_limit: DEFAULT_UNPACK_LIMIT,
         }
+    }
+
+    /// Unpack an archive to at most `bytes`.
+    #[must_use]
+    pub const fn with_unpack_limit(mut self, bytes: u64) -> Self {
+        self.unpack_limit = bytes;
+        self
     }
 
     /// The staging manager, for a caller that needs to place bytes first.
@@ -263,7 +285,15 @@ impl ImportPipeline {
             .await?;
 
         // --- staged -------------------------------------------------------
-        let staged = area.entries().await?;
+        // An archive is unpacked in its place first; its files are what is
+        // imported.
+        crate::unpack::open_archive(&area, checkpoint, self.unpack_limit).await?;
+        let staged: Vec<LogicalPath> = area
+            .entries()
+            .await?
+            .into_iter()
+            .filter(|path| !crate::unpack::is_reserved(path))
+            .collect();
         if staged.is_empty() {
             return Err(ImportError::NothingStaged {
                 import_id: request.import_id.to_string(),
@@ -1212,7 +1242,7 @@ impl ImportPipeline {
     }
 
     /// Where the bytes came from, as the request says.
-    fn build_origin(request: &ImportRequest) -> Origin {
+    fn build_origin(request: &ImportRequest, checkpoint: &ImportCheckpoint) -> Origin {
         Origin {
             // A rip is a dump of a disc in a drive, not a file somebody
             // supplied; its decrypted copy is a derivative of the dump,
@@ -1230,6 +1260,15 @@ impl ImportPipeline {
             acquired_at: Some(OffsetDateTime::now_utc()),
             operator_note: None,
             physical_dump: request.physical_dump.clone(),
+            container: checkpoint.archive.as_ref().map(|archive| {
+                tangible_domain::manifest::Container {
+                    format: archive.format.clone(),
+                    sha256: archive.sha256,
+                    length_bytes: archive.length_bytes,
+                    files: archive.files,
+                    notes: archive.notes.clone(),
+                }
+            }),
         }
     }
 
@@ -1345,7 +1384,7 @@ impl ImportPipeline {
             schema: SCHEMA_ID.to_owned(),
             artifact_id,
             created_at: OffsetDateTime::now_utc(),
-            origin: Self::build_origin(request),
+            origin: Self::build_origin(request, checkpoint),
             classification: Classification {
                 artifact_kind: if components.len() == 1 {
                     ArtifactKind::SingleFileImage

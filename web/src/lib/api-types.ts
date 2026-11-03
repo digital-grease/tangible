@@ -2401,6 +2401,7 @@ export interface components {
             ripped?: null | components["schemas"]["RippedView"];
             /** @description Where the bytes came from. */
             source_kind: string;
+            unpacked_from?: null | components["schemas"]["UnpackedFromView"];
             /** @description Structural findings, if any. */
             warnings: string[];
         };
@@ -5312,6 +5313,25 @@ export interface components {
              * @description Its first present sector, counted from the start of the image.
              */
             start_lba: number;
+        };
+        /** @description An archive an import was unpacked from. */
+        UnpackedFromView: {
+            /**
+             * Format: int64
+             * @description How many files came out of it.
+             */
+            files: number;
+            /** @description `zip`, `7z`, `tar`, `tar_gz` or `tar_xz`. */
+            format: string;
+            /**
+             * Format: int64
+             * @description Its length.
+             */
+            length_bytes: number;
+            /** @description What unpacking said: what was left out, archives inside it. */
+            notes: string[];
+            /** @description The archive's SHA-256, as received. */
+            sha256: string;
         };
         /**
          * @description What an administrator sends to change an integration. Absent fields stay

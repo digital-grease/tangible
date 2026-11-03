@@ -39,6 +39,7 @@ pub mod routes;
 pub mod secrets;
 pub mod source_removal;
 pub mod state;
+pub mod unpack;
 pub mod web;
 pub mod worker_auth;
 
@@ -223,6 +224,7 @@ pub const API_BASE: &str = "/api/v1";
         routes::artifacts::ArtifactSummaryPage,
         routes::artifacts::ArtifactSummary,
         routes::artifacts::ArtifactDeletionView,
+        routes::artifacts::UnpackedFromView,
         deletion::RequestDeletion,
         routes::artifacts::ArtifactDetail,
         routes::artifacts::ComponentView,

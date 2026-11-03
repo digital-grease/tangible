@@ -482,6 +482,28 @@ made into a CHD, and sent to RomM. The MDS image itself is kept as it was.
 An image Tangible imported whole (several sessions, or a DVD in several
 files) cannot be made into either, and the job says why.
 
+## Importing an archive
+
+An upload, a URL, a watched folder or a download client may deliver a ZIP,
+a 7z or a tar (plain, gzip or xz) instead of a disc image. When the one file
+an import holds is one of those, recognised by its bytes rather than its
+name, Tangible unpacks it in staging and imports what was inside: a CUE/BIN
+in a `.7z` arrives as the CUE/BIN. The archive is not kept; the artifact
+records it (format, SHA-256, size and how many files) as where its files
+came from, and its page says so.
+
+An archive is refused, and nothing imported, when it is encrypted, when a
+name in it would land outside the import or is not a plain relative path,
+when it holds a link, a device or a sparse file, when it names a file twice,
+when it holds more than 10,000 entries, when it unpacks to more than
+`TANGIBLE_MAX_UPLOAD_BYTES` or to more than a thousand times its own size
+(past the first 64 MiB, since a disc's empty sectors compress to almost
+nothing), when a 7z needs a dictionary over 1 GiB, or when unpacking takes
+over six hours. The import's failure says which. macOS's `__MACOSX` folder
+and `.DS_Store` files are left out. An archive inside the archive is
+imported as a file, not opened. RAR is not unpacked: its decoder is not free
+software; unpack it yourself and import what comes out.
+
 ## Importing from a URL
 
 Off unless you turn it on. With `TANGIBLE_URL_IMPORTS=true` in `.env` and a

@@ -8,6 +8,21 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
+- Archives are unpacked on import (docs/plans/archives.md): when the one
+  file an import holds is a ZIP, a 7z or a tar (plain, gzip or xz),
+  recognised by its bytes, its files are imported in its place, so a
+  CUE/BIN in a `.7z` arrives as the CUE/BIN. The archive is not kept; the
+  manifest records it as `origin.container` (format, SHA-256, size, files,
+  notes) and the artifact detail as `unpacked_from`. Refused, with a stable
+  failure code: encrypted archives (`ARCHIVE_ENCRYPTED`), names that are
+  not plain relative paths, links, devices, sparse files and names twice
+  (`ARCHIVE_UNSAFE_ENTRY`), more than 10,000 entries, more than
+  `TANGIBLE_MAX_UPLOAD_BYTES` or a thousand times the archive's size
+  unpacked, or a 7z dictionary over 1 GiB (`ARCHIVE_TOO_LARGE`), unreadable
+  data (`ARCHIVE_CORRUPT`), unknown methods (`ARCHIVE_UNSUPPORTED`). macOS's
+  `__MACOSX` and `.DS_Store` are left out; an archive inside is imported as
+  a file. An interrupted unpack starts again cleanly. No RAR. Pure Rust
+  decoders: `zip`, `sevenz-rust2`, `tar`, `flate2`, `lzma-rust2`.
 - Artifacts can be deleted, as tombstones (ADR 0020,
   docs/plans/deletion.md). An administrator (new permission
   `delete_artifacts`) asks with `POST /api/v1/artifacts/{id}/deletion-requests`

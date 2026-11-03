@@ -223,6 +223,7 @@ mod tests {
                 acquired_at: None,
                 operator_note: None,
                 physical_dump: None,
+                container: None,
             },
             classification: Classification {
                 artifact_kind: ArtifactKind::SingleFileImage,
