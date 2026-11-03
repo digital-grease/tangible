@@ -249,3 +249,103 @@ describe('Artifact integrity', () => {
     expect(screen.queryByRole('button', { name: 'Verify now' })).toBeNull();
   });
 });
+
+describe('Deleting an artifact', () => {
+  const PENDING = {
+    state: 'pending',
+    requested_at: '2026-11-02T12:00:00Z',
+    requested_by: 'admin',
+    delete_after: '2026-11-09T12:00:00Z',
+    deleted_at: null,
+  };
+
+  it('asks for an original only once it is confirmed, saying what happens', async () => {
+    const asked = serve(artifact({ origin: 'imported_original', deletion: null }), {
+      'POST /api/v1/artifacts/a1/deletion-requests': { status: 202, body: PENDING },
+    });
+    render(ArtifactPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Delete this artifact…' }));
+    expect(screen.getByText(/cannot be brought back/)).toBeTruthy();
+    const submit = screen.getByRole('button', { name: 'Delete VIDEO_TS' });
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    await fireEvent.click(screen.getByLabelText(/this is an original/));
+    expect((submit as HTMLButtonElement).disabled).toBe(false);
+    await fireEvent.click(submit);
+    await vi.waitFor(() => expect(asked).toContain('POST /api/v1/artifacts/a1/deletion-requests'));
+  });
+
+  it('asks for a derivative without the original confirmation', async () => {
+    serve(artifact({ origin: 'derived', deletion: null }));
+    render(ArtifactPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Delete this artifact…' }));
+    expect(screen.queryByLabelText(/this is an original/)).toBeNull();
+    expect(
+      (screen.getByRole('button', { name: 'Delete VIDEO_TS' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it('says when a pending artifact goes, and keeps it on request', async () => {
+    const asked = serve(artifact({ origin: 'imported_original', deletion: PENDING }), {
+      'DELETE /api/v1/artifacts/a1/deletion-requests': { status: 204, body: null },
+    });
+    render(ArtifactPage);
+    expect(await screen.findByRole('heading', { name: 'Pending deletion' })).toBeTruthy();
+    expect(screen.getByText(/asked for by admin/i)).toBeTruthy();
+    expect(screen.getByText(/Not burned while it is pending deletion/)).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: 'Keep VIDEO_TS' }));
+    await vi.waitFor(() =>
+      expect(asked).toContain('DELETE /api/v1/artifacts/a1/deletion-requests'),
+    );
+  });
+
+  it('shows a deleted artifact as a record, with nothing to download or check', async () => {
+    serve(
+      artifact({
+        origin: 'imported_original',
+        components: [
+          {
+            id: 'c1',
+            logical_path: 'VIDEO_TS/VIDEO_TS.IFO',
+            role: 'primary_image',
+            length_bytes: 2048,
+            sha256: 'a'.repeat(64),
+            ordinal: 0,
+          },
+        ],
+        deletion: {
+          ...PENDING,
+          state: 'deleted',
+          delete_after: null,
+          deleted_at: '2026-11-09T12:05:00Z',
+        },
+      }),
+    );
+    render(ArtifactPage);
+    expect(await screen.findByRole('heading', { name: 'Deleted' })).toBeTruthy();
+    expect(screen.getByText(/Its bytes are gone/)).toBeTruthy();
+    expect(screen.getByText('Removed')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: /Download VIDEO_TS\/VIDEO_TS.IFO/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Verify/ })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Create burn job' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Delete this artifact…' })).toBeNull();
+  });
+
+  it('says only an administrator can delete', async () => {
+    serve(artifact({ origin: 'derived', deletion: null }), {
+      'POST /api/v1/artifacts/a1/deletion-requests': {
+        status: 403,
+        body: {
+          type: 'about:blank',
+          title: 'Forbidden',
+          status: 403,
+          code: 'FORBIDDEN',
+          detail: 'the operator role does not allow delete_artifacts',
+        },
+      },
+    });
+    render(ArtifactPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Delete this artifact…' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete VIDEO_TS' }));
+    expect(await screen.findByText('Only an administrator can delete artifacts.')).toBeTruthy();
+  });
+});

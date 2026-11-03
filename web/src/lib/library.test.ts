@@ -3,6 +3,10 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  deletionLabel,
+  isOriginal,
+  keepArtifact,
+  requestDeletion,
   formatBytes,
   formatLabel,
   filtersNothing,
@@ -299,5 +303,68 @@ describe('library filters', () => {
     );
     expect(filtersNothing({ origin: '' })).toBe(true);
     expect(filtersNothing({ origin: 'derived' })).toBe(false);
+  });
+
+  it('lists the deleted only when asked', () => {
+    expect(libraryQuery({ deleted: false })).toBe('');
+    expect(libraryQuery({ deleted: true })).toBe('?deleted=true');
+    expect(filtersNothing({ deleted: true })).toBe(false);
+  });
+});
+
+describe('deleting an artifact', () => {
+  it('knows an original, which needs saying so', () => {
+    expect(isOriginal('imported_original')).toBe(true);
+    expect(isOriginal('physical_dump')).toBe(true);
+    expect(isOriginal('derived')).toBe(false);
+  });
+
+  it('says a deletion in words', () => {
+    expect(deletionLabel(null)).toBeNull();
+    expect(
+      deletionLabel({
+        state: 'deleted',
+        requested_at: '2026-11-02T12:00:00Z',
+        requested_by: 'admin',
+        delete_after: null,
+        deleted_at: '2026-11-09T12:00:00Z',
+      }),
+    ).toBe('Deleted');
+    expect(
+      deletionLabel({
+        state: 'pending',
+        requested_at: '2026-11-02T12:00:00Z',
+        requested_by: 'admin',
+        delete_after: '2026-11-09T12:00:00Z',
+        deleted_at: null,
+      }),
+    ).toMatch(/^Pending deletion, after /);
+  });
+
+  it('asks and keeps on the deletion-requests route', async () => {
+    const seen: { path: string; method: string; body: unknown }[] = [];
+    const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
+      seen.push({
+        path: String(input),
+        method: init?.method ?? 'GET',
+        body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
+      });
+      return {
+        ok: true,
+        status: init?.method === 'DELETE' ? 204 : 202,
+        headers: new Headers(),
+        json: async () => ({ state: 'pending' }),
+      } as Response;
+    }) as typeof fetch;
+    await requestDeletion('a 1', true, fetcher);
+    await keepArtifact('a 1', fetcher);
+    expect(seen).toEqual([
+      {
+        path: '/api/v1/artifacts/a%201/deletion-requests',
+        method: 'POST',
+        body: { confirm_original: true },
+      },
+      { path: '/api/v1/artifacts/a%201/deletion-requests', method: 'DELETE', body: undefined },
+    ]);
   });
 });

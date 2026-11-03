@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  import Deletion from '$lib/components/Deletion.svelte';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import FormatReport from '$lib/components/FormatReport.svelte';
   import Identification from '$lib/components/Identification.svelte';
@@ -13,6 +14,7 @@
     discSummary,
     formatBytes,
     formatLabel,
+    isOriginal,
     loadArtifact,
     msf,
     notBurnedAsItIs,
@@ -68,7 +70,20 @@
       level={1}
     />
   {:else if view.kind === 'ready'}
+    {@const deleted = view.data.deletion?.state === 'deleted'}
+    {@const pending = view.data.deletion?.state === 'pending'}
     <h1>{view.data.source_filename ?? 'Artifact'}</h1>
+
+    {#if view.data.deletion}
+      <!-- First, when it is going or gone: everything below reads differently. -->
+      <Deletion
+        artifactId={view.data.id}
+        name={view.data.source_filename ?? 'this artifact'}
+        origin={view.data.origin}
+        deletion={view.data.deletion}
+        onchanged={reload}
+      />
+    {/if}
 
     <section aria-labelledby="summary-heading">
       <h2 id="summary-heading">Summary</h2>
@@ -97,19 +112,23 @@
 
       <!-- Every imported original is immutable, and saying so is the point of
            the tool rather than an implementation note. -->
-      <p class="badge">
-        <strong>Immutable original.</strong>
-        These bytes are never rewritten, repaired or recompressed. Conversions create separate derivatives
-        that record what produced them.
-      </p>
+      {#if isOriginal(view.data.origin) && !deleted}
+        <p class="badge">
+          <strong>Immutable original.</strong>
+          These bytes are never rewritten, repaired or recompressed. Conversions create separate derivatives
+          that record what produced them.
+        </p>
+      {/if}
     </section>
 
-    <Integrity
-      artifactId={view.data.id}
-      integrityState={view.data.integrity_state}
-      checkedAt={view.data.integrity_checked_at}
-      onchecked={reload}
-    />
+    {#if !deleted}
+      <Integrity
+        artifactId={view.data.id}
+        integrityState={view.data.integrity_state}
+        checkedAt={view.data.integrity_checked_at}
+        onchecked={reload}
+      />
+    {/if}
 
     <Identification artifactId={view.data.id} />
 
@@ -202,9 +221,13 @@
                 <code title={component.sha256}>{component.sha256.slice(0, 12)}…</code>
               </td>
               <td>
-                <a href={componentUrl(view.data.id, component.id)} download
-                  >Download <span class="visually-hidden">{component.logical_path}</span></a
-                >
+                {#if deleted}
+                  <span>Removed</span>
+                {:else}
+                  <a href={componentUrl(view.data.id, component.id)} download
+                    >Download <span class="visually-hidden">{component.logical_path}</span></a
+                  >
+                {/if}
               </td>
             </tr>
           {/each}
@@ -255,26 +278,32 @@
 
     <Lineage artifactId={view.data.id} />
 
-    <section aria-labelledby="compatibility-heading">
-      <h2 id="compatibility-heading">Burn compatibility</h2>
-      <!-- Detection is not a burn plan. Saying "unknown" is accurate and
+    {#if !deleted}
+      <section aria-labelledby="compatibility-heading">
+        <h2 id="compatibility-heading">Burn compatibility</h2>
+        <!-- Detection is not a burn plan. Saying "unknown" is accurate and
            saying anything stronger would be a promise nothing has checked. -->
-      <p>
-        Target compatibility unknown. Structural validity does not establish that a written disc
-        will be accepted by any particular player, console or drive.
-      </p>
-      {#if notBurnedAsItIs(view.data)}
-        <p role="note">
-          <strong>Not burned as it is.</strong>
-          {notBurnedAsItIs(view.data)}
-        </p>
-      {:else}
         <p>
-          <a href={`/burns/new?artifact=${view.data.id}`}>Create burn job</a>
-          — queues a burn. Nothing is written until a worker claims it and its preflight passes.
+          Target compatibility unknown. Structural validity does not establish that a written disc
+          will be accepted by any particular player, console or drive.
         </p>
-      {/if}
-    </section>
+        {#if pending}
+          <p role="note">
+            <strong>Not burned while it is pending deletion.</strong> Keep it to burn it.
+          </p>
+        {:else if notBurnedAsItIs(view.data)}
+          <p role="note">
+            <strong>Not burned as it is.</strong>
+            {notBurnedAsItIs(view.data)}
+          </p>
+        {:else}
+          <p>
+            <a href={`/burns/new?artifact=${view.data.id}`}>Create burn job</a>
+            — queues a burn. Nothing is written until a worker claims it and its preflight passes.
+          </p>
+        {/if}
+      </section>
+    {/if}
 
     <section aria-labelledby="manifest-heading">
       <h2 id="manifest-heading">Manifest</h2>
@@ -283,6 +312,16 @@
         — the portable description of this artifact, including every component digest.
       </p>
     </section>
+
+    {#if !view.data.deletion}
+      <Deletion
+        artifactId={view.data.id}
+        name={view.data.source_filename ?? 'this artifact'}
+        origin={view.data.origin}
+        deletion={view.data.deletion}
+        onchanged={reload}
+      />
+    {/if}
   {/if}
 </div>
 

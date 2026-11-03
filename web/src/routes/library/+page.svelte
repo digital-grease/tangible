@@ -6,6 +6,7 @@
   import { apiFetch } from '$lib/session';
   import { onMount } from 'svelte';
   import {
+    deletionLabel,
     filtersNothing,
     formatBytes,
     formatLabel,
@@ -27,6 +28,7 @@
   let validation = $state('');
   let integrity = $state('');
   let linked = $state('');
+  let deleted = $state(false);
   let shown = $state<LibraryFilter>({});
 
   function chosen(): LibraryFilter {
@@ -36,6 +38,7 @@
       validation_state: validation,
       integrity_state: integrity,
       linked: linked === '' ? null : linked === 'true',
+      deleted,
     };
   }
 
@@ -54,6 +57,7 @@
 
   function clear() {
     format = origin = validation = integrity = linked = '';
+    deleted = false;
     void show({});
   }
 
@@ -134,6 +138,10 @@
       <option value="false">Not linked to any disc</option>
     </select>
   </label>
+  <label>
+    <input type="checkbox" bind:checked={deleted} />
+    Only deleted artifacts
+  </label>
   <button type="submit">Show</button>
   {#if !filtersNothing(shown)}
     <button type="button" onclick={clear}>Show everything</button>
@@ -197,6 +205,9 @@
                 <!-- Damage found by an integrity check outranks how the
                      bytes looked when they arrived, so it is said here. -->
                 <br /><strong><span aria-hidden="true">✕</span> Damaged</strong>
+              {/if}
+              {#if deletionLabel(artifact.deletion)}
+                <br /><strong>{deletionLabel(artifact.deletion)}</strong>
               {/if}
             </td>
             <td>

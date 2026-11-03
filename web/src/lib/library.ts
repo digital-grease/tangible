@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import type { components } from './api-types';
-import { apiFetch, transportProblem } from './session';
+import { apiCall, apiFetch, transportProblem, type Result } from './session';
 
 /**
  * Wire types come from the generated OpenAPI client, never hand-written.
@@ -72,6 +72,8 @@ export type LibraryFilter = {
   integrity_state?: string;
   /** `true` for artifacts linked to a disc, `false` for those linked to none. */
   linked?: boolean | null;
+  /** `true` lists only deleted artifacts, the tombstones (ADR 0020). */
+  deleted?: boolean;
 };
 
 /** Whether a filter keeps everything. */
@@ -87,6 +89,7 @@ export function libraryQuery(filter: LibraryFilter, cursor?: string): string {
     if (value) query.set(name, value);
   }
   if (filter.linked === true || filter.linked === false) query.set('linked', String(filter.linked));
+  if (filter.deleted === true) query.set('deleted', 'true');
   if (cursor) query.set('cursor', cursor);
   const text = query.toString();
   return text ? `?${text}` : '';
@@ -316,4 +319,40 @@ export function trackDetails(track: TrackView): string {
   if (track.isrc) parts.push(`ISRC ${track.isrc}`);
   parts.push(...track.flags.map(trackFlagLabel));
   return parts.join('; ');
+}
+
+export type ArtifactDeletionView = components['schemas']['ArtifactDeletionView'];
+
+/** Whether an artifact is an original, which deleting needs saying so for. */
+export function isOriginal(origin: string): boolean {
+  return origin === 'imported_original' || origin === 'physical_dump';
+}
+
+/** An artifact's deletion, in words, for a list. Null when none was asked for. */
+export function deletionLabel(deletion: ArtifactDeletionView | null | undefined): string | null {
+  if (!deletion) return null;
+  if (deletion.state === 'deleted') return 'Deleted';
+  return deletion.delete_after
+    ? `Pending deletion, after ${new Date(deletion.delete_after).toLocaleString()}`
+    : 'Pending deletion';
+}
+
+/** Ask for an artifact to be deleted after the grace period. */
+export function requestDeletion(
+  id: string,
+  confirmOriginal: boolean,
+  fetcher: typeof fetch = apiFetch,
+): Promise<Result<ArtifactDeletionView>> {
+  return apiCall(fetcher, `/api/v1/artifacts/${encodeURIComponent(id)}/deletion-requests`, 'POST', {
+    confirm_original: confirmOriginal,
+  });
+}
+
+/** Keep an artifact that was pending deletion. */
+export function keepArtifact(id: string, fetcher: typeof fetch = apiFetch): Promise<Result<null>> {
+  return apiCall(
+    fetcher,
+    `/api/v1/artifacts/${encodeURIComponent(id)}/deletion-requests`,
+    'DELETE',
+  );
 }

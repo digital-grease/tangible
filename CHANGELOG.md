@@ -24,6 +24,11 @@ may change between minor versions, and the release notes say how.
   stored. The library list leaves deleted artifacts out (`?deleted=true`
   lists them); every artifact view carries `deletion`, and `origin`. Scrubs, the GC plan,
   restore checks, the dashboard and metrics leave them out. Migration 0033.
+  On an artifact's page, "Delete this artifact" says what happens and,
+  for an original, asks to be told it may be the only copy; a pending
+  artifact says when it goes and offers "Keep"; a deleted one shows its
+  record with nothing to download, check or burn. The Library marks
+  pending deletions and can list only deleted artifacts.
 - `GET /api/v1/events`, the server-sent event stream API.md 12 describes
   (docs/plans/event-stream.md): what changes in imports, burns and their
   progress, rips, erasures, derivations, workers and the library, as it
