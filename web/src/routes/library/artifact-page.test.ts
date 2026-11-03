@@ -349,3 +349,33 @@ describe('Deleting an artifact', () => {
     expect(await screen.findByText('Only an administrator can delete artifacts.')).toBeTruthy();
   });
 });
+
+describe('An artifact unpacked from an archive', () => {
+  it('says what it came in, and that the archive is not kept', async () => {
+    serve(
+      artifact({
+        origin: 'imported_original',
+        deletion: null,
+        unpacked_from: {
+          format: '7z',
+          sha256: 'b'.repeat(64),
+          length_bytes: 520,
+          files: 2,
+          notes: ["macOS's own files (__MACOSX, .DS_Store) were left out"],
+        },
+      }),
+    );
+    render(ArtifactPage);
+    expect(await screen.findByText('Unpacked from')).toBeTruthy();
+    expect(screen.getByText(/A 7z archive of/)).toBeTruthy();
+    expect(screen.getByText(/The archive itself is not kept/)).toBeTruthy();
+    expect(screen.getByText(/__MACOSX/)).toBeTruthy();
+  });
+
+  it('says nothing of an archive for an artifact that was not in one', async () => {
+    serve(artifact({ origin: 'imported_original', deletion: null, unpacked_from: null }));
+    render(ArtifactPage);
+    expect(await screen.findByRole('heading', { name: 'Summary' })).toBeTruthy();
+    expect(screen.queryByText('Unpacked from')).toBeNull();
+  });
+});

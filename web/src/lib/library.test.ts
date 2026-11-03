@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  archiveLabel,
   deletionLabel,
   isOriginal,
   keepArtifact,
@@ -366,5 +367,13 @@ describe('deleting an artifact', () => {
       },
       { path: '/api/v1/artifacts/a%201/deletion-requests', method: 'DELETE', body: undefined },
     ]);
+  });
+});
+
+describe('archive formats', () => {
+  it('are named as people know them', () => {
+    expect(archiveLabel('zip')).toBe('ZIP');
+    expect(archiveLabel('tar_xz')).toBe('xz-compressed tar');
+    expect(archiveLabel('something')).toBe('something');
   });
 });

@@ -22,7 +22,9 @@ may change between minor versions, and the release notes say how.
   data (`ARCHIVE_CORRUPT`), unknown methods (`ARCHIVE_UNSUPPORTED`). macOS's
   `__MACOSX` and `.DS_Store` are left out; an archive inside is imported as
   a file. An interrupted unpack starts again cleanly. No RAR. Pure Rust
-  decoders: `zip`, `sevenz-rust2`, `tar`, `flate2`, `lzma-rust2`.
+  decoders: `zip`, `sevenz-rust2`, `tar`, `flate2`, `lzma-rust2`. An
+  artifact's page says what archive its files came in, its size, digest
+  and notes, and that the archive itself is not kept.
 - Artifacts can be deleted, as tombstones (ADR 0020,
   docs/plans/deletion.md). An administrator (new permission
   `delete_artifacts`) asks with `POST /api/v1/artifacts/{id}/deletion-requests`

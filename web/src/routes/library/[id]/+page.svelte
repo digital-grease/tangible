@@ -13,6 +13,7 @@
     componentUrl,
     discSummary,
     formatBytes,
+    archiveLabel,
     formatLabel,
     isOriginal,
     loadArtifact,
@@ -103,6 +104,20 @@
         <dd>{view.data.component_count}</dd>
         <dt>Source</dt>
         <dd>{view.data.source_kind}</dd>
+        {#if view.data.unpacked_from}
+          {@const from = view.data.unpacked_from}
+          <dt>Unpacked from</dt>
+          <dd>
+            A {archiveLabel(from.format)} archive of {formatBytes(from.length_bytes)}, holding
+            {from.files}
+            {from.files === 1 ? 'file' : 'files'}. The archive itself is not kept.
+            <br /><small>SHA-256 <code title={from.sha256}>{from.sha256.slice(0, 12)}…</code></small
+            >
+            {#each from.notes as note (note)}
+              <br /><small>{note}</small>
+            {/each}
+          </dd>
+        {/if}
         <dt>Validation</dt>
         <dd>
           <span aria-hidden="true">{validationMark(view.data.validation_state)}</span>

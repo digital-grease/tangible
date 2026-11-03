@@ -356,3 +356,23 @@ export function keepArtifact(id: string, fetcher: typeof fetch = apiFetch): Prom
     'DELETE',
   );
 }
+
+export type UnpackedFromView = components['schemas']['UnpackedFromView'];
+
+/** An archive format's name, as people know it. */
+export function archiveLabel(format: string): string {
+  switch (format) {
+    case 'zip':
+      return 'ZIP';
+    case '7z':
+      return '7z';
+    case 'tar':
+      return 'tar';
+    case 'tar_gz':
+      return 'gzip-compressed tar';
+    case 'tar_xz':
+      return 'xz-compressed tar';
+    default:
+      return format;
+  }
+}
