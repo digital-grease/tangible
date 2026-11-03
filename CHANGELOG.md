@@ -14,7 +14,10 @@ may change between minor versions, and the release notes say how.
   disc, under way and needing attention; workers online, silent, draining,
   pending and incompatible; artifacts damaged and never checked; objects
   stored and the library volume's free space; and the five latest ended
-  burns and jobs needing attention, by title and disc number.
+  burns and jobs needing attention, by title and disc number. The home
+  page shows it as cards, each in words and linking to its page, headed
+  "Needs somebody" when a burn needs attention or a disc, a worker has gone
+  silent, an artifact is damaged or an import failed this week.
 - The catalog can be edited (docs/plans/catalog-editing.md): `PATCH` on a
   title, edition, disc set or disc changes the fields given, `null`
   clearing one that may be empty. Every catalog row now has a `version`,
