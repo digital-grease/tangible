@@ -16,7 +16,7 @@
           "library"
         ],
         "summary": "List artifacts, newest identifiers last.",
-        "description": "List artifacts in creation order. Use `next_cursor` from the response to fetch the following page.",
+        "description": "List artifacts in creation order, filtered by format, origin, validation and integrity state, whether linked to a disc, and when imported. Use `next_cursor` from the response to fetch the following page, with the same filters.",
         "operationId": "list_artifacts",
         "parameters": [
           {
@@ -36,6 +36,90 @@
             "name": "cursor",
             "in": "query",
             "description": "Opaque cursor from a previous response's `next_cursor`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "Its format, such as `cue_bin`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "origin",
+            "in": "query",
+            "description": "Where it came from: `imported_original`, `derived`, `physical_dump`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "validation_state",
+            "in": "query",
+            "description": "Its validation state, such as `valid_with_warnings`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "integrity_state",
+            "in": "query",
+            "description": "Its integrity state: `unchecked`, `intact` or `damaged`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "linked",
+            "in": "query",
+            "description": "`true` for artifacts linked to a disc, `false` for those linked to none.",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "created_after",
+            "in": "query",
+            "description": "Imported at or after this, RFC 3339.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "created_before",
+            "in": "query",
+            "description": "Imported before this, RFC 3339.",
             "required": false,
             "schema": {
               "type": [

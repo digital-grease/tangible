@@ -19,10 +19,13 @@ use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use tangible_db::library::{ArtifactFilter, filtered_artifact_ids};
 use tangible_domain::ArtifactId;
+use tangible_domain::enums::{ArtifactFormat, ArtifactOrigin, IntegrityState, ValidationState};
 use tangible_domain::manifest::{ArtifactManifest, CdReadRecord, DecryptionRecord};
-use utoipa::ToSchema;
+use time::OffsetDateTime;
+use utoipa::{IntoParams, ToSchema};
 
 use crate::pagination::{Page, PageQuery};
 use crate::problem::{ErrorCode, Problem};
@@ -457,9 +460,56 @@ pub(crate) async fn load(state: &ApiState, id: ArtifactId) -> Result<ArtifactMan
     }
 }
 
+/// Which artifacts to list (docs/plans/library-filters.md). Each given must
+/// match; none given lists everything.
+#[derive(Debug, Clone, Default, Deserialize, IntoParams)]
+pub struct ArtifactFilterQuery {
+    /// Its format, such as `cue_bin`.
+    pub format: Option<String>,
+    /// Where it came from: `imported_original`, `derived`, `physical_dump`.
+    pub origin: Option<String>,
+    /// Its validation state, such as `valid_with_warnings`.
+    pub validation_state: Option<String>,
+    /// Its integrity state: `unchecked`, `intact` or `damaged`.
+    pub integrity_state: Option<String>,
+    /// `true` for artifacts linked to a disc, `false` for those linked to none.
+    pub linked: Option<bool>,
+    /// Imported at or after this, RFC 3339.
+    pub created_after: Option<String>,
+    /// Imported before this, RFC 3339.
+    pub created_before: Option<String>,
+}
+
+/// A filter value, checked against what the server knows.
+fn known<T: std::str::FromStr>(
+    value: Option<&String>,
+    name: &'static str,
+) -> Result<Option<String>, Problem> {
+    value
+        .map(|raw| {
+            raw.parse::<T>()
+                .map(|_| raw.clone())
+                .map_err(|_| Problem::invalid_parameter(name, "not a value this server knows"))
+        })
+        .transpose()
+}
+
+/// A timestamp filter, RFC 3339.
+fn instant(value: Option<&String>, name: &'static str) -> Result<Option<OffsetDateTime>, Problem> {
+    value
+        .map(|raw| {
+            OffsetDateTime::parse(raw, &time::format_description::well_known::Rfc3339)
+                .map_err(|_| Problem::invalid_parameter(name, "not an RFC 3339 timestamp"))
+        })
+        .transpose()
+}
+
 /// List artifacts, newest identifiers last.
 ///
-/// Ordering is by identifier, which for UUIDv7 is creation order.
+/// Ordering is by identifier, which for UUIDv7 is creation order. With a
+/// filter, which artifacts is answered from the catalogue; without one,
+/// from the manifests, so a library whose catalogue is behind is still
+/// listed in full.
 ///
 /// # Errors
 ///
@@ -469,9 +519,11 @@ pub(crate) async fn load(state: &ApiState, id: ArtifactId) -> Result<ArtifactMan
     get,
     path = "/api/v1/artifacts",
     tag = "library",
-    description = "List artifacts in creation order. Use `next_cursor` from the \
-                   response to fetch the following page.",
-    params(PageQuery),
+    description = "List artifacts in creation order, filtered by format, origin, \
+                   validation and integrity state, whether linked to a disc, and when \
+                   imported. Use `next_cursor` from the response to fetch the following \
+                   page, with the same filters.",
+    params(PageQuery, ArtifactFilterQuery),
     responses(
         (status = 200, description = "A page of artifacts", body = ArtifactSummaryPage),
         (status = 400, description = "Invalid cursor", body = Problem),
@@ -481,6 +533,7 @@ pub(crate) async fn load(state: &ApiState, id: ArtifactId) -> Result<ArtifactMan
 pub async fn list_artifacts(
     State(state): State<ApiState>,
     Query(query): Query<PageQuery>,
+    Query(filter): Query<ArtifactFilterQuery>,
 ) -> Result<Json<ArtifactSummaryPage>, Problem> {
     let Some(manifests) = state.manifests() else {
         return Err(Problem::storage_unavailable());
@@ -489,17 +542,56 @@ pub async fn list_artifacts(
     let after = query.after()?;
     let limit = query.limit();
 
-    let mut ids = manifests.list().await.map_err(|error| {
-        tracing::error!(error = ?error, "could not list manifests");
-        Problem::storage_unavailable()
-    })?;
+    let format = known::<ArtifactFormat>(filter.format.as_ref(), "format")?;
+    let origin = known::<ArtifactOrigin>(filter.origin.as_ref(), "origin")?;
+    let validation =
+        known::<ValidationState>(filter.validation_state.as_ref(), "validation_state")?;
+    let integrity = known::<IntegrityState>(filter.integrity_state.as_ref(), "integrity_state")?;
+    let catalogue_filter = ArtifactFilter {
+        format: format.as_deref(),
+        origin: origin.as_deref(),
+        validation_state: validation.as_deref(),
+        integrity_state: integrity.as_deref(),
+        linked: filter.linked,
+        created_after: instant(filter.created_after.as_ref(), "created_after")?,
+        created_before: instant(filter.created_before.as_ref(), "created_before")?,
+    };
 
-    // Keyset: keep only identifiers strictly after the cursor. The listing is
-    // already sorted, so this is a window rather than a scan-and-skip.
-    if let Some(after) = after {
-        ids.retain(|id| id.to_string() > after);
-    }
-    ids.truncate(limit);
+    let ids: Vec<ArtifactId> = if catalogue_filter.is_empty() {
+        let mut ids = manifests.list().await.map_err(|error| {
+            tracing::error!(error = ?error, "could not list manifests");
+            Problem::storage_unavailable()
+        })?;
+        // Keyset: keep only identifiers strictly after the cursor. The
+        // listing is already sorted, so this is a window rather than a
+        // scan-and-skip.
+        if let Some(after) = &after {
+            ids.retain(|id| &id.to_string() > after);
+        }
+        ids.truncate(limit);
+        ids
+    } else {
+        let after = after
+            .map(|after| {
+                uuid::Uuid::parse_str(&after)
+                    .map_err(|_| Problem::new(ErrorCode::InvalidCursor, "the cursor is not usable"))
+            })
+            .transpose()?;
+        filtered_artifact_ids(
+            state.database().pool(),
+            catalogue_filter,
+            after,
+            i64::try_from(limit).unwrap_or(i64::MAX),
+        )
+        .await
+        .map_err(|error| {
+            tracing::error!(error = ?error, "could not filter the library");
+            Problem::storage_unavailable()
+        })?
+        .into_iter()
+        .map(ArtifactId::from_uuid)
+        .collect()
+    };
 
     let mut items = Vec::with_capacity(ids.len());
     for id in ids {

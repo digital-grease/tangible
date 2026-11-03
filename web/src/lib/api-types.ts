@@ -13,7 +13,7 @@ export interface paths {
         };
         /**
          * List artifacts, newest identifiers last.
-         * @description List artifacts in creation order. Use `next_cursor` from the response to fetch the following page.
+         * @description List artifacts in creation order, filtered by format, origin, validation and integrity state, whether linked to a disc, and when imported. Use `next_cursor` from the response to fetch the following page, with the same filters.
          */
         get: operations["list_artifacts"];
         put?: never;
@@ -5363,6 +5363,20 @@ export interface operations {
                 limit?: number | null;
                 /** @description Opaque cursor from a previous response's `next_cursor`. */
                 cursor?: string | null;
+                /** @description Its format, such as `cue_bin`. */
+                format?: string | null;
+                /** @description Where it came from: `imported_original`, `derived`, `physical_dump`. */
+                origin?: string | null;
+                /** @description Its validation state, such as `valid_with_warnings`. */
+                validation_state?: string | null;
+                /** @description Its integrity state: `unchecked`, `intact` or `damaged`. */
+                integrity_state?: string | null;
+                /** @description `true` for artifacts linked to a disc, `false` for those linked to none. */
+                linked?: boolean | null;
+                /** @description Imported at or after this, RFC 3339. */
+                created_after?: string | null;
+                /** @description Imported before this, RFC 3339. */
+                created_before?: string | null;
             };
             header?: never;
             path?: never;

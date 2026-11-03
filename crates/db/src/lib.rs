@@ -19,6 +19,7 @@ pub mod gc;
 pub mod identification;
 pub mod integrations;
 pub mod integrity;
+pub mod library;
 pub mod metrics;
 pub mod oidc;
 pub mod repositories;

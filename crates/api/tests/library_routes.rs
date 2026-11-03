@@ -668,3 +668,163 @@ async fn an_awkward_file_name_cannot_break_out_of_the_header() {
          filename*=UTF-8''Disc%20%22one%22%3B%20%C3%BCn%C3%AFcode.iso"
     );
 }
+
+// --- filtering (docs/plans/library-filters.md) ----------------------------------
+
+/// A server whose imports are catalogued, as the server's own are, and the
+/// identifiers of an ISO linked to a disc and a CUE/BIN linked to none.
+async fn catalogued() -> (TempDir, axum::Router, String, String, String) {
+    let started = time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    let dir = TempDir::new().expect("temp dir");
+    let objects = FilesystemStore::open(dir.path().join("library"))
+        .await
+        .expect("objects");
+    let manifests = ManifestStore::open(objects.clone())
+        .await
+        .expect("manifests");
+    let staging = StagingManager::open(dir.path().join("staging"))
+        .await
+        .expect("staging");
+    let pipeline = ImportPipeline::new(staging, objects, manifests.clone());
+    let database = support::database().await;
+
+    let tag = uuid::Uuid::now_v7().simple().to_string();
+    let mut bin = vec![0_u8; 2352 * 20];
+    bin[..tag.len()].copy_from_slice(tag.as_bytes());
+    let sets: Vec<Vec<(String, Vec<u8>)>> = vec![
+        vec![("disc.iso".to_owned(), iso_image(&tag[..16], 20))],
+        vec![
+            (
+                "game.cue".to_owned(),
+                b"FILE \"game.bin\" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n"
+                    .to_vec(),
+            ),
+            ("game.bin".to_owned(), bin),
+        ],
+    ];
+    let mut ids = Vec::new();
+    for set in sets {
+        let import_id = ImportJobId::generate();
+        let area = pipeline.open_area(import_id).await.expect("area");
+        for (path, bytes) in &set {
+            area.write(&LogicalPath::parse(path).expect("path"), bytes)
+                .await
+                .expect("stage");
+        }
+        let mut checkpoint = ImportCheckpoint::default();
+        let outcome = pipeline
+            .run(
+                &ImportRequest {
+                    import_id,
+                    source_kind: "upload".to_owned(),
+                    source_filename: Some(set[0].0.clone()),
+                    source_reference: None,
+                    physical_dump: None,
+                    lineage: None,
+                    limits: IngestLimits {
+                        max_bytes: None,
+                        fsync: false,
+                    },
+                },
+                &mut checkpoint,
+            )
+            .await
+            .expect("import");
+        let manifest = manifests.read(outcome.artifact_id).await.expect("read");
+        tangible_api::catalog::register_manifest(&database, &manifest)
+            .await
+            .expect("catalogue");
+        ids.push(outcome.artifact_id.to_string());
+    }
+
+    // The ISO is linked to a disc; the CUE/BIN to none.
+    let chain: Vec<uuid::Uuid> = (0..4).map(|_| uuid::Uuid::now_v7()).collect();
+    for statement in [
+        format!(
+            "INSERT INTO titles (id, display_title, sort_title) VALUES ('{}', 'F', 'F')",
+            chain[0]
+        ),
+        format!(
+            "INSERT INTO editions (id, title_id, display_name) VALUES ('{}', '{}', 'E')",
+            chain[1], chain[0]
+        ),
+        format!(
+            "INSERT INTO disc_sets (id, edition_id, name) VALUES ('{}', '{}', 'S')",
+            chain[2], chain[1]
+        ),
+        format!(
+            "INSERT INTO discs (id, disc_set_id, sequence_number) VALUES ('{}', '{}', 1)",
+            chain[3], chain[2]
+        ),
+        format!(
+            "INSERT INTO artifact_disc_links (artifact_id, disc_id) VALUES ('{}', '{}')",
+            ids[0], chain[3]
+        ),
+    ] {
+        sqlx::query(&statement)
+            .execute(database.pool())
+            .await
+            .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    }
+
+    let session = support::sign_in(database.pool(), tangible_domain::Role::Viewer).await;
+    let state = ApiState::with_manifests(database, manifests);
+    let router = support::signed_in(tangible_api::router(state), session);
+    (dir, router, started, ids[0].clone(), ids[1].clone())
+}
+
+fn listed(page: &serde_json::Value) -> Vec<String> {
+    page["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|item| item["id"].as_str().expect("id").to_owned())
+        .collect()
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn the_library_is_filtered_by_format_origin_and_whether_linked() {
+    let (_dir, router, started, iso, cue) = catalogued().await;
+    let since = format!("created_after={}", started.replace('+', "%2B"));
+    let filtered = |query: String| {
+        let router = router.clone();
+        async move { get(&router, &format!("/api/v1/artifacts?limit=500&{query}")).await }
+    };
+
+    let (status, page, _) = filtered(format!("{since}&format=cue_bin")).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let ids = listed(&page);
+    assert!(ids.contains(&cue) && !ids.contains(&iso), "{ids:?}");
+    assert_eq!(page["items"][0]["format"], "cue_bin");
+
+    let ids = listed(&filtered(format!("{since}&linked=false")).await.1);
+    assert!(
+        ids.contains(&cue) && !ids.contains(&iso),
+        "unassociated: {ids:?}"
+    );
+    let ids = listed(&filtered(format!("{since}&linked=true")).await.1);
+    assert!(ids.contains(&iso) && !ids.contains(&cue), "linked: {ids:?}");
+    let ids = listed(
+        &filtered(format!(
+            "{since}&origin=imported_original&integrity_state=unchecked"
+        ))
+        .await
+        .1,
+    );
+    assert!(ids.contains(&iso) && ids.contains(&cue), "{ids:?}");
+    let ids = listed(&filtered(format!("{since}&origin=derived")).await.1);
+    assert!(!ids.contains(&iso) && !ids.contains(&cue), "{ids:?}");
+
+    for bad in [
+        "format=floppy",
+        "origin=found",
+        "linked=maybe",
+        "created_after=yesterday",
+    ] {
+        let (status, _, _) = filtered(bad.to_owned()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+}
