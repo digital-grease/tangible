@@ -396,6 +396,7 @@ async fn verify_passes_a_whole_chd_and_fails_a_damaged_one() {
         .await
         .expect_err("a damaged CHD does not");
     assert_eq!(error.code(), "CHDMAN_FAILED", "{error}");
+    assert!(!error.is_retryable(), "chdman's own verdict: {error}");
     // It only read them.
     assert_eq!(std::fs::read(input.join("good.chd")).unwrap(), good);
 }

@@ -417,7 +417,10 @@ passed it: the export runs it once, on a server whose
 `TANGIBLE_DERIVATION_ENGINE` is `chdman`, checking every hunk against the
 SHA-1s the CHD's maker wrote, and remembers the verdict by the CHD's
 SHA-256. A CHD that fails is not sent (the edition's RomM status says what
-chdman said), and is tried again only by another version of chdman. Verify
+chdman said), and is tried again only by another version of chdman. A
+verify that chdman did not finish (it could not start, took over six hours,
+or was killed) decides nothing and is tried again on the export's next
+pass. Verify
 proves the CHD is whole, not that the dump inside it was good; matching the
 tracks of a CUE/BIN made from it against a DAT is that check. To have what
 it holds instead, ask with "Make a

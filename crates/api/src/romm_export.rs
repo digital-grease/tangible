@@ -101,17 +101,31 @@ impl RommExport {
     }
 }
 
+/// What one `chdman verify` came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChdVerdict {
+    /// It verified.
+    Passed,
+    /// chdman read it and said it does not verify, or is not a CHD it can
+    /// read: its verdict, kept for that chdman version.
+    Failed(String),
+    /// chdman did not get to say: it could not be started, took too long,
+    /// or was ended by a signal. Nothing is kept; it is asked again on the
+    /// next pass.
+    NotRun(String),
+}
+
 /// Runs `chdman verify` on a CHD imported as it is, which the export sends
 /// as it is once it has passed (owner decision 2026-11-02, OWNER_QUEUE 14).
 pub trait ChdVerifier: Send + Sync + std::fmt::Debug {
     /// The version a verdict is recorded under.
     fn tool_version(&self) -> String;
 
-    /// Check `chd`, only reading it. `Err` says why it did not verify.
+    /// Check `chd`, only reading it.
     fn verify<'a>(
         &'a self,
         chd: &'a std::path::Path,
-    ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
+    ) -> std::pin::Pin<Box<dyn Future<Output = ChdVerdict> + Send + 'a>>;
 }
 
 impl ChdVerifier for tangible_image::chdman::Chdman {
@@ -122,11 +136,17 @@ impl ChdVerifier for tangible_image::chdman::Chdman {
     fn verify<'a>(
         &'a self,
         chd: &'a std::path::Path,
-    ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+    ) -> std::pin::Pin<Box<dyn Future<Output = ChdVerdict> + Send + 'a>> {
         Box::pin(async move {
-            tangible_image::chdman::Chdman::verify(self, chd)
-                .await
-                .map_err(|error| error.to_string())
+            match tangible_image::chdman::Chdman::verify(self, chd).await {
+                Ok(()) => ChdVerdict::Passed,
+                Err(tangible_image::derive::DeriveError::Failed {
+                    detail,
+                    retryable: false,
+                    ..
+                }) => ChdVerdict::Failed(detail),
+                Err(error) => ChdVerdict::NotRun(error.to_string()),
+            }
         })
     }
 }
@@ -138,6 +158,8 @@ enum ChdCheck {
     Passed,
     /// It failed, or the CHD could not be read; why.
     Failed(String),
+    /// chdman could not give a verdict this time; why. Asked again later.
+    NotYet(String),
     /// Never verified, and this server has no chdman to.
     Unverifiable,
 }
@@ -554,26 +576,30 @@ impl RommExporter {
         tracing::info!(%artifact, chdman = %version, "verifying a CHD imported as it is, for RomM");
         // What chdman says names the file it read; that path is the
         // library's, not something to show.
-        let outcome = verifier
-            .verify(&path)
-            .await
-            .map_err(|detail| detail.replace(&path.to_string_lossy().into_owned(), "the CHD"));
-        let (passed, detail) = match &outcome {
-            Ok(()) => (true, None),
-            Err(detail) => (false, Some(detail.as_str())),
+        let shown =
+            |detail: String| detail.replace(&path.to_string_lossy().into_owned(), "the CHD");
+        let (passed, detail) = match verifier.verify(&path).await {
+            ChdVerdict::Passed => (true, None),
+            ChdVerdict::Failed(detail) => (false, Some(shown(detail))),
+            // Nothing about the CHD: not recorded, so the next pass asks
+            // again rather than refusing it for good.
+            ChdVerdict::NotRun(detail) => {
+                let detail = shown(detail);
+                tracing::warn!(%artifact, %detail, "chdman could not verify a CHD imported as it is this time");
+                return ChdCheck::NotYet(detail);
+            }
         };
-        if let Err(error) = record_chd_verdict(pool, &sha256, &version, passed, detail).await {
+        if let Err(error) =
+            record_chd_verdict(pool, &sha256, &version, passed, detail.as_deref()).await
+        {
             tracing::warn!(%artifact, error = ?error, "could not record a CHD's verification");
         }
-        match outcome {
-            Ok(()) => {
-                tracing::info!(%artifact, "a CHD imported as it is verified, and goes to RomM as it is");
-                ChdCheck::Passed
-            }
-            Err(detail) => {
-                tracing::warn!(%artifact, %detail, "a CHD imported as it is did not verify");
-                ChdCheck::Failed(detail)
-            }
+        if let Some(detail) = detail {
+            tracing::warn!(%artifact, %detail, "a CHD imported as it is did not verify");
+            ChdCheck::Failed(detail)
+        } else {
+            tracing::info!(%artifact, "a CHD imported as it is verified, and goes to RomM as it is");
+            ChdCheck::Passed
         }
     }
 
@@ -753,6 +779,11 @@ fn missing_image(
                 "disc {number} is linked only to a CHD imported as it is, which did not pass \
                  chdman's verify ({detail}), so it is not sent to RomM; link a CUE/BIN or ISO \
                  image of the disc"
+            ),
+            ChdCheck::NotYet(detail) => format!(
+                "disc {number} is linked only to a CHD imported as it is, which goes to RomM once \
+                 chdman has verified it, and chdman could not this time ({detail}); it is tried \
+                 again on the next pass"
             ),
             _ => format!(
                 "disc {number} is linked only to a CHD imported as it is, which goes to RomM once \

@@ -608,8 +608,10 @@ may change between minor versions, and the release notes say how.
   passed it (owner decision, OWNER_QUEUE 14; docs/plans/chd-images.md). The
   export runs the verify once per CHD and chdman version, on a server whose
   derivation engine is chdman, and records the verdict by the CHD's SHA-256
-  (migration 0032). One that fails is not sent, and the edition's status
-  says what chdman said, the library's path left out. A CHD made and
+  (migration 0032), only when chdman itself answered: a run that could not
+  start, took too long or was ended by a signal is tried again on the next
+  pass. One that fails is not sent, and the edition's status says what
+  chdman said, the library's path left out. A CHD made and
   checked here is still preferred, then a verified imported one, then an
   ISO or CUE/BIN.
 - **A worker refuses plain HTTP that would leave its machine** (breaking

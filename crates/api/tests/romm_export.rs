@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use std::sync::Arc;
 
+use tangible_api::romm_export::ChdVerdict;
 use tangible_api::secrets::SecretKey;
 use tangible_api::{
     ApiState, DerivationPipeline, DerivationRunner, DerivationRunnerSettings, Derivations,
@@ -459,20 +460,28 @@ async fn a_checked_chd_replaces_the_cue_bin_in_romm() {
     assert_eq!(present, 1, "the old files' receipts are marked removed");
 }
 
-/// Stands in for chdman's verify: passes or fails as told, counting runs and
-/// saying what chdman would, the file's path included.
+/// Stands in for chdman's verify: passes, fails or never gets to say, as
+/// told, counting runs and saying what chdman would, the file's path
+/// included.
 #[derive(Debug)]
 struct FakeVerifier {
     version: String,
-    passes: bool,
+    says: Says,
     runs: std::sync::atomic::AtomicUsize,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum Says {
+    Passed,
+    Failed,
+    TookTooLong,
+}
+
 impl FakeVerifier {
-    fn new(passes: bool) -> Arc<Self> {
+    fn new(says: Says) -> Arc<Self> {
         Arc::new(Self {
             version: format!("0.fake-{}", uuid::Uuid::now_v7().simple()),
-            passes,
+            says,
             runs: std::sync::atomic::AtomicUsize::new(0),
         })
     }
@@ -490,17 +499,20 @@ impl tangible_api::romm_export::ChdVerifier for FakeVerifier {
     fn verify<'a>(
         &'a self,
         chd: &'a Path,
-    ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+    ) -> std::pin::Pin<Box<dyn Future<Output = ChdVerdict> + Send + 'a>> {
         Box::pin(async move {
             self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             assert!(chd.is_file(), "verified in place, in the library");
-            if self.passes {
-                Ok(())
-            } else {
-                Err(format!(
+            match self.says {
+                Says::Passed => ChdVerdict::Passed,
+                Says::Failed => ChdVerdict::Failed(format!(
                     "chdman verify failed: Error reading input file ({}): corrupt data",
                     chd.display()
-                ))
+                )),
+                Says::TookTooLong => ChdVerdict::NotRun(format!(
+                    "verify: chdman took longer than 21600s reading {}",
+                    chd.display()
+                )),
             }
         })
     }
@@ -549,8 +561,19 @@ async fn an_imported_chd_goes_to_romm_as_it_is_once_chdman_has_verified_it() {
         "{waiting}"
     );
 
+    // A verify that never gets to say: blocked for now, nothing kept, so the
+    // same chdman is asked again.
+    let stuck = FakeVerifier::new(Says::TookTooLong);
+    let waiting = harness.reconcile_with(&with(&stuck), &edition).await;
+    let detail = waiting["detail"].as_str().unwrap().to_owned();
+    assert_eq!(waiting["state"], "blocked", "{waiting}");
+    assert!(detail.contains("could not this time"), "{detail}");
+    assert!(!detail.contains("/library/"), "no library path: {detail}");
+    harness.reconcile_with(&with(&stuck), &edition).await;
+    assert_eq!(stuck.runs(), 2, "asked again");
+
     // A verify that fails: blocked, saying why, the library's path not shown.
-    let failing = FakeVerifier::new(false);
+    let failing = FakeVerifier::new(Says::Failed);
     let refused = harness.reconcile_with(&with(&failing), &edition).await;
     let detail = refused["detail"].as_str().unwrap().to_owned();
     assert_eq!(refused["state"], "blocked", "{refused}");
@@ -563,7 +586,7 @@ async fn an_imported_chd_goes_to_romm_as_it_is_once_chdman_has_verified_it() {
     assert_eq!(failing.runs(), 1);
 
     // Another chdman that passes it: sent as it is.
-    let passing = FakeVerifier::new(true);
+    let passing = FakeVerifier::new(Says::Passed);
     let current = harness.reconcile_with(&with(&passing), &edition).await;
     assert_eq!(current["state"], "current", "{current}");
     assert_eq!(

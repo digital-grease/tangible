@@ -121,7 +121,9 @@ impl Chdman {
     /// # Errors
     ///
     /// [`DeriveError::Failed`] (`CHDMAN_FAILED`) when the CHD does not
-    /// verify or chdman cannot read it, with the end of what it said.
+    /// verify or chdman cannot read it, with the end of what it said: not
+    /// retryable when chdman exited so, retryable when a signal ended it.
+    /// [`DeriveError::Io`] when it could not be run or took too long.
     pub async fn verify(&self, chd: &Path) -> Result<(), DeriveError> {
         let input = path_arg(chd)?;
         self.chdman(&["verify", "-i", &input], &std::env::temp_dir(), "verify")
@@ -147,7 +149,9 @@ impl Chdman {
             Err(DeriveError::Failed {
                 code: "CHDMAN_FAILED",
                 detail: format!("chdman {step} failed: {}", last_lines(&output)),
-                retryable: false,
+                // Ended by a signal (the system short of memory, a
+                // shutdown), it said nothing about the file.
+                retryable: !output.exited,
             })
         }
     }
@@ -832,6 +836,8 @@ async fn first_difference(
 #[derive(Debug, Clone)]
 struct RunOutput {
     success: bool,
+    /// Whether it exited, rather than being ended by a signal.
+    exited: bool,
     stdout: String,
     stderr: String,
 }
@@ -882,6 +888,7 @@ async fn run(
         let (status, stdout, stderr) = result?;
         Ok(RunOutput {
             success: status.success(),
+            exited: status.code().is_some(),
             stdout,
             stderr,
         })
@@ -972,6 +979,7 @@ mod tests {
     fn the_last_lines_skip_progress_noise() {
         let output = RunOutput {
             success: false,
+            exited: true,
             stdout: String::new(),
             stderr: "Compressing, 10% complete...\rCompressing, 20% complete...\r\nError: bad input\nFatal error occurred: 1\n".to_owned(),
         };
@@ -1002,6 +1010,58 @@ mod tests {
         assert_eq!(
             compare_files(&a, &b).await.unwrap(),
             Err(format!("the bytes differ from byte {}", COMPARE_CHUNK + 5))
+        );
+    }
+
+    /// A stand-in chdman: the banner with no arguments, otherwise `then`.
+    #[cfg(unix)]
+    async fn stand_in(dir: &Path, name: &str, then: &str) -> Chdman {
+        use std::os::unix::fs::PermissionsExt as _;
+        let script = dir.join(name);
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nif [ $# -eq 0 ]; then\n  echo 'chdman - MAME Compressed Hunks of Data \
+                 (CHD) manager 0.251 (unknown)'\n  exit 1\nfi\n{then}\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // A file just written can be busy to exec for a moment while another
+        // test's child, forked meanwhile, still holds it.
+        for _ in 0..20 {
+            if let Ok(chdman) = Chdman::probe(&script).await {
+                return chdman;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("the stand-in did not run");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_verify_chdman_answered_is_final_and_one_a_signal_ended_is_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let chd = dir.path().join("x.chd");
+        std::fs::write(&chd, b"not a chd").unwrap();
+
+        let refuses = stand_in(
+            dir.path(),
+            "refuses",
+            "echo 'Error: corrupt data' >&2; exit 1",
+        )
+        .await;
+        let error = refuses.verify(&chd).await.expect_err("refused");
+        assert_eq!(error.code(), "CHDMAN_FAILED");
+        assert!(!error.is_retryable(), "{error}");
+        assert!(error.to_string().contains("corrupt data"), "{error}");
+
+        let killed = stand_in(dir.path(), "killed", "kill -KILL $$").await;
+        let error = killed.verify(&chd).await.expect_err("ended");
+        assert_eq!(error.code(), "CHDMAN_FAILED");
+        assert!(
+            error.is_retryable(),
+            "a signal says nothing of the file: {error}"
         );
     }
 }
