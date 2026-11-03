@@ -64,13 +64,44 @@ function isProblem(value: unknown): value is Problem {
   return typeof value === 'object' && value !== null && 'code' in value && 'detail' in value;
 }
 
-/** Fetch one page of artifacts. */
+/** Which artifacts the library shows; an empty field filters nothing. */
+export type LibraryFilter = {
+  format?: string;
+  origin?: string;
+  validation_state?: string;
+  integrity_state?: string;
+  /** `true` for artifacts linked to a disc, `false` for those linked to none. */
+  linked?: boolean | null;
+};
+
+/** Whether a filter keeps everything. */
+export function filtersNothing(filter: LibraryFilter): boolean {
+  return libraryQuery(filter) === '';
+}
+
+/** The query string for a filter and cursor, or `''` for neither. */
+export function libraryQuery(filter: LibraryFilter, cursor?: string): string {
+  const query = new URLSearchParams();
+  for (const name of ['format', 'origin', 'validation_state', 'integrity_state'] as const) {
+    const value = filter[name];
+    if (value) query.set(name, value);
+  }
+  if (filter.linked === true || filter.linked === false) query.set('linked', String(filter.linked));
+  if (cursor) query.set('cursor', cursor);
+  const text = query.toString();
+  return text ? `?${text}` : '';
+}
+
+/** Fetch one page of artifacts, filtered when asked. */
 export async function loadLibrary(
   fetcher: typeof fetch = apiFetch,
   cursor?: string,
+  filter: LibraryFilter = {},
 ): Promise<LoadState<ArtifactSummaryPage>> {
-  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
-  const result = await request<ArtifactSummaryPage>(fetcher, `/api/v1/artifacts${query}`);
+  const result = await request<ArtifactSummaryPage>(
+    fetcher,
+    `/api/v1/artifacts${libraryQuery(filter, cursor)}`,
+  );
 
   if (isProblem(result)) return { kind: 'error', problem: result };
   // Empty is a distinct state, not a zero-length success: it needs its own

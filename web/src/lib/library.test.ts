@@ -5,7 +5,9 @@ import { describe, expect, it } from 'vitest';
 import {
   formatBytes,
   formatLabel,
+  filtersNothing,
   keepsSubchannel,
+  libraryQuery,
   notBurnedAsItIs,
   loadArtifact,
   loadLibrary,
@@ -282,5 +284,20 @@ describe('subchannel', () => {
       'compressed bytes',
     );
     expect(notBurnedAsItIs({ format: 'cue_bin', components: plain } as never)).toBeNull();
+  });
+});
+
+describe('library filters', () => {
+  it('sends only the filters set, and the cursor after them', () => {
+    expect(libraryQuery({})).toBe('');
+    expect(libraryQuery({ format: '', linked: null })).toBe('');
+    expect(libraryQuery({ format: 'iso', linked: false }, 'c1')).toBe(
+      '?format=iso&linked=false&cursor=c1',
+    );
+    expect(libraryQuery({ integrity_state: 'damaged', linked: true })).toBe(
+      '?integrity_state=damaged&linked=true',
+    );
+    expect(filtersNothing({ origin: '' })).toBe(true);
+    expect(filtersNothing({ origin: 'derived' })).toBe(false);
   });
 });

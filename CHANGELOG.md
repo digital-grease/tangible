@@ -12,7 +12,9 @@ may change between minor versions, and the release notes say how.
   `GET /api/v1/artifacts` takes `format`, `origin`, `validation_state`,
   `integrity_state`, `linked` (`false` for artifacts linked to no disc)
   and `created_after`/`created_before`, answered from the catalogue rather
-  than by reading every manifest. An unfiltered list is unchanged.
+  than by reading every manifest. An unfiltered list is unchanged. The
+  Library page has a filter bar for format, where an artifact came from,
+  validation, stored bytes and whether it is linked to a disc.
 - `GET /api/v1/dashboard` (docs/plans/dashboard.md), for anyone signed in,
   answers in one request what needs doing and what is under way: imports
   under way and failed in the last week; burn jobs queued, waiting for a
