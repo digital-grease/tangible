@@ -165,8 +165,32 @@ pub struct Enrolled {
 /// What the server says on a heartbeat.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Heartbeat {
+    /// Whether the worker should rotate its credential before more work.
+    /// Absent from a server too old to rotate, which never asks.
+    #[serde(default)]
+    pub credential_rotation_required: bool,
     /// Whether the worker should stop taking new work.
     pub drain: bool,
+}
+
+/// A credential a rotation issued.
+///
+/// `Debug` is written by hand so the credential never prints.
+#[derive(Clone, Deserialize)]
+pub struct RotatedCredential {
+    /// The new credential.
+    pub credential: String,
+    /// When it was issued.
+    pub issued_at: String,
+}
+
+impl std::fmt::Debug for RotatedCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RotatedCredential")
+            .field("credential", &redacted(&self.credential))
+            .field("issued_at", &self.issued_at)
+            .finish()
+    }
 }
 
 /// Where a worker fetches what it is to write.
@@ -668,6 +692,34 @@ impl WorkerClient {
             .authorised(
                 self.http
                     .post(self.url(&format!("/api/v1/workers/{worker_id}/heartbeat"))),
+            )
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .map_err(ClientError::Transport)?;
+
+        if !response.status().is_success() {
+            return Err(Self::refusal(response).await);
+        }
+        response.json().await.map_err(ClientError::Transport)
+    }
+
+    /// Ask for a new credential to replace the one in use.
+    ///
+    /// The old one keeps working until a request presents the new one.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Refused`] if the credential is no longer valid, or
+    /// [`ClientError::Transport`] on a network failure.
+    pub async fn rotate_credential(
+        &self,
+        worker_id: &str,
+    ) -> Result<RotatedCredential, ClientError> {
+        let response = self
+            .authorised(
+                self.http
+                    .post(self.url(&format!("/api/v1/workers/{worker_id}/credential-rotations"))),
             )
             .json(&serde_json::json!({}))
             .send()
@@ -1309,38 +1361,63 @@ impl WorkerIdentity {
 
     /// Write the identity, replacing any previous one.
     ///
-    /// Written to a temporary file and renamed, so an interrupted write
-    /// cannot leave a half-written credential that would strand the worker.
+    /// Written to a temporary file readable by this user alone, flushed to
+    /// the disk, and renamed over the old one, the folder flushed after: an
+    /// interrupted write cannot leave a half-written credential, and a
+    /// machine that loses power just after a credential rotation still has
+    /// the new credential when it comes back, the old one retired by then.
     ///
     /// # Errors
     ///
     /// [`ClientError::Io`] if the file cannot be written.
     pub async fn save(&self, path: &Path) -> Result<(), ClientError> {
+        use tokio::io::AsyncWriteExt as _;
+
+        let io = |operation: &'static str, path: &Path| {
+            let path = path.to_path_buf();
+            move |source| ClientError::Io {
+                operation,
+                path,
+                source,
+            }
+        };
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
-                .map_err(|source| ClientError::Io {
-                    operation: "creating the worker state directory",
-                    path: parent.to_path_buf(),
-                    source,
-                })?;
+                .map_err(io("creating the worker state directory", parent))?;
         }
         let text = serde_json::to_string_pretty(self).unwrap_or_default();
         let temporary = path.with_extension("tmp");
-        tokio::fs::write(&temporary, text)
+        let mut options = tokio::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options
+            .open(&temporary)
             .await
-            .map_err(|source| ClientError::Io {
-                operation: "writing the worker identity",
-                path: temporary.clone(),
-                source,
-            })?;
+            .map_err(io("writing the worker identity", &temporary))?;
+        file.write_all(text.as_bytes())
+            .await
+            .map_err(io("writing the worker identity", &temporary))?;
+        file.sync_all()
+            .await
+            .map_err(io("flushing the worker identity", &temporary))?;
+        drop(file);
         tokio::fs::rename(&temporary, path)
             .await
-            .map_err(|source| ClientError::Io {
-                operation: "renaming the worker identity",
-                path: path.to_path_buf(),
-                source,
-            })
+            .map_err(io("renaming the worker identity", path))?;
+        // The rename itself, made durable. A folder that cannot be opened to
+        // flush, as on a platform without that, leaves the rename to the
+        // filesystem's own schedule.
+        if let Some(parent) = path.parent()
+            && let Ok(folder) = tokio::fs::File::open(parent).await
+        {
+            folder
+                .sync_all()
+                .await
+                .map_err(io("flushing the worker state directory", parent))?;
+        }
+        Ok(())
     }
 }
 
@@ -1429,6 +1506,56 @@ mod tests {
             "{error:?}"
         );
         server.join().expect("server");
+    }
+
+    #[test]
+    fn a_heartbeat_from_a_server_that_cannot_rotate_never_asks_to() {
+        let older: Heartbeat =
+            serde_json::from_value(serde_json::json!({ "drain": false })).expect("parse");
+        assert!(!older.credential_rotation_required);
+        let asks: Heartbeat = serde_json::from_value(serde_json::json!({
+            "drain": false,
+            "credential_rotation_required": true,
+        }))
+        .expect("parse");
+        assert!(asks.credential_rotation_required);
+    }
+
+    #[test]
+    fn a_rotated_credential_never_prints() {
+        let rotated = RotatedCredential {
+            credential: "tgw_live_placeholder".to_owned(),
+            issued_at: "2026-11-02T00:00:00Z".to_owned(),
+        };
+        assert!(!format!("{rotated:?}").contains("tgw_live_placeholder"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_saved_identity_is_readable_by_this_user_alone() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("state").join("identity.json");
+        let identity = WorkerIdentity {
+            worker_id: "w".to_owned(),
+            credential: "tgw_live_placeholder".to_owned(),
+            drive_id: None,
+        };
+        identity.save(&path).await.expect("save");
+        // Saved again over the first, as a rotation does.
+        identity.save(&path).await.expect("save again");
+        let mode = std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert!(!path.with_extension("tmp").exists(), "nothing left over");
+        let loaded = WorkerIdentity::load(&path)
+            .await
+            .expect("load")
+            .expect("some");
+        assert_eq!(loaded.credential, "tgw_live_placeholder");
     }
 
     #[test]

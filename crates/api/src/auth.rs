@@ -386,9 +386,19 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
         "/api/v1/workers/{worker_id}/revoke",
         Signed(ManageWorkers),
     ),
+    (
+        "POST",
+        "/api/v1/workers/{worker_id}/rotate-credential",
+        Signed(ManageWorkers),
+    ),
     ("POST", "/api/v1/worker-enrollments/consume", Worker),
     ("PUT", "/api/v1/workers/{worker_id}/capabilities", Worker),
     ("POST", "/api/v1/workers/{worker_id}/heartbeat", Worker),
+    (
+        "POST",
+        "/api/v1/workers/{worker_id}/credential-rotations",
+        Worker,
+    ),
     ("POST", "/api/v1/workers/{worker_id}/claims", Worker),
     ("POST", "/api/v1/workers/{worker_id}/recoveries", Worker),
     (

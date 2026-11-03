@@ -252,7 +252,8 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         .with_oidc_if(oidc)
         .with_reports(reports)
         .with_diagnostics(diagnostics)
-        .with_decryption_allowed(serve.allow_decryption);
+        .with_decryption_allowed(serve.allow_decryption)
+        .with_worker_credential_max_age_days(serve.worker_credential_max_age_days);
     let state = match &secret_key {
         Some(key) => state.with_secret_key(Arc::clone(key)),
         None => state,
@@ -1482,6 +1483,7 @@ mod tests {
         "TANGIBLE_URL_IMPORTS_ALLOW_HTTP",
         "TANGIBLE_WATCH_ROOTS",
         "TANGIBLE_WEB_ROOT",
+        "TANGIBLE_WORKER_CREDENTIAL_MAX_AGE_DAYS",
         "TANGIBLE_WORKER_NAME",
         "TANGIBLE_WORKER_PLAIN_HTTP",
         "TANGIBLE_WORKER_STATE_DIR",

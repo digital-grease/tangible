@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! Workers as people manage them (docs/plans/worker-admin.md): seen, drained,
-//! enabled again, and revoked.
+//! enabled again, revoked, and asked to rotate their credential
+//! (docs/plans/credential-rotation.md).
 //!
 //! What a worker does for itself (enrolling, reporting, heartbeats, claims)
 //! is in [`crate::repositories`]. Here is what an administrator does to one,
@@ -36,6 +37,11 @@ pub struct WorkerRecord {
     pub created_at: OffsetDateTime,
     /// When it was revoked.
     pub revoked_at: Option<OffsetDateTime>,
+    /// When the credential it uses was issued.
+    pub credential_issued_at: OffsetDateTime,
+    /// When an administrator asked for that credential to be rotated, until
+    /// it is.
+    pub credential_rotation_requested_at: Option<OffsetDateTime>,
     /// Its drives, by name.
     pub drives: Vec<(DriveId, String)>,
 }
@@ -54,6 +60,7 @@ pub enum WorkerChange {
 
 const WORKER_COLUMNS: &str = "w.id, w.name, w.status, w.software_version, w.protocol_version, \
      w.last_seen_at, w.created_at, w.revoked_at, \
+     w.credential_issued_at, w.credential_rotation_requested_at, \
      COALESCE((SELECT jsonb_agg(jsonb_build_array(d.id, d.configured_name) \
                        ORDER BY d.configured_name, d.id) \
                FROM drives d WHERE d.worker_id = w.id), '[]'::jsonb) AS drives";
@@ -79,6 +86,12 @@ fn worker_from_row(row: &sqlx::postgres::PgRow) -> Result<WorkerRecord, DbError>
         last_seen_at: row.try_get("last_seen_at").map_err(DbError::Query)?,
         created_at: row.try_get("created_at").map_err(DbError::Query)?,
         revoked_at: row.try_get("revoked_at").map_err(DbError::Query)?,
+        credential_issued_at: row
+            .try_get("credential_issued_at")
+            .map_err(DbError::Query)?,
+        credential_rotation_requested_at: row
+            .try_get("credential_rotation_requested_at")
+            .map_err(DbError::Query)?,
         drives,
     })
 }
@@ -261,6 +274,33 @@ pub async fn revoke_worker(
         "worker.revoked",
         |status| Some(status != "revoked"),
         "UPDATE workers SET status = 'revoked', revoked_at = now(), updated_at = now()
+         WHERE id = $1",
+    )
+    .await
+}
+
+/// Ask a worker to rotate its credential: its next heartbeat says so, and
+/// a worker able to rotates before it takes more work. The first request's
+/// time is kept until the rotation happens; a revoked worker cannot be
+/// asked.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn request_credential_rotation(
+    pool: &PgPool,
+    id: WorkerId,
+    actor: &str,
+) -> Result<WorkerChange, DbError> {
+    change(
+        pool,
+        id,
+        actor,
+        "worker.credential_rotation_requested",
+        |status| (status != "revoked").then_some(true),
+        "UPDATE workers
+         SET credential_rotation_requested_at = COALESCE(credential_rotation_requested_at, now()),
+             updated_at = now()
          WHERE id = $1",
     )
     .await

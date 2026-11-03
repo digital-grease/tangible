@@ -71,7 +71,13 @@ struct Inner {
     identification: Option<crate::identification::IdentificationHandle>,
     /// The identity provider people may sign in through (ADR 0018).
     oidc: Option<Arc<crate::oidc::Oidc>>,
+    /// How many days a worker credential is used before the worker is asked
+    /// to rotate it; 0 for never (`TANGIBLE_WORKER_CREDENTIAL_MAX_AGE_DAYS`).
+    worker_credential_max_age_days: u32,
 }
+
+/// How long a worker credential is used before rotation, unless configured.
+pub const DEFAULT_WORKER_CREDENTIAL_MAX_AGE_DAYS: u32 = 90;
 
 /// What the import routes need beyond the database.
 #[derive(Debug, Clone)]
@@ -119,6 +125,7 @@ impl ApiState {
                 integrity: None,
                 identification: None,
                 oidc: None,
+                worker_credential_max_age_days: DEFAULT_WORKER_CREDENTIAL_MAX_AGE_DAYS,
             }),
         }
     }
@@ -147,6 +154,7 @@ impl ApiState {
                 integrity: None,
                 identification: None,
                 oidc: None,
+                worker_credential_max_age_days: DEFAULT_WORKER_CREDENTIAL_MAX_AGE_DAYS,
             }),
         }
     }
@@ -219,6 +227,24 @@ impl ApiState {
         Self {
             inner: Arc::new(inner),
         }
+    }
+
+    /// Ask workers to rotate a credential older than `days` days; 0 never
+    /// asks by age (an administrator still can).
+    #[must_use]
+    pub fn with_worker_credential_max_age_days(self, days: u32) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.worker_credential_max_age_days = days;
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// How many days a worker credential is used before rotation; 0 for
+    /// never.
+    #[must_use]
+    pub fn worker_credential_max_age_days(&self) -> u32 {
+        self.inner.worker_credential_max_age_days
     }
 
     /// Allow rips to decrypt encrypted discs, on workers that can. Off by

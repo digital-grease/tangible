@@ -216,9 +216,18 @@ change one there, or by the API:
   the attempt is reconciled the same way. Revoking is final: to use the
   machine again, issue a new enrollment token and enroll it under a new
   name.
+- **Rotate credential** (`.../rotate-credential`) to have the worker swap
+  its credential for a new one. At its next heartbeat it is asked, and
+  between jobs it gets a new credential, saves it on its volume and starts
+  using it; the old one keeps working until that moment, then never again,
+  so nothing is interrupted and a worker that restarts halfway is not
+  locked out. A worker also rotates on its own once its credential is
+  older than `TANGIBLE_WORKER_CREDENTIAL_MAX_AGE_DAYS` (90 by default, `0`
+  for never). If the credential may be known to somebody else, revoke the
+  worker instead: whoever holds it could rotate it too.
 
-Each change is audited with who asked. Viewers and operators see workers;
-only administrators change them.
+Each change is audited with who asked, and so is each rotation. Viewers
+and operators see workers; only administrators change them.
 
 ## Tested hardware
 

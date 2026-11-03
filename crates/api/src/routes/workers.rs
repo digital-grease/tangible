@@ -40,8 +40,8 @@ use tangible_burn::worker::{RecoveryDirective, WorkerStage, plan_for};
 use tangible_db::repositories::{
     AttemptCompletion, ClaimOutcome, DriveReport, EnrollmentOutcome, IncomingEvent, ReportedStage,
     abandon_prewrite_attempt, attempt_state_for_worker, authenticate_worker, claim_next_burn_job,
-    complete_attempt, consume_enrollment, issue_enrollment, record_capabilities, record_events,
-    record_heartbeat, renew_lease,
+    complete_attempt, consume_enrollment, credential_rotation_due, issue_enrollment,
+    issue_next_credential, record_capabilities, record_events, record_heartbeat, renew_lease,
 };
 use tangible_domain::{
     BurnAttemptId, BurnAttemptState, DriveConnection, DriveId, EjectPolicy, SecretString, WorkerId,
@@ -443,6 +443,10 @@ pub async fn consume_enrollment_token(
 pub struct HeartbeatResponse {
     /// The server's clock, so a worker can notice drift.
     pub server_time: String,
+    /// Whether the worker should rotate its credential before it takes more
+    /// work: an administrator asked, or the credential is older than
+    /// `TANGIBLE_WORKER_CREDENTIAL_MAX_AGE_DAYS`.
+    pub credential_rotation_required: bool,
     /// Whether the worker should stop taking new work.
     pub drain: bool,
 }
@@ -488,13 +492,98 @@ pub async fn heartbeat(
         ));
     };
 
+    // A failure here costs a rotation one heartbeat's delay, never the
+    // heartbeat.
+    let credential_rotation_required = credential_rotation_due(
+        state.database().pool(),
+        worker_id,
+        state.worker_credential_max_age_days(),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        tracing::warn!(error = ?error, "could not tell whether a worker's credential is due for rotation");
+        false
+    });
+
     Ok(Json(HeartbeatResponse {
         server_time: OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)
             .unwrap_or_default(),
+        credential_rotation_required,
         // An administrator drained it: finish what it holds, take nothing new.
         drain: status == "draining",
     }))
+}
+
+// --- credential rotation -------------------------------------------------------
+
+/// A credential a rotation issued.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RotatedCredential {
+    /// The new credential, returned this once. The first request that
+    /// presents it makes it the worker's credential and retires the old one;
+    /// until then the old one keeps working.
+    pub credential: String,
+    /// When it was issued.
+    pub issued_at: String,
+}
+
+/// Issue a worker a new credential to replace the one it uses.
+///
+/// # Errors
+///
+/// `NOT_FOUND` if the path names a different worker than the credential,
+/// `UNAUTHENTICATED` for one revoked meanwhile.
+#[utoipa::path(
+    post,
+    path = "/api/v1/workers/{worker_id}/credential-rotations",
+    tag = "workers",
+    description = "Issue this worker a new credential, returned once. The old credential \
+                   keeps working until a request presents the new one, which then replaces \
+                   it for good; asking again before that replaces the unused one. A worker \
+                   asks when a heartbeat says `credential_rotation_required`, between jobs. \
+                   Audited.",
+    params(("worker_id" = String, Path, description = "Worker identifier")),
+    responses(
+        (status = 201, description = "Issued", body = RotatedCredential),
+        (status = 401, description = "Not authenticated", body = Problem),
+        (status = 404, description = "Not this worker", body = Problem),
+    ),
+    security(("worker_credential" = [])),
+)]
+pub async fn rotate_credential(
+    State(state): State<ApiState>,
+    identity: WorkerIdentity,
+    Path(worker_id): Path<String>,
+) -> Result<(StatusCode, Json<RotatedCredential>), Problem> {
+    let worker_id = same_worker(identity, &worker_id)?;
+    let credential = WorkerCredential::issue().map_err(|error| {
+        tracing::error!(error = ?error, "could not generate a worker credential");
+        unavailable("a credential could not be generated")
+    })?;
+    let issued_at =
+        issue_next_credential(state.database().pool(), worker_id, credential.hash.as_str())
+            .await
+            .map_err(|error| {
+                tracing::error!(error = ?error, "could not record a rotated credential");
+                unavailable("the credential could not be recorded")
+            })?
+            // Revoked between authenticating and here.
+            .ok_or_else(|| {
+                Problem::new(ErrorCode::Unauthenticated, "the credential is not valid")
+            })?;
+    tracing::info!(worker_id = %worker_id, "issued a worker a rotated credential");
+
+    Ok((
+        StatusCode::CREATED,
+        Json(RotatedCredential {
+            // The one and only time this leaves the server.
+            credential: credential.secret.expose().to_owned(),
+            issued_at: issued_at
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default(),
+        }),
+    ))
 }
 
 // --- capabilities ----------------------------------------------------------------
@@ -1744,6 +1833,10 @@ pub fn router() -> Router<ApiState> {
             axum::routing::put(report_capabilities),
         )
         .route("/workers/{worker_id}/heartbeat", post(heartbeat))
+        .route(
+            "/workers/{worker_id}/credential-rotations",
+            post(rotate_credential),
+        )
         .route("/workers/{worker_id}/claims", post(claim_work))
         .route("/workers/{worker_id}/recoveries", post(recover))
         .route("/burn-attempts/{attempt_id}/lease/renew", post(renew))

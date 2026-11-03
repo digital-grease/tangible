@@ -7101,6 +7101,64 @@
         ]
       }
     },
+    "/api/v1/workers/{worker_id}/credential-rotations": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Issue a worker a new credential to replace the one it uses.",
+        "description": "Issue this worker a new credential, returned once. The old credential keeps working until a request presents the new one, which then replaces it for good; asking again before that replaces the unused one. A worker asks when a heartbeat says `credential_rotation_required`, between jobs. Audited.",
+        "operationId": "rotate_credential",
+        "parameters": [
+          {
+            "name": "worker_id",
+            "in": "path",
+            "description": "Worker identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotatedCredential"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not this worker",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "worker_credential": []
+          }
+        ]
+      }
+    },
     "/api/v1/workers/{worker_id}/drain": {
       "post": {
         "tags": [
@@ -7499,6 +7557,64 @@
         "security": [
           {
             "worker_credential": []
+          }
+        ]
+      }
+    },
+    "/api/v1/workers/{worker_id}/rotate-credential": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Ask a worker to rotate its credential.",
+        "description": "Ask a worker to rotate its credential: its next heartbeat says so, and it asks for a new one between jobs. The old credential keeps working until the worker first uses the new one, so nothing is interrupted. A worker too old to rotate keeps its credential and the request stays open; revoke it instead if the credential may be known to somebody else. Needs an administrator, and is audited.",
+        "operationId": "rotate_one_worker_credential",
+        "parameters": [
+          {
+            "name": "worker_id",
+            "in": "path",
+            "description": "Worker identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Asked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such worker",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
           }
         ]
       }
@@ -11082,9 +11198,14 @@
         "description": "What the server tells a worker on each heartbeat.",
         "required": [
           "server_time",
+          "credential_rotation_required",
           "drain"
         ],
         "properties": {
+          "credential_rotation_required": {
+            "type": "boolean",
+            "description": "Whether the worker should rotate its credential before it takes more\nwork: an administrator asked, or the credential is older than\n`TANGIBLE_WORKER_CREDENTIAL_MAX_AGE_DAYS`."
+          },
           "drain": {
             "type": "boolean",
             "description": "Whether the worker should stop taking new work."
@@ -13461,6 +13582,24 @@
           }
         }
       },
+      "RotatedCredential": {
+        "type": "object",
+        "description": "A credential a rotation issued.",
+        "required": [
+          "credential",
+          "issued_at"
+        ],
+        "properties": {
+          "credential": {
+            "type": "string",
+            "description": "The new credential, returned this once. The first request that\npresents it makes it the worker's credential and retires the old one;\nuntil then the old one keeps working."
+          },
+          "issued_at": {
+            "type": "string",
+            "description": "When it was issued."
+          }
+        }
+      },
       "S3ImportRequest": {
         "type": "object",
         "description": "What an operator sends to import an object from S3.",
@@ -14333,12 +14472,29 @@
           "software_version",
           "protocol_version",
           "created_at",
+          "credential_issued_at",
+          "credential_rotation_due",
           "drives"
         ],
         "properties": {
           "created_at": {
             "type": "string",
             "description": "When it enrolled."
+          },
+          "credential_issued_at": {
+            "type": "string",
+            "description": "When the credential it uses was issued."
+          },
+          "credential_rotation_due": {
+            "type": "boolean",
+            "description": "Whether its next heartbeat asks it to rotate: an administrator asked,\nor the credential is older than the server allows."
+          },
+          "credential_rotation_requested_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When an administrator asked for that credential to be rotated, until\nthe worker has."
           },
           "drives": {
             "type": "array",

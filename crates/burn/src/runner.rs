@@ -51,6 +51,20 @@ use crate::ripping::{CdReader, Decrypting, RipOptions, RipOutcome, rip_disc};
 use crate::transport::{PlainHttp, ServerUrl, ServerUrlError, Transport};
 use crate::worker::{EventBuffer, RecoveryRecord, RecoveryStore, WorkerStage, plan_for};
 
+/// How long after a failed credential rotation the worker tries again.
+const ROTATION_RETRY_INTERVAL: Duration = Duration::from_secs(10 * 60);
+
+/// How one pass of the run loop ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Step {
+    /// Work was done.
+    Worked,
+    /// There was nothing to do.
+    Idle,
+    /// The server asked for the credential to be rotated, before any work.
+    RotateCredential,
+}
+
 /// How a worker is configured.
 #[derive(Debug, Clone)]
 pub struct WorkerSettings {
@@ -590,8 +604,14 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         }
 
         let mut shutdown = Box::pin(shutdown);
+        // When a rotation last failed, so a server that cannot rotate does
+        // not keep this worker from its work: it tries again later.
+        let mut rotation_failed_at: Option<std::time::Instant> = None;
         loop {
-            let step = self.step(&identity, drive_id);
+            let may_rotate =
+                rotation_failed_at.is_none_or(|at| at.elapsed() >= ROTATION_RETRY_INTERVAL);
+            let step = self.step(&identity, drive_id, may_rotate);
+            let mut rotate = false;
             tokio::select! {
                 () = &mut shutdown => {
                     tracing::info!("shutting down after the current step");
@@ -599,8 +619,9 @@ impl<E: BurnEngine> WorkerRuntime<E> {
                 }
                 result = step => {
                     match result {
-                        Ok(true) => {}
-                        Ok(false) => {
+                        Ok(Step::Worked) => {}
+                        Ok(Step::RotateCredential) => rotate = true,
+                        Ok(Step::Idle) => {
                             // Nothing to do. Sleeping here rather than
                             // hammering the queue.
                             tokio::select! {
@@ -628,21 +649,77 @@ impl<E: BurnEngine> WorkerRuntime<E> {
                     }
                 }
             }
+            // Between jobs, where nothing else holds the credential: a burn's
+            // reporting task works with the client it started with.
+            if rotate {
+                match self.rotate_credential(&mut identity).await {
+                    Ok(()) => rotation_failed_at = None,
+                    Err(RunnerError::Client(error)) if error.is_unauthenticated() => {
+                        tracing::error!("this worker's credential is no longer accepted");
+                        return Err(RunnerError::Client(error));
+                    }
+                    Err(error) => {
+                        // The old credential still works; carry on with it.
+                        tracing::warn!(
+                            error = ?error,
+                            "could not rotate this worker's credential; carrying on with the \
+                             old one and trying again later"
+                        );
+                        rotation_failed_at = Some(std::time::Instant::now());
+                    }
+                }
+            }
         }
+    }
+
+    /// Exchange this worker's credential for a new one.
+    ///
+    /// The new one is saved before it is used. The server keeps the old one
+    /// working until the new one is first presented, so a worker that stops
+    /// anywhere in here starts again with whichever its state file holds,
+    /// and either works.
+    async fn rotate_credential(
+        &mut self,
+        identity: &mut WorkerIdentity,
+    ) -> Result<(), RunnerError> {
+        let rotated = self.client.rotate_credential(&identity.worker_id).await?;
+        let mut updated = identity.clone();
+        updated.credential = rotated.credential.clone();
+        updated
+            .save(&identity_path(&self.settings.state_dir))
+            .await?;
+        self.client = self
+            .client
+            .clone()
+            .with_credential(updated.credential.clone());
+        *identity = updated;
+        tracing::info!("rotated this worker's credential");
+        // Presented at once, which retires the old one. Should this fail,
+        // the next heartbeat presents it instead.
+        if let Err(error) = self.client.heartbeat(&identity.worker_id).await {
+            tracing::warn!(error = ?error, "the first request with the new credential failed");
+        }
+        Ok(())
     }
 
     /// One pass: report in, ask for work, do it if there is any.
     ///
-    /// Returns whether work was performed.
+    /// Before any work, a heartbeat that asks for the credential to be
+    /// rotated ends the pass with [`Step::RotateCredential`], when
+    /// `may_rotate`.
     async fn step(
         &self,
         identity: &WorkerIdentity,
         drive_id: DriveId,
-    ) -> Result<bool, RunnerError> {
+        may_rotate: bool,
+    ) -> Result<Step, RunnerError> {
         let heartbeat = self.client.heartbeat(&identity.worker_id).await?;
+        if heartbeat.credential_rotation_required && may_rotate {
+            return Ok(Step::RotateCredential);
+        }
         if heartbeat.drain {
             tracing::info!("draining: taking no new work");
-            return Ok(false);
+            return Ok(Step::Idle);
         }
 
         // An erasure first. Somebody asked for the disc in this drive to be
@@ -654,7 +731,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             .await?
         {
             self.erase(identity, drive_id, &erasure).await?;
-            return Ok(true);
+            return Ok(Step::Worked);
         }
 
         // A rip next: somebody wants the disc in this drive read, and a burn
@@ -666,7 +743,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
                 .await?
         {
             self.rip(identity, drive_id, &rip).await?;
-            return Ok(true);
+            return Ok(Step::Worked);
         }
 
         let leased = self
@@ -680,7 +757,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             .await?;
 
         let Some(lease) = leased else {
-            return Ok(false);
+            return Ok(Step::Idle);
         };
 
         tracing::info!(
@@ -689,7 +766,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             "work leased"
         );
         self.execute(identity, drive_id, lease).await?;
-        Ok(true)
+        Ok(Step::Worked)
     }
 }
 

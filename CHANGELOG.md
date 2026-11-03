@@ -8,6 +8,18 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
+- Worker credentials are rotated (docs/plans/credential-rotation.md). A
+  worker's heartbeat says `credential_rotation_required` when an
+  administrator asked (`POST /api/v1/workers/{id}/rotate-credential`) or
+  the credential is older than `TANGIBLE_WORKER_CREDENTIAL_MAX_AGE_DAYS`
+  (90 by default, `0` for never); between jobs the worker asks for a new
+  one (`POST /api/v1/workers/{id}/credential-rotations`), saves it and uses
+  it. The old credential works until the new one is first presented, then
+  never again, so a lost answer or a restart halfway never locks a worker
+  out. Issuing, rotating and asking are audited. Workers show when their
+  credential was issued and whether a rotation is due. The worker's
+  identity file is now written readable by its user alone and flushed to
+  disk before it replaces the old one.
 - `GET /api/v1/drives/{id}` answers one drive as the drive list does.
 - The library can be filtered (docs/plans/library-filters.md):
   `GET /api/v1/artifacts` takes `format`, `origin`, `validation_state`,

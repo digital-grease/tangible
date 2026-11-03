@@ -7,11 +7,13 @@
 
 //! Workers as people manage them (docs/plans/worker-admin.md, API.md 8.6).
 //!
-//! Seeing workers needs `read`, as seeing drives does. Draining, enabling and
-//! revoking one needs `manage_workers` and is audited. A drained worker hears
-//! it at its next heartbeat, finishes what it holds and is given nothing new;
-//! a revoked one's credential stops working at its next request, and it is
-//! never interrupted mid-write by the server.
+//! Seeing workers needs `read`, as seeing drives does. Draining, enabling,
+//! revoking one, and asking it to rotate its credential, need
+//! `manage_workers` and are audited. A drained worker hears it at its next
+//! heartbeat, finishes what it holds and is given nothing new; a revoked
+//! one's credential stops working at its next request, and it is never
+//! interrupted mid-write by the server. One asked to rotate does so between
+//! jobs (docs/plans/credential-rotation.md).
 
 use axum::extract::{Path, Query, State};
 use axum::routing::{get, post};
@@ -19,7 +21,7 @@ use axum::{Json, Router};
 use serde::Serialize;
 use tangible_db::workers::{
     WorkerChange, WorkerRecord, drain_worker, enable_worker, get_worker, list_workers,
-    revoke_worker,
+    request_credential_rotation, revoke_worker,
 };
 use tangible_domain::WorkerId;
 use time::OffsetDateTime;
@@ -69,12 +71,26 @@ pub struct WorkerView {
     pub created_at: String,
     /// When it was revoked.
     pub revoked_at: Option<String>,
+    /// When the credential it uses was issued.
+    pub credential_issued_at: String,
+    /// When an administrator asked for that credential to be rotated, until
+    /// the worker has.
+    pub credential_rotation_requested_at: Option<String>,
+    /// Whether its next heartbeat asks it to rotate: an administrator asked,
+    /// or the credential is older than the server allows.
+    pub credential_rotation_due: bool,
     /// Its drives, by name.
     pub drives: Vec<WorkerDriveView>,
 }
 
-impl From<WorkerRecord> for WorkerView {
-    fn from(record: WorkerRecord) -> Self {
+impl WorkerView {
+    /// The worker as the list shows it, its credential judged against a
+    /// limit of `max_age_days` (0 for none).
+    fn new(record: WorkerRecord, max_age_days: u32) -> Self {
+        let too_old = max_age_days > 0
+            && record.credential_issued_at
+                < OffsetDateTime::now_utc() - time::Duration::days(i64::from(max_age_days));
+        let credential_rotation_due = record.credential_rotation_requested_at.is_some() || too_old;
         Self {
             id: record.id.to_string(),
             name: record.name,
@@ -84,6 +100,9 @@ impl From<WorkerRecord> for WorkerView {
             last_seen_at: record.last_seen_at.map(rfc3339),
             created_at: rfc3339(record.created_at),
             revoked_at: record.revoked_at.map(rfc3339),
+            credential_issued_at: rfc3339(record.credential_issued_at),
+            credential_rotation_requested_at: record.credential_rotation_requested_at.map(rfc3339),
+            credential_rotation_due,
             drives: record
                 .drives
                 .into_iter()
@@ -150,7 +169,11 @@ pub async fn list_all_workers(
         tracing::error!(error = ?error, "could not list workers");
         unavailable("workers could not be read")
     })?;
-    let items: Vec<WorkerView> = workers.into_iter().map(WorkerView::from).collect();
+    let max_age = state.worker_credential_max_age_days();
+    let items: Vec<WorkerView> = workers
+        .into_iter()
+        .map(|record| WorkerView::new(record, max_age))
+        .collect();
     let page = Page::new(items, limit, |worker| worker.id.clone());
     Ok(Json(WorkerList {
         items: page.items,
@@ -184,14 +207,27 @@ pub async fn get_one_worker(
             tracing::error!(error = ?error, "could not read a worker");
             unavailable("the worker could not be read")
         })?
-        .map(|record| Json(record.into()))
+        .map(|record| {
+            Json(WorkerView::new(
+                record,
+                state.worker_credential_max_age_days(),
+            ))
+        })
         .ok_or_else(|| Problem::not_found("worker", &worker_id))
 }
 
 /// The answer to a change: the worker as it now is, or why not.
-fn answer(change: WorkerChange, worker_id: &str, verb: &str) -> Result<Json<WorkerView>, Problem> {
+fn answer(
+    state: &ApiState,
+    change: WorkerChange,
+    worker_id: &str,
+    verb: &str,
+) -> Result<Json<WorkerView>, Problem> {
     match change {
-        WorkerChange::Done(record) => Ok(Json(record.into())),
+        WorkerChange::Done(record) => Ok(Json(WorkerView::new(
+            record,
+            state.worker_credential_max_age_days(),
+        ))),
         WorkerChange::NotFound => Err(Problem::not_found("worker", worker_id)),
         WorkerChange::Refused(status) => Err(Problem::new(
             ErrorCode::Conflict,
@@ -236,7 +272,7 @@ pub async fn drain_one_worker(
     if matches!(change, WorkerChange::Done(_)) {
         tracing::info!(worker_id = %id, by = %user.username, "worker drained");
     }
-    answer(change, &worker_id, "drained")
+    answer(&state, change, &worker_id, "drained")
 }
 
 /// Undo a drain.
@@ -273,7 +309,7 @@ pub async fn enable_one_worker(
     if matches!(change, WorkerChange::Done(_)) {
         tracing::info!(worker_id = %id, by = %user.username, "worker enabled");
     }
-    answer(change, &worker_id, "enabled")
+    answer(&state, change, &worker_id, "enabled")
 }
 
 /// Revoke a worker, for good.
@@ -312,7 +348,47 @@ pub async fn revoke_one_worker(
     if matches!(change, WorkerChange::Done(_)) {
         tracing::warn!(worker_id = %id, by = %user.username, "worker revoked");
     }
-    answer(change, &worker_id, "revoked")
+    answer(&state, change, &worker_id, "revoked")
+}
+
+/// Ask a worker to rotate its credential.
+///
+/// # Errors
+///
+/// `NOT_FOUND` for an unknown worker, `CONFLICT` for one revoked.
+#[utoipa::path(
+    post,
+    path = "/api/v1/workers/{worker_id}/rotate-credential",
+    tag = "workers",
+    description = "Ask a worker to rotate its credential: its next heartbeat says so, and \
+                   it asks for a new one between jobs. The old credential keeps working \
+                   until the worker first uses the new one, so nothing is interrupted. A \
+                   worker too old to rotate keeps its credential and the request stays \
+                   open; revoke it instead if the credential may be known to somebody \
+                   else. Needs an administrator, and is audited.",
+    params(("worker_id" = String, Path, description = "Worker identifier")),
+    responses(
+        (status = 200, description = "Asked", body = WorkerView),
+        (status = 404, description = "No such worker", body = Problem),
+        (status = 409, description = "Revoked", body = Problem),
+    ),
+)]
+pub async fn rotate_one_worker_credential(
+    State(state): State<ApiState>,
+    SignedIn(user): SignedIn,
+    Path(worker_id): Path<String>,
+) -> Result<Json<WorkerView>, Problem> {
+    let id = parse_worker(&worker_id)?;
+    let change = request_credential_rotation(state.database().pool(), id, &user.username)
+        .await
+        .map_err(|error| {
+            tracing::error!(error = ?error, "could not ask a worker to rotate its credential");
+            unavailable("the request could not be recorded")
+        })?;
+    if matches!(change, WorkerChange::Done(_)) {
+        tracing::info!(worker_id = %id, by = %user.username, "worker asked to rotate its credential");
+    }
+    answer(&state, change, &worker_id, "asked to rotate its credential")
 }
 
 /// The routes for managing workers.
@@ -323,4 +399,8 @@ pub fn router() -> Router<ApiState> {
         .route("/workers/{worker_id}/drain", post(drain_one_worker))
         .route("/workers/{worker_id}/enable", post(enable_one_worker))
         .route("/workers/{worker_id}/revoke", post(revoke_one_worker))
+        .route(
+            "/workers/{worker_id}/rotate-credential",
+            post(rotate_one_worker_credential),
+        )
 }

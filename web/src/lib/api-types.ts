@@ -2104,6 +2104,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workers/{worker_id}/credential-rotations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue a worker a new credential to replace the one it uses.
+         * @description Issue this worker a new credential, returned once. The old credential keeps working until a request presents the new one, which then replaces it for good; asking again before that replaces the unused one. A worker asks when a heartbeat says `credential_rotation_required`, between jobs. Audited.
+         */
+        post: operations["rotate_credential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workers/{worker_id}/drain": {
         parameters: {
             query?: never;
@@ -2238,6 +2258,26 @@ export interface paths {
          * @description Take the next rip queued for this worker's drive. Answers 204 when there is none, or while a burn or an erasure holds the drive. Asked after erasure claims and before burn claims.
          */
         post: operations["claim_drive_rip"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workers/{worker_id}/rotate-credential": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask a worker to rotate its credential.
+         * @description Ask a worker to rotate its credential: its next heartbeat says so, and it asks for a new one between jobs. The old credential keeps working until the worker first uses the new one, so nothing is interrupted. A worker too old to rotate keeps its credential and the request stays open; revoke it instead if the credential may be known to somebody else. Needs an administrator, and is audited.
+         */
+        post: operations["rotate_one_worker_credential"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3874,6 +3914,12 @@ export interface components {
         };
         /** @description What the server tells a worker on each heartbeat. */
         HeartbeatResponse: {
+            /**
+             * @description Whether the worker should rotate its credential before it takes more
+             *     work: an administrator asked, or the credential is older than
+             *     `TANGIBLE_WORKER_CREDENTIAL_MAX_AGE_DAYS`.
+             */
+            credential_rotation_required: boolean;
             /** @description Whether the worker should stop taking new work. */
             drain: boolean;
             /** @description The server's clock, so a worker can notice drift. */
@@ -4915,6 +4961,17 @@ export interface components {
             /** @description The platforms an edition may name. */
             platforms: components["schemas"]["PlatformView"][];
         };
+        /** @description A credential a rotation issued. */
+        RotatedCredential: {
+            /**
+             * @description The new credential, returned this once. The first request that
+             *     presents it makes it the worker's credential and retires the old one;
+             *     until then the old one keeps working.
+             */
+            credential: string;
+            /** @description When it was issued. */
+            issued_at: string;
+        };
         /** @description What an operator sends to import an object from S3. */
         S3ImportRequest: {
             /** @description One of the buckets it allows. */
@@ -5336,6 +5393,18 @@ export interface components {
         WorkerView: {
             /** @description When it enrolled. */
             created_at: string;
+            /** @description When the credential it uses was issued. */
+            credential_issued_at: string;
+            /**
+             * @description Whether its next heartbeat asks it to rotate: an administrator asked,
+             *     or the credential is older than the server allows.
+             */
+            credential_rotation_due: boolean;
+            /**
+             * @description When an administrator asked for that credential to be rotated, until
+             *     the worker has.
+             */
+            credential_rotation_requested_at?: string | null;
             /** @description Its drives, by name. */
             drives: components["schemas"]["WorkerDriveView"][];
             /** @description Opaque identifier. */
@@ -10078,6 +10147,47 @@ export interface operations {
             };
         };
     };
+    rotate_credential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Worker identifier */
+                worker_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Issued */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotatedCredential"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not this worker */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     drain_one_worker: {
         parameters: {
             query?: never;
@@ -10346,6 +10456,47 @@ export interface operations {
             };
             /** @description Not this worker, or not its drive */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    rotate_one_worker_credential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Worker identifier */
+                worker_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Asked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerView"];
+                };
+            };
+            /** @description No such worker */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Revoked */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

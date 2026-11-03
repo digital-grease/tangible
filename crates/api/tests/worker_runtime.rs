@@ -718,6 +718,127 @@ async fn a_restarted_worker_reuses_its_credential() {
     server.stop().await;
 }
 
+/// When a worker last reported in.
+async fn last_seen_at(pool: &PgPool, worker_id: &str) -> time::OffsetDateTime {
+    sqlx::query_scalar("SELECT last_seen_at FROM workers WHERE id = $1::uuid")
+        .bind(worker_id)
+        .fetch_one(pool)
+        .await
+        .expect("seen")
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_worker_asked_to_rotate_its_credential_does_so_between_jobs() {
+    // Through the real client and the real routes: the heartbeat asks, the
+    // worker gets a new credential, saves it where only it can read it, and
+    // uses it, which retires the old one; and it carries on working.
+    let _queue = exclusive_queue().await;
+    let mut server = server().await;
+    server.drain_queue().await;
+    let worker_dir = TempDir::new().expect("temp dir");
+    let token = server.enrollment_token().await;
+    let settings = settings(&server, worker_dir.path().to_path_buf(), token);
+    let identity_file = settings.state_dir.join("identity.json");
+    let engine = FakeEngine::new(settings.state_dir.join("media"));
+
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let worker = tokio::spawn(async move {
+        let mut runtime = WorkerRuntime::new(settings, engine).expect("runtime");
+        runtime
+            .run(async {
+                let _ = stopped.await;
+            })
+            .await
+    });
+
+    let read_identity = || async {
+        let text = tokio::fs::read_to_string(&identity_file).await.ok()?;
+        serde_json::from_str::<serde_json::Value>(&text).ok()
+    };
+    let mut enrolled = None;
+    for _ in 0..100 {
+        if let Some(identity) = read_identity().await {
+            enrolled = Some(identity);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let enrolled = enrolled.expect("the worker enrolled");
+    let worker_id = enrolled["worker_id"].as_str().expect("id").to_owned();
+    let old = enrolled["credential"]
+        .as_str()
+        .expect("credential")
+        .to_owned();
+
+    sqlx::query("UPDATE workers SET credential_rotation_requested_at = now() WHERE id = $1::uuid")
+        .bind(&worker_id)
+        .execute(&server.pool)
+        .await
+        .expect("ask for a rotation");
+
+    let mut rotated = false;
+    for _ in 0..100 {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM audit_events \
+             WHERE target_id = $1 AND action = 'worker.credential_rotated'",
+        )
+        .bind(&worker_id)
+        .fetch_one(&server.pool)
+        .await
+        .expect("audit");
+        if count == 1 {
+            rotated = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(rotated, "the worker rotated its credential");
+
+    let saved = read_identity().await.expect("the identity");
+    let new = saved["credential"].as_str().expect("credential").to_owned();
+    assert_ne!(new, old);
+    assert_eq!(saved["worker_id"], worker_id.as_str());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(worker_dir.path().join("identity.json"))
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "readable by the worker alone");
+    }
+
+    // The old credential is refused; the worker keeps reporting in.
+    let refused = tangible_burn::WorkerClient::new(&server.base_url)
+        .expect("client")
+        .with_credential(old)
+        .heartbeat(&worker_id)
+        .await
+        .expect_err("the old credential is retired");
+    assert!(refused.is_unauthenticated(), "{refused:?}");
+    let seen_at = last_seen_at(&server.pool, &worker_id).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let seen_later = last_seen_at(&server.pool, &worker_id).await;
+    assert!(
+        seen_later > seen_at,
+        "still heartbeating after the rotation"
+    );
+    let pending: Option<time::OffsetDateTime> = sqlx::query_scalar(
+        "SELECT credential_rotation_requested_at FROM workers WHERE id = $1::uuid",
+    )
+    .bind(&worker_id)
+    .fetch_one(&server.pool)
+    .await
+    .expect("request");
+    assert_eq!(pending, None, "the request is answered");
+
+    let _ = stop.send(());
+    let outcome = worker.await.expect("the worker task");
+    assert!(outcome.is_ok(), "the worker exited badly: {outcome:?}");
+    server.stop().await;
+}
+
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
 async fn a_worker_reports_decryption_only_when_its_image_has_it() {

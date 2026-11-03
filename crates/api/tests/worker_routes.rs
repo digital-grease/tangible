@@ -2054,7 +2054,7 @@ async fn an_operator_sees_workers_and_cannot_change_them() {
     };
     let (status, _) = operator.get(&format!("/api/v1/workers/{worker_id}")).await;
     assert_eq!(status, StatusCode::OK);
-    for action in ["drain", "enable", "revoke"] {
+    for action in ["drain", "enable", "revoke", "rotate-credential"] {
         let (status, body) = operator
             .post(
                 &format!("/api/v1/workers/{worker_id}/{action}"),
@@ -2064,4 +2064,184 @@ async fn an_operator_sees_workers_and_cannot_change_them() {
             .await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{action}: {body}");
     }
+}
+
+// --- credential rotation ------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_worker_asked_to_rotate_gets_a_new_credential_and_the_old_one_retires() {
+    let harness = harness().await;
+    let (worker_id, old) = enroll(&harness).await;
+
+    let (status, worker) = harness.get(&format!("/api/v1/workers/{worker_id}")).await;
+    assert_eq!(status, StatusCode::OK, "{worker}");
+    assert!(worker["credential_issued_at"].is_string(), "{worker}");
+    assert_eq!(worker["credential_rotation_due"], false, "{worker}");
+    let (_, beat) = harness.heartbeat(&worker_id, &old).await;
+    assert_eq!(beat["credential_rotation_required"], false, "{beat}");
+
+    // An administrator asks; the next heartbeat says so.
+    let (status, asked) = harness
+        .post(
+            &format!("/api/v1/workers/{worker_id}/rotate-credential"),
+            None,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{asked}");
+    assert!(
+        asked["credential_rotation_requested_at"].is_string(),
+        "{asked}"
+    );
+    assert_eq!(asked["credential_rotation_due"], true, "{asked}");
+    let (_, beat) = harness.heartbeat(&worker_id, &old).await;
+    assert_eq!(beat["credential_rotation_required"], true, "{beat}");
+
+    // The worker asks for a new one, with the old one.
+    let (status, rotated) = harness
+        .post(
+            &format!("/api/v1/workers/{worker_id}/credential-rotations"),
+            Some(&old),
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{rotated}");
+    let new = rotated["credential"]
+        .as_str()
+        .expect("credential")
+        .to_owned();
+    assert!(new.starts_with("tgw_live_"), "a worker credential");
+    assert_ne!(new, old);
+    assert!(rotated["issued_at"].is_string(), "{rotated}");
+
+    // The old one works until the new one is used, then never again.
+    let (status, _) = harness.heartbeat(&worker_id, &old).await;
+    assert_eq!(status, StatusCode::OK, "not locked out before the switch");
+    let (status, beat) = harness.heartbeat(&worker_id, &new).await;
+    assert_eq!(status, StatusCode::OK, "{beat}");
+    assert_eq!(
+        beat["credential_rotation_required"], false,
+        "the request is answered: {beat}"
+    );
+    let (status, _) = harness.heartbeat(&worker_id, &old).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "the old one is retired");
+
+    // Only hashes are kept; the credential appears nowhere.
+    let stored: Vec<String> = sqlx::query_scalar(
+        "SELECT concat_ws(' ', credential_hash, next_credential_hash) FROM workers WHERE id = $1::uuid
+         UNION ALL
+         SELECT metadata::text FROM audit_events WHERE target_id = $1",
+    )
+    .bind(&worker_id)
+    .fetch_all(&harness.pool)
+    .await
+    .expect("read back");
+    assert!(
+        stored.iter().all(|value| !value.contains(&new)),
+        "{stored:?}"
+    );
+    assert!(stored[0].contains(&hex_sha256(&new)), "{stored:?}");
+    let actions: Vec<String> = sqlx::query_scalar(
+        "SELECT action FROM audit_events WHERE target_id = $1 ORDER BY created_at, id",
+    )
+    .bind(&worker_id)
+    .fetch_all(&harness.pool)
+    .await
+    .expect("audit");
+    assert_eq!(
+        actions,
+        [
+            "worker.credential_rotation_requested",
+            "worker.credential_issued",
+            "worker.credential_rotated",
+        ]
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_worker_rotates_only_its_own_credential() {
+    let harness = harness().await;
+    let (worker_id, _) = enroll(&harness).await;
+    let (_, other_credential) = enroll(&harness).await;
+    let (status, _) = harness
+        .post(
+            &format!("/api/v1/workers/{worker_id}/credential-rotations"),
+            Some(&other_credential),
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = harness
+        .post(
+            &format!("/api/v1/workers/{worker_id}/credential-rotations"),
+            None,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_old_credential_is_due_for_rotation_by_age() {
+    let harness = harness().await;
+    let (worker_id, credential) = enroll(&harness).await;
+    sqlx::query(
+        "UPDATE workers SET credential_issued_at = now() - interval '91 days' WHERE id = $1::uuid",
+    )
+    .bind(&worker_id)
+    .execute(&harness.pool)
+    .await
+    .expect("age it");
+    let (_, beat) = harness.heartbeat(&worker_id, &credential).await;
+    assert_eq!(
+        beat["credential_rotation_required"], true,
+        "past the default 90 days: {beat}"
+    );
+    let (_, worker) = harness.get(&format!("/api/v1/workers/{worker_id}")).await;
+    assert_eq!(worker["credential_rotation_due"], true, "{worker}");
+    assert!(
+        worker["credential_rotation_requested_at"].is_null(),
+        "{worker}"
+    );
+
+    // A server configured not to rotate by age does not ask.
+    let database = Database::connect(&DbConfig::new(
+        std::env::var("TANGIBLE_TEST_DATABASE_URL")
+            .or_else(|_| std::env::var("TANGIBLE_DATABASE_URL"))
+            .expect("database"),
+    ))
+    .await
+    .expect("connect");
+    let never = Harness {
+        session: harness.session.clone(),
+        router: router(ApiState::new(database).with_worker_credential_max_age_days(0)),
+        pool: harness.pool.clone(),
+    };
+    let (_, beat) = never.heartbeat(&worker_id, &credential).await;
+    assert_eq!(beat["credential_rotation_required"], false, "{beat}");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_revoked_worker_cannot_be_asked_to_rotate() {
+    let harness = harness().await;
+    let (worker_id, _) = enroll(&harness).await;
+    harness
+        .post(
+            &format!("/api/v1/workers/{worker_id}/revoke"),
+            None,
+            serde_json::json!({}),
+        )
+        .await;
+    let (status, body) = harness
+        .post(
+            &format!("/api/v1/workers/{worker_id}/rotate-credential"),
+            None,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
 }

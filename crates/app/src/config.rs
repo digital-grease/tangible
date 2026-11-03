@@ -291,6 +291,19 @@ pub struct ServeConfig {
     )]
     pub scrub_interval_days: u32,
 
+    /// Days a worker uses one credential before its heartbeat asks it to
+    /// rotate, up to 3650; 0 never asks by age. A worker rotates between
+    /// jobs, and its old credential keeps working until it first uses the
+    /// new one, so nothing is interrupted. An administrator can ask for a
+    /// rotation at any time.
+    #[arg(
+        long,
+        env = "TANGIBLE_WORKER_CREDENTIAL_MAX_AGE_DAYS",
+        default_value_t = 90,
+        value_parser = clap::value_parser!(u32).range(0..=3650)
+    )]
+    pub worker_credential_max_age_days: u32,
+
     /// Whether to compute every artifact's preservation hashes (CRC32, MD5
     /// and SHA-1 of its files and CD tracks) in the background, for matching
     /// against DATs. On by default; each artifact's stored bytes are read
@@ -656,6 +669,7 @@ mod tests {
     fn scrubs_are_never_scheduled_unless_asked_for() {
         // A scrub reads every byte; the load is an administrator's choice.
         assert_eq!(parse().scrub_interval_days, 0);
+        assert_eq!(parse().worker_credential_max_age_days, 90);
         let cli = TestCli::try_parse_from(["tangible", "--scrub-interval-days", "30"])
             .expect("a month parses");
         assert_eq!(cli.serve.scrub_interval_days, 30);

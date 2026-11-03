@@ -667,6 +667,12 @@ pub async fn consume_enrollment(
 /// Revoked workers are excluded here rather than checked afterwards, so a
 /// caller cannot forget to.
 ///
+/// A credential a rotation issued is accepted too, and the first time it is
+/// presented it takes the old credential's place, in one statement: from
+/// then on the old one is refused. Until then the old one keeps working, so
+/// a worker that lost the answer to its rotation, or stopped before saving
+/// it, is never locked out (docs/plans/credential-rotation.md).
+///
 /// # Errors
 ///
 /// [`DbError::Query`] on a database failure.
@@ -674,19 +680,125 @@ pub async fn authenticate_worker(
     pool: &PgPool,
     credential_hash: &str,
 ) -> Result<Option<WorkerId>, DbError> {
-    let row =
-        sqlx::query("SELECT id FROM workers WHERE credential_hash = $1 AND status <> 'revoked'")
-            .bind(credential_hash)
-            .fetch_optional(pool)
-            .await
-            .map_err(DbError::Query)?;
+    if let Some(worker_id) = current_credential(pool, credential_hash).await? {
+        return Ok(Some(worker_id));
+    }
+    if let Some(worker_id) = promote_next_credential(pool, credential_hash).await? {
+        tracing::info!(worker_id = %worker_id, "a worker began using its rotated credential");
+        return Ok(Some(worker_id));
+    }
+    // Two requests presenting a new credential at once: the other one
+    // promoted it while this one waited on the row, so it is now current.
+    current_credential(pool, credential_hash).await
+}
 
-    row.map(|row| {
-        row.try_get::<uuid::Uuid, _>("id")
-            .map(WorkerId::from_uuid)
-            .map_err(DbError::Query)
-    })
-    .transpose()
+/// The worker whose credential in use has this hash.
+async fn current_credential(
+    pool: &PgPool,
+    credential_hash: &str,
+) -> Result<Option<WorkerId>, DbError> {
+    let id: Option<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT id FROM workers WHERE credential_hash = $1 AND status <> 'revoked'",
+    )
+    .bind(credential_hash)
+    .fetch_optional(pool)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(id.map(WorkerId::from_uuid))
+}
+
+/// Make the next credential with this hash the worker's credential, retiring
+/// the old one, and audit it.
+async fn promote_next_credential(
+    pool: &PgPool,
+    credential_hash: &str,
+) -> Result<Option<WorkerId>, DbError> {
+    let id: Option<uuid::Uuid> = sqlx::query_scalar(
+        "WITH promoted AS (
+             UPDATE workers
+             SET credential_hash = next_credential_hash,
+                 credential_issued_at = next_credential_issued_at,
+                 next_credential_hash = NULL,
+                 next_credential_issued_at = NULL,
+                 credential_rotation_requested_at = NULL,
+                 updated_at = now()
+             WHERE next_credential_hash = $1 AND status <> 'revoked'
+             RETURNING id
+         ), audited AS (
+             INSERT INTO audit_events
+                 (id, actor_type, actor_id, action, target_type, target_id, outcome, metadata)
+             SELECT $2, 'worker', id::text, 'worker.credential_rotated', 'worker', id::text,
+                    'success', '{}'::jsonb
+             FROM promoted
+         )
+         SELECT id FROM promoted",
+    )
+    .bind(credential_hash)
+    .bind(uuid::Uuid::now_v7())
+    .fetch_optional(pool)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(id.map(WorkerId::from_uuid))
+}
+
+/// Keep `next_hash` as the credential a rotation issued this worker,
+/// replacing any it was issued before and has not used, and audit it.
+/// Answers when it was issued, or `None` for a worker that is revoked or
+/// does not exist.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn issue_next_credential(
+    pool: &PgPool,
+    worker_id: WorkerId,
+    next_hash: &str,
+) -> Result<Option<OffsetDateTime>, DbError> {
+    sqlx::query_scalar(
+        "WITH issued AS (
+             UPDATE workers
+             SET next_credential_hash = $2, next_credential_issued_at = now(), updated_at = now()
+             WHERE id = $1 AND status <> 'revoked'
+             RETURNING id, next_credential_issued_at
+         ), audited AS (
+             INSERT INTO audit_events
+                 (id, actor_type, actor_id, action, target_type, target_id, outcome, metadata)
+             SELECT $3, 'worker', id::text, 'worker.credential_issued', 'worker', id::text,
+                    'success', '{}'::jsonb
+             FROM issued
+         )
+         SELECT next_credential_issued_at FROM issued",
+    )
+    .bind(worker_id.as_uuid())
+    .bind(next_hash)
+    .bind(uuid::Uuid::now_v7())
+    .fetch_optional(pool)
+    .await
+    .map_err(DbError::Query)
+}
+
+/// Whether a worker should rotate its credential: an administrator asked,
+/// or it is older than `max_age_days` (0 for no limit by age).
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn credential_rotation_due(
+    pool: &PgPool,
+    worker_id: WorkerId,
+    max_age_days: u32,
+) -> Result<bool, DbError> {
+    let due: Option<bool> = sqlx::query_scalar(
+        "SELECT credential_rotation_requested_at IS NOT NULL
+                OR ($2 > 0 AND credential_issued_at < now() - make_interval(days => $2))
+         FROM workers WHERE id = $1",
+    )
+    .bind(worker_id.as_uuid())
+    .bind(i32::try_from(max_age_days).unwrap_or(i32::MAX))
+    .fetch_optional(pool)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(due.unwrap_or(false))
 }
 
 /// Whether a worker holds a live lease on an attempt to burn an artifact.
