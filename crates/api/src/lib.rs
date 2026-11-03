@@ -516,14 +516,45 @@ where
         state.database().clone(),
         hub.clone(),
     ));
-    let served = axum::serve(listener, router(state))
-        .with_graceful_shutdown(async move {
-            shutdown.await;
-            hub.close();
-        })
-        .await;
+    // Requests still open this long after shutdown begins (a download to a
+    // slow client, an upload that stalls) are dropped, so shutdown ends.
+    let (begun, shutting_down) = tokio::sync::watch::channel(false);
+    let served = axum::serve(listener, router(state)).with_graceful_shutdown(async move {
+        shutdown.await;
+        hub.close();
+        begun.send_replace(true);
+    });
+    let served = until_deadline(served.into_future(), shutting_down, SHUTDOWN_DEADLINE).await;
     changes.abort();
     served
+}
+
+/// How long shutdown waits for requests under way.
+const SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// `served`, or `Ok` once `deadline` has passed since `begun` said
+/// shutdown began, dropping whatever it still serves.
+async fn until_deadline(
+    served: impl Future<Output = std::io::Result<()>>,
+    mut begun: tokio::sync::watch::Receiver<bool>,
+    deadline: std::time::Duration,
+) -> std::io::Result<()> {
+    let expired = async {
+        if begun.wait_for(|begun| *begun).await.is_err() {
+            std::future::pending::<()>().await;
+        }
+        tokio::time::sleep(deadline).await;
+    };
+    tokio::select! {
+        served = served => served,
+        () = expired => {
+            tracing::warn!(
+                seconds = deadline.as_secs(),
+                "requests were still open after shutdown began; they are dropped"
+            );
+            Ok(())
+        }
+    }
 }
 
 /// Build the application router.
@@ -759,5 +790,34 @@ mod tests {
             json.contains("\"503\""),
             "readyz must document its degraded response"
         );
+    }
+
+    #[tokio::test]
+    async fn shutdown_waits_for_requests_only_so_long() {
+        let short = std::time::Duration::from_millis(50);
+        // Requests that never finish: dropped once the deadline passes after
+        // shutdown begins, and not before it begins.
+        let (begun, watching) = tokio::sync::watch::channel(false);
+        let mut waiting = Box::pin(until_deadline(std::future::pending(), watching, short));
+        assert!(
+            tokio::time::timeout(short * 4, &mut waiting).await.is_err(),
+            "no deadline before shutdown begins"
+        );
+        begun.send_replace(true);
+        tokio::time::timeout(short * 20, waiting)
+            .await
+            .expect("ended by the deadline")
+            .expect("as an orderly end");
+
+        // Requests that finish first: their answer.
+        let (_begun, watching) = tokio::sync::watch::channel(true);
+        let error = until_deadline(
+            async { Err(std::io::Error::other("failed")) },
+            watching,
+            std::time::Duration::from_secs(60),
+        )
+        .await
+        .expect_err("the serve's own outcome");
+        assert_eq!(error.to_string(), "failed");
     }
 }

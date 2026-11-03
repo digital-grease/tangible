@@ -22,7 +22,7 @@
 //! minutes, and the browser reconnects, so a session that has ended stops
 //! receiving within that.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -37,6 +37,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, broadcast, watch};
 use utoipa::IntoParams;
 
+use crate::auth::SignedIn;
 use crate::problem::{ErrorCode, Problem};
 use crate::state::ApiState;
 
@@ -68,6 +69,10 @@ const STREAM_LIFETIME: Duration = Duration::from_secs(10 * 60);
 
 /// How many streams may be open at once.
 const MAX_STREAMS: usize = 256;
+
+/// How many one account may have open: a tab per live page, and some, so
+/// one account cannot take every place.
+const MAX_STREAMS_PER_ACCOUNT: usize = 16;
 
 /// How many events a slow client may fall behind before it is told to
 /// reconcile.
@@ -110,6 +115,8 @@ struct HubInner {
     /// this, so a subscriber neither misses an event nor gets one twice.
     recent: Mutex<VecDeque<Arc<StreamEvent>>>,
     streams: Arc<Semaphore>,
+    /// How many streams each account has open.
+    per_account: Mutex<HashMap<uuid::Uuid, usize>>,
     /// True once the server is shutting down: every stream ends, so the
     /// graceful shutdown does not wait out their ten minutes.
     closing: watch::Sender<bool>,
@@ -137,6 +144,7 @@ impl EventHub {
                 sender,
                 recent: Mutex::new(VecDeque::new()),
                 streams: Arc::new(Semaphore::new(MAX_STREAMS)),
+                per_account: Mutex::new(HashMap::new()),
                 closing: watch::channel(false).0,
             }),
         }
@@ -204,9 +212,49 @@ impl EventHub {
         self.inner.closing.send_replace(true);
     }
 
-    /// A place among the open streams, if there is one.
-    fn open_stream(&self) -> Option<OwnedSemaphorePermit> {
-        Arc::clone(&self.inner.streams).try_acquire_owned().ok()
+    /// A place among the open streams for `account`, if there is one: why
+    /// not, if not.
+    fn open_stream(&self, account: uuid::Uuid) -> Result<StreamPlace, &'static str> {
+        let mut per_account = self
+            .inner
+            .per_account
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if per_account.get(&account).copied().unwrap_or(0) >= MAX_STREAMS_PER_ACCOUNT {
+            return Err("this account has too many event streams open; close a tab or two");
+        }
+        let permit = Arc::clone(&self.inner.streams)
+            .try_acquire_owned()
+            .map_err(|_| "too many event streams are open; reload the page later")?;
+        *per_account.entry(account).or_insert(0) += 1;
+        Ok(StreamPlace {
+            _permit: permit,
+            account,
+            hub: Arc::clone(&self.inner),
+        })
+    }
+}
+
+/// A stream's place, given back when the stream ends.
+struct StreamPlace {
+    _permit: OwnedSemaphorePermit,
+    account: uuid::Uuid,
+    hub: Arc<HubInner>,
+}
+
+impl Drop for StreamPlace {
+    fn drop(&mut self) {
+        let mut per_account = self
+            .hub
+            .per_account
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(open) = per_account.get_mut(&self.account) {
+            *open = open.saturating_sub(1);
+            if *open == 0 {
+                per_account.remove(&self.account);
+            }
+        }
     }
 }
 
@@ -321,7 +369,7 @@ struct StreamState {
     topics: Topics,
     ends_at: tokio::time::Instant,
     closing: watch::Receiver<bool>,
-    _place: OwnedSemaphorePermit,
+    _place: StreamPlace,
 }
 
 /// What changes, as it changes.
@@ -329,7 +377,7 @@ struct StreamState {
 /// # Errors
 ///
 /// `INVALID_PARAMETER` for an unknown topic, `RATE_LIMITED` when too many
-/// streams are open.
+/// streams are open, or too many of the caller's.
 #[utoipa::path(
     get,
     path = "/api/v1/events",
@@ -343,7 +391,8 @@ struct StreamState {
                    `after`) replays what was missed while the server holds it; otherwise, \
                    or when the client falls behind, `stream.reset` is sent and the client \
                    should reconcile through the REST routes. A stream ends after ten \
-                   minutes and is reconnected. Needs `read`.",
+                   minutes and is reconnected. At most 16 are open for one account, and \
+                   256 in all. Needs `read`.",
     params(
         EventQuery,
         ("Last-Event-ID" = Option<String>, Header, description = "The id of the last event seen"),
@@ -351,11 +400,12 @@ struct StreamState {
     responses(
         (status = 200, description = "The stream", content_type = "text/event-stream", body = String),
         (status = 400, description = "Unknown topic", body = Problem),
-        (status = 429, description = "Too many streams are open", body = Problem),
+        (status = 429, description = "Too many streams are open, or too many of this account's", body = Problem),
     ),
 )]
 pub async fn event_stream(
     State(state): State<ApiState>,
+    SignedIn(user): SignedIn,
     Query(query): Query<EventQuery>,
     headers: HeaderMap,
 ) -> Result<Response, Problem> {
@@ -367,12 +417,9 @@ pub async fn event_stream(
         .or(query.after)
         .filter(|after| !after.is_empty() && after.len() <= 64);
     let hub = state.events();
-    let place = hub.open_stream().ok_or_else(|| {
-        Problem::new(
-            ErrorCode::RateLimited,
-            "too many event streams are open; reload the page later",
-        )
-    })?;
+    let place = hub
+        .open_stream(user.user_id)
+        .map_err(|why| Problem::new(ErrorCode::RateLimited, why))?;
     let (replay, receiver) = hub.subscribe(after.as_deref());
     let pending: VecDeque<Event> = match replay {
         Replay::Events(events) => events
@@ -544,13 +591,32 @@ mod tests {
     }
 
     #[test]
-    fn places_are_limited() {
+    fn places_are_limited_in_all() {
         let hub = EventHub::new();
         let held: Vec<_> = (0..MAX_STREAMS)
-            .map(|_| hub.open_stream().expect("a place"))
+            .map(|_| hub.open_stream(uuid::Uuid::now_v7()).expect("a place"))
             .collect();
-        assert!(hub.open_stream().is_none());
+        assert!(hub.open_stream(uuid::Uuid::now_v7()).is_err());
         drop(held);
-        assert!(hub.open_stream().is_some());
+        assert!(hub.open_stream(uuid::Uuid::now_v7()).is_ok());
+        assert!(
+            hub.inner.per_account.lock().unwrap().is_empty(),
+            "none left counted"
+        );
+    }
+
+    #[test]
+    fn places_are_limited_for_one_account() {
+        let hub = EventHub::new();
+        let account = uuid::Uuid::now_v7();
+        let mut held: Vec<_> = (0..MAX_STREAMS_PER_ACCOUNT)
+            .map(|_| hub.open_stream(account).expect("a place"))
+            .collect();
+        let refused = hub.open_stream(account).err().expect("refused");
+        assert!(refused.contains("this account"), "{refused}");
+        // Another account is not held back by it.
+        assert!(hub.open_stream(uuid::Uuid::now_v7()).is_ok());
+        held.pop();
+        assert!(hub.open_stream(account).is_ok(), "a place given back");
     }
 }

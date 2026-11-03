@@ -1078,7 +1078,7 @@ export interface paths {
         };
         /**
          * What changes, as it changes.
-         * @description A server-sent event stream (`text/event-stream`) of what changes: `import.changed`, `burn_job.changed`, `burn_attempt.changed`, `burn.progress`, `rip.changed`, `rip.progress`, `erasure.changed`, `derivation.changed`, `worker.changed` and `artifact.changed`, each with an id and data naming its topic, identifiers and state. Read the resource itself for the rest. Reconnecting with `Last-Event-ID` (or `after`) replays what was missed while the server holds it; otherwise, or when the client falls behind, `stream.reset` is sent and the client should reconcile through the REST routes. A stream ends after ten minutes and is reconnected. Needs `read`.
+         * @description A server-sent event stream (`text/event-stream`) of what changes: `import.changed`, `burn_job.changed`, `burn_attempt.changed`, `burn.progress`, `rip.changed`, `rip.progress`, `erasure.changed`, `derivation.changed`, `worker.changed` and `artifact.changed`, each with an id and data naming its topic, identifiers and state. Read the resource itself for the rest. Reconnecting with `Last-Event-ID` (or `after`) replays what was missed while the server holds it; otherwise, or when the client falls behind, `stream.reset` is sent and the client should reconcile through the REST routes. A stream ends after ten minutes and is reconnected. At most 16 are open for one account, and 256 in all. Needs `read`.
          */
         get: operations["event_stream"];
         put?: never;
@@ -7925,7 +7925,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Too many streams are open */
+            /** @description Too many streams are open, or too many of this account's */
             429: {
                 headers: {
                     [name: string]: unknown;

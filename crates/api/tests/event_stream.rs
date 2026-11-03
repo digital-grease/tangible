@@ -321,3 +321,50 @@ async fn shutting_down_ends_open_streams() {
         "the stream ended at shutdown rather than timing out"
     );
 }
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn one_account_cannot_take_every_place() {
+    let mut server = server().await;
+    let mut held = Vec::new();
+    for _ in 0..16 {
+        let response = server.open("", None).await;
+        assert_eq!(response.status(), 200);
+        held.push(response);
+    }
+    let refused = server.open("", None).await;
+    assert_eq!(refused.status(), 429);
+    let body: serde_json::Value = refused.json().await.expect("problem");
+    assert_eq!(body["code"], "RATE_LIMITED");
+    assert!(
+        body["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("this account"),
+        "{body}"
+    );
+
+    // Somebody else still gets one, and a place closed is given back.
+    let other = support::sign_in(&server.pool, Role::Viewer).await;
+    let theirs = reqwest::Client::new()
+        .get(format!("{}/api/v1/events", server.base))
+        .header("cookie", other.cookie())
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(theirs.status(), 200);
+    drop(held.pop());
+    let mut given_back = false;
+    for _ in 0..50 {
+        let response = server.open("", None).await;
+        if response.status() == 200 {
+            given_back = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(given_back, "the closed stream's place came back");
+    drop(theirs);
+    drop(held);
+    server.stop().await;
+}
