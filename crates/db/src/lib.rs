@@ -10,6 +10,7 @@
 pub mod accounts;
 pub mod audit;
 pub mod catalog_edits;
+pub mod dashboard;
 pub mod dats;
 pub mod derivations;
 pub mod diagnostics;

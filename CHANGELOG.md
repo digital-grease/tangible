@@ -8,6 +8,13 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
+- `GET /api/v1/dashboard` (docs/plans/dashboard.md), for anyone signed in,
+  answers in one request what needs doing and what is under way: imports
+  under way and failed in the last week; burn jobs queued, waiting for a
+  disc, under way and needing attention; workers online, silent, draining,
+  pending and incompatible; artifacts damaged and never checked; objects
+  stored and the library volume's free space; and the five latest ended
+  burns and jobs needing attention, by title and disc number.
 - The catalog can be edited (docs/plans/catalog-editing.md): `PATCH` on a
   title, edition, disc set or disc changes the fields given, `null`
   clearing one that may be empty. Every catalog row now has a `version`,

@@ -362,6 +362,8 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
     // the worker protocol, authenticated by the worker's own credential or,
     // for consuming a token, by the token.
     ("POST", "/api/v1/worker-enrollments", Signed(ManageWorkers)),
+    // The dashboard (docs/plans/dashboard.md): for anyone signed in.
+    ("GET", "/api/v1/dashboard", Signed(Read)),
     // The audit log (docs/plans/audit-log.md): read by administrators only.
     ("GET", "/api/v1/audit-events", Signed(ReadAudit)),
     ("GET", "/api/v1/audit-events/{event_id}", Signed(ReadAudit)),

@@ -1671,6 +1671,33 @@
         ]
       }
     },
+    "/api/v1/dashboard": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "The dashboard.",
+        "description": "What needs doing and what is under way: imports, burns, workers, integrity, storage, the latest burns and those needing attention.",
+        "operationId": "dashboard",
+        "responses": {
+          "200": {
+            "description": "The dashboard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/dats": {
       "get": {
         "tags": [
@@ -8817,6 +8844,249 @@
           "version": {
             "type": "string",
             "description": "Its version."
+          }
+        }
+      },
+      "DashboardBurn": {
+        "type": "object",
+        "description": "A burn, as the dashboard lists it.",
+        "required": [
+          "burn_job_id",
+          "disc_id",
+          "title",
+          "disc_number",
+          "state",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "When it ended, or last changed."
+          },
+          "burn_job_id": {
+            "type": "string",
+            "description": "The burn job."
+          },
+          "disc_id": {
+            "type": "string",
+            "description": "Its disc."
+          },
+          "disc_number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Which disc of its set."
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The failure's code, when there was one."
+          },
+          "state": {
+            "type": "string",
+            "description": "How the attempt ended, or the job's state."
+          },
+          "title": {
+            "type": "string",
+            "description": "The disc's title."
+          }
+        }
+      },
+      "DashboardBurns": {
+        "type": "object",
+        "description": "Burn jobs.",
+        "required": [
+          "queued",
+          "waiting_for_media",
+          "active",
+          "needing_attention"
+        ],
+        "properties": {
+          "active": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Held by a worker, staging to verifying."
+          },
+          "needing_attention": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Needing somebody to look."
+          },
+          "queued": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Waiting for a worker."
+          },
+          "waiting_for_media": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Waiting for a disc in the drive."
+          }
+        }
+      },
+      "DashboardImports": {
+        "type": "object",
+        "description": "Imports.",
+        "required": [
+          "active",
+          "failed"
+        ],
+        "properties": {
+          "active": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Under way."
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Failed in the last 7 days."
+          }
+        }
+      },
+      "DashboardIntegrity": {
+        "type": "object",
+        "description": "The library's integrity.",
+        "required": [
+          "damaged",
+          "unchecked"
+        ],
+        "properties": {
+          "damaged": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Artifacts a check found damaged."
+          },
+          "unchecked": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Artifacts no check has covered yet."
+          }
+        }
+      },
+      "DashboardStorage": {
+        "type": "object",
+        "description": "Room for the library.",
+        "required": [
+          "objects",
+          "stored_bytes"
+        ],
+        "properties": {
+          "free_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bytes free on the library's volume, when it could be asked.",
+            "minimum": 0
+          },
+          "objects": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Objects stored."
+          },
+          "stored_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Their bytes."
+          },
+          "total_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The volume's size, likewise.",
+            "minimum": 0
+          }
+        }
+      },
+      "DashboardView": {
+        "type": "object",
+        "description": "What needs doing and what is under way.",
+        "required": [
+          "imports",
+          "burns",
+          "workers",
+          "integrity",
+          "storage",
+          "recent_burns",
+          "attention"
+        ],
+        "properties": {
+          "attention": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardBurn"
+            },
+            "description": "The 5 latest burn jobs needing attention, newest first."
+          },
+          "burns": {
+            "$ref": "#/components/schemas/DashboardBurns",
+            "description": "Burn jobs."
+          },
+          "imports": {
+            "$ref": "#/components/schemas/DashboardImports",
+            "description": "Imports."
+          },
+          "integrity": {
+            "$ref": "#/components/schemas/DashboardIntegrity",
+            "description": "The library's integrity."
+          },
+          "recent_burns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardBurn"
+            },
+            "description": "The 5 latest ended burn attempts, newest first."
+          },
+          "storage": {
+            "$ref": "#/components/schemas/DashboardStorage",
+            "description": "Room for the library."
+          },
+          "workers": {
+            "$ref": "#/components/schemas/DashboardWorkers",
+            "description": "Workers."
+          }
+        }
+      },
+      "DashboardWorkers": {
+        "type": "object",
+        "description": "Workers; revoked ones are not counted.",
+        "required": [
+          "online",
+          "silent",
+          "draining",
+          "pending",
+          "incompatible"
+        ],
+        "properties": {
+          "draining": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Finishing what they hold, taking nothing new."
+          },
+          "incompatible": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Speaking a protocol this server does not."
+          },
+          "online": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Taking work and heard from in the last minute."
+          },
+          "pending": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Enrolled, never heard from."
+          },
+          "silent": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Meant to be taking work, and not heard from in the last minute."
           }
         }
       },

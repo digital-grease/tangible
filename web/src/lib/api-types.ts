@@ -515,6 +515,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/dashboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The dashboard.
+         * @description What needs doing and what is under way: imports, burns, workers, integrity, storage, the latest burns and those needing attention.
+         */
+        get: operations["dashboard"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dats": {
         parameters: {
             query?: never;
@@ -2858,6 +2878,143 @@ export interface components {
             tool_version: string;
             /** @description Its version. */
             version: string;
+        };
+        /** @description A burn, as the dashboard lists it. */
+        DashboardBurn: {
+            /** @description When it ended, or last changed. */
+            at: string;
+            /** @description The burn job. */
+            burn_job_id: string;
+            /** @description Its disc. */
+            disc_id: string;
+            /**
+             * Format: int32
+             * @description Which disc of its set.
+             */
+            disc_number: number;
+            /** @description The failure's code, when there was one. */
+            error_code?: string | null;
+            /** @description How the attempt ended, or the job's state. */
+            state: string;
+            /** @description The disc's title. */
+            title: string;
+        };
+        /** @description Burn jobs. */
+        DashboardBurns: {
+            /**
+             * Format: int64
+             * @description Held by a worker, staging to verifying.
+             */
+            active: number;
+            /**
+             * Format: int64
+             * @description Needing somebody to look.
+             */
+            needing_attention: number;
+            /**
+             * Format: int64
+             * @description Waiting for a worker.
+             */
+            queued: number;
+            /**
+             * Format: int64
+             * @description Waiting for a disc in the drive.
+             */
+            waiting_for_media: number;
+        };
+        /** @description Imports. */
+        DashboardImports: {
+            /**
+             * Format: int64
+             * @description Under way.
+             */
+            active: number;
+            /**
+             * Format: int64
+             * @description Failed in the last 7 days.
+             */
+            failed: number;
+        };
+        /** @description The library's integrity. */
+        DashboardIntegrity: {
+            /**
+             * Format: int64
+             * @description Artifacts a check found damaged.
+             */
+            damaged: number;
+            /**
+             * Format: int64
+             * @description Artifacts no check has covered yet.
+             */
+            unchecked: number;
+        };
+        /** @description Room for the library. */
+        DashboardStorage: {
+            /**
+             * Format: int64
+             * @description Bytes free on the library's volume, when it could be asked.
+             */
+            free_bytes?: number | null;
+            /**
+             * Format: int64
+             * @description Objects stored.
+             */
+            objects: number;
+            /**
+             * Format: int64
+             * @description Their bytes.
+             */
+            stored_bytes: number;
+            /**
+             * Format: int64
+             * @description The volume's size, likewise.
+             */
+            total_bytes?: number | null;
+        };
+        /** @description What needs doing and what is under way. */
+        DashboardView: {
+            /** @description The 5 latest burn jobs needing attention, newest first. */
+            attention: components["schemas"]["DashboardBurn"][];
+            /** @description Burn jobs. */
+            burns: components["schemas"]["DashboardBurns"];
+            /** @description Imports. */
+            imports: components["schemas"]["DashboardImports"];
+            /** @description The library's integrity. */
+            integrity: components["schemas"]["DashboardIntegrity"];
+            /** @description The 5 latest ended burn attempts, newest first. */
+            recent_burns: components["schemas"]["DashboardBurn"][];
+            /** @description Room for the library. */
+            storage: components["schemas"]["DashboardStorage"];
+            /** @description Workers. */
+            workers: components["schemas"]["DashboardWorkers"];
+        };
+        /** @description Workers; revoked ones are not counted. */
+        DashboardWorkers: {
+            /**
+             * Format: int64
+             * @description Finishing what they hold, taking nothing new.
+             */
+            draining: number;
+            /**
+             * Format: int64
+             * @description Speaking a protocol this server does not.
+             */
+            incompatible: number;
+            /**
+             * Format: int64
+             * @description Taking work and heard from in the last minute.
+             */
+            online: number;
+            /**
+             * Format: int64
+             * @description Enrolled, never heard from.
+             */
+            pending: number;
+            /**
+             * Format: int64
+             * @description Meant to be taking work, and not heard from in the last minute.
+             */
+            silent: number;
         };
         /** @description Every loaded DAT. */
         DatList: {
@@ -6236,6 +6393,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    dashboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The dashboard */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardView"];
                 };
             };
         };
