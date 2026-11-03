@@ -115,3 +115,10 @@ path = "fuzz_targets/mds.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "chd"
+path = "fuzz_targets/chd.rs"
+test = false
+doc = false
+bench = false

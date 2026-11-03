@@ -1,0 +1,19 @@
+chdman - MAME Compressed Hunks of Data (CHD) manager 0.251 (unknown)
+Input file:   cooked.chd
+File Version: 5
+Logical size: 489,600 bytes
+Hunk Size:    19,584 bytes
+Total Hunks:  25
+Unit Size:    2,448 bytes
+Total Units:  200
+Compression:  cdlz (CD LZMA), cdzl (CD Deflate), cdfl (CD FLAC)
+CHD size:     2,015 bytes
+Ratio:        0.4%
+SHA1:         b0aef7f70361757d944e00b7881d9b1f73810260
+Data SHA1:    ac464916de4a28e363a0c4ded790a49c2b670bc4
+Metadata:     Tag='CHT2'  Index=0  Length=86 bytes
+              TRACK:1 TYPE:MODE1 SUBTYPE:NONE FRAMES:200 PREGAP:0 PGTYPE:MODE1 PGSUB:NONE POSTGAP:0.
+
+     Hunks  Percent  Name
+----------  -------  ------------------------------------
+        25   100.0%  CD Deflate                              

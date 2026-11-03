@@ -9,9 +9,11 @@
 //!
 //! In place: ISO 9660 and UDF detection, CUE sheet and cdrdao TOC parsing
 //! with track layout, CloneCD (CCD/IMG/SUB) and Alcohol 120% (MDS/MDF)
-//! descriptors, DVD-Video `VIDEO_TS` trees, and Logiqx XML DATs.
+//! descriptors, CHD headers and metadata, DVD-Video `VIDEO_TS` trees, and
+//! Logiqx XML DATs.
 
 pub mod ccd;
+pub mod chd;
 pub mod chdman;
 pub mod cue;
 pub mod dat;

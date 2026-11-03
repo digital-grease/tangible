@@ -1,0 +1,23 @@
+chdman - MAME Compressed Hunks of Data (CHD) manager 0.251 (unknown)
+Input file:   mixed-mode.chd
+File Version: 5
+Logical size: 1,840,896 bytes
+Hunk Size:    19,584 bytes
+Total Hunks:  94
+Unit Size:    2,448 bytes
+Total Units:  752
+Compression:  cdlz (CD LZMA), cdzl (CD Deflate), cdfl (CD FLAC)
+CHD size:     8,632 bytes
+Ratio:        0.5%
+SHA1:         17d5e655c9d30e10acc4cf8d004c9aad720e021b
+Data SHA1:    548059e51d9b6b244a81e37589037e9fc12fb3c3
+Metadata:     Tag='CHT2'  Index=0  Length=90 bytes
+              TRACK:1 TYPE:MODE1_RAW SUBTYPE:NONE FRAMES:300 PREGAP:0 PGTYPE:MODE1 PGSUB:NONE POSTGAP:0.
+Metadata:     Tag='CHT2'  Index=1  Length=89 bytes
+              TRACK:2 TYPE:AUDIO SUBTYPE:NONE FRAMES:300 PREGAP:150 PGTYPE:VAUDIO PGSUB:NONE POSTGAP:0.
+Metadata:     Tag='CHT2'  Index=2  Length=86 bytes
+              TRACK:3 TYPE:AUDIO SUBTYPE:NONE FRAMES:150 PREGAP:0 PGTYPE:MODE1 PGSUB:NONE POSTGAP:0.
+
+     Hunks  Percent  Name
+----------  -------  ------------------------------------
+        94   100.0%  CD Deflate                              

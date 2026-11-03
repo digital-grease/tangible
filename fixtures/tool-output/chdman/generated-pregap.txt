@@ -1,0 +1,21 @@
+chdman - MAME Compressed Hunks of Data (CHD) manager 0.251 (unknown)
+Input file:   generated-pregap.chd
+File Version: 5
+Logical size: 979,200 bytes
+Hunk Size:    19,584 bytes
+Total Hunks:  50
+Unit Size:    2,448 bytes
+Total Units:  400
+Compression:  cdlz (CD LZMA), cdzl (CD Deflate), cdfl (CD FLAC)
+CHD size:     4,896 bytes
+Ratio:        0.5%
+SHA1:         42bfe419d28b007f3fc5889c42f4afcf46646aa4
+Data SHA1:    8ec5b13c0b3a0e693f7df0969d7897567536c9a1
+Metadata:     Tag='CHT2'  Index=0  Length=90 bytes
+              TRACK:1 TYPE:MODE1_RAW SUBTYPE:NONE FRAMES:300 PREGAP:0 PGTYPE:MODE1 PGSUB:NONE POSTGAP:0.
+Metadata:     Tag='CHT2'  Index=1  Length=88 bytes
+              TRACK:2 TYPE:AUDIO SUBTYPE:NONE FRAMES:100 PREGAP:150 PGTYPE:MODE1 PGSUB:NONE POSTGAP:0.
+
+     Hunks  Percent  Name
+----------  -------  ------------------------------------
+        50   100.0%  CD Deflate                              

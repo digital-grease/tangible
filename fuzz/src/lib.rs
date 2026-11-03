@@ -21,7 +21,7 @@ use tangible_domain::LogicalPath;
 use tangible_domain::logical_path::{MAX_PATH_BYTES, MAX_SEGMENT_BYTES};
 use tangible_domain::manifest::ArtifactManifest;
 use tangible_domain::report::{self, ScrubContext};
-use tangible_image::{ccd, cue, dat, iso, mds, toc, video_ts};
+use tangible_image::{ccd, chd, cue, dat, iso, mds, toc, video_ts};
 use tangible_integrations::romm;
 
 /// One target: what it is called, and what it runs.
@@ -42,6 +42,7 @@ pub const TARGETS: &[Target] = &[
     ("video_ts", video_ts_tree),
     ("dat", dat_file),
     ("mds", mds_descriptor),
+    ("chd", chd_image),
 ];
 
 /// Fixture directories, relative to the repository root, that also seed a
@@ -51,6 +52,7 @@ pub const FIXTURE_SEEDS: &[(&str, &str)] = &[
     ("toc", "fixtures/tool-output/cdrdao/toc"),
     ("ccd", "fixtures/images/ccd"),
     ("mds", "fixtures/images/mds"),
+    ("chd", "fixtures/images/chd"),
     ("cdrdao_output", "fixtures/tool-output/cdrdao"),
     ("xorriso_output", "fixtures/tool-output/xorriso"),
     ("report_scrub", "fixtures/tool-output/cdrdao"),
@@ -111,6 +113,28 @@ pub fn mds_descriptor(data: &[u8]) {
                 );
             }
         }
+    }
+}
+
+/// A CHD's header and metadata. What it reads has a version 5 header whose
+/// units divide its hunks and its data, at most 1024 metadata entries, and
+/// CD tracks numbered 1 to 99 one after another; a delta says so.
+pub fn chd_image(data: &[u8]) {
+    let length = data.len() as u64;
+    let Ok(description) = chd::read(&mut std::io::Cursor::new(data), length) else {
+        return;
+    };
+    let header = &description.header;
+    assert!(header.unit_bytes > 0 && header.hunk_bytes % header.unit_bytes == 0);
+    assert_eq!(header.logical_bytes % u64::from(header.unit_bytes), 0);
+    assert!(description.tags.len() <= 1024);
+    assert!(description.tracks.len() <= 99);
+    for (index, track) in description.tracks.iter().enumerate() {
+        assert_eq!(track.number as usize, index + 1, "tracks one after another");
+        assert!(!track.pregap_in_data || track.pregap <= track.frames);
+    }
+    if header.parent_sha1.is_some() {
+        assert!(description.warnings.iter().any(|w| w.contains("parent")));
     }
 }
 

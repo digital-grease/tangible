@@ -1,0 +1,16 @@
+chdman - MAME Compressed Hunks of Data (CHD) manager 0.251 (unknown)
+Input file:   hd.chd
+File Version: 5
+Logical size: 1,048,576 bytes
+Hunk Size:    4,096 bytes
+Total Hunks:  256
+Unit Size:    512 bytes
+Total Units:  2,048
+Compression:  none
+CHD size:     1,196 bytes
+Metadata:     Tag='GDDD'  Index=0  Length=32 bytes
+              CYLS:4,HEADS:16,SECS:32,BPS:512.
+
+     Hunks  Percent  Name
+----------  -------  ------------------------------------
+       256   100.0%  Copy from parent                        
