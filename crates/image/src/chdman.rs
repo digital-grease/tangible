@@ -19,6 +19,17 @@
 //!   data survives, the descriptor's text and the file split do not;
 //! - anything else is refused, and no derivative is recorded.
 //!
+//! A CHD imported as an original is extracted the other way
+//! (docs/plans/chd-images.md): verified by chdman, extracted, and checked
+//! against the CHD's own data SHA-1, which covers every frame or sector:
+//!
+//! - a CUE/BIN is made into a CHD again, whose data SHA-1 must be the
+//!   original's;
+//! - an ISO's own SHA-1 must be the DVD CHD's data SHA-1.
+//!
+//! Either is `structurally_equivalent`: the data is the same, the container
+//! is not.
+//!
 //! Arguments are fixed lists built from validated options. No text from an
 //! image or a request reaches the command line except the paths this engine
 //! chose.
@@ -32,8 +43,8 @@ use tangible_domain::cd::SampleByteOrder;
 use tangible_domain::{LogicalPath, LossCharacter, Transformation};
 use tokio::io::{AsyncRead, AsyncReadExt as _};
 
-use crate::derive::{DerivationEngine, DeriveError, DeriveReport, DeriveRequest};
-use crate::{cue, toc};
+use crate::derive::{DerivationEngine, DeriveError, DeriveReport, DeriveRequest, bin_beside};
+use crate::{chd, cue, toc};
 
 /// Where the image installs chdman.
 pub const CHDMAN: &str = "/usr/bin/chdman";
@@ -134,7 +145,11 @@ impl DerivationEngine for Chdman {
 
     fn check_supported(&self, transformation: Transformation) -> Result<(), String> {
         match transformation {
-            Transformation::ChdCreateCd => Ok(()),
+            // createcd, extractcd and extractraw are in every chdman that
+            // writes version 5.
+            Transformation::ChdCreateCd
+            | Transformation::CueBinFromChd
+            | Transformation::IsoFromChd => Ok(()),
             Transformation::ChdCreateDvd if self.minor >= FIRST_DVD_MINOR => Ok(()),
             Transformation::ChdCreateDvd => Err(format!(
                 "chdman {} cannot make DVD CHDs; createdvd arrived in 0.{FIRST_DVD_MINOR}",
@@ -143,7 +158,8 @@ impl DerivationEngine for Chdman {
             Transformation::CueBinFromCcd
             | Transformation::CueBinFromMds
             | Transformation::IsoFromMds => Err(
-                "chdman does not make CUE/BIN or ISO images; Tangible makes them itself".to_owned(),
+                "chdman does not make CUE/BIN or ISO images of these; Tangible makes them itself"
+                    .to_owned(),
             ),
         }
     }
@@ -158,35 +174,52 @@ impl DerivationEngine for Chdman {
         let input = request.input_dir.join(request.input.as_str());
         let input_text = path_arg(&input)?;
         let output_text = path_arg(request.output)?;
-        let codecs = request
-            .options
-            .compression
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
-        let hunk = request.options.hunk_bytes.to_string();
-        let create = match request.transformation {
-            Transformation::ChdCreateCd => "createcd",
-            Transformation::ChdCreateDvd => "createdvd",
+        let result = match request.transformation {
+            Transformation::ChdCreateCd | Transformation::ChdCreateDvd => {
+                let options = request.options.ok_or_else(|| DeriveError::Failed {
+                    code: "DERIVATION_INTERNAL",
+                    detail: "a CHD is made with its options, and none were given".to_owned(),
+                    retryable: false,
+                })?;
+                let codecs = options
+                    .compression
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let hunk = options.hunk_bytes.to_string();
+                let create = if request.transformation == Transformation::ChdCreateCd {
+                    "createcd"
+                } else {
+                    "createdvd"
+                };
+                self.make_and_check(request, create, &input_text, &output_text, &codecs, &hunk)
+                    .await
+            }
+            Transformation::CueBinFromChd => {
+                self.extract_cd(request, &input, &input_text, &output_text)
+                    .await
+            }
+            Transformation::IsoFromChd => {
+                self.extract_dvd(request, &input, &input_text, &output_text)
+                    .await
+            }
             // Refused by check_supported above.
             Transformation::CueBinFromCcd
             | Transformation::CueBinFromMds
-            | Transformation::IsoFromMds => {
-                return Err(DeriveError::Failed {
-                    code: "DERIVATION_UNSUPPORTED",
-                    detail: "chdman does not make CUE/BIN or ISO images".to_owned(),
-                    retryable: false,
-                });
-            }
+            | Transformation::IsoFromMds => Err(DeriveError::Failed {
+                code: "DERIVATION_UNSUPPORTED",
+                detail: "chdman does not make CUE/BIN or ISO images of these".to_owned(),
+                retryable: false,
+            }),
         };
-        let result = self
-            .make_and_check(request, create, &input_text, &output_text, &codecs, &hunk)
-            .await;
         if result.is_err() {
             // Nothing that failed a check may be left where a caller would
             // find it.
             let _ = tokio::fs::remove_file(request.output).await;
+            if request.transformation == Transformation::CueBinFromChd {
+                let _ = tokio::fs::remove_file(bin_beside(request.output)).await;
+            }
         }
         result
     }
@@ -225,6 +258,98 @@ impl Chdman {
         outcome
     }
 
+    /// Extract a CD CHD into the CUE/BIN at `output`, and check it by making
+    /// it into a CHD again: that CHD's data SHA-1 must be the original's.
+    async fn extract_cd(
+        &self,
+        request: &DeriveRequest<'_>,
+        input: &Path,
+        input_text: &str,
+        output: &str,
+    ) -> Result<DeriveReport, DeriveError> {
+        let cwd = request.input_dir;
+        let bin = path_arg(&bin_beside(request.output))?;
+        self.chdman(&["verify", "-i", input_text], cwd, "verify")
+            .await?;
+        self.chdman(
+            &["extractcd", "-i", input_text, "-o", output, "-ob", &bin],
+            cwd,
+            "extract",
+        )
+        .await?;
+
+        let check_dir = request.output.with_extension("check");
+        let _ = tokio::fs::remove_dir_all(&check_dir).await;
+        tokio::fs::create_dir_all(&check_dir)
+            .await
+            .map_err(|source| io("preparing the round-trip check", source))?;
+        let back = check_dir.join("back.chd");
+        let outcome = async {
+            self.chdman(
+                &["createcd", "-i", output, "-o", &path_arg(&back)?],
+                &check_dir,
+                "make again",
+            )
+            .await?;
+            same_data(input, &back).await
+        }
+        .await;
+        let _ = tokio::fs::remove_dir_all(&check_dir).await;
+        outcome?;
+        Ok(DeriveReport {
+            loss_character: LossCharacter::StructurallyEquivalent,
+            notes: vec![
+                "chdman verified the CHD against its own SHA-1s".to_owned(),
+                "made into a CHD again, it has the original's data SHA-1: every frame is the same"
+                    .to_owned(),
+            ],
+        })
+    }
+
+    /// Extract a DVD CHD's data, which is the ISO, to `output`, and check its
+    /// SHA-1 is the CHD's data SHA-1.
+    async fn extract_dvd(
+        &self,
+        request: &DeriveRequest<'_>,
+        input: &Path,
+        input_text: &str,
+        output: &str,
+    ) -> Result<DeriveReport, DeriveError> {
+        let cwd = request.input_dir;
+        self.chdman(&["verify", "-i", input_text], cwd, "verify")
+            .await?;
+        // extractraw rather than extractdvd, which chdman 0.251 lacks: a DVD
+        // CHD's data is the ISO's bytes, whatever made it.
+        self.chdman(
+            &["extractraw", "-i", input_text, "-o", output],
+            cwd,
+            "extract",
+        )
+        .await?;
+        let header = read_header(input).await?;
+        let digest = sha1_of(request.output)
+            .await
+            .map_err(|source| io("hashing the ISO", source))?;
+        if digest != header.raw_sha1 {
+            return Err(DeriveError::Failed {
+                code: "DERIVATION_NOT_EQUIVALENT",
+                detail: format!(
+                    "the extracted ISO's SHA-1 is {}, and the CHD's data SHA-1 {}",
+                    chd::hex(&digest),
+                    chd::hex(&header.raw_sha1)
+                ),
+                retryable: false,
+            });
+        }
+        Ok(DeriveReport {
+            loss_character: LossCharacter::StructurallyEquivalent,
+            notes: vec![
+                "chdman verified the CHD against its own SHA-1s".to_owned(),
+                "its SHA-1 is the CHD's data SHA-1: every sector is the same".to_owned(),
+            ],
+        })
+    }
+
     /// Extract the CHD again and compare it with the parent.
     async fn round_trip(
         &self,
@@ -242,9 +367,11 @@ impl Chdman {
         match request.transformation {
             Transformation::CueBinFromCcd
             | Transformation::CueBinFromMds
-            | Transformation::IsoFromMds => Err(DeriveError::Failed {
+            | Transformation::IsoFromMds
+            | Transformation::CueBinFromChd
+            | Transformation::IsoFromChd => Err(DeriveError::Failed {
                 code: "DERIVATION_UNSUPPORTED",
-                detail: "chdman does not make CUE/BIN or ISO images".to_owned(),
+                detail: "only a CHD that was made is extracted again".to_owned(),
                 retryable: false,
             }),
             Transformation::ChdCreateDvd => {
@@ -330,6 +457,79 @@ impl Chdman {
 
 fn io(operation: &'static str, source: std::io::Error) -> DeriveError {
     DeriveError::Io { operation, source }
+}
+
+/// A CHD's header and metadata, read from the file: only those, never the
+/// hunks, however large the CHD.
+async fn read_chd(path: &Path) -> Result<chd::ChdDescription, DeriveError> {
+    let owned = path.to_path_buf();
+    let read = tokio::task::spawn_blocking(move || {
+        let file = std::fs::File::open(&owned)?;
+        let length = file.metadata()?.len();
+        Ok::<_, std::io::Error>(chd::read(&mut std::io::BufReader::new(file), length))
+    })
+    .await
+    .map_err(|join| {
+        io(
+            "reading a CHD header",
+            std::io::Error::other(join.to_string()),
+        )
+    })?
+    .map_err(|source| io("reading a CHD header", source))?;
+    read.map_err(|e| DeriveError::Failed {
+        code: "DERIVATION_NOT_EQUIVALENT",
+        detail: format!("{}: {e}", path.display()),
+        retryable: false,
+    })
+}
+
+/// A CHD's header.
+async fn read_header(path: &Path) -> Result<chd::ChdHeader, DeriveError> {
+    read_chd(path).await.map(|description| description.header)
+}
+
+/// Whether two CHDs hold the same disc: the same data, by their data SHA-1s
+/// and sizes, and the same tracks in their metadata (type, subcode, frames,
+/// pregap and whether it is in the data, postgap), which the data SHA-1
+/// does not cover.
+async fn same_data(original: &Path, again: &Path) -> Result<(), DeriveError> {
+    let (original, again) = (read_chd(original).await?, read_chd(again).await?);
+    let refused = |detail: String| DeriveError::Failed {
+        code: "DERIVATION_NOT_EQUIVALENT",
+        detail,
+        retryable: false,
+    };
+    if original.header.raw_sha1 != again.header.raw_sha1
+        || original.header.logical_bytes != again.header.logical_bytes
+    {
+        return Err(refused(format!(
+            "made into a CHD again, the CUE/BIN's data SHA-1 is {} and the original's {}",
+            chd::hex(&again.header.raw_sha1),
+            chd::hex(&original.header.raw_sha1)
+        )));
+    }
+    if original.tracks != again.tracks {
+        return Err(refused(
+            "made into a CHD again, the CUE/BIN's tracks are not the original's".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// A file's SHA-1, read a chunk at a time.
+async fn sha1_of(path: &Path) -> std::io::Result<[u8; 20]> {
+    use sha1::Digest as _;
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut hasher = sha1::Sha1::new();
+    let mut buffer = vec![0_u8; COMPARE_CHUNK];
+    loop {
+        let read = file.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher.finalize().into())
 }
 
 /// A path as an argument. Paths here are ones this engine built under a

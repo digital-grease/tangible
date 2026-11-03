@@ -657,6 +657,13 @@ string_enum! {
         /// An Alcohol 120% DVD image whose one MDF is an ISO's bytes to that
         /// ISO, made by Tangible itself from the same stored object.
         IsoFromMds => "iso_from_mds",
+        /// A CD CHD imported as an original to a CUE/BIN, extracted by
+        /// chdman and made into a CHD again to check it holds the same data
+        /// (docs/plans/chd-images.md).
+        CueBinFromChd => "cue_bin_from_chd",
+        /// A DVD CHD imported as an original to the ISO it holds, extracted
+        /// by chdman and checked against the CHD's data SHA-1.
+        IsoFromChd => "iso_from_chd",
     }
 }
 

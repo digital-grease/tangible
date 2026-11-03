@@ -998,3 +998,213 @@ async fn an_mds_dvd_becomes_the_iso_its_mdf_is() {
     .unwrap();
     assert_eq!(facts.format, "iso");
 }
+
+/// A CHD fixture with this test's own bytes appended past its last
+/// structure, so its content is this run's own.
+fn tagged_chd(name: &str) -> Vec<u8> {
+    let mut bytes = std::fs::read(format!(
+        "{}/../../fixtures/images/chd/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap();
+    bytes.extend_from_slice(uuid::Uuid::now_v7().simple().to_string().as_bytes());
+    bytes
+}
+
+/// Ask for what suits `parent`, run it, and answer the job as it ended.
+async fn ask_and_run(h: &Harness, parent: &str, transformation: &str) -> Value {
+    let (_, lineage) = h
+        .send("GET", &format!("/api/v1/artifacts/{parent}/lineage"), None)
+        .await;
+    assert_eq!(
+        lineage["suggested_transformation"], transformation,
+        "{lineage}"
+    );
+    let (status, asked) = h.derive(parent, json!({})).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{asked}");
+    assert_eq!(asked["job"]["transformation"], transformation);
+    assert_eq!(asked["job"]["options"], json!({}));
+    let job = asked["job"]["id"].as_str().unwrap().to_owned();
+    assert!(h.runner.step().await.unwrap(), "the runner found the job");
+    let (_, done) = h
+        .send("GET", &format!("/api/v1/derivation-jobs/{job}"), None)
+        .await;
+    done
+}
+
+fn checked_engine() -> Arc<dyn DerivationEngine> {
+    Arc::new(FakeDeriver::default().reporting(LossCharacter::StructurallyEquivalent))
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_cd_chd_becomes_the_cue_bin_chdman_extracts() {
+    let h = harness_with(Some(checked_engine())).await;
+    let _queue = exclusive_queue(h.pool()).await;
+    let parent = h
+        .import(&[("Game.chd", tagged_chd("mixed-mode.chd"))])
+        .await;
+    let done = ask_and_run(&h, &parent, "cue_bin_from_chd").await;
+    assert_eq!(done["state"], "complete", "{done}");
+    let child = done["child_artifact_id"].as_str().unwrap().to_owned();
+
+    let (_, manifest) = h
+        .send("GET", &format!("/api/v1/artifacts/{child}/manifest"), None)
+        .await;
+    assert_eq!(manifest["classification"]["format"], "cue_bin");
+    assert_eq!(manifest["classification"]["media_family"], "cd");
+    assert_eq!(manifest["lineage"]["transformation"], "cue_bin_from_chd");
+    assert_eq!(
+        manifest["lineage"]["loss_character"],
+        "structurally_equivalent"
+    );
+    assert_eq!(manifest["lineage"]["tool"]["name"], "fake");
+    assert_eq!(
+        manifest["validation"]["validators"][0]["code"],
+        "CUE_LAID_OUT"
+    );
+    assert_eq!(component(&manifest, "Game.cue")["role"], "descriptor");
+    assert_eq!(component(&manifest, "Game.bin")["role"], "track_data");
+    // The sheet the engine wrote, laid out as an import lays one out.
+    assert_eq!(manifest["topology"]["kind"], "cd_tracks");
+    assert_eq!(manifest["topology"]["tracks"][0]["mode"], "MODE1/2352");
+
+    // A CUE/BIN burns; the CHD did not.
+    let facts = tangible_db::repositories::artifact_burn_facts(
+        h.pool(),
+        uuid::Uuid::parse_str(&child).unwrap(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(facts.format, "cue_bin");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_dvd_chd_becomes_the_iso_chdman_extracts() {
+    let h = harness_with(Some(checked_engine())).await;
+    let _queue = exclusive_queue(h.pool()).await;
+    let parent = h.import(&[("Film.chd", tagged_chd("dvd.chd"))]).await;
+    let done = ask_and_run(&h, &parent, "iso_from_chd").await;
+    assert_eq!(done["state"], "complete", "{done}");
+    let child = done["child_artifact_id"].as_str().unwrap().to_owned();
+    let (_, manifest) = h
+        .send("GET", &format!("/api/v1/artifacts/{child}/manifest"), None)
+        .await;
+    assert_eq!(manifest["classification"]["format"], "iso");
+    assert_eq!(manifest["classification"]["media_family"], "dvd");
+    assert_eq!(manifest["topology"]["kind"], "single_track_block_image");
+    assert_eq!(manifest["topology"]["volume_labels"], json!(["FAKE"]));
+    assert_eq!(component(&manifest, "Film.iso")["role"], "primary_image");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_delta_chd_is_not_extracted_and_says_why() {
+    let h = harness_with(Some(checked_engine())).await;
+    let _queue = exclusive_queue(h.pool()).await;
+    let parent = h.import(&[("delta.chd", tagged_chd("delta.chd"))]).await;
+    let done = ask_and_run(&h, &parent, "cue_bin_from_chd").await;
+    assert_eq!(done["state"], "failed_terminal", "{done}");
+    assert_eq!(done["error_code"], "DERIVATION_NOT_EXPRESSIBLE");
+    assert!(
+        done["error_detail"]
+            .as_str()
+            .unwrap()
+            .contains("without that parent"),
+        "{done}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_chd_made_here_is_not_offered_extraction() {
+    let h = harness().await;
+    let _queue = exclusive_queue(h.pool()).await;
+    let parent = h
+        .import(&cue_disc(&uuid::Uuid::now_v7().simple().to_string()))
+        .await;
+    let (_, asked) = h.derive(&parent, json!({})).await;
+    assert_eq!(asked["job"]["transformation"], "chd_create_cd");
+    assert!(h.runner.step().await.unwrap());
+    let job = asked["job"]["id"].as_str().unwrap().to_owned();
+    let (_, done) = h
+        .send("GET", &format!("/api/v1/derivation-jobs/{job}"), None)
+        .await;
+    let chd = done["child_artifact_id"].as_str().unwrap().to_owned();
+    // What it was made from is the CUE/BIN; extracting it is not offered,
+    // and an empty request finds nothing to do.
+    let (_, lineage) = h
+        .send("GET", &format!("/api/v1/artifacts/{chd}/lineage"), None)
+        .await;
+    assert_eq!(
+        lineage["suggested_transformation"],
+        Value::Null,
+        "{lineage}"
+    );
+    let (status, refused) = h.derive(&chd, json!({})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+}
+
+/// chdman itself, when `TANGIBLE_CHDMAN_TESTS=1` (and `TANGIBLE_CHDMAN_BIN`
+/// if it is not on `PATH`), as crates/image/tests/chdman.rs runs it.
+async fn real_chdman() -> Option<Arc<dyn DerivationEngine>> {
+    if std::env::var("TANGIBLE_CHDMAN_TESTS").unwrap_or_default() != "1" {
+        eprintln!("skipping: set TANGIBLE_CHDMAN_TESTS=1 to run it with chdman");
+        return None;
+    }
+    let program = std::env::var("TANGIBLE_CHDMAN_BIN").unwrap_or_else(|_| "chdman".to_owned());
+    Some(Arc::new(
+        tangible_image::chdman::Chdman::probe(program)
+            .await
+            .expect("chdman reports a version"),
+    ))
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn chdman_extracts_a_cd_chd_and_a_dvd_chd_end_to_end() {
+    let Some(engine) = real_chdman().await else {
+        return;
+    };
+    let h = harness_with(Some(engine)).await;
+    let _queue = exclusive_queue(h.pool()).await;
+
+    let parent = h
+        .import(&[("Game.chd", tagged_chd("mixed-mode.chd"))])
+        .await;
+    let done = ask_and_run(&h, &parent, "cue_bin_from_chd").await;
+    assert_eq!(done["state"], "complete", "{done}");
+    let child = done["child_artifact_id"].as_str().unwrap().to_owned();
+    let (_, manifest) = h
+        .send("GET", &format!("/api/v1/artifacts/{child}/manifest"), None)
+        .await;
+    assert_eq!(
+        manifest["lineage"]["loss_character"],
+        "structurally_equivalent"
+    );
+    assert_eq!(manifest["lineage"]["tool"]["name"], "chdman");
+    let shapes = track_shapes(&manifest);
+    assert_eq!(shapes.len(), 3, "{manifest}");
+    // Track 2's pregap was in the CHD's data, and is in the BIN.
+    assert_eq!(manifest["topology"]["tracks"][1]["pregap_sectors"], 150);
+    assert_eq!(component(&manifest, "Game.bin")["length_bytes"], 750 * RAW);
+
+    let parent = h.import(&[("Film.chd", tagged_chd("dvd.chd"))]).await;
+    let done = ask_and_run(&h, &parent, "iso_from_chd").await;
+    assert_eq!(done["state"], "complete", "{done}");
+    let child = done["child_artifact_id"].as_str().unwrap().to_owned();
+    let (_, manifest) = h
+        .send("GET", &format!("/api/v1/artifacts/{child}/manifest"), None)
+        .await;
+    assert_eq!(
+        manifest["lineage"]["loss_character"],
+        "structurally_equivalent"
+    );
+    assert_eq!(
+        manifest["topology"]["volume_labels"],
+        json!(["TANGIBLE_DVD"])
+    );
+    assert_eq!(manifest["topology"]["block_count"], 64);
+}

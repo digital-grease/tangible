@@ -73,8 +73,10 @@ impl Transformation {
     pub const fn output_format(self) -> ArtifactFormat {
         match self {
             Self::ChdCreateCd | Self::ChdCreateDvd => ArtifactFormat::Chd,
-            Self::CueBinFromCcd | Self::CueBinFromMds => ArtifactFormat::CueBin,
-            Self::IsoFromMds => ArtifactFormat::Iso,
+            Self::CueBinFromCcd | Self::CueBinFromMds | Self::CueBinFromChd => {
+                ArtifactFormat::CueBin
+            }
+            Self::IsoFromMds | Self::IsoFromChd => ArtifactFormat::Iso,
         }
     }
 
@@ -82,7 +84,9 @@ impl Transformation {
     #[must_use]
     pub const fn tool_name(self) -> &'static str {
         match self {
-            Self::ChdCreateCd | Self::ChdCreateDvd => CHDMAN,
+            Self::ChdCreateCd | Self::ChdCreateDvd | Self::CueBinFromChd | Self::IsoFromChd => {
+                CHDMAN
+            }
             Self::CueBinFromCcd | Self::CueBinFromMds | Self::IsoFromMds => TANGIBLE,
         }
     }
@@ -129,14 +133,16 @@ impl Transformation {
             (Self::ChdCreateCd, ArtifactFormat::CueBin | ArtifactFormat::TocBin)
             | (Self::CueBinFromCcd, ArtifactFormat::CcdImgSub) => Ok(()),
             // An ISO's bytes do not say whether it was a CD; an MDS
-            // descriptor does.
+            // descriptor or a CHD's metadata does.
             (Self::ChdCreateCd, ArtifactFormat::Iso)
-            | (Self::CueBinFromMds, ArtifactFormat::MdsMdf) => media_must_be(&[MediaFamily::Cd]),
+            | (Self::CueBinFromMds, ArtifactFormat::MdsMdf)
+            | (Self::CueBinFromChd, ArtifactFormat::Chd) => media_must_be(&[MediaFamily::Cd]),
             (Self::ChdCreateDvd, ArtifactFormat::Iso) => {
                 media_must_be(&[MediaFamily::Dvd, MediaFamily::Bluray])
             }
             // An MDS descriptor says which it is.
-            (Self::IsoFromMds, ArtifactFormat::MdsMdf) => media_must_be(&[MediaFamily::Dvd]),
+            (Self::IsoFromMds, ArtifactFormat::MdsMdf)
+            | (Self::IsoFromChd, ArtifactFormat::Chd) => media_must_be(&[MediaFamily::Dvd]),
             (transformation, format) => Err(NotApplicable::Format {
                 transformation,
                 format,
@@ -160,6 +166,8 @@ impl Transformation {
             Self::CueBinFromCcd,
             Self::CueBinFromMds,
             Self::IsoFromMds,
+            Self::CueBinFromChd,
+            Self::IsoFromChd,
         ]
         .into_iter()
         .filter(move |t| t.check_applies(format, media).is_ok())
@@ -245,7 +253,9 @@ impl ChdOptions {
             Transformation::ChdCreateCd
             | Transformation::CueBinFromCcd
             | Transformation::CueBinFromMds
-            | Transformation::IsoFromMds => Self {
+            | Transformation::IsoFromMds
+            | Transformation::CueBinFromChd
+            | Transformation::IsoFromChd => Self {
                 compression: vec![ChdCodec::Cdlz, ChdCodec::Cdzl, ChdCodec::Cdfl],
                 hunk_bytes: 8 * CD_FRAME_BYTES,
             },
@@ -514,6 +524,51 @@ mod tests {
         );
         assert_eq!(
             Transformation::suited_to(ArtifactFormat::MdsMdf, MediaFamily::Unknown),
+            None
+        );
+    }
+
+    #[test]
+    fn a_chd_is_extracted_by_chdman_by_its_medium_with_no_options() {
+        let cue = Transformation::CueBinFromChd;
+        let iso = Transformation::IsoFromChd;
+        assert_eq!(cue.output_format(), ArtifactFormat::CueBin);
+        assert_eq!(iso.output_format(), ArtifactFormat::Iso);
+        for t in [cue, iso] {
+            assert_eq!(t.tool_name(), CHDMAN);
+            assert!(!t.is_in_process() && !t.takes_options());
+        }
+        assert!(
+            cue.check_applies(ArtifactFormat::Chd, MediaFamily::Cd)
+                .is_ok()
+        );
+        assert!(
+            iso.check_applies(ArtifactFormat::Chd, MediaFamily::Dvd)
+                .is_ok()
+        );
+        assert!(
+            cue.check_applies(ArtifactFormat::Chd, MediaFamily::Dvd)
+                .is_err()
+        );
+        assert!(
+            iso.check_applies(ArtifactFormat::Chd, MediaFamily::GdRom)
+                .is_err()
+        );
+        assert!(
+            cue.check_applies(ArtifactFormat::CueBin, MediaFamily::Cd)
+                .is_err()
+        );
+        assert_eq!(
+            Transformation::suited_to(ArtifactFormat::Chd, MediaFamily::Cd),
+            Some(cue)
+        );
+        assert_eq!(
+            Transformation::suited_to(ArtifactFormat::Chd, MediaFamily::Dvd),
+            Some(iso)
+        );
+        // A hard disk, or a CHD that does not say: nothing.
+        assert_eq!(
+            Transformation::suited_to(ArtifactFormat::Chd, MediaFamily::Unknown),
             None
         );
     }

@@ -4,10 +4,11 @@
 //! Making one image from another.
 //!
 //! A [`DerivationEngine`] reads a parent artifact's files, already copied
-//! into a staging directory at their logical paths, and writes one output
-//! file. It never sees the content-addressed store: the caller stages the
-//! input and promotes the output, so no tool ever runs against a canonical
-//! object.
+//! into a staging directory at their logical paths, and writes its output:
+//! one file, or for a CUE/BIN extracted from a CHD the sheet and a `.bin`
+//! beside it. It never sees the content-addressed store: the caller stages
+//! the input and promotes the output, so no tool ever runs against a
+//! canonical object.
 //!
 //! The engine also says what the output preserved, as a [`LossCharacter`],
 //! because a derivative that cannot be shown to hold the parent's bytes must
@@ -24,15 +25,23 @@ use tangible_domain::{LogicalPath, LossCharacter, Transformation};
 pub struct DeriveRequest<'a> {
     /// The transformation.
     pub transformation: Transformation,
-    /// Its options, already validated against it.
-    pub options: &'a ChdOptions,
+    /// Its options, already validated against it: a CHD's codecs and hunk
+    /// size, and nothing for an extraction, which takes none.
+    pub options: Option<&'a ChdOptions>,
     /// A directory holding the parent's components at their logical paths.
     pub input_dir: &'a Path,
     /// The component the tool reads: the sheet or TOC for a CD layout, the
-    /// image itself for an ISO.
+    /// image itself for an ISO or a CHD.
     pub input: &'a LogicalPath,
-    /// Where to write the result. It does not exist yet.
+    /// Where to write the result. It does not exist yet. For a CUE/BIN, the
+    /// sheet; its BIN goes beside it, as [`bin_beside`] names it.
     pub output: &'a Path,
+}
+
+/// Where a CUE/BIN's BIN goes, beside its sheet at `sheet`.
+#[must_use]
+pub fn bin_beside(sheet: &Path) -> std::path::PathBuf {
+    sheet.with_extension("bin")
 }
 
 /// What an engine did.
@@ -240,14 +249,74 @@ impl DerivationEngine for FakeDeriver {
             request.transformation,
             entries.join("\n")
         );
-        tokio::fs::write(request.output, body)
-            .await
-            .map_err(io("writing the output"))?;
+        match request.transformation {
+            // What an extraction writes is read back as what it says it is,
+            // so the fake writes the real shapes: a one-track CUE/BIN, an
+            // ISO, each carrying the body so inputs stay told apart.
+            Transformation::CueBinFromChd => {
+                let bin = bin_beside(request.output);
+                let name = bin
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let sheet = format!(
+                    "FILE \"{name}\" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n"
+                );
+                let mut sectors = vec![0_u8; FAKE_SECTORS * 2352];
+                let text = body.as_bytes();
+                let take = text.len().min(sectors.len());
+                sectors[..take].copy_from_slice(&text[..take]);
+                tokio::fs::write(&bin, sectors)
+                    .await
+                    .map_err(io("writing the output"))?;
+                tokio::fs::write(request.output, sheet)
+                    .await
+                    .map_err(io("writing the output"))?;
+            }
+            Transformation::IsoFromChd => {
+                tokio::fs::write(request.output, fake_iso(body.as_bytes()))
+                    .await
+                    .map_err(io("writing the output"))?;
+            }
+            _ => {
+                tokio::fs::write(request.output, body)
+                    .await
+                    .map_err(io("writing the output"))?;
+            }
+        }
         Ok(DeriveReport {
             loss_character: self.loss_character,
             notes: vec!["made by the fake engine; no tool ran".to_owned()],
         })
     }
+}
+
+/// Sectors in the fake engine's CUE/BIN, and blocks in its ISO.
+const FAKE_SECTORS: usize = 32;
+
+/// A minimal ISO 9660 volume, labelled FAKE, with `text` in its last block.
+fn fake_iso(text: &[u8]) -> Vec<u8> {
+    const BLOCK: usize = 2048;
+    let mut bytes = vec![0_u8; FAKE_SECTORS * BLOCK];
+    let blocks = u32::try_from(FAKE_SECTORS).unwrap_or(u32::MAX);
+    let pvd = &mut bytes[16 * BLOCK..17 * BLOCK];
+    pvd[0] = 1;
+    pvd[1..6].copy_from_slice(b"CD001");
+    pvd[6] = 1;
+    pvd[40..72].fill(b' ');
+    pvd[40..44].copy_from_slice(b"FAKE");
+    pvd[80..84].copy_from_slice(&blocks.to_le_bytes());
+    pvd[84..88].copy_from_slice(&blocks.to_be_bytes());
+    pvd[128..130].copy_from_slice(&2048_u16.to_le_bytes());
+    pvd[130..132].copy_from_slice(&2048_u16.to_be_bytes());
+    let terminator = &mut bytes[17 * BLOCK..18 * BLOCK];
+    terminator[0] = 255;
+    terminator[1..6].copy_from_slice(b"CD001");
+    terminator[6] = 1;
+    let last = (FAKE_SECTORS - 1) * BLOCK;
+    let take = text.len().min(BLOCK);
+    bytes[last..last + take].copy_from_slice(&text[..take]);
+    bytes
 }
 
 #[cfg(test)]
@@ -273,7 +342,7 @@ mod tests {
         let report = FakeDeriver::default()
             .derive(&DeriveRequest {
                 transformation: Transformation::ChdCreateCd,
-                options: &options,
+                options: Some(&options),
                 input_dir: &input_dir,
                 input: &input,
                 output: &first,
@@ -285,7 +354,7 @@ mod tests {
         FakeDeriver::default()
             .derive(&DeriveRequest {
                 transformation: Transformation::ChdCreateCd,
-                options: &options,
+                options: Some(&options),
                 input_dir: &input_dir,
                 input: &input,
                 output: &second,
@@ -302,7 +371,7 @@ mod tests {
         FakeDeriver::default()
             .derive(&DeriveRequest {
                 transformation: Transformation::ChdCreateCd,
-                options: &options,
+                options: Some(&options),
                 input_dir: &input_dir,
                 input: &input,
                 output: &third,
@@ -325,7 +394,7 @@ mod tests {
             .failing("FAKE_REFUSED", false)
             .derive(&DeriveRequest {
                 transformation: Transformation::ChdCreateCd,
-                options: &options,
+                options: Some(&options),
                 input_dir: dir.path(),
                 input: &input,
                 output: &output,

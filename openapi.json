@@ -10976,7 +10976,7 @@
               "string",
               "null"
             ],
-            "description": "`chd_create_cd`, `chd_create_dvd`, `cue_bin_from_ccd` (a CUE/BIN of a\nCloneCD image, which drops its subchannel), `cue_bin_from_mds` (a\nCUE/BIN of an Alcohol 120% CD image, without any subchannel it\ninterleaves) or `iso_from_mds` (the ISO an Alcohol 120% DVD image's\ndata file is). The last three are made by Tangible itself and take no\noptions. Omitted, the one that suits the artifact and that this server\ncan run."
+            "description": "`chd_create_cd`, `chd_create_dvd`, `cue_bin_from_ccd` (a CUE/BIN of a\nCloneCD image, which drops its subchannel), `cue_bin_from_mds` (a\nCUE/BIN of an Alcohol 120% CD image, without any subchannel it\ninterleaves), `iso_from_mds` (the ISO an Alcohol 120% DVD image's\ndata file is), `cue_bin_from_chd` or `iso_from_chd` (a CD CHD's\nCUE/BIN or a DVD CHD's ISO, extracted by chdman). Only the CHDs take\noptions; the MDS and CloneCD ones are made by Tangible itself.\nOmitted, the one that suits the artifact and that this server can\nrun."
           }
         },
         "additionalProperties": false

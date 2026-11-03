@@ -16,6 +16,16 @@ may change between minor versions, and the release notes say how.
   are recorded as evidence. A version other than 5, a delta that needs its
   parent, and metadata that does not add up are imported and say so. An
   imported CHD is not sent to RomM as it is.
+- An imported CHD can be extracted by chdman into what burns: a CD CHD into
+  a CUE/BIN (`cue_bin_from_chd`), a DVD CHD into its ISO (`iso_from_chd`).
+  chdman verifies the CHD first; the CUE/BIN is made into a CHD again and
+  kept only if that has the original's data SHA-1, and the ISO only if its
+  own SHA-1 is the CHD's data SHA-1. Either is recorded as structurally
+  equivalent, and burns, makes a checked CHD and goes to RomM. A delta, or
+  a CD CHD that keeps subcode, is refused saying why. A CHD Tangible made is
+  not offered extraction: what it was made from is the CUE/BIN or ISO.
+  Database migration 0028 widens the derivation jobs' transformation
+  constraint, additively.
 - Alcohol 120% images (MDS/MDF) are recognised and imported as one
   artifact: the binary `.mds` is read with a bounded, fuzzed parser written
   from libmirage's reading of the format and checked against libmirage

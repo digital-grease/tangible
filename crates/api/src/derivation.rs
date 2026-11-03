@@ -16,6 +16,11 @@
 //! read back to check it gives the same tracks, and the parent's IMG as the
 //! BIN, the same stored object, so no bytes are copied.
 //!
+//! A CHD imported as an original is extracted by the engine
+//! (docs/plans/chd-images.md): a CUE/BIN of a CD CHD, the ISO of a DVD one,
+//! each checked by the engine against the CHD's data SHA-1, then read here
+//! as an import reads one.
+//!
 //! So are an Alcohol 120% image's (docs/plans/mds-images.md): a CUE/BIN of a
 //! CD, its MDF the BIN, or, when the MDF interleaves subchannel, a BIN of
 //! each sector's first 2352 bytes; and the ISO a DVD image's one MDF is,
@@ -47,7 +52,10 @@ use tangible_domain::manifest::{
     Track, TrackIndex, Validation, ValidatorResult,
 };
 use tangible_domain::{ArtifactId, ComponentId, LogicalPath, LossCharacter, Transformation};
-use tangible_image::derive::{DerivationEngine, DeriveError, DeriveRequest};
+use tangible_image::chd;
+use tangible_image::derive::{
+    DerivationEngine, DeriveError, DeriveReport, DeriveRequest, bin_beside,
+};
 use tangible_image::{cue, iso, mds};
 use tangible_storage::{
     FilesystemStore, IngestLimits, ManifestStore, ManifestStoreError, StagingError, StagingKind,
@@ -262,6 +270,21 @@ impl DerivationPipeline {
         Transformation::all_suited_to(format, media).find(|t| self.tool_for(*t).is_ok())
     }
 
+    /// The transformation to offer for this artifact, as [`Self::suggested`],
+    /// except for a CHD made here: what it was made from is the CUE/BIN or
+    /// ISO, so extracting it again is never offered (it may still be asked
+    /// for).
+    #[must_use]
+    pub fn suggested_for(&self, manifest: &ArtifactManifest) -> Option<Transformation> {
+        if manifest.classification.format == ArtifactFormat::Chd && manifest.lineage.is_some() {
+            return None;
+        }
+        self.suggested(
+            manifest.classification.format,
+            manifest.classification.media_family.unwrap_or_default(),
+        )
+    }
+
     /// Where manifests are kept.
     #[must_use]
     pub const fn manifests(&self) -> &ManifestStore {
@@ -290,8 +313,11 @@ impl DerivationPipeline {
                 t
             }
             None => self
-                .suggested(format, media)
-                .or_else(|| Transformation::suited_to(format, media))
+                .suggested_for(parent)
+                .or_else(|| {
+                    Transformation::suited_to(format, media)
+                        .filter(|_| format != ArtifactFormat::Chd || parent.lineage.is_none())
+                })
                 .ok_or(PlanError::NothingSuits { format, media })?,
         };
         let tool = self.tool_for(transformation)?;
@@ -355,9 +381,10 @@ impl DerivationPipeline {
             Transformation::CueBinFromCcd => self.cue_from_ccd(&area, job, &parent, &planned).await,
             Transformation::CueBinFromMds => self.cue_from_mds(&area, job, &parent, &planned).await,
             Transformation::IsoFromMds => self.iso_from_mds(job, &parent, &planned).await,
-            Transformation::ChdCreateCd | Transformation::ChdCreateDvd => {
-                self.derive_in(&area, job, &parent, &planned).await
-            }
+            Transformation::ChdCreateCd
+            | Transformation::ChdCreateDvd
+            | Transformation::CueBinFromChd
+            | Transformation::IsoFromChd => self.derive_in(&area, job, &parent, &planned).await,
         };
         if let Err(error) = self.staging.discard(StagingKind::Derivatives, &id).await {
             tracing::warn!(job_id = %job.id, error = ?error, "could not remove a derivation's staging area");
@@ -372,16 +399,37 @@ impl DerivationPipeline {
         parent: &ArtifactManifest,
         planned: &PlannedDerivation,
     ) -> Result<DerivationOutcome, DerivationError> {
-        let (Some(engine), Some(options)) = (&self.engine, &planned.spec.options) else {
+        let transformation = planned.spec.transformation;
+        let options = planned.spec.options.as_ref();
+        let Some(engine) = &self.engine else {
             return Err(DerivationError::Plan(PlanError::Unsupported(
                 "this server runs no derivation engine for CHDs".to_owned(),
             )));
         };
+        if transformation.takes_options() && options.is_none() {
+            return Err(DerivationError::Plan(PlanError::Options(
+                OptionsError::Missing(transformation),
+            )));
+        }
         let input_dir = area.path().join("input");
         for component in &parent.components {
             self.materialize(component, &input_dir).await?;
         }
         let input = tool_input(parent)?;
+        if matches!(
+            transformation,
+            Transformation::CueBinFromChd | Transformation::IsoFromChd
+        ) {
+            let extraction = Extraction {
+                area,
+                job,
+                parent,
+                planned,
+                input,
+                input_dir: &input_dir,
+            };
+            return self.extract_chd(engine.as_ref(), &extraction).await;
+        }
         let output_name = output_name(&input.logical_path);
         let output_logical = LogicalPath::parse(&format!("output/{}", output_name.as_str()))
             .map_err(|e| DerivationError::Materialize(e.to_string()))?;
@@ -416,6 +464,189 @@ impl DerivationPipeline {
             started,
             completed,
             tool: planned.spec.tool.clone(),
+        });
+        self.manifests.write(&manifest).await?;
+        Ok(DerivationOutcome {
+            child_artifact_id: child,
+            loss_character: report.loss_character,
+        })
+    }
+
+    /// Extract a CHD imported as an original: the engine extracts and checks
+    /// it, and what it wrote is read here as an import would read it.
+    async fn extract_chd(
+        &self,
+        engine: &dyn DerivationEngine,
+        extraction: &Extraction<'_>,
+    ) -> Result<DerivationOutcome, DerivationError> {
+        let transformation = extraction.planned.spec.transformation;
+        let chd_path = extraction
+            .input_dir
+            .join(extraction.input.logical_path.as_str());
+        // What the CHD says, before chdman is asked: a delta cannot be read
+        // without its parent, and a CUE/BIN cannot hold subcode.
+        let description = read_chd(chd_path).await?;
+        if description.header.parent_sha1.is_some() {
+            return Err(not_expressible(
+                "the CHD is a delta of another CHD and cannot be read without that parent"
+                    .to_owned(),
+            ));
+        }
+        if transformation == Transformation::CueBinFromChd
+            && description
+                .tracks
+                .iter()
+                .any(|track| track.subcode != chd::ChdSubcode::None)
+        {
+            return Err(not_expressible(
+                "the CHD keeps subcode, which a CUE/BIN cannot hold".to_owned(),
+            ));
+        }
+
+        let stem = file_stem(&extraction.input.logical_path);
+        let extension = if transformation == Transformation::CueBinFromChd {
+            "cue"
+        } else {
+            "iso"
+        };
+        let output_logical = LogicalPath::parse(&format!("output/{stem}.{extension}"))
+            .map_err(|e| DerivationError::Materialize(e.to_string()))?;
+        let output = extraction.area.prepare_parent(&output_logical).await?;
+        let started = OffsetDateTime::now_utc();
+        let report = engine
+            .derive(&DeriveRequest {
+                transformation,
+                options: None,
+                input_dir: extraction.input_dir,
+                input: &extraction.input.logical_path,
+                output: &output,
+            })
+            .await?;
+        if transformation == Transformation::CueBinFromChd {
+            self.store_extracted_cue_bin(extraction, &stem, &output, &report, started)
+                .await
+        } else {
+            self.store_extracted_iso(extraction, &stem, &output, &report, started)
+                .await
+        }
+    }
+
+    /// Read the CUE/BIN chdman extracted as an import reads one, store both
+    /// files, and publish its manifest.
+    async fn store_extracted_cue_bin(
+        &self,
+        extraction: &Extraction<'_>,
+        stem: &str,
+        sheet_path: &Path,
+        report: &DeriveReport,
+        started: OffsetDateTime,
+    ) -> Result<DerivationOutcome, DerivationError> {
+        let bin_name = format!("{stem}.bin");
+        let bin_length = tokio::fs::metadata(bin_beside(sheet_path))
+            .await
+            .map_err(|e| DerivationError::Materialize(format!("could not read the BIN: {e}")))?
+            .len();
+        let sheet = read_prefix(sheet_path, cue::MAX_CUE_BYTES + 1)
+            .await
+            .map_err(|e| DerivationError::Materialize(format!("could not read the sheet: {e}")))?;
+        let parsed =
+            cue::parse(&sheet).map_err(|e| not_equivalent(format!("chdman's sheet: {e}")))?;
+        if !matches!(parsed.files.as_slice(), [file] if file.name == bin_name) {
+            return Err(not_equivalent(
+                "chdman's sheet does not name the one BIN it wrote".to_owned(),
+            ));
+        }
+        let laid = cue::layout(&parsed, &[bin_length])
+            .map_err(|e| not_equivalent(format!("chdman's sheet: {e}")))?;
+
+        let area = extraction.area;
+        let cue_logical = LogicalPath::parse(&format!("output/{stem}.cue"))
+            .map_err(|e| DerivationError::Materialize(e.to_string()))?;
+        let bin_logical = LogicalPath::parse(&format!("output/{bin_name}"))
+            .map_err(|e| DerivationError::Materialize(e.to_string()))?;
+        let cue_stored = area
+            .promote(&cue_logical, &self.objects, self.limits)
+            .await?;
+        let bin_stored = area
+            .promote(&bin_logical, &self.objects, self.limits)
+            .await?;
+        let completed = OffsetDateTime::now_utc();
+
+        let name = |text: String| {
+            LogicalPath::parse(&text).map_err(|e| DerivationError::Materialize(e.to_string()))
+        };
+        let bin = stored_component(bin_logical, bin_stored.digest, bin_stored.size_bytes);
+        let child = ArtifactId::generate();
+        let manifest = cue_bin_manifest(&CueBinManifest {
+            child,
+            job: extraction.job,
+            parent: extraction.parent,
+            planned: extraction.planned,
+            cue: (
+                name(format!("{stem}.cue"))?,
+                cue_stored.digest,
+                cue_stored.size_bytes,
+            ),
+            bin: (name(bin_name)?, &bin),
+            layout: &laid,
+            notes: &report.notes,
+            loss: report.loss_character,
+            validator_code: "CUE_LAID_OUT",
+            started,
+            completed,
+        });
+        self.manifests.write(&manifest).await?;
+        Ok(DerivationOutcome {
+            child_artifact_id: child,
+            loss_character: report.loss_character,
+        })
+    }
+
+    /// Read the ISO chdman extracted as an import reads one, store it, and
+    /// publish its manifest.
+    async fn store_extracted_iso(
+        &self,
+        extraction: &Extraction<'_>,
+        stem: &str,
+        iso_path: &Path,
+        report: &DeriveReport,
+        started: OffsetDateTime,
+    ) -> Result<DerivationOutcome, DerivationError> {
+        let length = tokio::fs::metadata(iso_path)
+            .await
+            .map_err(|e| DerivationError::Materialize(format!("could not read the ISO: {e}")))?
+            .len();
+        let prefix = read_prefix(iso_path, iso::REQUIRED_PREFIX_BYTES)
+            .await
+            .map_err(|e| DerivationError::Materialize(format!("could not read the ISO: {e}")))?;
+        let inspection = iso::inspect(&prefix, length, Some("iso"));
+        if inspection.primary.is_none() {
+            return Err(not_equivalent(
+                "the extracted image holds no ISO 9660 volume".to_owned(),
+            ));
+        }
+        let logical = LogicalPath::parse(&format!("output/{stem}.iso"))
+            .map_err(|e| DerivationError::Materialize(e.to_string()))?;
+        let stored = extraction
+            .area
+            .promote(&logical, &self.objects, self.limits)
+            .await?;
+        let completed = OffsetDateTime::now_utc();
+        let name = LogicalPath::parse(&format!("{stem}.iso"))
+            .map_err(|e| DerivationError::Materialize(e.to_string()))?;
+        let component = stored_component(logical, stored.digest, stored.size_bytes);
+        let child = ArtifactId::generate();
+        let manifest = iso_manifest(&IsoManifest {
+            child,
+            job: extraction.job,
+            parent: extraction.parent,
+            planned: extraction.planned,
+            iso: (name, &component),
+            inspection: &inspection,
+            notes: &report.notes,
+            loss: report.loss_character,
+            started,
+            completed,
         });
         self.manifests.write(&manifest).await?;
         Ok(DerivationOutcome {
@@ -609,6 +840,7 @@ impl DerivationPipeline {
             iso: (name, data),
             inspection: &inspection,
             notes: &notes,
+            loss: LossCharacter::Lossy,
             started,
             completed,
         });
@@ -693,6 +925,8 @@ impl DerivationPipeline {
             bin: (bin_path, image),
             layout: &back,
             notes: &notes,
+            loss: LossCharacter::Lossy,
+            validator_code: "CUE_READ_BACK_IDENTICAL",
             started,
             completed,
         });
@@ -975,8 +1209,38 @@ struct CueBinManifest<'a> {
     bin: (LogicalPath, &'a Component),
     layout: &'a cue::CdLayout,
     notes: &'a [String],
+    /// What it preserved.
+    loss: LossCharacter,
+    /// What its validator says of the sheet: written and read back the
+    /// same, or chdman's, laid out.
+    validator_code: &'static str,
     started: OffsetDateTime,
     completed: OffsetDateTime,
+}
+
+/// What a CHD extraction works with.
+struct Extraction<'a> {
+    area: &'a tangible_storage::StagingArea,
+    job: &'a DerivationJobRecord,
+    parent: &'a ArtifactManifest,
+    planned: &'a PlannedDerivation,
+    /// The CHD, as a component of the parent.
+    input: &'a Component,
+    /// Where the parent's components were put for the tool.
+    input_dir: &'a Path,
+}
+
+/// A CHD's header and metadata, read from a file.
+async fn read_chd(path: std::path::PathBuf) -> Result<chd::ChdDescription, DerivationError> {
+    tokio::task::spawn_blocking(move || {
+        let file = std::fs::File::open(&path)?;
+        let length = file.metadata()?.len();
+        Ok::<_, std::io::Error>(chd::read(&mut std::io::BufReader::new(file), length))
+    })
+    .await
+    .map_err(|e| DerivationError::Materialize(format!("could not read the CHD: {e}")))?
+    .map_err(|e| DerivationError::Materialize(format!("could not read the CHD: {e}")))?
+    .map_err(|e| not_expressible(format!("the CHD could not be read: {e}")))
 }
 
 /// A CUE/BIN derivative's two components: the sheet, a new object, and the
@@ -1062,7 +1326,8 @@ fn cue_bin_manifest(input: &CueBinManifest<'_>) -> ArtifactManifest {
             }),
         },
         components: vec![descriptor, data],
-        // Read back by the CUE parser and found to give the same tracks.
+        // Laid out by the CUE parser every import uses: written here and
+        // read back the same, or chdman's.
         validation: Validation {
             state: ValidationState::Valid,
             validated_at: Some(input.completed),
@@ -1070,7 +1335,7 @@ fn cue_bin_manifest(input: &CueBinManifest<'_>) -> ArtifactManifest {
                 name: "cue-structural".to_owned(),
                 version: env!("CARGO_PKG_VERSION").to_owned(),
                 result: "pass".to_owned(),
-                code: "CUE_READ_BACK_IDENTICAL".to_owned(),
+                code: input.validator_code.to_owned(),
                 details: Extensions::new(),
             }],
         },
@@ -1085,7 +1350,7 @@ fn cue_bin_manifest(input: &CueBinManifest<'_>) -> ArtifactManifest {
                 .into_iter()
                 .collect(),
             command_fingerprint: input.planned.fingerprint.clone(),
-            loss_character: LossCharacter::Lossy,
+            loss_character: input.loss,
             started_at: Some(input.started),
             completed_at: Some(input.completed),
         }),
@@ -1114,6 +1379,8 @@ struct IsoManifest<'a> {
     iso: (LogicalPath, &'a Component),
     inspection: &'a iso::IsoInspection,
     notes: &'a [String],
+    /// What it preserved.
+    loss: LossCharacter,
     started: OffsetDateTime,
     completed: OffsetDateTime,
 }
@@ -1187,7 +1454,7 @@ fn iso_manifest(input: &IsoManifest<'_>) -> ArtifactManifest {
                 .into_iter()
                 .collect(),
             command_fingerprint: input.planned.fingerprint.clone(),
-            loss_character: LossCharacter::Lossy,
+            loss_character: input.loss,
             started_at: Some(input.started),
             completed_at: Some(input.completed),
         }),

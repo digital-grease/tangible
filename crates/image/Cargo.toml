@@ -13,6 +13,9 @@ hex = "0.4.3"
 # serde, no encodings but UTF-8, and it expands no entity but XML's own.
 quick-xml = "0.42.0"
 serde = { version = "1.0.229", features = ["derive"] }
+# A DVD CHD's ISO is checked against the CHD's data SHA-1
+# (docs/plans/chd-images.md); already in the tree for preservation hashes.
+sha1 = "0.10.7"
 sha2 = "0.11.0"
 tangible-domain = { version = "0.1.0", path = "../domain" }
 thiserror = "2.0.19"

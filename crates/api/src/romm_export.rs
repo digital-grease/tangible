@@ -604,7 +604,7 @@ fn missing_image(number: usize, disc: &DiscInputs) -> String {
         // the owner).
         format!(
             "disc {number} is linked only to a CHD imported as it is, which is not sent to RomM \
-             as it is; link a CUE/BIN or ISO image of it"
+             as it is; make a CUE/BIN (of a CD) or an ISO (of a DVD) of it, or link one"
         )
     } else if disc
         .artifacts

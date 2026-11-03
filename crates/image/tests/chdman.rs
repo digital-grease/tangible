@@ -88,7 +88,7 @@ async fn derive(
     let result = engine
         .derive(&DeriveRequest {
             transformation,
-            options: &options,
+            options: Some(&options),
             input_dir: &dir.join("in"),
             input: &input,
             output: &output,
@@ -231,4 +231,145 @@ async fn a_dvd_chd_is_refused_by_a_chdman_without_createdvd() {
     .await
     .unwrap_err();
     assert_eq!(error.code(), "DERIVATION_UNSUPPORTED");
+}
+
+// --- CHDs imported as originals, extracted (docs/plans/chd-images.md) --------
+
+fn chd_fixture(name: &str) -> Vec<u8> {
+    std::fs::read(format!(
+        "{}/../../fixtures/images/chd/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap()
+}
+
+/// Extract `input` in `dir/in` to `dir/out/<output>`, as a job would.
+async fn extract(
+    engine: &Chdman,
+    dir: &Path,
+    input: &str,
+    output: &str,
+    transformation: Transformation,
+) -> Result<LossCharacter, DeriveError> {
+    let output = dir.join("out").join(output);
+    std::fs::create_dir_all(output.parent().unwrap()).unwrap();
+    let input = LogicalPath::parse(input).unwrap();
+    let result = engine
+        .derive(&DeriveRequest {
+            transformation,
+            options: None,
+            input_dir: &dir.join("in"),
+            input: &input,
+            output: &output,
+        })
+        .await;
+    if result.is_err() {
+        assert!(
+            !output.exists(),
+            "a refused extraction must not be left behind"
+        );
+        assert!(!output.with_extension("bin").exists());
+    }
+    result.map(|report| report.loss_character)
+}
+
+#[tokio::test]
+async fn a_cd_chd_extracts_to_a_cue_bin_that_makes_the_same_chd() {
+    let Some(engine) = chdman().await else { return };
+    let (dir, input) = input_dir();
+    write(&input, "Game.chd", &chd_fixture("mixed-mode.chd"));
+    let loss = extract(
+        &engine,
+        dir.path(),
+        "Game.chd",
+        "Game.cue",
+        Transformation::CueBinFromChd,
+    )
+    .await
+    .expect("extracted and checked");
+    assert_eq!(loss, LossCharacter::StructurallyEquivalent);
+    let out = dir.path().join("out");
+    assert_eq!(
+        std::fs::read_to_string(out.join("Game.cue")).unwrap(),
+        "FILE \"Game.bin\" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n  TRACK 02 AUDIO\n    \
+         INDEX 00 00:04:00\n    INDEX 01 00:06:00\n  TRACK 03 AUDIO\n    INDEX 01 00:08:00\n"
+    );
+    assert_eq!(
+        std::fs::metadata(out.join("Game.bin")).unwrap().len(),
+        750 * RAW as u64
+    );
+    assert!(!out.join("Game.check").exists(), "the check leaves nothing");
+}
+
+#[tokio::test]
+async fn a_chd_of_noise_extracts_to_exactly_the_bin_it_was_made_from() {
+    let Some(engine) = chdman().await else { return };
+    let (dir, input) = input_dir();
+    let d = disc();
+    let bin = [d.data, d.gap, d.audio, d.more].concat();
+    write(&input, "disc.bin", &bin);
+    write(
+        &input,
+        "disc.cue",
+        b"FILE \"disc.bin\" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n  TRACK 02 AUDIO\n    INDEX 00 00:04:00\n    INDEX 01 00:06:00\n  TRACK 03 AUDIO\n    INDEX 01 00:08:50\n",
+    );
+    derive(&engine, dir.path(), "disc.cue", Transformation::ChdCreateCd)
+        .await
+        .expect("a CHD");
+
+    let (again, input) = input_dir();
+    std::fs::copy(
+        dir.path().join("out").join("disc.chd"),
+        input.join("disc.chd"),
+    )
+    .unwrap();
+    extract(
+        &engine,
+        again.path(),
+        "disc.chd",
+        "disc.cue",
+        Transformation::CueBinFromChd,
+    )
+    .await
+    .expect("extracted and checked");
+    let back = std::fs::read(again.path().join("out").join("disc.bin")).unwrap();
+    assert!(back == bin, "every byte of every track comes back");
+}
+
+#[tokio::test]
+async fn a_dvd_chd_extracts_to_its_iso() {
+    let Some(engine) = chdman().await else { return };
+    let (dir, input) = input_dir();
+    write(&input, "Film.chd", &chd_fixture("dvd.chd"));
+    let loss = extract(
+        &engine,
+        dir.path(),
+        "Film.chd",
+        "Film.iso",
+        Transformation::IsoFromChd,
+    )
+    .await
+    .expect("extracted and checked");
+    assert_eq!(loss, LossCharacter::StructurallyEquivalent);
+    let iso = std::fs::read(dir.path().join("out").join("Film.iso")).unwrap();
+    assert_eq!(iso.len(), 64 * 2048);
+    // make_inputs.py numbers every sector in its first four bytes.
+    assert_eq!(&iso[2048 * 5..2048 * 5 + 4], &5_u32.to_le_bytes());
+}
+
+#[tokio::test]
+async fn a_delta_chd_without_its_parent_is_refused() {
+    let Some(engine) = chdman().await else { return };
+    let (dir, input) = input_dir();
+    write(&input, "delta.chd", &chd_fixture("delta.chd"));
+    let error = extract(
+        &engine,
+        dir.path(),
+        "delta.chd",
+        "delta.cue",
+        Transformation::CueBinFromChd,
+    )
+    .await
+    .expect_err("chdman cannot read it");
+    assert_eq!(error.code(), "CHDMAN_FAILED", "{error}");
 }
