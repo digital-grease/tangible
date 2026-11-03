@@ -21,6 +21,10 @@ export type CreateTitleRequest = components['schemas']['CreateTitleRequest'];
 export type CreateEditionRequest = components['schemas']['CreateEditionRequest'];
 export type CreateDiscSetRequest = components['schemas']['CreateDiscSetRequest'];
 export type CreateDiscRequest = components['schemas']['CreateDiscRequest'];
+export type EditTitleRequest = components['schemas']['EditTitleRequest'];
+export type EditEditionRequest = components['schemas']['EditEditionRequest'];
+export type EditDiscSetRequest = components['schemas']['EditDiscSetRequest'];
+export type EditDiscRequest = components['schemas']['EditDiscRequest'];
 
 function isProblem(value: unknown): value is Problem {
   return typeof value === 'object' && value !== null && 'code' in value && 'detail' in value;
@@ -66,6 +70,87 @@ async function post<T>(
   });
   if (isProblem(result)) return { kind: 'error', problem: result };
   return { kind: 'ready', data: result };
+}
+
+/**
+ * Change a catalog row as it was read: `If-Match` names the version it was
+ * read at, so a change somebody made since is refused rather than lost.
+ */
+async function patch<T>(
+  fetcher: typeof fetch,
+  path: string,
+  version: number,
+  body: unknown,
+): Promise<CommandResult<T>> {
+  const result = await request<T>(fetcher, path, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', 'if-match': `"${version}"` },
+    body: JSON.stringify(body),
+  });
+  if (isProblem(result)) return { kind: 'error', problem: result };
+  return { kind: 'ready', data: result };
+}
+
+/** Change a title, as read at `version`. */
+export function editTitle(
+  id: string,
+  version: number,
+  body: EditTitleRequest,
+  fetcher: typeof fetch = apiFetch,
+): Promise<CommandResult<TitleView>> {
+  return patch<TitleView>(fetcher, `/api/v1/titles/${encodeURIComponent(id)}`, version, body);
+}
+
+/** Change an edition, as read at `version`. */
+export function editEdition(
+  id: string,
+  version: number,
+  body: EditEditionRequest,
+  fetcher: typeof fetch = apiFetch,
+): Promise<CommandResult<EditionView>> {
+  return patch<EditionView>(fetcher, `/api/v1/editions/${encodeURIComponent(id)}`, version, body);
+}
+
+/** Change a disc set, as read at `version`. */
+export function editDiscSet(
+  id: string,
+  version: number,
+  body: EditDiscSetRequest,
+  fetcher: typeof fetch = apiFetch,
+): Promise<CommandResult<DiscSetView>> {
+  return patch<DiscSetView>(fetcher, `/api/v1/disc-sets/${encodeURIComponent(id)}`, version, body);
+}
+
+/** Change a disc, as read at `version`. */
+export function editDisc(
+  id: string,
+  version: number,
+  body: EditDiscRequest,
+  fetcher: typeof fetch = apiFetch,
+): Promise<CommandResult<DiscView>> {
+  return patch<DiscView>(fetcher, `/api/v1/discs/${encodeURIComponent(id)}`, version, body);
+}
+
+/** Whether a refusal means somebody changed it since it was read. */
+export function isStale(problem: Problem): boolean {
+  return problem.code === 'RESOURCE_VERSION_CONFLICT';
+}
+
+/**
+ * The fields of `form` that differ from `current`, for a PATCH: text
+ * trimmed, and a blank one sent as null to clear it.
+ */
+export function changedFields(
+  current: Record<string, unknown>,
+  form: Record<string, string | number | null>,
+): Record<string, string | number | null> {
+  const changed: Record<string, string | number | null> = {};
+  for (const [key, raw] of Object.entries(form)) {
+    // A number input left empty may read as undefined: that is null too.
+    const value = typeof raw === 'string' ? raw.trim() || null : (raw ?? null);
+    if (value !== (current[key] ?? null)) changed[key] = value;
+  }
+  return changed;
 }
 
 /** Fetch titles in sort order, optionally filtered by name. */

@@ -3,8 +3,11 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  changedFields,
   compatibilityLabel,
   createDisc,
+  editTitle,
+  isStale,
   createTitle,
   discName,
   isComplete,
@@ -190,5 +193,49 @@ describe('describing what is catalogued', () => {
     expect(mediaFamilyLabel('bluray')).toBe('Blu-ray');
     expect(mediaFamilyLabel('uhd_bluray')).toBe('UHD Blu-ray');
     expect(titleKindLabel('movie')).toBe('Film');
+  });
+});
+
+describe('editing', () => {
+  it('sends only what changed, trimmed, with blanks as null', () => {
+    const current = { display_title: 'Doom', sort_title: 'Doom', release_year: 1993, region: null };
+    expect(
+      changedFields(current, {
+        display_title: ' Doom II ',
+        sort_title: 'Doom',
+        release_year: 1993,
+        region: '',
+      }),
+    ).toEqual({ display_title: 'Doom II' });
+    expect(changedFields({ region: 'PAL' }, { region: '  ' })).toEqual({ region: null });
+    expect(changedFields({ release_year: 1993 }, { release_year: null })).toEqual({
+      release_year: null,
+    });
+    expect(changedFields({ name: 'Set' }, { name: 'Set' })).toEqual({});
+  });
+
+  it('changes a title as read, naming its version', async () => {
+    const seen: { method: string; ifMatch: string | null; body: unknown }[] = [];
+    const fetcher = (async (_input: string | URL | Request, init?: RequestInit) => {
+      seen.push({
+        method: init?.method ?? 'GET',
+        ifMatch: new Headers(init?.headers).get('if-match'),
+        body: JSON.parse(String(init?.body)),
+      });
+      return {
+        ok: false,
+        status: 409,
+        json: async () => ({
+          type: 'about:blank',
+          title: 'Changed since it was read',
+          status: 409,
+          code: 'RESOURCE_VERSION_CONFLICT',
+          detail: 'it is at version 4 now',
+        }),
+      } as Response;
+    }) as typeof fetch;
+    const result = await editTitle('t1', 3, { display_title: 'Doom II' }, fetcher);
+    expect(seen).toEqual([{ method: 'PATCH', ifMatch: '"3"', body: { display_title: 'Doom II' } }]);
+    expect(result.kind === 'error' && isStale(result.problem)).toBe(true);
   });
 });

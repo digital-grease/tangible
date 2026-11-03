@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  import CatalogEditor from '$lib/components/CatalogEditor.svelte';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import { apiFetch } from '$lib/session';
   import RommExport from '$lib/components/RommExport.svelte';
@@ -44,6 +45,51 @@
   let sets = $state<DiscSetView[]>([]);
   let selectedSet = $state<string | null>(null);
   let discs = $state<DiscView[]>([]);
+
+  /** What is being changed, one thing at a time. */
+  let editing = $state<
+    | { kind: 'title'; id: string }
+    | { kind: 'edition'; id: string }
+    | { kind: 'set'; id: string }
+    | { kind: 'disc'; id: string }
+    | null
+  >(null);
+
+  const editedTitle = $derived(
+    editing?.kind === 'title' && view.kind === 'ready'
+      ? view.data.items.find((title) => title.id === editing?.id)
+      : undefined,
+  );
+  const editedEdition = $derived(
+    editing?.kind === 'edition'
+      ? editions.find((edition) => edition.id === editing?.id)
+      : undefined,
+  );
+  const editedSet = $derived(
+    editing?.kind === 'set' ? sets.find((set) => set.id === editing?.id) : undefined,
+  );
+  const editedDisc = $derived(
+    editing?.kind === 'disc' ? discs.find((disc) => disc.id === editing?.id) : undefined,
+  );
+
+  /** Saved: show it as it now is, keeping what was chosen. */
+  async function saved() {
+    const was = editing;
+    editing = null;
+    if (was?.kind === 'title') await refreshTitles();
+    if (was?.kind === 'edition' && selectedTitle) {
+      const result = await loadEditions(selectedTitle);
+      if (result.kind === 'ready') editions = result.data;
+    }
+    if (was?.kind === 'set' && selectedEdition) {
+      const result = await loadDiscSets(selectedEdition);
+      if (result.kind === 'ready') sets = result.data;
+    }
+    if (was?.kind === 'disc' && selectedSet) {
+      const result = await loadDiscs(selectedSet);
+      if (result.kind === 'ready') discs = result.data;
+    }
+  }
 
   let newTitle = $state('');
   let newTitleKind = $state('unknown');
@@ -219,6 +265,19 @@
           </li>
         {/each}
       </ul>
+      {#if selectedTitle && editing?.kind !== 'title'}
+        <button type="button" onclick={() => (editing = { kind: 'title', id: selectedTitle! })}>
+          Change this title…
+        </button>
+      {/if}
+      {#if editedTitle}
+        <CatalogEditor
+          kind="title"
+          item={editedTitle}
+          onsaved={saved}
+          oncancel={() => (editing = null)}
+        />
+      {/if}
     {/if}
   </div>
 
@@ -264,6 +323,19 @@
           </li>
         {/each}
       </ul>
+      {#if selectedEdition && editing?.kind !== 'edition'}
+        <button type="button" onclick={() => (editing = { kind: 'edition', id: selectedEdition! })}>
+          Change this edition…
+        </button>
+      {/if}
+      {#if editedEdition}
+        <CatalogEditor
+          kind="edition"
+          item={editedEdition}
+          onsaved={saved}
+          oncancel={() => (editing = null)}
+        />
+      {/if}
     {/if}
 
     <form onsubmit={addEdition}>
@@ -301,6 +373,19 @@
           </li>
         {/each}
       </ul>
+      {#if selectedSet && editing?.kind !== 'set'}
+        <button type="button" onclick={() => (editing = { kind: 'set', id: selectedSet! })}>
+          Change this set…
+        </button>
+      {/if}
+      {#if editedSet}
+        <CatalogEditor
+          kind="set"
+          item={editedSet}
+          onsaved={saved}
+          oncancel={() => (editing = null)}
+        />
+      {/if}
     {/if}
 
     <form onsubmit={addSet}>
@@ -346,11 +431,22 @@
               <td>{compatibilityLabel(disc.compatibility_claim)}</td>
               <td>
                 <a href={`/burns/new?disc=${disc.id}`}>Burn to this disc</a>
+                <button type="button" onclick={() => (editing = { kind: 'disc', id: disc.id })}>
+                  Change {discName(disc)}…
+                </button>
               </td>
             </tr>
           {/each}
         </tbody>
       </table>
+      {#if editedDisc}
+        <CatalogEditor
+          kind="disc"
+          item={editedDisc}
+          onsaved={saved}
+          oncancel={() => (editing = null)}
+        />
+      {/if}
     {/if}
 
     <form onsubmit={addDisc}>

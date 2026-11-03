@@ -17,7 +17,10 @@ may change between minor versions, and the release notes say how.
   unless it was set on its own. Disc numbers stay unique within a set.
   Edits need the `catalog` permission and are audited. `GET
   /api/v1/editions/{id}` and `/disc-sets/{id}` are new. Database migration
-  0029 adds the version columns, additively.
+  0029 adds the version columns, additively. On the Catalog page, "Change
+  this title", "Change this edition", "Change this set" and "Change" on
+  each disc open a form that saves only what changed, and says so when
+  somebody else changed it first.
 - The audit log can be read (docs/plans/audit-log.md):
   `GET /api/v1/audit-events`, newest first and paged, filtered by action
   (or a kind of action, such as `worker.`), actor, target and outcome, and
