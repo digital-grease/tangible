@@ -28,7 +28,7 @@ tangible-integrations = { version = "0.1.0", path = "../integrations" }
 tangible-storage = { version = "0.1.0", path = "../storage" }
 thiserror = "2.0.19"
 time = { version = "0.3.55", features = ["serde"] }
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "fs", "io-util"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "fs", "io-util", "sync"] }
 tokio-util = { version = "0.7.18", features = ["io"] }
 tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.7.0", features = ["trace", "cors", "limit", "fs"] }

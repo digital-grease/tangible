@@ -364,6 +364,8 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
     ("POST", "/api/v1/worker-enrollments", Signed(ManageWorkers)),
     // The dashboard (docs/plans/dashboard.md): for anyone signed in.
     ("GET", "/api/v1/dashboard", Signed(Read)),
+    // The event stream (API.md 12): what anyone who can read sees change.
+    ("GET", "/api/v1/events", Signed(Read)),
     // The audit log (docs/plans/audit-log.md): read by administrators only.
     ("GET", "/api/v1/audit-events", Signed(ReadAudit)),
     ("GET", "/api/v1/audit-events/{event_id}", Signed(ReadAudit)),

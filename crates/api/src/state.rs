@@ -74,6 +74,8 @@ struct Inner {
     /// How many days a worker credential is used before the worker is asked
     /// to rotate it; 0 for never (`TANGIBLE_WORKER_CREDENTIAL_MAX_AGE_DAYS`).
     worker_credential_max_age_days: u32,
+    /// What the event stream sends (API.md 12).
+    events: crate::events::EventHub,
 }
 
 /// How long a worker credential is used before rotation, unless configured.
@@ -126,6 +128,7 @@ impl ApiState {
                 identification: None,
                 oidc: None,
                 worker_credential_max_age_days: DEFAULT_WORKER_CREDENTIAL_MAX_AGE_DAYS,
+                events: crate::events::EventHub::new(),
             }),
         }
     }
@@ -155,6 +158,7 @@ impl ApiState {
                 identification: None,
                 oidc: None,
                 worker_credential_max_age_days: DEFAULT_WORKER_CREDENTIAL_MAX_AGE_DAYS,
+                events: crate::events::EventHub::new(),
             }),
         }
     }
@@ -238,6 +242,12 @@ impl ApiState {
         Self {
             inner: Arc::new(inner),
         }
+    }
+
+    /// What the event stream sends. Every clone of this state shares it.
+    #[must_use]
+    pub fn events(&self) -> &crate::events::EventHub {
+        &self.inner.events
     }
 
     /// How many days a worker credential is used before rotation; 0 for

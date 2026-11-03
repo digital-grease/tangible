@@ -1045,6 +1045,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What changes, as it changes.
+         * @description A server-sent event stream (`text/event-stream`) of what changes: `import.changed`, `burn_job.changed`, `burn_attempt.changed`, `burn.progress`, `rip.changed`, `rip.progress`, `erasure.changed`, `derivation.changed`, `worker.changed` and `artifact.changed`, each with an id and data naming its topic, identifiers and state. Read the resource itself for the rest. Reconnecting with `Last-Event-ID` (or `after`) replays what was missed while the server holds it; otherwise, or when the client falls behind, `stream.reset` is sent and the client should reconcile through the REST routes. A stream ends after ten minutes and is reconnected. Needs `read`.
+         */
+        get: operations["event_stream"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/import-sources": {
         parameters: {
             query?: never;
@@ -7664,6 +7684,58 @@ export interface operations {
             };
             /** @description A field is not shaped like a problem document's */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    event_stream: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Comma-separated topics: imports, burns, rips, erasures, workers,
+                 *     derivations, library. Every topic when absent.
+                 */
+                topics?: string | null;
+                /**
+                 * @description The id of the last event seen, as `Last-Event-ID` would say; the
+                 *     header wins when both are given.
+                 */
+                after?: string | null;
+            };
+            header?: {
+                /** @description The id of the last event seen */
+                "Last-Event-ID"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The stream */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            /** @description Unknown topic */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many streams are open */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

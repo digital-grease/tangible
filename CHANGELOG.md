@@ -8,6 +8,13 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
+- `GET /api/v1/events`, the server-sent event stream API.md 12 describes
+  (docs/plans/event-stream.md): what changes in imports, burns and their
+  progress, rips, erasures, derivations, workers and the library, as it
+  commits, heard from the database itself (migration 0031). Topics can be
+  chosen; a client reconnecting with `Last-Event-ID` is sent what it
+  missed, or `stream.reset` to reconcile. Streams end after ten minutes and
+  at shutdown.
 - Worker credentials are rotated (docs/plans/credential-rotation.md). A
   worker's heartbeat says `credential_rotation_required` when an
   administrator asked (`POST /api/v1/workers/{id}/rotate-credential`) or

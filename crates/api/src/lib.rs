@@ -16,6 +16,7 @@ pub mod derivation;
 pub mod diagnostics;
 pub mod download_clients;
 pub mod error_report;
+pub mod events;
 pub mod format_report;
 pub mod gc;
 pub mod health;
@@ -185,6 +186,7 @@ pub const API_BASE: &str = "/api/v1";
         routes::erasures::claim_drive_erasure,
         routes::erasures::complete_drive_erasure,
         routes::dashboard::dashboard,
+        events::event_stream,
         routes::audit::list_audit_log,
         routes::audit::get_audit_log_event,
         routes::worker_admin::list_all_workers,
@@ -395,6 +397,7 @@ pub const API_BASE: &str = "/api/v1";
         (name = "diagnostics", description = "The deployment's state as a checklist, for administrators"),
         (name = "rips", description = "Ripping the disc in a drive into the library"),
         (name = "integrations", description = "Download clients and other services, configured by administrators"),
+        (name = "events", description = "What changes, as it changes: a server-sent event stream"),
     ),
 )]
 pub struct ApiDoc;
@@ -498,9 +501,22 @@ pub async fn serve<S>(
 where
     S: Future<Output = ()> + Send + 'static,
 {
-    axum::serve(listener, router(state))
-        .with_graceful_shutdown(shutdown)
-        .await
+    // The event stream hears of changes from the database for as long as
+    // the server serves; its streams end as shutdown begins, so the graceful
+    // shutdown does not wait for them.
+    let hub = state.events().clone();
+    let changes = tokio::spawn(events::forward_changes(
+        state.database().clone(),
+        hub.clone(),
+    ));
+    let served = axum::serve(listener, router(state))
+        .with_graceful_shutdown(async move {
+            shutdown.await;
+            hub.close();
+        })
+        .await;
+    changes.abort();
+    served
 }
 
 /// Build the application router.
@@ -509,6 +525,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/livez", get(health::livez))
         .route("/readyz", get(health::readyz))
         .nest(API_BASE, routes::accounts::router())
+        .nest(API_BASE, events::router())
         .nest(API_BASE, routes::artifacts::router())
         .nest(API_BASE, routes::burns::router())
         .nest(API_BASE, routes::imports::router())

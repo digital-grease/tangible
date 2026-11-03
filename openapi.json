@@ -3475,6 +3475,91 @@
         ]
       }
     },
+    "/api/v1/events": {
+      "get": {
+        "tags": [
+          "events"
+        ],
+        "summary": "What changes, as it changes.",
+        "description": "A server-sent event stream (`text/event-stream`) of what changes: `import.changed`, `burn_job.changed`, `burn_attempt.changed`, `burn.progress`, `rip.changed`, `rip.progress`, `erasure.changed`, `derivation.changed`, `worker.changed` and `artifact.changed`, each with an id and data naming its topic, identifiers and state. Read the resource itself for the rest. Reconnecting with `Last-Event-ID` (or `after`) replays what was missed while the server holds it; otherwise, or when the client falls behind, `stream.reset` is sent and the client should reconcile through the REST routes. A stream ends after ten minutes and is reconnected. Needs `read`.",
+        "operationId": "event_stream",
+        "parameters": [
+          {
+            "name": "topics",
+            "in": "query",
+            "description": "Comma-separated topics: imports, burns, rips, erasures, workers,\nderivations, library. Every topic when absent.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "The id of the last event seen, as `Last-Event-ID` would say; the\nheader wins when both are given.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "description": "The id of the last event seen",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown topic",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many streams are open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/import-sources": {
       "get": {
         "tags": [
@@ -14638,6 +14723,10 @@
     {
       "name": "integrations",
       "description": "Download clients and other services, configured by administrators"
+    },
+    {
+      "name": "events",
+      "description": "What changes, as it changes: a server-sent event stream"
     }
   ]
 }
