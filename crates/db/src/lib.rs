@@ -25,6 +25,7 @@ pub mod romm;
 pub mod romm_api;
 pub mod source_removals;
 pub mod uploads;
+pub mod workers;
 
 use std::time::Duration;
 

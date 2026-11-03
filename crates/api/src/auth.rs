@@ -354,6 +354,25 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
     // the worker protocol, authenticated by the worker's own credential or,
     // for consuming a token, by the token.
     ("POST", "/api/v1/worker-enrollments", Signed(ManageWorkers)),
+    // Workers as people manage them (docs/plans/worker-admin.md): seen as
+    // drives are, changed by administrators.
+    ("GET", "/api/v1/workers", Signed(Read)),
+    ("GET", "/api/v1/workers/{worker_id}", Signed(Read)),
+    (
+        "POST",
+        "/api/v1/workers/{worker_id}/drain",
+        Signed(ManageWorkers),
+    ),
+    (
+        "POST",
+        "/api/v1/workers/{worker_id}/enable",
+        Signed(ManageWorkers),
+    ),
+    (
+        "POST",
+        "/api/v1/workers/{worker_id}/revoke",
+        Signed(ManageWorkers),
+    ),
     ("POST", "/api/v1/worker-enrollments/consume", Worker),
     ("PUT", "/api/v1/workers/{worker_id}/capabilities", Worker),
     ("POST", "/api/v1/workers/{worker_id}/heartbeat", Worker),

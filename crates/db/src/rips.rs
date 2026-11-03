@@ -620,7 +620,10 @@ pub async fn claim_rip(
         .await?;
     }
 
-    if crate::repositories::drive_has_active_attempt(&mut tx, drive_id).await?
+    // What its drive abandoned is closed above whatever; a draining worker
+    // takes nothing new, nor a revoked one (docs/plans/worker-admin.md).
+    if crate::workers::takes_no_new_work(&mut tx, worker_id).await?
+        || crate::repositories::drive_has_active_attempt(&mut tx, drive_id).await?
         || crate::erasures::drive_is_erasing(&mut tx, drive_id).await?
     {
         tx.commit().await.map_err(DbError::Query)?;

@@ -775,10 +775,12 @@ async fn a_heartbeat_brings_a_pending_worker_online() {
     let pool = pool().await;
     let world = seed(&pool).await;
 
-    assert!(
+    assert_eq!(
         record_heartbeat(&pool, world.worker)
             .await
             .expect("heartbeat")
+            .as_deref(),
+        Some("online")
     );
 
     let status: String = sqlx::query_scalar("SELECT status FROM workers WHERE id = $1")
@@ -800,10 +802,11 @@ async fn a_heartbeat_from_a_revoked_worker_is_refused() {
     );
     pool.execute(statement.as_str()).await.expect("revoke");
 
-    assert!(
-        !record_heartbeat(&pool, world.worker)
+    assert_eq!(
+        record_heartbeat(&pool, world.worker)
             .await
-            .expect("heartbeat")
+            .expect("heartbeat"),
+        None
     );
 }
 
@@ -820,9 +823,14 @@ async fn a_heartbeat_does_not_resurrect_a_draining_worker() {
     );
     pool.execute(statement.as_str()).await.expect("drain");
 
-    record_heartbeat(&pool, world.worker)
-        .await
-        .expect("heartbeat");
+    assert_eq!(
+        record_heartbeat(&pool, world.worker)
+            .await
+            .expect("heartbeat")
+            .as_deref(),
+        Some("draining"),
+        "the heartbeat answers it, so the worker hears it"
+    );
 
     let status: String = sqlx::query_scalar("SELECT status FROM workers WHERE id = $1")
         .bind(world.worker.as_uuid())

@@ -147,6 +147,13 @@ pub async fn claim_next_burn_job(
         return Ok(Err(ClaimOutcome::NotYourDrive));
     }
 
+    // A draining worker finishes what it holds and takes nothing new, and a
+    // revoked one takes nothing (docs/plans/worker-admin.md).
+    if crate::workers::takes_no_new_work(&mut tx, worker_id).await? {
+        tx.rollback().await.map_err(DbError::Query)?;
+        return Ok(Err(ClaimOutcome::NoWork));
+    }
+
     // Refuse before touching the queue if this drive is already working. Doing
     // it first means a busy drive does not lock a job row it cannot use.
     if drive_has_active_attempt(&mut tx, drive_id).await?
@@ -713,22 +720,29 @@ pub async fn worker_holds_artifact(
     .map_err(DbError::Query)
 }
 
-/// Record that a worker is alive.
+/// Record that a worker is alive, answering its status after, or `None`
+/// for a worker that is revoked or unknown.
+///
+/// A draining worker stays draining (docs/plans/worker-admin.md): the
+/// heartbeat is how it hears so.
 ///
 /// # Errors
 ///
 /// [`DbError::Query`] on a database failure.
-pub async fn record_heartbeat(pool: &PgPool, worker_id: WorkerId) -> Result<bool, DbError> {
-    let result = sqlx::query(
+pub async fn record_heartbeat(
+    pool: &PgPool,
+    worker_id: WorkerId,
+) -> Result<Option<String>, DbError> {
+    sqlx::query_scalar(
         "UPDATE workers
          SET last_seen_at = now(), status = CASE WHEN status = 'pending' THEN 'online' ELSE status END
-         WHERE id = $1 AND status <> 'revoked'",
+         WHERE id = $1 AND status <> 'revoked'
+         RETURNING status",
     )
     .bind(worker_id.as_uuid())
-    .execute(pool)
+    .fetch_optional(pool)
     .await
-    .map_err(DbError::Query)?;
-    Ok(result.rows_affected() > 0)
+    .map_err(DbError::Query)
 }
 
 /// Move an attempt to a new state.

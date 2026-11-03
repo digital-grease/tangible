@@ -473,26 +473,27 @@ pub async fn heartbeat(
 ) -> Result<Json<HeartbeatResponse>, Problem> {
     let worker_id = same_worker(identity, &worker_id)?;
 
-    let alive = record_heartbeat(state.database().pool(), worker_id)
+    let status = record_heartbeat(state.database().pool(), worker_id)
         .await
         .map_err(|error| {
             tracing::error!(error = ?error, "heartbeat failed");
             unavailable("the heartbeat could not be recorded")
         })?;
 
-    if !alive {
+    let Some(status) = status else {
         // Revoked between authenticating and here, or revoked entirely.
         return Err(Problem::new(
             ErrorCode::Unauthenticated,
             "the credential is not valid",
         ));
-    }
+    };
 
     Ok(Json(HeartbeatResponse {
         server_time: OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)
             .unwrap_or_default(),
-        drain: false,
+        // An administrator drained it: finish what it holds, take nothing new.
+        drain: status == "draining",
     }))
 }
 

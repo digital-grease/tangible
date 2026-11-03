@@ -177,6 +177,11 @@ pub const API_BASE: &str = "/api/v1";
         routes::erasures::cancel_one_erasure,
         routes::erasures::claim_drive_erasure,
         routes::erasures::complete_drive_erasure,
+        routes::worker_admin::list_all_workers,
+        routes::worker_admin::get_one_worker,
+        routes::worker_admin::drain_one_worker,
+        routes::worker_admin::enable_one_worker,
+        routes::worker_admin::revoke_one_worker,
         routes::workers::issue_enrollment_token,
         routes::workers::consume_enrollment_token,
         routes::workers::report_capabilities,
@@ -322,6 +327,9 @@ pub const API_BASE: &str = "/api/v1";
         routes::workers::TrackVerificationReport,
         routes::workers::IssueEnrollmentRequest,
         routes::workers::IssuedEnrollment,
+        routes::worker_admin::WorkerView,
+        routes::worker_admin::WorkerDriveView,
+        routes::worker_admin::WorkerList,
         routes::workers::EnrollmentRequest,
         routes::workers::EnrollmentResponse,
         routes::workers::HeartbeatResponse,
@@ -481,6 +489,7 @@ pub fn router(state: ApiState) -> Router {
         .nest(API_BASE, routes::physical_copies::router())
         .nest(API_BASE, routes::catalog::router())
         .nest(API_BASE, routes::workers::router())
+        .nest(API_BASE, routes::worker_admin::router())
         .nest(API_BASE, routes::erasures::router())
         .nest(API_BASE, routes::integrations::router())
         .nest(API_BASE, routes::integrity::router())

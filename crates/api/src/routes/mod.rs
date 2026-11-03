@@ -24,4 +24,5 @@ pub mod romm;
 pub mod s3_imports;
 pub mod storage;
 pub mod uploads;
+pub mod worker_admin;
 pub mod workers;

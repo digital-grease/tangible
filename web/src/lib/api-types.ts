@@ -1882,6 +1882,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A page of workers, oldest first.
+         * @description List workers, oldest first, with their status and drives. Use `next_cursor` from the response to fetch the following page.
+         */
+        get: operations["list_all_workers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workers/{worker_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One worker.
+         * @description # Errors
+         *
+         *     `NOT_FOUND` for an unknown worker.
+         */
+        get: operations["get_one_worker"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workers/{worker_id}/capabilities": {
         parameters: {
             query?: never;
@@ -1916,6 +1958,46 @@ export interface paths {
          * @description Ask for a burn job. Answers 204 when there is nothing to do.
          */
         post: operations["claim_work"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workers/{worker_id}/drain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Drain a worker: it finishes what it holds and takes nothing new.
+         * @description Drain a worker: at its next heartbeat it is told to take no new work, and claims answer it with nothing to do, while what it holds runs to the end. Draining a draining worker changes nothing. Needs an administrator, and is audited.
+         */
+        post: operations["drain_one_worker"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workers/{worker_id}/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Undo a drain.
+         * @description Undo a drain: the worker takes work again. Enabling a worker that is not draining changes nothing. Needs an administrator, and is audited.
+         */
+        post: operations["enable_one_worker"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1976,6 +2058,26 @@ export interface paths {
          * @description Reconcile a worker that restarted holding local state. No directive ever permits writing.
          */
         post: operations["recover"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workers/{worker_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke a worker, for good.
+         * @description Revoke a worker's credential, for good: its next request is refused, so it can no longer take work, renew a lease or report. An attempt it held lapses as a lost worker's does; nothing interrupts a write. To use the machine again, enroll it with a new token under a new name. Revoking a revoked worker changes nothing. Needs an administrator, and is audited.
+         */
+        post: operations["revoke_one_worker"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4829,6 +4931,44 @@ export interface components {
             state: string;
             /** @description What was checked on each track, for a disc described as tracks. */
             tracks?: components["schemas"]["TrackVerificationReport"][];
+        };
+        /** @description One of a worker's drives. */
+        WorkerDriveView: {
+            /** @description Opaque identifier. */
+            id: string;
+            /** @description What the worker calls it. */
+            name: string;
+        };
+        /** @description A page of workers. */
+        WorkerList: {
+            /** @description The workers in this page, oldest first. */
+            items: components["schemas"]["WorkerView"][];
+            /** @description Cursor for the next page, or null when this is the last. */
+            next_cursor?: string | null;
+        };
+        /** @description A worker. */
+        WorkerView: {
+            /** @description When it enrolled. */
+            created_at: string;
+            /** @description Its drives, by name. */
+            drives: components["schemas"]["WorkerDriveView"][];
+            /** @description Opaque identifier. */
+            id: string;
+            /** @description When it last reported in. */
+            last_seen_at?: string | null;
+            /** @description Its name, chosen when it enrolled. */
+            name: string;
+            /** @description The worker protocol version it speaks. */
+            protocol_version: string;
+            /** @description When it was revoked. */
+            revoked_at?: string | null;
+            /** @description The Tangible version it runs. */
+            software_version: string;
+            /**
+             * @description `pending` (never heard from), `online`, `offline`, `draining`,
+             *     `revoked` or `incompatible`.
+             */
+            status: string;
         };
         /** @description The engine's account of the write. */
         WriteReport: {
@@ -8925,6 +9065,72 @@ export interface operations {
             };
         };
     };
+    list_all_workers: {
+        parameters: {
+            query?: {
+                /** @description Maximum items to return. Clamped to [`MAX_LIMIT`]. */
+                limit?: number | null;
+                /** @description Opaque cursor from a previous response's `next_cursor`. */
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of workers */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerList"];
+                };
+            };
+            /** @description Invalid cursor */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_one_worker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Worker identifier */
+                worker_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The worker */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerView"];
+                };
+            };
+            /** @description No such worker */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     report_capabilities: {
         parameters: {
             query?: never;
@@ -9021,6 +9227,88 @@ export interface operations {
                 };
             };
             /** @description The drive is already busy */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    drain_one_worker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Worker identifier */
+                worker_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Draining */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerView"];
+                };
+            };
+            /** @description No such worker */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Revoked or incompatible */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    enable_one_worker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Worker identifier */
+                worker_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Taking work */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerView"];
+                };
+            };
+            /** @description No such worker */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Revoked or incompatible */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -9141,6 +9429,38 @@ export interface operations {
                 };
             };
             /** @description Not this worker */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    revoke_one_worker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Worker identifier */
+                worker_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerView"];
+                };
+            };
+            /** @description No such worker */
             404: {
                 headers: {
                     [name: string]: unknown;

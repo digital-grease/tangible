@@ -1918,3 +1918,150 @@ async fn queue_job(pool: &PgPool) -> String {
 
     ids[5].to_string()
 }
+
+// --- managing workers (docs/plans/worker-admin.md) ------------------------------
+
+impl Harness {
+    async fn get(&self, path: &str) -> (StatusCode, serde_json::Value) {
+        self.send(
+            Request::builder()
+                .method("GET")
+                .uri(path)
+                .body(Body::empty())
+                .expect("build the request"),
+        )
+        .await
+    }
+
+    async fn heartbeat(
+        &self,
+        worker_id: &str,
+        credential: &str,
+    ) -> (StatusCode, serde_json::Value) {
+        self.post(
+            &format!("/api/v1/workers/{worker_id}/heartbeat"),
+            Some(credential),
+            serde_json::json!({}),
+        )
+        .await
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_administrator_drains_enables_and_revokes_a_worker() {
+    let _queue = exclusive_queue().await;
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let (worker_id, credential) = enroll(&harness).await;
+    let drive = seed_drive(&harness.pool, &worker_id).await;
+    queue_job(&harness.pool).await;
+
+    let (status, worker) = harness.get(&format!("/api/v1/workers/{worker_id}")).await;
+    assert_eq!(status, StatusCode::OK, "{worker}");
+    assert_eq!(worker["drives"][0]["id"], drive.as_str());
+    let (_, listed) = harness.get("/api/v1/workers?limit=200").await;
+    assert!(listed["items"].is_array(), "{listed}");
+
+    let (status, drained) = harness
+        .post(
+            &format!("/api/v1/workers/{worker_id}/drain"),
+            None,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{drained}");
+    assert_eq!(drained["status"], "draining");
+    let (_, beat) = harness.heartbeat(&worker_id, &credential).await;
+    assert_eq!(beat["drain"], true, "{beat}");
+    // A job is queued, and a draining worker is given nothing.
+    let claim =
+        serde_json::json!({ "drive_id": drive, "engine": "fake", "engine_version": "0.1.0" });
+    let (status, _) = harness
+        .post(
+            &format!("/api/v1/workers/{worker_id}/claims"),
+            Some(&credential),
+            claim.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, enabled) = harness
+        .post(
+            &format!("/api/v1/workers/{worker_id}/enable"),
+            None,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{enabled}");
+    assert_eq!(enabled["status"], "online");
+    let (_, beat) = harness.heartbeat(&worker_id, &credential).await;
+    assert_eq!(beat["drain"], false, "{beat}");
+
+    let (status, revoked) = harness
+        .post(
+            &format!("/api/v1/workers/{worker_id}/revoke"),
+            None,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{revoked}");
+    assert_eq!(revoked["status"], "revoked");
+    assert!(revoked["revoked_at"].is_string(), "{revoked}");
+    let (status, _) = harness.heartbeat(&worker_id, &credential).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "the credential stops working"
+    );
+    let (status, _) = harness
+        .post(
+            &format!("/api/v1/workers/{worker_id}/claims"),
+            Some(&credential),
+            claim,
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, refused) = harness
+        .post(
+            &format!("/api/v1/workers/{worker_id}/drain"),
+            None,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+
+    let (status, _) = harness
+        .post(
+            &format!("/api/v1/workers/{}/revoke", uuid::Uuid::now_v7()),
+            None,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    drain_queue(&harness.pool).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_operator_sees_workers_and_cannot_change_them() {
+    let admin = harness().await;
+    let (worker_id, _) = enroll(&admin).await;
+    let operator = Harness {
+        session: support::sign_in(&admin.pool, tangible_domain::Role::Operator).await,
+        router: admin.router.clone(),
+        pool: admin.pool.clone(),
+    };
+    let (status, _) = operator.get(&format!("/api/v1/workers/{worker_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    for action in ["drain", "enable", "revoke"] {
+        let (status, body) = operator
+            .post(
+                &format!("/api/v1/workers/{worker_id}/{action}"),
+                None,
+                serde_json::json!({}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{action}: {body}");
+    }
+}

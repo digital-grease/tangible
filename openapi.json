@@ -6041,6 +6041,118 @@
         }
       }
     },
+    "/api/v1/workers": {
+      "get": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "A page of workers, oldest first.",
+        "description": "List workers, oldest first, with their status and drives. Use `next_cursor` from the response to fetch the following page.",
+        "operationId": "list_all_workers",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum items to return. Clamped to [`MAX_LIMIT`].",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous response's `next_cursor`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of workers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/workers/{worker_id}": {
+      "get": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "One worker.",
+        "description": "# Errors\n\n`NOT_FOUND` for an unknown worker.",
+        "operationId": "get_one_worker",
+        "parameters": [
+          {
+            "name": "worker_id",
+            "in": "path",
+            "description": "Worker identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The worker",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such worker",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/workers/{worker_id}/capabilities": {
       "put": {
         "tags": [
@@ -6186,6 +6298,122 @@
         "security": [
           {
             "worker_credential": []
+          }
+        ]
+      }
+    },
+    "/api/v1/workers/{worker_id}/drain": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Drain a worker: it finishes what it holds and takes nothing new.",
+        "description": "Drain a worker: at its next heartbeat it is told to take no new work, and claims answer it with nothing to do, while what it holds runs to the end. Draining a draining worker changes nothing. Needs an administrator, and is audited.",
+        "operationId": "drain_one_worker",
+        "parameters": [
+          {
+            "name": "worker_id",
+            "in": "path",
+            "description": "Worker identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Draining",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such worker",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Revoked or incompatible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/workers/{worker_id}/enable": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Undo a drain.",
+        "description": "Undo a drain: the worker takes work again. Enabling a worker that is not draining changes nothing. Needs an administrator, and is audited.",
+        "operationId": "enable_one_worker",
+        "parameters": [
+          {
+            "name": "worker_id",
+            "in": "path",
+            "description": "Worker identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Taking work",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such worker",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Revoked or incompatible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
           }
         ]
       }
@@ -6363,6 +6591,54 @@
         "security": [
           {
             "worker_credential": []
+          }
+        ]
+      }
+    },
+    "/api/v1/workers/{worker_id}/revoke": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Revoke a worker, for good.",
+        "description": "Revoke a worker's credential, for good: its next request is refused, so it can no longer take work, renew a lease or report. An attempt it held lapses as a lost worker's does; nothing interrupts a write. To use the machine again, enroll it with a new token under a new name. Revoking a revoked worker changes nothing. Needs an administrator, and is audited.",
+        "operationId": "revoke_one_worker",
+        "parameters": [
+          {
+            "name": "worker_id",
+            "in": "path",
+            "description": "Worker identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such worker",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
           }
         ]
       }
@@ -12723,6 +12999,107 @@
               "$ref": "#/components/schemas/TrackVerificationReport"
             },
             "description": "What was checked on each track, for a disc described as tracks."
+          }
+        }
+      },
+      "WorkerDriveView": {
+        "type": "object",
+        "description": "One of a worker's drives.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Opaque identifier."
+          },
+          "name": {
+            "type": "string",
+            "description": "What the worker calls it."
+          }
+        }
+      },
+      "WorkerList": {
+        "type": "object",
+        "description": "A page of workers.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkerView"
+            },
+            "description": "The workers in this page, oldest first."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor for the next page, or null when this is the last."
+          }
+        }
+      },
+      "WorkerView": {
+        "type": "object",
+        "description": "A worker.",
+        "required": [
+          "id",
+          "name",
+          "status",
+          "software_version",
+          "protocol_version",
+          "created_at",
+          "drives"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "description": "When it enrolled."
+          },
+          "drives": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkerDriveView"
+            },
+            "description": "Its drives, by name."
+          },
+          "id": {
+            "type": "string",
+            "description": "Opaque identifier."
+          },
+          "last_seen_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it last reported in."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name, chosen when it enrolled."
+          },
+          "protocol_version": {
+            "type": "string",
+            "description": "The worker protocol version it speaks."
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was revoked."
+          },
+          "software_version": {
+            "type": "string",
+            "description": "The Tangible version it runs."
+          },
+          "status": {
+            "type": "string",
+            "description": "`pending` (never heard from), `online`, `offline`, `draining`,\n`revoked` or `incompatible`."
           }
         }
       },

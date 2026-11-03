@@ -175,6 +175,26 @@ docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml up -d
 One worker per drive. To add a second, copy the `burner-sr0` service, rename
 it, and map that drive's own block device.
 
+## Draining and revoking a worker
+
+`GET /api/v1/workers` lists the workers, their status, when each was last
+heard from and its drives. An administrator can change one:
+
+- **Drain** (`POST /api/v1/workers/<id>/drain`) before maintenance: at its
+  next heartbeat the worker is told to take no new work, and asking for any
+  is answered with nothing, while a burn, rip or erasure it already holds
+  runs to the end. **Enable** (`.../enable`) undoes it.
+- **Revoke** (`.../revoke`) when a worker's machine or credential is lost
+  or not to be trusted. Its credential is refused from its next request, so
+  it can no longer take work, renew a lease or report. A burn it held is not
+  interrupted by the server; its lease lapses as a lost worker's does, and
+  the attempt is reconciled the same way. Revoking is final: to use the
+  machine again, issue a new enrollment token and enroll it under a new
+  name.
+
+Each change is audited with who asked. Viewers and operators see workers;
+only administrators change them.
+
 ## Tested hardware
 
 What has actually been burned and checked, through the worker as it deploys
