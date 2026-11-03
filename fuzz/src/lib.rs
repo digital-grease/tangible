@@ -178,7 +178,6 @@ pub fn archive(data: &[u8]) {
             let metadata = std::fs::symlink_metadata(&file).expect("listed files exist");
             assert!(metadata.is_file(), "{path} is a regular file");
             assert_eq!(metadata.len(), *length);
-            assert!(!path.as_str().starts_with(".tangible-"));
             total += length;
         }
         assert_eq!(total, unpacked.expanded_bytes);

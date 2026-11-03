@@ -40,6 +40,10 @@ pub enum StagingKind {
     Derivatives,
     /// An artifact being reconstituted for a burn or a validator.
     Materializations,
+    /// An import's archive, set aside and unpacked apart from what its
+    /// source staged, under the import's id: no source writes here, so
+    /// nothing a source staged can be taken for Tangible's own.
+    Unpacks,
 }
 
 impl StagingKind {
@@ -50,13 +54,19 @@ impl StagingKind {
             Self::Imports => "imports",
             Self::Derivatives => "derivatives",
             Self::Materializations => "materializations",
+            Self::Unpacks => "unpacks",
         }
     }
 
     /// Every kind, for sweeps.
     #[must_use]
     pub const fn all() -> &'static [Self] {
-        &[Self::Imports, Self::Derivatives, Self::Materializations]
+        &[
+            Self::Imports,
+            Self::Derivatives,
+            Self::Materializations,
+            Self::Unpacks,
+        ]
     }
 }
 

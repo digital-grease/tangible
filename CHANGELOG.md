@@ -18,10 +18,15 @@ may change between minor versions, and the release notes say how.
   not plain relative paths, links, devices, sparse files and names twice
   (`ARCHIVE_UNSAFE_ENTRY`), more than 10,000 entries, more than
   `TANGIBLE_MAX_UPLOAD_BYTES` or a thousand times the archive's size
-  unpacked, or a 7z dictionary over 1 GiB (`ARCHIVE_TOO_LARGE`), unreadable
+  unpacked, a 7z dictionary over 1 GiB, or an index the decoders would
+  hold whole in memory (a ZIP's central directory or a 7z header over
+  64 MiB, a tar extension header over 1 MiB), checked from the bytes before
+  it is read (`ARCHIVE_TOO_LARGE`), unreadable
   data (`ARCHIVE_CORRUPT`), unknown methods (`ARCHIVE_UNSUPPORTED`). macOS's
   `__MACOSX` and `.DS_Store` are left out; an archive inside is imported as
-  a file. An interrupted unpack starts again cleanly. No RAR. Pure Rust
+  a file. An interrupted unpack starts again cleanly, from state kept in a
+  staging area of Tangible's own (`<staging>/unpacks/`) that no source
+  writes to. No RAR. Pure Rust
   decoders: `zip`, `sevenz-rust2`, `tar`, `flate2`, `lzma-rust2`. An
   artifact's page says what archive its files came in, its size, digest
   and notes, and that the archive itself is not kept.

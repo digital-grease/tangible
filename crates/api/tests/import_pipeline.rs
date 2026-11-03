@@ -1470,17 +1470,20 @@ async fn an_archive_is_unpacked_and_its_disc_imported_with_the_archive_recorded(
             Some(name),
             "the name it was received under"
         );
-        // Nothing of Tangible's own is left among what was imported.
-        assert!(
-            area.entries()
-                .await
-                .expect("entries")
-                .iter()
-                .all(|path| !path.as_str().starts_with(".tangible-archive")
-                    || path.as_str() == ".tangible-archive.json"),
-            "{name}"
-        );
-        assert!(!area.path().join(".tangible-archive").exists(), "{name}");
+        // Only what the archive held is in the import's area; Tangible's
+        // record is in its own area, and the archive is gone.
+        let mut staged: Vec<String> = area
+            .entries()
+            .await
+            .expect("entries")
+            .iter()
+            .map(|path| path.as_str().to_owned())
+            .collect();
+        staged.sort_unstable();
+        assert_eq!(staged, ["Game/Game.bin", "Game/Game.cue"], "{name}");
+        let unpacks = pipeline.unpack_area(import_id).await.expect("area");
+        assert!(unpacks.path().join("record.json").is_file(), "{name}");
+        assert!(!unpacks.path().join("archive").exists(), "{name}");
         drop(dir);
     }
     let formats: Vec<String> = ["game.zip", "game.7z"]
@@ -1532,10 +1535,13 @@ async fn an_unpacking_that_stopped_part_way_starts_again() {
     let import_id = ImportJobId::generate();
     let area = pipeline.open_area(import_id).await.expect("area");
     // As a run that set the archive aside and stopped while unpacking.
-    area.write(&path(".tangible-archive"), &archive_fixture("game.zip"))
+    let unpacks = pipeline.unpack_area(import_id).await.expect("area");
+    unpacks
+        .write(&path("archive"), &archive_fixture("game.zip"))
         .await
         .expect("stage");
-    area.write(&path(".tangible-unpacking/Game/Game.bin"), b"half")
+    unpacks
+        .write(&path("unpacking/Game/Game.bin"), b"half")
         .await
         .expect("stage");
     area.write(&path("Game/Game.cue"), b"moved before it stopped")
@@ -1566,23 +1572,30 @@ async fn an_unpacking_that_finished_but_kept_its_archive_finishes() {
     let (_dir, pipeline) = pipeline().await;
     let import_id = ImportJobId::generate();
     let area = pipeline.open_area(import_id).await.expect("area");
-    let first = ImportJobId::generate();
-    // The files in place and the record written, the archive not yet gone:
-    // made by unpacking in another area, then copied.
-    let donor = pipeline.open_area(first).await.expect("area");
-    donor
-        .write(&path("game.zip"), &archive_fixture("game.zip"))
-        .await
-        .expect("stage");
-    let mut donor_checkpoint = ImportCheckpoint::default();
-    tangible_api::unpack::open_archive(&donor, &mut donor_checkpoint, 1 << 30)
-        .await
-        .expect("unpack");
-    for name in ["Game/Game.bin", "Game/Game.cue", ".tangible-archive.json"] {
-        let bytes = std::fs::read(donor.path().join(name)).unwrap();
-        area.write(&path(name), &bytes).await.expect("stage");
-    }
-    area.write(&path(".tangible-archive"), &archive_fixture("game.zip"))
+    let unpacks = pipeline.unpack_area(import_id).await.expect("area");
+    // As a run left it that stopped just before removing the archive: the
+    // files in place and the record written.
+    let zip = archive_fixture("game.zip");
+    unpacks.write(&path("archive"), &zip).await.expect("stage");
+    tangible_image::archive::unpack(
+        &unpacks.path().join("archive"),
+        tangible_image::archive::ArchiveKind::Zip,
+        area.path(),
+        &tangible_image::archive::ArchiveLimits::for_import(1 << 30),
+    )
+    .expect("unpack");
+    let record = tangible_api::unpack::UnpackedArchive {
+        format: "zip".to_owned(),
+        sha256: sha256_hex(&zip).parse().expect("digest"),
+        length_bytes: zip.len() as u64,
+        files: 2,
+        notes: Vec::new(),
+    };
+    unpacks
+        .write(
+            &path("record.json"),
+            &serde_json::to_vec(&record).expect("record"),
+        )
         .await
         .expect("stage");
 
@@ -1591,7 +1604,7 @@ async fn an_unpacking_that_finished_but_kept_its_archive_finishes() {
         .run(&request(import_id, "game.zip"), &mut checkpoint)
         .await
         .expect("import");
-    assert!(!area.path().join(".tangible-archive").exists());
+    assert!(!unpacks.path().join("archive").exists());
     let manifest = pipeline
         .manifests()
         .read(outcome.artifact_id)
@@ -1613,4 +1626,72 @@ async fn a_file_that_is_not_an_archive_is_imported_as_it_is() {
     let (manifest, _) = import_set(&[("disc.iso", iso_image("DISC", 64))], "disc.iso").await;
     assert!(manifest.origin.container.is_none());
     assert_eq!(manifest.classification.format, ArtifactFormat::Iso);
+}
+
+#[tokio::test]
+async fn an_unpacking_that_stopped_before_the_archive_was_moved_begins_again() {
+    let (_dir, pipeline) = pipeline().await;
+    let import_id = ImportJobId::generate();
+    let area = pipeline.open_area(import_id).await.expect("area");
+    // Tangible's area made, the archive still where its source staged it.
+    pipeline.unpack_area(import_id).await.expect("area");
+    area.write(&path("game.zip"), &archive_fixture("game.zip"))
+        .await
+        .expect("stage");
+    let mut checkpoint = ImportCheckpoint::default();
+    let outcome = pipeline
+        .run(&request(import_id, "game.zip"), &mut checkpoint)
+        .await
+        .expect("import, not the staged archive cleared away");
+    let manifest = pipeline
+        .manifests()
+        .read(outcome.artifact_id)
+        .await
+        .expect("read");
+    assert_eq!(manifest.classification.format, ArtifactFormat::CueBin);
+    assert!(manifest.origin.container.is_some());
+}
+
+#[tokio::test]
+async fn files_named_like_tangibles_own_are_the_imports_and_forge_nothing() {
+    // A file of the old names, imported as it is.
+    for name in [".tangible-state", ".tangible-archive.json"] {
+        let (manifest, _) = import_set(&[(name, iso_image("DISC", 64))], name).await;
+        assert_eq!(
+            manifest.classification.format,
+            ArtifactFormat::Iso,
+            "{name}"
+        );
+        assert_eq!(manifest.components[0].logical_path.as_str(), name);
+    }
+
+    // A source of many files staging what looks like Tangible's record of
+    // an unpacking: its files, all of them, and no archive claimed.
+    let forged = serde_json::json!({
+        "format": "zip",
+        "sha256": "00".repeat(32),
+        "length_bytes": 1,
+        "files": 1,
+        "notes": [],
+    });
+    let files = [
+        (
+            ".tangible-state/record.json",
+            forged.to_string().into_bytes(),
+        ),
+        ("record.json", forged.to_string().into_bytes()),
+        ("disc.iso", iso_image("DISC", 64)),
+    ];
+    let (manifest, _) = import_set(&files, "a download").await;
+    assert!(manifest.origin.container.is_none(), "nothing was unpacked");
+    let mut paths: Vec<&str> = manifest
+        .components
+        .iter()
+        .map(|component| component.logical_path.as_str())
+        .collect();
+    paths.sort_unstable();
+    assert_eq!(
+        paths,
+        [".tangible-state/record.json", "disc.iso", "record.json"]
+    );
 }

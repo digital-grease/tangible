@@ -19,8 +19,7 @@
 //! - Bounded: the number of entries, the bytes unpacked, the ratio of those
 //!   to the archive's size, a 7z dictionary, and the time taken.
 //! - Encrypted archives are refused: Tangible holds no passwords for them.
-//! - Nothing is overwritten: a name twice refuses a tar or a 7z, and the
-//!   names Tangible keeps for itself (`.tangible-…`) are refused. A ZIP's
+//! - Nothing is overwritten: a name twice refuses a tar or a 7z. A ZIP's
 //!   directory is read one entry per name, as ZIP readers read it, so a name
 //!   twice there gives one file.
 //! - An archive inside the archive is unpacked as a file, not opened.
@@ -164,6 +163,10 @@ pub enum ArchiveError {
     /// Too many bytes for its size.
     #[error("the archive unpacks to more than {0} times its own size")]
     Ratio(u64),
+    /// The archive's own index is larger than any real one: what the
+    /// decoder would read whole before a single entry could be counted.
+    #[error("the archive's {0} is larger than Tangible reads")]
+    Index(&'static str),
     /// A dictionary too large to allocate.
     #[error("the archive's dictionary needs {needed} bytes, more than the {limit} allowed")]
     Dictionary {
@@ -200,6 +203,7 @@ impl ArchiveError {
             Self::TooManyEntries(_)
             | Self::TooLarge(_)
             | Self::Ratio(_)
+            | Self::Index(_)
             | Self::Dictionary { .. } => "ARCHIVE_TOO_LARGE",
             Self::TimedOut => "ARCHIVE_TIMED_OUT",
             Self::Io { .. } => "ARCHIVE_IO",
@@ -217,6 +221,15 @@ const GZIP_SIGNATURE: &[u8] = &[0x1F, 0x8B];
 const XZ_SIGNATURE: &[u8] = &[0xFD, b'7', b'z', b'X', b'Z', 0x00];
 /// Where a tar header says `ustar`, POSIX's or GNU's.
 const USTAR_OFFSET: usize = 257;
+
+/// The largest index read whole before entries are counted: a 7z's header
+/// or a ZIP's central directory. Ten thousand entries with the longest names
+/// need about 11 MB.
+const MAX_INDEX_BYTES: u64 = 64 << 20;
+
+/// The largest tar extension header (a GNU long name or link, a PAX record):
+/// the tar reader holds each whole in memory.
+const MAX_TAR_EXTENSION_BYTES: u64 = 1 << 20;
 
 /// Whether `block`, a tar's first 512 bytes, is a tar header.
 fn is_tar_header(block: &[u8]) -> bool {
@@ -303,7 +316,16 @@ pub fn unpack(
         .map_err(io("reading the archive"))?
         .len();
     let mut writer = Writer::new(kind, destination, limits, archive_bytes)?;
-    let file = fs::File::open(archive).map_err(io("opening the archive"))?;
+    let mut file = fs::File::open(archive).map_err(io("opening the archive"))?;
+    // What the decoders would read whole into memory before a single entry
+    // reaches a limit is checked first, from the bytes.
+    match kind {
+        ArchiveKind::Zip => zip_index_fits(&mut file, archive_bytes, limits)?,
+        ArchiveKind::SevenZip => seven_zip_index_fits(&mut file, archive_bytes, limits)?,
+        _ => {}
+    }
+    file.seek(SeekFrom::Start(0))
+        .map_err(io("reading the archive"))?;
     match kind {
         ArchiveKind::Zip => unpack_zip(file, &mut writer)?,
         ArchiveKind::SevenZip => unpack_seven_zip(file, &mut writer)?,
@@ -376,8 +398,12 @@ impl<'a> Writer<'a> {
             return Err(ArchiveError::TooManyEntries(self.limits.max_entries));
         }
         self.check_time()?;
-        let name = raw.trim_end_matches('/');
-        if name.is_empty() && is_dir {
+        // `tar -C dir -cf x.tar .` names everything under `./`.
+        let mut name = raw.trim_end_matches('/');
+        while let Some(rest) = name.strip_prefix("./") {
+            name = rest;
+        }
+        if (name.is_empty() || name == ".") && is_dir {
             return Ok(None);
         }
         let path = LogicalPath::parse(name).map_err(|error| ArchiveError::Path {
@@ -385,15 +411,6 @@ impl<'a> Writer<'a> {
             why: error.to_string(),
         })?;
         let segments: Vec<&str> = path.segments().collect();
-        if segments
-            .iter()
-            .any(|segment| segment.starts_with(".tangible-"))
-        {
-            return Err(ArchiveError::Path {
-                name: raw.to_owned(),
-                why: "names beginning .tangible- are Tangible's own".to_owned(),
-            });
-        }
         if segments.first() == Some(&"__MACOSX") || segments.last() == Some(&".DS_Store") {
             if !self.notes.iter().any(|note| note.starts_with("macOS")) {
                 self.notes
@@ -406,8 +423,7 @@ impl<'a> Writer<'a> {
 
     fn folder(&mut self, raw: &str) -> Result<(), ArchiveError> {
         if let Some(path) = self.admit(raw, true)? {
-            fs::create_dir_all(self.destination.join(path.as_str()))
-                .map_err(io("creating a folder from the archive"))?;
+            make_folder(&self.destination.join(path.as_str()), raw)?;
         }
         Ok(())
     }
@@ -421,7 +437,7 @@ impl<'a> Writer<'a> {
         };
         let target = self.destination.join(path.as_str());
         if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(io("creating a folder from the archive"))?;
+            make_folder(parent, raw)?;
         }
         let mut out = match fs::OpenOptions::new()
             .write(true)
@@ -429,7 +445,12 @@ impl<'a> Writer<'a> {
             .open(&target)
         {
             Ok(out) => out,
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::AlreadyExists | io::ErrorKind::NotADirectory
+                ) =>
+            {
                 return Err(ArchiveError::Duplicate(raw.to_owned()));
             }
             Err(error) => return Err(io("writing a file from the archive")(error)),
@@ -479,6 +500,24 @@ impl<'a> Writer<'a> {
     }
 }
 
+/// Create a folder the archive needs. A file already where a folder goes, or
+/// the other way about, is the archive naming one thing twice, and is final:
+/// it would fail the same way every time.
+fn make_folder(path: &Path, raw: &str) -> Result<(), ArchiveError> {
+    match fs::create_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::AlreadyExists | io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Err(ArchiveError::Duplicate(raw.to_owned()))
+        }
+        Err(error) => Err(io("creating a folder from the archive")(error)),
+    }
+}
+
 /// A read error from inside an archive's data: the archive, not the disk.
 fn corrupt(error: &io::Error) -> ArchiveError {
     ArchiveError::Corrupt(error.to_string())
@@ -491,6 +530,273 @@ fn is_archive_name(name: &str) -> bool {
     [".zip", ".7z", ".tar", ".tgz", ".gz", ".xz", ".rar"]
         .iter()
         .any(|suffix| lower.ends_with(suffix))
+}
+
+/// Read `buffer.len()` bytes at `offset`, or fail as a damaged archive.
+fn read_at(file: &mut fs::File, offset: u64, buffer: &mut [u8]) -> Result<(), ArchiveError> {
+    file.seek(SeekFrom::Start(offset))
+        .map_err(io("reading the archive"))?;
+    file.read_exact(buffer)
+        .map_err(|_| ArchiveError::Corrupt("it ends early".to_owned()))
+}
+
+fn le_u16(bytes: &[u8], at: usize) -> u64 {
+    u64::from(u16::from_le_bytes([bytes[at], bytes[at + 1]]))
+}
+
+fn le_u32(bytes: &[u8], at: usize) -> u64 {
+    u64::from(u32::from_le_bytes([
+        bytes[at],
+        bytes[at + 1],
+        bytes[at + 2],
+        bytes[at + 3],
+    ]))
+}
+
+fn le_u64(bytes: &[u8], at: usize) -> u64 {
+    let mut word = [0_u8; 8];
+    word.copy_from_slice(&bytes[at..at + 8]);
+    u64::from_le_bytes(word)
+}
+
+/// A ZIP's entry count and central directory size, from its end record (and
+/// the ZIP64 one where that says so), checked before the reader builds its
+/// index of every entry in memory.
+fn zip_index_fits(
+    file: &mut fs::File,
+    length: u64,
+    limits: &ArchiveLimits,
+) -> Result<(), ArchiveError> {
+    // The end record is 22 bytes, with up to 64 KiB of comment after it.
+    let tail_length = length.min(22 + 65_535);
+    let mut tail = vec![0_u8; usize::try_from(tail_length).unwrap_or(0)];
+    read_at(file, length - tail_length, &mut tail)?;
+    let Some(at) = (0..tail.len().saturating_sub(21))
+        .rev()
+        .find(|&at| tail[at..at + 4] == *b"PK\x05\x06")
+    else {
+        return Err(ArchiveError::Corrupt("it has no ZIP end record".to_owned()));
+    };
+    let mut entries = le_u16(&tail, at + 10);
+    let mut size = le_u32(&tail, at + 12);
+    if entries == 0xFFFF || size == 0xFFFF_FFFF || le_u32(&tail, at + 16) == 0xFFFF_FFFF {
+        // ZIP64: a locator just before the end record names the real one.
+        let locator = (length - tail_length + at as u64)
+            .checked_sub(20)
+            .ok_or_else(|| ArchiveError::Corrupt("its ZIP64 locator is missing".to_owned()))?;
+        let mut bytes = [0_u8; 20];
+        read_at(file, locator, &mut bytes)?;
+        if bytes[..4] != *b"PK\x06\x07" {
+            return Err(ArchiveError::Corrupt(
+                "its ZIP64 locator is missing".to_owned(),
+            ));
+        }
+        let mut record = [0_u8; 56];
+        read_at(file, le_u64(&bytes, 8), &mut record)?;
+        if record[..4] != *b"PK\x06\x06" {
+            return Err(ArchiveError::Corrupt(
+                "its ZIP64 end record is missing".to_owned(),
+            ));
+        }
+        entries = le_u64(&record, 32);
+        size = le_u64(&record, 40);
+    }
+    if entries > limits.max_entries {
+        return Err(ArchiveError::TooManyEntries(limits.max_entries));
+    }
+    if size > MAX_INDEX_BYTES {
+        return Err(ArchiveError::Index("central directory"));
+    }
+    Ok(())
+}
+
+/// Reads a 7z header's fields, each read bounded by the bytes there are.
+struct HeaderCursor<'a> {
+    bytes: &'a [u8],
+    at: usize,
+}
+
+fn header_unreadable() -> ArchiveError {
+    ArchiveError::Corrupt("its header could not be read".to_owned())
+}
+
+impl<'a> HeaderCursor<'a> {
+    fn byte(&mut self) -> Result<u8, ArchiveError> {
+        let value = *self.bytes.get(self.at).ok_or_else(header_unreadable)?;
+        self.at += 1;
+        Ok(value)
+    }
+
+    fn take(&mut self, length: usize) -> Result<&'a [u8], ArchiveError> {
+        let slice = self
+            .bytes
+            .get(self.at..self.at.checked_add(length).ok_or_else(header_unreadable)?)
+            .ok_or_else(header_unreadable)?;
+        self.at += length;
+        Ok(slice)
+    }
+
+    /// A 7z number: one to nine bytes, the first saying how many follow.
+    fn number(&mut self) -> Result<u64, ArchiveError> {
+        let first = self.byte()?;
+        let mut mask = 0x80_u8;
+        let mut value = 0_u64;
+        for i in 0..8 {
+            if first & mask == 0 {
+                let high = u64::from(first & mask.wrapping_sub(1));
+                return Ok(value | (high << (8 * i)));
+            }
+            value |= u64::from(self.byte()?) << (8 * i);
+            mask >>= 1;
+        }
+        Ok(value)
+    }
+
+    /// A number that counts something, bounded so a hostile header cannot
+    /// make the reading of it loop for long.
+    fn count(&mut self) -> Result<u64, ArchiveError> {
+        let value = self.number()?;
+        if value > 1024 {
+            return Err(header_unreadable());
+        }
+        Ok(value)
+    }
+}
+
+/// What a 7z's encoded header will decode to, and the dictionaries its own
+/// coders ask for, read from the bytes before the reader decodes it whole
+/// into memory. A plain header is read as it is, so its size on disk bounds
+/// it.
+fn seven_zip_index_fits(
+    file: &mut fs::File,
+    length: u64,
+    limits: &ArchiveLimits,
+) -> Result<(), ArchiveError> {
+    let mut start = [0_u8; 32];
+    read_at(file, 0, &mut start)?;
+    let offset = le_u64(&start, 12);
+    let size = le_u64(&start, 20);
+    if size > MAX_INDEX_BYTES {
+        return Err(ArchiveError::Index("header"));
+    }
+    let at = 32_u64
+        .checked_add(offset)
+        .filter(|at| at.checked_add(size).is_some_and(|end| end <= length))
+        .ok_or_else(header_unreadable)?;
+    let mut header = vec![0_u8; usize::try_from(size).map_err(|_| header_unreadable())?];
+    read_at(file, at, &mut header)?;
+    // kHeader is plain. Anything else but kEncodedHeader is the reader's to
+    // refuse.
+    if header.first() != Some(&0x17) {
+        return Ok(());
+    }
+    let mut cursor = HeaderCursor {
+        bytes: &header,
+        at: 1,
+    };
+    loop {
+        match cursor.byte()? {
+            0x00 => return Ok(()),
+            // PackInfo: where the packed header is, and its sizes.
+            0x06 => {
+                cursor.number()?;
+                let streams = cursor.count()?;
+                loop {
+                    match cursor.byte()? {
+                        0x00 => break,
+                        0x09 => {
+                            for _ in 0..streams {
+                                cursor.number()?;
+                            }
+                        }
+                        _ => return Err(header_unreadable()),
+                    }
+                }
+            }
+            // UnpackInfo: the coders, and what each folder decodes to. What
+            // follows (CRCs, the end) the reader checks.
+            0x07 => return seven_zip_unpack_info(&mut cursor, limits),
+            _ => return Err(header_unreadable()),
+        }
+    }
+}
+
+/// An encoded header's UnpackInfo: each folder's coders checked, and every
+/// size it decodes to.
+fn seven_zip_unpack_info(
+    cursor: &mut HeaderCursor<'_>,
+    limits: &ArchiveLimits,
+) -> Result<(), ArchiveError> {
+    if cursor.byte()? != 0x0B {
+        return Err(header_unreadable());
+    }
+    let folders = cursor.count()?;
+    if cursor.byte()? != 0 {
+        return Err(header_unreadable());
+    }
+    let mut outputs = 0_u64;
+    for _ in 0..folders {
+        outputs += seven_zip_folder(cursor, limits)?;
+    }
+    if cursor.byte()? != 0x0C {
+        return Err(header_unreadable());
+    }
+    for _ in 0..outputs {
+        if cursor.number()? > MAX_INDEX_BYTES {
+            return Err(ArchiveError::Index("header"));
+        }
+    }
+    Ok(())
+}
+
+/// One folder of an encoded header: its coders, refused if encrypted or
+/// asking too large a dictionary. How many outputs it has.
+fn seven_zip_folder(
+    cursor: &mut HeaderCursor<'_>,
+    limits: &ArchiveLimits,
+) -> Result<u64, ArchiveError> {
+    let coders = cursor.count()?;
+    let (mut ins, mut outs) = (0_u64, 0_u64);
+    for _ in 0..coders {
+        let flags = cursor.byte()?;
+        if flags & 0x80 != 0 {
+            return Err(header_unreadable());
+        }
+        let id = cursor.take(usize::from(flags & 0x0F))?;
+        if flags & 0x10 != 0 {
+            ins += cursor.count()?;
+            outs += cursor.count()?;
+        } else {
+            ins += 1;
+            outs += 1;
+        }
+        if flags & 0x20 != 0 {
+            let length = usize::try_from(cursor.count()?).map_err(|_| header_unreadable())?;
+            let properties = cursor.take(length)?;
+            if id == sevenz_rust2::EncoderMethod::ID_AES256_SHA256 {
+                return Err(ArchiveError::Encrypted);
+            }
+            if let Some(needed) = dictionary_bytes(id, properties)
+                && needed > limits.max_dictionary_bytes
+            {
+                return Err(ArchiveError::Dictionary {
+                    needed,
+                    limit: limits.max_dictionary_bytes,
+                });
+            }
+        }
+    }
+    let pairs = outs.checked_sub(1).ok_or_else(header_unreadable)?;
+    for _ in 0..pairs * 2 {
+        cursor.number()?;
+    }
+    let packed = ins.checked_sub(pairs).ok_or_else(header_unreadable)?;
+    if packed > 1 {
+        for _ in 0..packed {
+            cursor.number()?;
+        }
+    }
+    Ok(outs)
 }
 
 fn unpack_zip(file: fs::File, writer: &mut Writer<'_>) -> Result<(), ArchiveError> {
@@ -632,7 +938,134 @@ fn seven_zip_error(error: &sevenz_rust2::Error) -> ArchiveError {
     }
 }
 
+/// What a tar guard refused, for the error the tar reader then returns.
+type Refusal = std::rc::Rc<std::cell::RefCell<Option<ArchiveError>>>;
+
+/// Between a tar's bytes and the tar reader, following its headers as they
+/// pass: what the reader would hold whole in memory (a GNU long name or
+/// link, a PAX record) is refused past [`MAX_TAR_EXTENSION_BYTES`] before the
+/// reader reads it, as is an old GNU sparse file, whose extra headers would
+/// put the count out of step; and the deadline is kept while the reader
+/// skips data it does not hand on.
+struct TarGuard<R> {
+    inner: R,
+    header: [u8; 512],
+    filled: usize,
+    data_left: u64,
+    deadline: Option<Instant>,
+    refusal: Refusal,
+}
+
+impl<R> TarGuard<R> {
+    fn refuse(&self, error: ArchiveError) -> io::Error {
+        let message = error.to_string();
+        *self.refusal.borrow_mut() = Some(error);
+        io::Error::other(message)
+    }
+
+    /// A whole header has passed: where its data ends, and whether it is
+    /// one to refuse.
+    fn header_passed(&mut self) -> Result<(), ArchiveError> {
+        let header = &self.header;
+        // The two zero blocks that end a tar.
+        if header.iter().all(|byte| *byte == 0) {
+            return Ok(());
+        }
+        let size = tar_size(&header[124..136]).ok_or_else(|| {
+            ArchiveError::Corrupt("a tar header's size is not a number".to_owned())
+        })?;
+        match header[156] {
+            b'L' | b'K' | b'x' | b'g' if size > MAX_TAR_EXTENSION_BYTES => {
+                return Err(ArchiveError::Index("tar extension header"));
+            }
+            b'S' => {
+                return Err(ArchiveError::NotAFile {
+                    name: String::from_utf8_lossy(&header[..100])
+                        .trim_end_matches('\0')
+                        .to_owned(),
+                    kind: "sparse file",
+                });
+            }
+            _ => {}
+        }
+        self.data_left = size
+            .div_ceil(512)
+            .checked_mul(512)
+            .ok_or_else(|| ArchiveError::Corrupt("a tar entry's size is impossible".to_owned()))?;
+        Ok(())
+    }
+}
+
+impl<R: Read> Read for TarGuard<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() > deadline)
+        {
+            return Err(self.refuse(ArchiveError::TimedOut));
+        }
+        let read = self.inner.read(buffer)?;
+        let mut at = 0;
+        while at < read {
+            if self.data_left > 0 {
+                let take = (read - at).min(usize::try_from(self.data_left).unwrap_or(usize::MAX));
+                self.data_left -= take as u64;
+                at += take;
+                continue;
+            }
+            let take = (read - at).min(512 - self.filled);
+            self.header[self.filled..self.filled + take].copy_from_slice(&buffer[at..at + take]);
+            self.filled += take;
+            at += take;
+            if self.filled == 512 {
+                self.filled = 0;
+                if let Err(error) = self.header_passed() {
+                    return Err(self.refuse(error));
+                }
+            }
+        }
+        Ok(read)
+    }
+}
+
+/// A tar header's size field: octal digits, or base-256 when the top bit of
+/// its first byte is set (GNU, for sizes over 8 GiB).
+fn tar_size(field: &[u8]) -> Option<u64> {
+    if field.first()? & 0x80 != 0 {
+        let mut value = u64::from(field[0] & 0x7F);
+        for byte in &field[1..] {
+            value = value.checked_mul(256)?.checked_add(u64::from(*byte))?;
+        }
+        return Some(value);
+    }
+    let text = std::str::from_utf8(field).ok()?;
+    let digits = text.trim_matches(|c: char| c == '\0' || c == ' ');
+    if digits.is_empty() {
+        return Some(0);
+    }
+    u64::from_str_radix(digits, 8).ok()
+}
+
 fn unpack_tar(reader: impl Read, writer: &mut Writer<'_>) -> Result<(), ArchiveError> {
+    let refusal = Refusal::default();
+    let guard = TarGuard {
+        inner: reader,
+        header: [0; 512],
+        filled: 0,
+        data_left: 0,
+        deadline: writer.limits.deadline,
+        refusal: std::rc::Rc::clone(&refusal),
+    };
+    let outcome = unpack_tar_entries(guard, writer);
+    // What the guard refused is the reason, whatever the reader made of it.
+    let refused = refusal.borrow_mut().take();
+    match refused {
+        Some(error) => Err(error),
+        None => outcome,
+    }
+}
+
+fn unpack_tar_entries(reader: impl Read, writer: &mut Writer<'_>) -> Result<(), ArchiveError> {
     let mut archive = tar::Archive::new(reader);
     let entries = archive.entries().map_err(|error| corrupt(&error))?;
     for entry in entries {
@@ -647,6 +1080,26 @@ fn unpack_tar(reader: impl Read, writer: &mut Writer<'_>) -> Result<(), ArchiveE
                 .to_owned()
         };
         let kind = entry.header().entry_type();
+        // A PAX sparse file is an ordinary entry whose data is the sparse
+        // map and the extents, not the file.
+        let sparse = entry
+            .pax_extensions()
+            .map_err(|error| corrupt(&error))?
+            .is_some_and(|mut extensions| {
+                extensions.any(|extension| {
+                    extension.is_ok_and(|extension| {
+                        extension
+                            .key()
+                            .is_ok_and(|key| key.starts_with("GNU.sparse."))
+                    })
+                })
+            });
+        if sparse {
+            return Err(ArchiveError::NotAFile {
+                name,
+                kind: "sparse file",
+            });
+        }
         if kind.is_dir() {
             writer.folder(&name)?;
         } else if kind.is_file() || kind == tar::EntryType::Continuous {

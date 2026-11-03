@@ -258,3 +258,156 @@ fn a_damaged_archive_says_so() {
     let error = unpack(&damaged, ArchiveKind::SevenZip, out.path(), &limits()).unwrap_err();
     assert_eq!(error.code(), "ARCHIVE_CORRUPT", "{error}");
 }
+
+#[test]
+fn names_under_dot_slash_unpack_as_they_are() {
+    let (dir, out) = unpacked("dotslash.tar").unwrap();
+    let names: Vec<&str> = out.files.iter().map(|(path, _)| path.as_str()).collect();
+    assert_eq!(names, ["Game.bin"]);
+    assert_eq!(std::fs::read(dir.path().join("Game.bin")).unwrap(), bin());
+}
+
+#[test]
+fn a_pax_sparse_file_is_refused() {
+    let error = unpacked("sparse.tar").unwrap_err();
+    assert!(
+        matches!(
+            error,
+            ArchiveError::NotAFile {
+                kind: "sparse file",
+                ..
+            }
+        ),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_file_where_a_folder_goes_is_final_not_retried() {
+    let error = unpacked("clash.zip").unwrap_err();
+    assert!(matches!(error, ArchiveError::Duplicate(_)), "{error}");
+    assert_eq!(
+        error.code(),
+        "ARCHIVE_UNSAFE_ENTRY",
+        "not ARCHIVE_IO, which is retried"
+    );
+}
+
+/// A tar header block, its checksum filled in.
+fn tar_header(name: &str, kind: u8, size_field: &[u8]) -> Vec<u8> {
+    let mut block = vec![0_u8; 512];
+    block[..name.len()].copy_from_slice(name.as_bytes());
+    block[100..108].copy_from_slice(b"0000644\0");
+    block[124..124 + size_field.len()].copy_from_slice(size_field);
+    block[156] = kind;
+    block[257..263].copy_from_slice(b"ustar\0");
+    block[263..265].copy_from_slice(b"00");
+    block[148..156].copy_from_slice(b"        ");
+    let sum: u32 = block.iter().map(|byte| u32::from(*byte)).sum();
+    block[148..156].copy_from_slice(format!("{sum:06o}\0 ").as_bytes());
+    block
+}
+
+#[test]
+fn a_huge_tar_extension_header_is_refused_before_it_is_read() {
+    // A GNU long name declaring 8 GiB (octal 77777777777), with nothing
+    // after: the reader would hold it whole in memory.
+    for kind in [b'L', b'K', b'x', b'g'] {
+        let dir = TempDir::new().unwrap();
+        let archive = dir.path().join("long.tar");
+        std::fs::write(
+            &archive,
+            tar_header("././@LongLink", kind, b"77777777777\0"),
+        )
+        .unwrap();
+        let out = TempDir::new().unwrap();
+        let error = unpack(&archive, ArchiveKind::Tar, out.path(), &limits()).unwrap_err();
+        assert!(
+            matches!(error, ArchiveError::Index("tar extension header")),
+            "{}: {error}",
+            kind as char
+        );
+        assert_eq!(error.code(), "ARCHIVE_TOO_LARGE");
+    }
+    // The same in base-256, as GNU writes sizes over 8 GiB.
+    let dir = TempDir::new().unwrap();
+    let archive = dir.path().join("long.tar");
+    let mut size = vec![0x80_u8; 1];
+    size.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0]);
+    std::fs::write(&archive, tar_header("././@LongLink", b'L', &size)).unwrap();
+    let out = TempDir::new().unwrap();
+    assert!(matches!(
+        unpack(&archive, ArchiveKind::Tar, out.path(), &limits()),
+        Err(ArchiveError::Index(_))
+    ));
+}
+
+/// A 7z number of exactly eight bytes.
+fn seven_zip_u64(value: u64) -> Vec<u8> {
+    let mut bytes = vec![0xFF];
+    bytes.extend_from_slice(&value.to_le_bytes());
+    bytes
+}
+
+/// A 7z whose encoded header names one LZMA folder with `dictionary` and
+/// decodes to `unpacked` bytes.
+fn seven_zip_with_header(dictionary: u32, unpacked: u64) -> Vec<u8> {
+    let mut header = vec![
+        0x17, 0x06, 0x00, 0x01, 0x09, 0x0A, 0x00, 0x07, 0x0B, 0x01, 0x00,
+    ];
+    header.extend_from_slice(&[0x01, 0x23, 0x03, 0x01, 0x01, 0x05, 0x5D]);
+    header.extend_from_slice(&dictionary.to_le_bytes());
+    header.push(0x0C);
+    header.extend_from_slice(&seven_zip_u64(unpacked));
+    header.push(0x00);
+    let mut file = vec![0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0x00, 0x04, 0, 0, 0, 0];
+    file.extend_from_slice(&0_u64.to_le_bytes());
+    file.extend_from_slice(&(header.len() as u64).to_le_bytes());
+    file.extend_from_slice(&[0, 0, 0, 0]);
+    file.extend_from_slice(&header);
+    file
+}
+
+#[test]
+fn a_7z_header_that_would_decode_to_gigabytes_is_refused_before_it_is() {
+    let dir = TempDir::new().unwrap();
+    let archive = dir.path().join("header.7z");
+    std::fs::write(&archive, seven_zip_with_header(1 << 16, 64 << 30)).unwrap();
+    let out = TempDir::new().unwrap();
+    let error = unpack(&archive, ArchiveKind::SevenZip, out.path(), &limits()).unwrap_err();
+    assert!(matches!(error, ArchiveError::Index("header")), "{error}");
+
+    std::fs::write(&archive, seven_zip_with_header(2 << 30, 4096)).unwrap();
+    let out = TempDir::new().unwrap();
+    let error = unpack(&archive, ArchiveKind::SevenZip, out.path(), &limits()).unwrap_err();
+    assert!(matches!(error, ArchiveError::Dictionary { .. }), "{error}");
+}
+
+#[test]
+fn a_zip_directory_too_large_is_refused_before_it_is_read() {
+    // Only an end record: what it claims is what is checked.
+    let end = |entries: u16, size: u32| {
+        let mut record = b"PK\x05\x06".to_vec();
+        record.extend_from_slice(&[0, 0, 0, 0]);
+        record.extend_from_slice(&entries.to_le_bytes());
+        record.extend_from_slice(&entries.to_le_bytes());
+        record.extend_from_slice(&size.to_le_bytes());
+        record.extend_from_slice(&0_u32.to_le_bytes());
+        record.extend_from_slice(&[0, 0]);
+        record
+    };
+    let dir = TempDir::new().unwrap();
+    let archive = dir.path().join("many.zip");
+    std::fs::write(&archive, end(60_000, 1000)).unwrap();
+    let out = TempDir::new().unwrap();
+    assert!(matches!(
+        unpack(&archive, ArchiveKind::Zip, out.path(), &limits()),
+        Err(ArchiveError::TooManyEntries(_))
+    ));
+    std::fs::write(&archive, end(10, 200 << 20)).unwrap();
+    let out = TempDir::new().unwrap();
+    assert!(matches!(
+        unpack(&archive, ArchiveKind::Zip, out.path(), &limits()),
+        Err(ArchiveError::Index("central directory"))
+    ));
+}

@@ -498,8 +498,9 @@ when it holds a link, a device or a sparse file, when it names a file twice,
 when it holds more than 10,000 entries, when it unpacks to more than
 `TANGIBLE_MAX_UPLOAD_BYTES` or to more than a thousand times its own size
 (past the first 64 MiB, since a disc's empty sectors compress to almost
-nothing), when a 7z needs a dictionary over 1 GiB, or when unpacking takes
-over six hours. The import's failure says which. macOS's `__MACOSX` folder
+nothing), when a 7z needs a dictionary over 1 GiB, when its index is larger
+than any real one (a ZIP's central directory or a 7z header over 64 MiB, a
+tar extension header over 1 MiB), or when unpacking takes over six hours. The import's failure says which. macOS's `__MACOSX` folder
 and `.DS_Store` files are left out. An archive inside the archive is
 imported as a file, not opened. RAR is not unpacked: its decoder is not free
 software; unpack it yourself and import what comes out.

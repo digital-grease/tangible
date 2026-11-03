@@ -287,13 +287,8 @@ impl ImportPipeline {
         // --- staged -------------------------------------------------------
         // An archive is unpacked in its place first; its files are what is
         // imported.
-        crate::unpack::open_archive(&area, checkpoint, self.unpack_limit).await?;
-        let staged: Vec<LogicalPath> = area
-            .entries()
-            .await?
-            .into_iter()
-            .filter(|path| !crate::unpack::is_reserved(path))
-            .collect();
+        crate::unpack::open_archive(&self.staging, &area, checkpoint, self.unpack_limit).await?;
+        let staged: Vec<LogicalPath> = area.entries().await?;
         if staged.is_empty() {
             return Err(ImportError::NothingStaged {
                 import_id: request.import_id.to_string(),
@@ -1437,9 +1432,23 @@ impl ImportPipeline {
     ///
     /// [`ImportError::Staging`] if removal fails.
     pub async fn discard(&self, import_id: ImportJobId) -> Result<bool, ImportError> {
+        let id = import_id.to_string();
+        let staged = self.staging.discard(StagingKind::Imports, &id).await?;
+        // Where an archive was unpacked, if it was one.
+        let unpacked = self.staging.discard(StagingKind::Unpacks, &id).await?;
+        Ok(staged || unpacked)
+    }
+
+    /// Open, or reopen, Tangible's own area beside an import's, where an
+    /// archive it received is set aside and unpacked (docs/plans/archives.md).
+    ///
+    /// # Errors
+    ///
+    /// [`ImportError::Staging`] if the area cannot be created.
+    pub async fn unpack_area(&self, import_id: ImportJobId) -> Result<StagingArea, ImportError> {
         Ok(self
             .staging
-            .discard(StagingKind::Imports, &import_id.to_string())
+            .create(StagingKind::Unpacks, &import_id.to_string())
             .await?)
     }
 }

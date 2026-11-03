@@ -92,6 +92,29 @@ def main():
         link.type = tarfile.LNKTYPE
         link.linkname = "Game.bin"
         archive.addfile(link)
+    # What `tar -C dir -cf x.tar .` writes: everything under ./
+    with tarfile.open(os.path.join(here, "dotslash.tar"), "w") as archive:
+        top = tarfile.TarInfo("./")
+        top.type = tarfile.DIRTYPE
+        archive.addfile(top)
+        data = tarfile.TarInfo("./Game.bin")
+        data.size = len(BIN)
+        archive.addfile(data, io.BytesIO(BIN))
+    # A PAX sparse file: an ordinary entry whose data is a sparse map.
+    with tarfile.open(os.path.join(here, "sparse.tar"), "w", format=tarfile.PAX_FORMAT) as archive:
+        data = tarfile.TarInfo("Game.bin")
+        data.size = 4
+        data.pax_headers = {
+            "GNU.sparse.major": "1",
+            "GNU.sparse.minor": "0",
+            "GNU.sparse.name": "Game.bin",
+            "GNU.sparse.realsize": "1048576",
+        }
+        archive.addfile(data, io.BytesIO(b"1\n0\n"))
+    # A file, then a folder of the same name.
+    with zipfile.ZipFile(os.path.join(here, "clash.zip"), "w") as archive:
+        archive.writestr("Game", b"a file")
+        archive.writestr("Game/Game.bin", b"inside a folder of that name")
     with zipfile.ZipFile(os.path.join(here, "macos.zip"), "w") as archive:
         archive.writestr("Game.bin", BIN)
         archive.writestr("__MACOSX/._Game.bin", b"resource fork")
