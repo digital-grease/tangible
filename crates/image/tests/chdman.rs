@@ -373,3 +373,29 @@ async fn a_delta_chd_without_its_parent_is_refused() {
     .expect_err("chdman cannot read it");
     assert_eq!(error.code(), "CHDMAN_FAILED", "{error}");
 }
+
+#[tokio::test]
+async fn verify_passes_a_whole_chd_and_fails_a_damaged_one() {
+    // What the RomM export asks before sending an imported CHD as it is
+    // (OWNER_QUEUE 14): chdman checks it against its own SHA-1s.
+    let Some(engine) = chdman().await else { return };
+    let (_dir, input) = input_dir();
+    let good = chd_fixture("mixed-mode.chd");
+    write(&input, "good.chd", &good);
+    engine
+        .verify(&input.join("good.chd"))
+        .await
+        .expect("a whole CHD verifies");
+
+    let mut damaged = good.clone();
+    let middle = damaged.len() / 2;
+    damaged[middle] ^= 0xff;
+    write(&input, "damaged.chd", &damaged);
+    let error = engine
+        .verify(&input.join("damaged.chd"))
+        .await
+        .expect_err("a damaged CHD does not");
+    assert_eq!(error.code(), "CHDMAN_FAILED", "{error}");
+    // It only read them.
+    assert_eq!(std::fs::read(input.join("good.chd")).unwrap(), good);
+}

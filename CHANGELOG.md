@@ -558,6 +558,14 @@ may change between minor versions, and the release notes say how.
 
 ### Changed
 
+- A CHD imported as it is goes to RomM as it is once `chdman verify` has
+  passed it (owner decision, OWNER_QUEUE 14; docs/plans/chd-images.md). The
+  export runs the verify once per CHD and chdman version, on a server whose
+  derivation engine is chdman, and records the verdict by the CHD's SHA-256
+  (migration 0032). One that fails is not sent, and the edition's status
+  says what chdman said, the library's path left out. A CHD made and
+  checked here is still preferred, then a verified imported one, then an
+  ISO or CUE/BIN.
 - **A worker refuses plain HTTP that would leave its machine** (breaking
   for a remote worker given an `http://` server URL). An `http://`
   `TANGIBLE_SERVER_URL` is accepted only where the server's address is
@@ -571,6 +579,8 @@ may change between minor versions, and the release notes say how.
 
 ### Fixed
 
+- A CHD sent to RomM is recorded in its export receipt as `chd`; it was
+  recorded as `cue_bin`.
 - A burn worker no longer writes its server URL to the log before checking
   it. A password in `TANGIBLE_SERVER_URL` reached the start-up log line;
   such a URL is now refused before anything is logged.

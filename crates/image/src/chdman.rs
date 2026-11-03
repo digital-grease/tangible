@@ -109,6 +109,26 @@ impl Chdman {
         })
     }
 
+    /// The version it reported.
+    #[must_use]
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+
+    /// Check a CHD against the SHA-1s written in it when it was made: every
+    /// hunk decompressed and hashed. It only reads the file.
+    ///
+    /// # Errors
+    ///
+    /// [`DeriveError::Failed`] (`CHDMAN_FAILED`) when the CHD does not
+    /// verify or chdman cannot read it, with the end of what it said.
+    pub async fn verify(&self, chd: &Path) -> Result<(), DeriveError> {
+        let input = path_arg(chd)?;
+        self.chdman(&["verify", "-i", &input], &std::env::temp_dir(), "verify")
+            .await
+            .map(|_| ())
+    }
+
     async fn chdman(
         &self,
         args: &[&str],

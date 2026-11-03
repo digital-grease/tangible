@@ -672,3 +672,68 @@ async fn mark_removed(
     .map_err(DbError::Query)?;
     Ok(())
 }
+
+/// What `chdman verify` has said of one CHD, by every chdman that ran it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChdVerdicts {
+    /// Whether any run passed.
+    pub passed: bool,
+    /// The versions that have run it.
+    pub tried_with: Vec<String>,
+    /// What the most recent failure said, if one failed.
+    pub last_failure: Option<String>,
+}
+
+/// What `chdman verify` has said of the CHD with this SHA-256.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn chd_verdicts(pool: &PgPool, sha256: &str) -> Result<ChdVerdicts, DbError> {
+    let rows: Vec<(String, bool, Option<String>)> = sqlx::query_as(
+        "SELECT tool_version, passed, detail FROM chd_verifications
+         WHERE sha256 = $1 ORDER BY created_at, tool_version",
+    )
+    .bind(sha256)
+    .fetch_all(pool)
+    .await
+    .map_err(DbError::Query)?;
+    let mut verdicts = ChdVerdicts::default();
+    for (version, passed, detail) in rows {
+        verdicts.passed |= passed;
+        if !passed {
+            verdicts.last_failure = detail.or_else(|| Some("it did not verify".to_owned()));
+        }
+        verdicts.tried_with.push(version);
+    }
+    Ok(verdicts)
+}
+
+/// Record what `chdman verify` at `tool_version` said of a CHD. A second
+/// verdict from the same version changes nothing: it is about the same bytes.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn record_chd_verdict(
+    pool: &PgPool,
+    sha256: &str,
+    tool_version: &str,
+    passed: bool,
+    detail: Option<&str>,
+) -> Result<(), DbError> {
+    let detail: Option<String> = detail.map(|detail| detail.chars().take(2000).collect());
+    sqlx::query(
+        "INSERT INTO chd_verifications (sha256, tool_version, passed, detail)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (sha256, tool_version) DO NOTHING",
+    )
+    .bind(sha256)
+    .bind(tool_version)
+    .bind(passed)
+    .bind(detail)
+    .execute(pool)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(())
+}

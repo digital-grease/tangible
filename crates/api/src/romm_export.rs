@@ -25,8 +25,9 @@ use std::time::Duration;
 
 use tangible_db::Database;
 use tangible_db::romm::{
-    DiscInputs, LinkedArtifact, Receipt, edition_romm, editions_to_reconcile, export_inputs,
-    fill_receipt_lengths, record_folder_removed, record_receipts, record_status,
+    DiscInputs, LinkedArtifact, Receipt, chd_verdicts, edition_romm, editions_to_reconcile,
+    export_inputs, fill_receipt_lengths, record_chd_verdict, record_folder_removed,
+    record_receipts, record_status,
 };
 use tangible_db::romm_api::owe_scans;
 use tangible_domain::enums::ComponentRole;
@@ -100,6 +101,47 @@ impl RommExport {
     }
 }
 
+/// Runs `chdman verify` on a CHD imported as it is, which the export sends
+/// as it is once it has passed (owner decision 2026-11-02, OWNER_QUEUE 14).
+pub trait ChdVerifier: Send + Sync + std::fmt::Debug {
+    /// The version a verdict is recorded under.
+    fn tool_version(&self) -> String;
+
+    /// Check `chd`, only reading it. `Err` says why it did not verify.
+    fn verify<'a>(
+        &'a self,
+        chd: &'a std::path::Path,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
+}
+
+impl ChdVerifier for tangible_image::chdman::Chdman {
+    fn tool_version(&self) -> String {
+        self.version().to_owned()
+    }
+
+    fn verify<'a>(
+        &'a self,
+        chd: &'a std::path::Path,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+        Box::pin(async move {
+            tangible_image::chdman::Chdman::verify(self, chd)
+                .await
+                .map_err(|error| error.to_string())
+        })
+    }
+}
+
+/// Whether a CHD imported as it is may go to RomM.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ChdCheck {
+    /// `chdman verify` passed.
+    Passed,
+    /// It failed, or the CHD could not be read; why.
+    Failed(String),
+    /// Never verified, and this server has no chdman to.
+    Unverifiable,
+}
+
 /// The background task that does the exporting.
 #[derive(Debug, Clone)]
 pub struct RommExporter {
@@ -107,6 +149,8 @@ pub struct RommExporter {
     database: Database,
     manifests: ManifestStore,
     integration_id: uuid::Uuid,
+    /// What verifies CHDs imported as they are, when this server has chdman.
+    verifier: Option<Arc<dyn ChdVerifier>>,
 }
 
 /// Why one edition could not be exported, in words for the operator.
@@ -143,7 +187,16 @@ impl RommExporter {
             database,
             manifests,
             integration_id,
+            verifier: None,
         }
+    }
+
+    /// Verify CHDs imported as they are with `verifier`, sending those that
+    /// pass to RomM as they are.
+    #[must_use]
+    pub fn with_chd_verifier(mut self, verifier: Arc<dyn ChdVerifier>) -> Self {
+        self.verifier = Some(verifier);
+        self
     }
 
     /// Run until `shutdown` resolves.
@@ -431,8 +484,9 @@ impl RommExporter {
         let mut sources = Vec::with_capacity(discs.len());
         for (index, disc) in discs.iter().enumerate() {
             let number = index + 1;
-            let (artifact, format) =
-                chosen_artifact(disc).ok_or_else(|| missing_image(number, disc))?;
+            let checks = self.check_imported_chds(disc).await;
+            let (artifact, format) = chosen_artifact(disc, &checks)
+                .ok_or_else(|| missing_image(number, disc, &checks))?;
             let image = self
                 .disc_image(artifact, format)
                 .await
@@ -440,14 +494,87 @@ impl RommExporter {
             images.push(image);
             sources.push((
                 artifact,
-                if format == ArtifactFormat::Iso {
-                    "iso"
-                } else {
-                    "cue_bin"
+                match format {
+                    ArtifactFormat::Iso => "iso",
+                    ArtifactFormat::Chd => "chd",
+                    _ => "cue_bin",
                 },
             ));
         }
         Ok((images, sources))
+    }
+
+    /// Whether each CHD imported as it is that is linked to `disc` may go
+    /// to RomM.
+    async fn check_imported_chds(&self, disc: &DiscInputs) -> BTreeMap<ArtifactId, ChdCheck> {
+        let mut checks = BTreeMap::new();
+        for link in disc.artifacts.iter().filter(|link| is_imported_chd(link)) {
+            let check = self.check_imported_chd(link.id).await;
+            checks.insert(link.id, check);
+        }
+        checks
+    }
+
+    /// Whether one CHD imported as it is has passed `chdman verify`,
+    /// running it once for each chdman version that has not.
+    async fn check_imported_chd(&self, artifact: ArtifactId) -> ChdCheck {
+        let Ok(manifest) = self.manifests.read(artifact).await else {
+            return ChdCheck::Failed("its manifest could not be read".to_owned());
+        };
+        let Some(image) = primary_image(&manifest) else {
+            return ChdCheck::Failed("it has no image file".to_owned());
+        };
+        let sha256 = image.content.sha256.to_hex();
+        let pool = self.database.pool();
+        let verdicts = match chd_verdicts(pool, &sha256).await {
+            Ok(verdicts) => verdicts,
+            Err(error) => {
+                tracing::warn!(%artifact, error = ?error, "could not read a CHD's verification");
+                return ChdCheck::Failed("its verification could not be read".to_owned());
+            }
+        };
+        if verdicts.passed {
+            return ChdCheck::Passed;
+        }
+        let Some(verifier) = &self.verifier else {
+            return verdicts
+                .last_failure
+                .map_or(ChdCheck::Unverifiable, ChdCheck::Failed);
+        };
+        let version = verifier.tool_version();
+        if verdicts.tried_with.contains(&version) {
+            return ChdCheck::Failed(
+                verdicts
+                    .last_failure
+                    .unwrap_or_else(|| "it did not verify".to_owned()),
+            );
+        }
+
+        let path = self.manifests.objects().object_path(&image.content.sha256);
+        tracing::info!(%artifact, chdman = %version, "verifying a CHD imported as it is, for RomM");
+        // What chdman says names the file it read; that path is the
+        // library's, not something to show.
+        let outcome = verifier
+            .verify(&path)
+            .await
+            .map_err(|detail| detail.replace(&path.to_string_lossy().into_owned(), "the CHD"));
+        let (passed, detail) = match &outcome {
+            Ok(()) => (true, None),
+            Err(detail) => (false, Some(detail.as_str())),
+        };
+        if let Err(error) = record_chd_verdict(pool, &sha256, &version, passed, detail).await {
+            tracing::warn!(%artifact, error = ?error, "could not record a CHD's verification");
+        }
+        match outcome {
+            Ok(()) => {
+                tracing::info!(%artifact, "a CHD imported as it is verified, and goes to RomM as it is");
+                ChdCheck::Passed
+            }
+            Err(detail) => {
+                tracing::warn!(%artifact, %detail, "a CHD imported as it is did not verify");
+                ChdCheck::Failed(detail)
+            }
+        }
     }
 
     /// The image one disc exports as, read from its manifest.
@@ -536,17 +663,31 @@ fn is_checked_chd(link: &LinkedArtifact) -> bool {
         )
 }
 
+/// Whether an artifact is a CHD that was imported, not made here.
+fn is_imported_chd(link: &LinkedArtifact) -> bool {
+    link.format == ArtifactFormat::Chd && link.loss_character.is_none()
+}
+
 /// The artifact a disc exports from, in order of preference: a checked CHD,
-/// which RomM's emulators read and which is a fraction of the size; then an
-/// ISO or CUE/BIN linked as a representation of the disc; then any ISO or
+/// which RomM's emulators read and which is a fraction of the size; then a
+/// CHD imported as it is that `chdman verify` passed (`checks`); then an ISO
+/// or CUE/BIN linked as a representation of the disc; then any ISO or
 /// CUE/BIN linked at all.
-fn chosen_artifact(disc: &DiscInputs) -> Option<(ArtifactId, ArtifactFormat)> {
+fn chosen_artifact(
+    disc: &DiscInputs,
+    checks: &BTreeMap<ArtifactId, ChdCheck>,
+) -> Option<(ArtifactId, ArtifactFormat)> {
     let exportable = |link: &&LinkedArtifact| {
         matches!(link.format, ArtifactFormat::Iso | ArtifactFormat::CueBin)
     };
     disc.artifacts
         .iter()
         .find(|link| is_checked_chd(link))
+        .or_else(|| {
+            disc.artifacts.iter().find(|link| {
+                is_imported_chd(link) && checks.get(&link.id) == Some(&ChdCheck::Passed)
+            })
+        })
         .or_else(|| {
             disc.artifacts
                 .iter()
@@ -558,7 +699,16 @@ fn chosen_artifact(disc: &DiscInputs) -> Option<(ArtifactId, ArtifactFormat)> {
 }
 
 /// Why a disc has nothing to export, in words that say what to do.
-fn missing_image(number: usize, disc: &DiscInputs) -> String {
+fn missing_image(
+    number: usize,
+    disc: &DiscInputs,
+    checks: &BTreeMap<ArtifactId, ChdCheck>,
+) -> String {
+    let imported_chd = disc
+        .artifacts
+        .iter()
+        .filter(|link| is_imported_chd(link))
+        .find_map(|link| checks.get(&link.id));
     if disc
         .artifacts
         .iter()
@@ -594,18 +744,22 @@ fn missing_image(number: usize, disc: &DiscInputs) -> String {
         )
     } else if disc.artifacts.is_empty() {
         format!("disc {number} has no image linked")
-    } else if disc
-        .artifacts
-        .iter()
-        .any(|link| link.format == ArtifactFormat::Chd && link.loss_character.is_none())
-    {
-        // Not made here, so there is no original to have checked it against
-        // (docs/plans/chd-images.md; whether to send one as it is waits on
-        // the owner).
-        format!(
-            "disc {number} is linked only to a CHD imported as it is, which is not sent to RomM \
-             as it is; make a CUE/BIN (of a CD) or an ISO (of a DVD) of it, or link one"
-        )
+    } else if let Some(check) = imported_chd {
+        // Not made here, so there is no original to check it against: it
+        // goes as it is once chdman has verified it against its own SHA-1s
+        // (owner decision 2026-11-02, OWNER_QUEUE 14).
+        match check {
+            ChdCheck::Failed(detail) => format!(
+                "disc {number} is linked only to a CHD imported as it is, which did not pass \
+                 chdman's verify ({detail}), so it is not sent to RomM; link a CUE/BIN or ISO \
+                 image of the disc"
+            ),
+            _ => format!(
+                "disc {number} is linked only to a CHD imported as it is, which goes to RomM once \
+                 chdman has verified it, and this server runs no chdman \
+                 (TANGIBLE_DERIVATION_ENGINE=chdman); or link a CUE/BIN or ISO image of the disc"
+            ),
+        }
     } else if disc
         .artifacts
         .iter()
@@ -662,6 +816,10 @@ mod tests {
     use super::*;
     use tangible_domain::DiscId;
 
+    fn none() -> BTreeMap<ArtifactId, ChdCheck> {
+        BTreeMap::new()
+    }
+
     fn disc(links: &[(ArtifactFormat, &str)]) -> DiscInputs {
         derived(
             &links
@@ -697,7 +855,7 @@ mod tests {
             ),
         ]);
         assert_eq!(
-            chosen_artifact(&checked).map(|(_, f)| f),
+            chosen_artifact(&checked, &none()).map(|(_, f)| f),
             Some(ArtifactFormat::Chd)
         );
         for loss in [
@@ -710,7 +868,7 @@ mod tests {
                 (ArtifactFormat::Chd, "representation_of", loss),
             ]);
             assert_eq!(
-                chosen_artifact(&unchecked).map(|(_, f)| f),
+                chosen_artifact(&unchecked, &none()).map(|(_, f)| f),
                 Some(ArtifactFormat::CueBin),
                 "a CHD whose loss is {loss:?} must not be exported"
             );
@@ -724,7 +882,7 @@ mod tests {
             ),
         ]);
         assert_eq!(
-            chosen_artifact(&toc_with_chd).map(|(_, f)| f),
+            chosen_artifact(&toc_with_chd, &none()).map(|(_, f)| f),
             Some(ArtifactFormat::Chd),
             "a TOC/BIN disc reaches RomM through its checked CHD"
         );
@@ -738,16 +896,19 @@ mod tests {
             (ArtifactFormat::CueBin, "representation_of"),
         ]);
         assert_eq!(
-            chosen_artifact(&d).map(|(_, f)| f),
+            chosen_artifact(&d, &none()).map(|(_, f)| f),
             Some(ArtifactFormat::CueBin)
         );
         let d = disc(&[(ArtifactFormat::Iso, "unknown")]);
         assert_eq!(
-            chosen_artifact(&d).map(|(_, f)| f),
+            chosen_artifact(&d, &none()).map(|(_, f)| f),
             Some(ArtifactFormat::Iso)
         );
         assert_eq!(
-            chosen_artifact(&disc(&[(ArtifactFormat::TocBin, "representation_of")])),
+            chosen_artifact(
+                &disc(&[(ArtifactFormat::TocBin, "representation_of")]),
+                &none()
+            ),
             None
         );
     }
@@ -755,45 +916,138 @@ mod tests {
     #[test]
     fn a_disc_with_nothing_to_export_says_what_to_do() {
         assert!(
-            missing_image(2, &disc(&[(ArtifactFormat::TocBin, "representation_of")]))
-                .contains("TOC/BIN")
+            missing_image(
+                2,
+                &disc(&[(ArtifactFormat::TocBin, "representation_of")]),
+                &none()
+            )
+            .contains("TOC/BIN")
         );
-        assert_eq!(missing_image(1, &disc(&[])), "disc 1 has no image linked");
+        assert_eq!(
+            missing_image(1, &disc(&[]), &none()),
+            "disc 1 has no image linked"
+        );
         let clonecd = missing_image(
             5,
             &disc(&[(ArtifactFormat::CcdImgSub, "representation_of")]),
+            &none(),
         );
         assert!(clonecd.contains("CloneCD"), "{clonecd}");
         assert!(clonecd.contains("make a CUE/BIN"), "{clonecd}");
         assert_eq!(
-            chosen_artifact(&disc(&[(ArtifactFormat::CcdImgSub, "representation_of")])),
+            chosen_artifact(
+                &disc(&[(ArtifactFormat::CcdImgSub, "representation_of")]),
+                &none()
+            ),
             None,
             "a CloneCD image is not sent to RomM as it is"
         );
-        let mds = missing_image(6, &disc(&[(ArtifactFormat::MdsMdf, "representation_of")]));
+        let mds = missing_image(
+            6,
+            &disc(&[(ArtifactFormat::MdsMdf, "representation_of")]),
+            &none(),
+        );
         assert!(
             mds.contains("MDS/MDF") && mds.contains("make a CUE/BIN"),
             "{mds}"
         );
         assert_eq!(
-            chosen_artifact(&disc(&[(ArtifactFormat::MdsMdf, "representation_of")])),
+            chosen_artifact(
+                &disc(&[(ArtifactFormat::MdsMdf, "representation_of")]),
+                &none()
+            ),
             None,
             "an MDS image is not sent to RomM as it is"
         );
         assert!(
             missing_image(
                 3,
-                &derived(&[(ArtifactFormat::Chd, "unknown", Some(LossCharacter::Unknown))])
+                &derived(&[(ArtifactFormat::Chd, "unknown", Some(LossCharacter::Unknown))]),
+                &none()
             )
             .contains("not checked")
         );
-        assert!(
-            missing_image(7, &disc(&[(ArtifactFormat::Chd, "representation_of")]))
-                .contains("imported as it is")
+        let imported = disc(&[(ArtifactFormat::Chd, "representation_of")]);
+        let id = imported.artifacts[0].id;
+        let unverifiable = missing_image(
+            7,
+            &imported,
+            &BTreeMap::from([(id, ChdCheck::Unverifiable)]),
         );
         assert!(
-            missing_image(4, &disc(&[(ArtifactFormat::TocBin, "representation_of")]))
-                .contains("make a CHD")
+            unverifiable.contains("imported as it is") && unverifiable.contains("runs no chdman"),
+            "{unverifiable}"
+        );
+        let failed = missing_image(
+            7,
+            &imported,
+            &BTreeMap::from([(id, ChdCheck::Failed("hunk 12 is corrupt".to_owned()))]),
+        );
+        assert!(
+            failed.contains("did not pass chdman's verify (hunk 12 is corrupt)"),
+            "{failed}"
+        );
+        assert!(
+            missing_image(
+                4,
+                &disc(&[(ArtifactFormat::TocBin, "representation_of")]),
+                &none()
+            )
+            .contains("make a CHD")
+        );
+    }
+
+    #[test]
+    fn an_imported_chd_goes_as_it_is_only_once_verified() {
+        let d = derived(&[
+            (ArtifactFormat::CueBin, "representation_of", None),
+            (ArtifactFormat::Chd, "representation_of", None),
+        ]);
+        let chd = d.artifacts[1].id;
+        for (check, expected) in [
+            (None, ArtifactFormat::CueBin),
+            (Some(ChdCheck::Unverifiable), ArtifactFormat::CueBin),
+            (
+                Some(ChdCheck::Failed("bad".to_owned())),
+                ArtifactFormat::CueBin,
+            ),
+            (Some(ChdCheck::Passed), ArtifactFormat::Chd),
+        ] {
+            let checks: BTreeMap<_, _> = check
+                .clone()
+                .map(|check| (chd, check))
+                .into_iter()
+                .collect();
+            assert_eq!(
+                chosen_artifact(&d, &checks).map(|(_, f)| f),
+                Some(expected),
+                "{check:?}"
+            );
+        }
+
+        // Alone, it is the disc's image once verified, and nothing before.
+        let alone = disc(&[(ArtifactFormat::Chd, "representation_of")]);
+        let id = alone.artifacts[0].id;
+        assert_eq!(chosen_artifact(&alone, &none()), None);
+        assert_eq!(
+            chosen_artifact(&alone, &BTreeMap::from([(id, ChdCheck::Passed)])),
+            Some((id, ArtifactFormat::Chd))
+        );
+
+        // A CHD made and checked here still comes first.
+        let both = derived(&[
+            (ArtifactFormat::Chd, "representation_of", None),
+            (
+                ArtifactFormat::Chd,
+                "representation_of",
+                Some(LossCharacter::StructurallyEquivalent),
+            ),
+        ]);
+        let imported = both.artifacts[0].id;
+        let made = both.artifacts[1].id;
+        assert_eq!(
+            chosen_artifact(&both, &BTreeMap::from([(imported, ChdCheck::Passed)])).map(|(a, _)| a),
+            Some(made)
         );
     }
 

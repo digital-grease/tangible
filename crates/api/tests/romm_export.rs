@@ -262,7 +262,12 @@ impl Harness {
     }
 
     async fn reconcile(&self, edition: &str) -> Value {
-        self.exporter
+        self.reconcile_with(&self.exporter, edition).await
+    }
+
+    /// Reconcile with `exporter`, which may verify CHDs as this one does not.
+    async fn reconcile_with(&self, exporter: &RommExporter, edition: &str) -> Value {
+        exporter
             .reconcile(edition.parse::<EditionId>().unwrap())
             .await
             .unwrap();
@@ -452,6 +457,149 @@ async fn a_checked_chd_replaces_the_cue_bin_in_romm() {
     .await
     .unwrap();
     assert_eq!(present, 1, "the old files' receipts are marked removed");
+}
+
+/// Stands in for chdman's verify: passes or fails as told, counting runs and
+/// saying what chdman would, the file's path included.
+#[derive(Debug)]
+struct FakeVerifier {
+    version: String,
+    passes: bool,
+    runs: std::sync::atomic::AtomicUsize,
+}
+
+impl FakeVerifier {
+    fn new(passes: bool) -> Arc<Self> {
+        Arc::new(Self {
+            version: format!("0.fake-{}", uuid::Uuid::now_v7().simple()),
+            passes,
+            runs: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+
+    fn runs(&self) -> usize {
+        self.runs.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl tangible_api::romm_export::ChdVerifier for FakeVerifier {
+    fn tool_version(&self) -> String {
+        self.version.clone()
+    }
+
+    fn verify<'a>(
+        &'a self,
+        chd: &'a Path,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+        Box::pin(async move {
+            self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            assert!(chd.is_file(), "verified in place, in the library");
+            if self.passes {
+                Ok(())
+            } else {
+                Err(format!(
+                    "chdman verify failed: Error reading input file ({}): corrupt data",
+                    chd.display()
+                ))
+            }
+        })
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_imported_chd_goes_to_romm_as_it_is_once_chdman_has_verified_it() {
+    let harness = harness().await;
+    let bytes = std::fs::read(format!(
+        "{}/../../fixtures/images/chd/mixed-mode.chd",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap();
+    let sha256 = {
+        use sha2::Digest as _;
+        hex::encode(sha2::Sha256::digest(&bytes))
+    };
+    // Verdicts are by the CHD's bytes; this fixture's from earlier runs go.
+    sqlx::query("DELETE FROM chd_verifications WHERE sha256 = $1")
+        .bind(&sha256)
+        .execute(&harness.pool)
+        .await
+        .unwrap();
+    let chd = harness.import(&[("Game.chd", bytes)]).await;
+    let title = format!("Romm Imported Chd {}", uuid::Uuid::now_v7().simple());
+    let edition = harness
+        .game(&title, "USA", std::slice::from_ref(&chd))
+        .await;
+    harness.set(&edition, Some("psx"), true).await;
+    let folder = harness.root.join(format!("psx/{title} (USA)"));
+    let with = |verifier: &Arc<FakeVerifier>| {
+        harness.exporter.clone().with_chd_verifier(
+            Arc::clone(verifier) as Arc<dyn tangible_api::romm_export::ChdVerifier>
+        )
+    };
+
+    // No chdman: it waits, and says so.
+    let waiting = harness.reconcile(&edition).await;
+    assert_eq!(waiting["state"], "blocked", "{waiting}");
+    assert!(
+        waiting["detail"]
+            .as_str()
+            .unwrap()
+            .contains("runs no chdman"),
+        "{waiting}"
+    );
+
+    // A verify that fails: blocked, saying why, the library's path not shown.
+    let failing = FakeVerifier::new(false);
+    let refused = harness.reconcile_with(&with(&failing), &edition).await;
+    let detail = refused["detail"].as_str().unwrap().to_owned();
+    assert_eq!(refused["state"], "blocked", "{refused}");
+    assert!(detail.contains("did not pass chdman's verify"), "{detail}");
+    assert!(detail.contains("the CHD"), "{detail}");
+    assert!(!detail.contains("/library/"), "no library path: {detail}");
+    assert!(!folder.exists());
+    // The same chdman is not asked twice about the same bytes.
+    harness.reconcile_with(&with(&failing), &edition).await;
+    assert_eq!(failing.runs(), 1);
+
+    // Another chdman that passes it: sent as it is.
+    let passing = FakeVerifier::new(true);
+    let current = harness.reconcile_with(&with(&passing), &edition).await;
+    assert_eq!(current["state"], "current", "{current}");
+    assert_eq!(
+        names(&folder),
+        vec![
+            ".tangible-export.json".to_owned(),
+            format!("{title} (USA).chd")
+        ]
+    );
+    assert_eq!(passing.runs(), 1);
+    let representation: String =
+        sqlx::query_scalar("SELECT representation FROM export_receipts WHERE destination_key = $1")
+            .bind(format!("psx/{title} (USA)/{title} (USA).chd"))
+            .fetch_one(&harness.pool)
+            .await
+            .unwrap();
+    assert_eq!(representation, "chd");
+
+    // Verified once, it stays verified, with chdman or without.
+    harness.reconcile_with(&with(&passing), &edition).await;
+    assert_eq!(harness.reconcile(&edition).await["state"], "current");
+    assert_eq!(passing.runs(), 1);
+    let verdicts: Vec<(String, bool)> = sqlx::query_as(
+        "SELECT tool_version, passed FROM chd_verifications WHERE sha256 = $1 ORDER BY created_at",
+    )
+    .bind(&sha256)
+    .fetch_all(&harness.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        verdicts,
+        vec![
+            (failing.version.clone(), false),
+            (passing.version.clone(), true)
+        ]
+    );
 }
 
 #[tokio::test]

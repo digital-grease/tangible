@@ -325,8 +325,9 @@ TOC reaches RomM through its CHD, since RomM's emulators do not read TOC
 files. A CloneCD (CCD/IMG/SUB) image is not exported as it is either, since
 not every emulator reads one; its disc reaches RomM through a CUE/BIN or CHD
 made from it. Nor is an Alcohol 120% (MDS/MDF) image: its disc reaches RomM
-through the CUE/BIN or ISO made from it. A CHD that was not checked against its original is never
-exported.
+through the CUE/BIN or ISO made from it. A CHD that was made here but not checked against its
+original is never exported. A CHD imported as it is goes as it is once
+`chdman verify` has passed it (below).
 
 ### Connecting to RomM's API
 
@@ -411,8 +412,15 @@ for RomM, not for burning: burn the image it was made from.
 
 A CHD can also be imported as it is. Tangible reads its header and metadata,
 never its compressed data, and records which disc it holds and its tracks.
-It is not burned, and it is not sent to RomM as it is, since nothing here
-checked it against an original. Instead, ask for what it holds, with "Make a
+It is not burned. It goes to RomM as it is once `chdman verify` has
+passed it: the export runs it once, on a server whose
+`TANGIBLE_DERIVATION_ENGINE` is `chdman`, checking every hunk against the
+SHA-1s the CHD's maker wrote, and remembers the verdict by the CHD's
+SHA-256. A CHD that fails is not sent (the edition's RomM status says what
+chdman said), and is tried again only by another version of chdman. Verify
+proves the CHD is whole, not that the dump inside it was good; matching the
+tracks of a CUE/BIN made from it against a DAT is that check. To have what
+it holds instead, ask with "Make a
 CUE/BIN" or "Make an ISO" on its page (or the same request, with an empty
 body): chdman verifies the CHD and extracts a CD CHD to a CUE/BIN, or a DVD
 CHD to its ISO. The CUE/BIN is made into a CHD again

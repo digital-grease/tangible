@@ -264,7 +264,7 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         state,
         &database,
         &manifests,
-        serve.romm_export_root.as_deref(),
+        (serve.romm_export_root.as_deref(), serve.derivation_engine),
         (Some(integrations.clone()), secret_key.clone()),
     )
     .await?;
@@ -684,6 +684,20 @@ fn start_derivations(
     (state.with_derivations(derivations), Some((stop, task)))
 }
 
+/// What verifies CHDs imported as they are for the RomM export: chdman, when
+/// it is the derivation engine and can be run.
+async fn chd_verifier(
+    kind: DerivationEngineKind,
+) -> Option<Arc<dyn tangible_api::romm_export::ChdVerifier>> {
+    if kind != DerivationEngineKind::Chdman {
+        return None;
+    }
+    tangible_image::chdman::Chdman::probe(tangible_image::chdman::CHDMAN)
+        .await
+        .ok()
+        .map(|chdman| Arc::new(chdman) as Arc<dyn tangible_api::romm_export::ChdVerifier>)
+}
+
 /// The configured derivation engine, if it can be run.
 async fn derivation_engine(
     kind: DerivationEngineKind,
@@ -1010,7 +1024,7 @@ async fn start_romm_export(
     state: ApiState,
     database: &Database,
     manifests: &ManifestStore,
-    root: Option<&std::path::Path>,
+    (root, engine): (Option<&std::path::Path>, DerivationEngineKind),
     (http, key): (
         Option<tangible_integrations::outbound::OutboundClient>,
         Option<Arc<SecretKey>>,
@@ -1046,6 +1060,12 @@ async fn start_romm_export(
         manifests.clone(),
         integration,
     );
+    // A CHD imported as it is goes to RomM once chdman has verified it
+    // (OWNER_QUEUE 14), on a server the operator gave chdman to.
+    let exporter = match chd_verifier(engine).await {
+        Some(verifier) => exporter.with_chd_verifier(verifier),
+        None => exporter,
+    };
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(exporter.run(async {
         let _ = stopped.await;
