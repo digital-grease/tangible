@@ -13,9 +13,9 @@
     discSummary,
     formatBytes,
     formatLabel,
-    keepsSubchannel,
     loadArtifact,
     msf,
+    notBurnedAsItIs,
     trackDetails,
     trackModeLabel,
     validationLabel,
@@ -263,11 +263,10 @@
         Target compatibility unknown. Structural validity does not establish that a written disc
         will be accepted by any particular player, console or drive.
       </p>
-      {#if keepsSubchannel(view.data)}
+      {#if notBurnedAsItIs(view.data)}
         <p role="note">
-          <strong>Not burned as it is.</strong> This image keeps the disc's subchannel, which Tangible
-          cannot write, so a disc burned from it would not be this image. Make a CUE/BIN of it under Derivatives,
-          which drops the subchannel and says so, and burn that.
+          <strong>Not burned as it is.</strong>
+          {notBurnedAsItIs(view.data)}
         </p>
       {:else}
         <p>

@@ -49,6 +49,10 @@ export function transformationLabel(transformation: string): string {
       return 'Decrypted copy of a DVD, made as it was ripped';
     case 'cue_bin_from_ccd':
       return 'CUE/BIN of a CloneCD image';
+    case 'cue_bin_from_mds':
+      return 'CUE/BIN of an Alcohol 120% image';
+    case 'iso_from_mds':
+      return 'ISO of an Alcohol 120% DVD image';
     default:
       return transformation;
   }
@@ -75,6 +79,28 @@ export function derivativeOffer(transformation: string): DerivativeOffer {
         'is the same stored bytes as the IMG, so no space is used, and the original is not ' +
         'changed.',
       exists: 'A CUE/BIN of this already exists.',
+    };
+  }
+  if (transformation === 'cue_bin_from_mds') {
+    return {
+      action: 'Make a CUE/BIN',
+      explanation:
+        'Makes a CUE/BIN of this Alcohol 120% image, which can be burned, made into a CHD and ' +
+        'sent to RomM. It leaves out the MDS descriptor and any subchannel, and says so. The BIN ' +
+        'is the same stored bytes as the MDF, so no space is used, unless the MDF holds ' +
+        'subchannel after every sector: then it is a new copy without it. The original is not ' +
+        'changed.',
+      exists: 'A CUE/BIN of this already exists.',
+    };
+  }
+  if (transformation === 'iso_from_mds') {
+    return {
+      action: 'Make an ISO',
+      explanation:
+        'Makes an ISO of this Alcohol 120% DVD image, which can be burned, made into a CHD and ' +
+        'sent to RomM. It leaves out the MDS descriptor, and says so. The ISO is the same stored ' +
+        'bytes as the MDF, so no space is used, and the original is not changed.',
+      exists: 'An ISO of this already exists.',
     };
   }
   return {

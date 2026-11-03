@@ -159,7 +159,7 @@ export function formatLabel(format: string): string {
     case 'ccd_img_sub':
       return 'CloneCD (CCD/IMG/SUB)';
     case 'mds_mdf':
-      return 'MDS/MDF';
+      return 'Alcohol 120% (MDS/MDF)';
     case 'chd':
       return 'CHD';
     case 'bdmv_directory':
@@ -181,6 +181,30 @@ export function formatLabel(format: string): string {
  */
 export function keepsSubchannel(detail: Pick<ArtifactDetail, 'components'>): boolean {
   return detail.components.some((component) => component.role === 'subchannel');
+}
+
+/**
+ * Why an artifact is not burned as it is, and what to burn instead, or null
+ * when nothing here stops it. The server refuses these too; this only says
+ * so before anyone asks.
+ */
+export function notBurnedAsItIs(
+  detail: Pick<ArtifactDetail, 'components' | 'format'>,
+): string | null {
+  if (keepsSubchannel(detail)) {
+    return (
+      "This image keeps the disc's subchannel, which Tangible cannot write, so a disc burned " +
+      'from it would not be this image. Make a CUE/BIN of it under Derivatives, which drops the ' +
+      'subchannel and says so, and burn that.'
+    );
+  }
+  if (detail.format === 'mds_mdf') {
+    return (
+      'Tangible does not burn Alcohol 120% images. Make a CUE/BIN of it (of a CD) or an ISO ' +
+      '(of a DVD) under Derivatives, and burn that.'
+    );
+  }
+  return null;
 }
 
 export type DiscLayout = components['schemas']['DiscLayout'];

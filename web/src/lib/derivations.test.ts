@@ -87,6 +87,18 @@ describe('what is offered', () => {
     expect(offer.exists).toBe('A CUE/BIN of this already exists.');
   });
 
+  it('names what is made of an Alcohol 120% image and what it leaves out', () => {
+    expect(transformationLabel('cue_bin_from_mds')).toBe('CUE/BIN of an Alcohol 120% image');
+    expect(transformationLabel('iso_from_mds')).toBe('ISO of an Alcohol 120% DVD image');
+    const cue = derivativeOffer('cue_bin_from_mds');
+    expect(cue.action).toBe('Make a CUE/BIN');
+    expect(cue.explanation).toContain('leaves out the MDS descriptor and any subchannel');
+    const iso = derivativeOffer('iso_from_mds');
+    expect(iso.action).toBe('Make an ISO');
+    expect(iso.explanation).toContain('no space is used');
+    expect(iso.exists).toBe('An ISO of this already exists.');
+  });
+
   it('offers a CHD for everything else', () => {
     for (const transformation of ['chd_create_cd', 'chd_create_dvd']) {
       expect(derivativeOffer(transformation).action).toBe('Make a CHD');

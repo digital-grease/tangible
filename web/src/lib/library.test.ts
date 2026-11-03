@@ -6,6 +6,7 @@ import {
   formatBytes,
   formatLabel,
   keepsSubchannel,
+  notBurnedAsItIs,
   loadArtifact,
   loadLibrary,
   validationLabel,
@@ -194,6 +195,7 @@ describe('labels', () => {
     expect(formatLabel('cue_bin')).toBe('CUE/BIN');
     expect(formatLabel('unknown')).toBe('Unrecognised');
     expect(formatLabel('ccd_img_sub')).toBe('CloneCD (CCD/IMG/SUB)');
+    expect(formatLabel('mds_mdf')).toBe('Alcohol 120% (MDS/MDF)');
   });
 });
 
@@ -263,5 +265,19 @@ describe('subchannel', () => {
     expect(
       keepsSubchannel({ components: [component('descriptor'), component('track_data')] } as never),
     ).toBe(false);
+  });
+
+  it('says why an image is not burned as it is, and what to burn instead', () => {
+    const plain = [component('descriptor'), component('track_data')];
+    expect(
+      notBurnedAsItIs({
+        format: 'ccd_img_sub',
+        components: [...plain, component('subchannel')],
+      } as never),
+    ).toContain('Make a CUE/BIN of it');
+    const mds = notBurnedAsItIs({ format: 'mds_mdf', components: plain } as never);
+    expect(mds).toContain('Alcohol 120%');
+    expect(mds).toContain('or an ISO');
+    expect(notBurnedAsItIs({ format: 'cue_bin', components: plain } as never)).toBeNull();
   });
 });

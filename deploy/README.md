@@ -383,9 +383,10 @@ kept as it was.
 
 Nothing Tangible burns with, and none of RomM's emulators or chdman, reads
 an Alcohol 120% (MDS/MDF) image, so Tangible makes one of each itself,
-whatever `TANGIBLE_DERIVATION_ENGINE` says. Ask for it with
-`POST /api/v1/artifacts/{id}/derivatives` and an empty body, which takes the
-one that suits the image:
+whatever `TANGIBLE_DERIVATION_ENGINE` says: "Make a CUE/BIN" or "Make an
+ISO" on its page in the library (or `POST /api/v1/artifacts/{id}/derivatives`
+with an empty body, which takes the one that suits the image). Its page says
+it is not burned as it is, and what to burn, instead of offering a burn.
 
 - a CD image becomes a CUE/BIN (`cue_bin_from_mds`). The sheet is written
   from the descriptor's tracks, its pregaps as PREGAP, and read back to

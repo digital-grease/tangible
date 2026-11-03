@@ -50,6 +50,15 @@ describe('the Derivatives section', () => {
     ).toBe(true);
   });
 
+  it('offers an ISO of an Alcohol 120% DVD image', async () => {
+    server('iso_from_mds');
+    render(Lineage, { artifactId: 'a1' });
+    const button = await screen.findByRole('button', { name: 'Make an ISO' });
+    expect(screen.getByText(/leaves out the MDS descriptor/)).toBeTruthy();
+    await fireEvent.click(button);
+    expect(await screen.findByText('An ISO of this already exists.')).toBeTruthy();
+  });
+
   it('offers a CHD where that is what suits, and nothing where nothing does', async () => {
     server('chd_create_cd');
     const { unmount } = render(Lineage, { artifactId: 'a1' });

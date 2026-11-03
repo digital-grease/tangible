@@ -30,6 +30,10 @@ may change between minor versions, and the release notes say how.
   only to an MDS image says what to make of it before RomM gets it.
   Database migration 0027 widens the derivation jobs' transformation
   constraint, additively.
+- The web UI names MDS images ("Alcohol 120% (MDS/MDF)"), offers "Make a
+  CUE/BIN" or "Make an ISO" on an MDS image's page, saying what each leaves
+  out, and in place of "Create burn job" says it is not burned as it is and
+  what to burn instead.
 - Signing in through an OpenID Connect provider, such as VoidAuth (ADR
   0018): authorization code flow with PKCE, ID tokens checked for
   signature, issuer, audience, expiry and nonce, and each sign-in bound to
