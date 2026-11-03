@@ -976,7 +976,10 @@ library, a few at a time, when the server first starts with this. A CD's
 tracks are hashed as Redump cuts them, from each track's first byte in the
 image (its pregap, when the image holds it) to the next track's, so a
 single-BIN image, a split one and a CloneCD image all give the same track
-hashes. An artifact's page shows them, and so does
+hashes. An Alcohol 120% (MDS/MDF) image is the exception: its data file
+leaves the pregaps out, so a track after the first hashes without its
+pregap and will not match a DAT that lists it with one; the first track and
+a single-track disc match. An artifact's page shows them, and so does
 `GET /api/v1/artifacts/{id}/identification`. Set
 `TANGIBLE_PRESERVATION_HASHES=false` to turn this off.
 

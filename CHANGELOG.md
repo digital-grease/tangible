@@ -8,6 +8,18 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
+- Alcohol 120% images (MDS/MDF) are recognised and imported as one
+  artifact: the binary `.mds` is read with a bounded, fuzzed parser written
+  from libmirage's reading of the format and checked against libmirage
+  3.2.10. Version 1 descriptors only; another version is imported whole,
+  saying so. The data file is found by the name the descriptor gives
+  (`*.mdf` is its own name), in its folder, ignoring case with a warning. A
+  single-session CD without subchannel is laid out as a CUE sheet's tracks
+  are; its pregaps are not in the MDF, so a track after the first does not
+  hash as a DAT that includes its pregap lists it. A DVD image whose one
+  MDF is an ISO is described as one. An image with subchannel after every
+  sector, several sessions or a DVD in several files is imported whole,
+  saying why. An MDS image is refused for burning as it is.
 - Signing in through an OpenID Connect provider, such as VoidAuth (ADR
   0018): authorization code flow with PKCE, ID tokens checked for
   signature, issuer, audience, expiry and nonce, and each sign-in bound to

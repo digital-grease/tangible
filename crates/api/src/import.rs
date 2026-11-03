@@ -42,7 +42,7 @@ use tangible_domain::{
     ArtifactId, ComponentId, ImportJobId, ImportState, ImportTransitionError, LogicalPath,
     Sha256Digest,
 };
-use tangible_image::{ccd, cue, iso, toc, video_ts};
+use tangible_image::{ccd, cue, iso, mds, toc, video_ts};
 use tangible_storage::{
     FilesystemStore, IngestLimits, ManifestStore, ManifestStoreError, StagingArea, StagingError,
     StagingKind, StagingManager, StorageError,
@@ -343,7 +343,12 @@ impl ImportPipeline {
     ) -> Result<Detection, ImportError> {
         let descriptors: Vec<&LogicalPath> = staged
             .iter()
-            .filter(|path| matches!(path.extension().as_deref(), Some("cue" | "toc" | "ccd")))
+            .filter(|path| {
+                matches!(
+                    path.extension().as_deref(),
+                    Some("cue" | "toc" | "ccd" | "mds")
+                )
+            })
             .collect();
 
         match descriptors.as_slice() {
@@ -355,6 +360,13 @@ impl ImportPipeline {
                 match self.inspect_ccd(area, staged, only, checkpoint).await? {
                     Some(detection) => Ok(detection),
                     // Named `.ccd` and not one: imported, not claimed.
+                    None => self.inspect_iso(area, staged, request).await,
+                }
+            }
+            [only] if only.extension().as_deref() == Some("mds") => {
+                match self.inspect_mds(area, staged, only, checkpoint).await? {
+                    Some(detection) => Ok(detection),
+                    // Named `.mds` and not one: imported, not claimed.
                     None => self.inspect_iso(area, staged, request).await,
                 }
             }
@@ -643,6 +655,176 @@ impl ImportPipeline {
         Ok(Some(detection))
     }
 
+    /// Read an Alcohol 120% MDS descriptor and lay out the disc it describes
+    /// over the data files beside it (docs/plans/mds-images.md M2).
+    ///
+    /// The data files are found by the names the descriptor's footers give,
+    /// in the descriptor's own folder among what was staged; `*.mdf` is the
+    /// descriptor's own name. A CD without subchannel is laid out like a CUE
+    /// sheet's tracks; a DVD whose one data file starts at its first byte is
+    /// an ISO's bytes, read as one. Anything else is imported whole, saying
+    /// why it is not laid out.
+    async fn inspect_mds(
+        &self,
+        area: &StagingArea,
+        staged: &[LogicalPath],
+        descriptor: &LogicalPath,
+        checkpoint: &ImportCheckpoint,
+    ) -> Result<Option<Detection>, ImportError> {
+        let resolved = area.resolve(descriptor).await?;
+        let bytes = read_prefix(&resolved, mds::MAX_DESCRIPTOR_BYTES + 1)
+            .await
+            .map_err(|source| ImportError::ReadStaged {
+                path: descriptor.to_string(),
+                source,
+            })?;
+        let parsed = match mds::parse(&bytes) {
+            Ok(parsed) => parsed,
+            Err(mds::MdsError::NotMds) => return Ok(None),
+            // An MDS descriptor this reader cannot read in full: claimed as
+            // MDS, laid out as nothing, and saying why.
+            Err(error) => {
+                let mut detection = Detection::plain(ArtifactFormat::MdsMdf, 0.9);
+                detection.descriptor = Some(descriptor.clone());
+                detection
+                    .warnings
+                    .push(format!("the descriptor could not be read in full: {error}"));
+                return Ok(Some(detection));
+            }
+        };
+
+        let mut detection = Detection::plain(ArtifactFormat::MdsMdf, 0.95);
+        detection.descriptor = Some(descriptor.clone());
+        detection.media_family = Some(if parsed.medium.is_dvd() {
+            MediaFamily::Dvd
+        } else {
+            MediaFamily::Cd
+        });
+        detection.evidence.push(format!(
+            "MDS version {}.{}, {:?}, {} session(s), {} track(s)",
+            parsed.version.0,
+            parsed.version.1,
+            parsed.medium,
+            parsed.sessions.len(),
+            parsed.tracks.len()
+        ));
+        if parsed.has_dpm {
+            detection.evidence.push(
+                "DPM (copy-protection timing) data is kept in the descriptor, not interpreted"
+                    .to_owned(),
+            );
+        }
+
+        // The descriptor's folder, where its data files must be.
+        let (folder, own_name) = descriptor
+            .as_str()
+            .rsplit_once('/')
+            .map_or(("", descriptor.as_str()), |(folder, name)| (folder, name));
+        let mut files: Vec<LogicalPath> = Vec::new();
+        for declared in parsed.tracks.iter().flat_map(|track| track.files.iter()) {
+            let name = mds::data_file_name(declared, own_name);
+            let wanted = if folder.is_empty() {
+                name.clone()
+            } else {
+                format!("{folder}/{name}")
+            };
+            let Some(found) = companion(staged, &wanted, &mut detection.warnings) else {
+                detection.warnings.push(format!(
+                    "there is no {name} beside the descriptor, so the disc was not laid out"
+                ));
+                return Ok(Some(detection));
+            };
+            if !files.contains(&found) {
+                files.push(found);
+            }
+        }
+        detection.track_files.clone_from(&files);
+        let size = |path: &LogicalPath| {
+            checkpoint
+                .promoted
+                .get(path.as_str())
+                .map_or(0, |promoted| promoted.length_bytes)
+        };
+
+        if parsed.medium.is_dvd() {
+            Self::describe_mds_dvd(area, &parsed, &files, size, &mut detection).await?;
+            return Ok(Some(detection));
+        }
+
+        let data_bytes = files.first().map_or(0, size);
+        match mds::layout(&parsed, data_bytes) {
+            Ok(layout) => {
+                detection.evidence.push(format!(
+                    "{} track(s) over {} sectors; pregaps are not in the data file",
+                    layout.tracks.len(),
+                    layout.total_sectors()
+                ));
+                detection.confidence = 0.99;
+                detection.layout = Some(layout);
+            }
+            Err(error) => detection
+                .warnings
+                .push(format!("the tracks could not be laid out: {error}")),
+        }
+        Ok(Some(detection))
+    }
+
+    /// Describe a DVD image whose one data file starts at its first byte as
+    /// the ISO it is; anything else is imported whole, saying why.
+    async fn describe_mds_dvd(
+        area: &StagingArea,
+        parsed: &mds::MdsDescriptor,
+        files: &[LogicalPath],
+        size: impl Fn(&LogicalPath) -> u64,
+        detection: &mut Detection,
+    ) -> Result<(), ImportError> {
+        let single =
+            files.len() == 1 && parsed.tracks.len() == 1 && parsed.tracks[0].start_offset == 0;
+        let Some(data) = files.first().filter(|_| single) else {
+            detection.warnings.push(
+                "a DVD image in several data files, or not at the start of one, is \
+                 imported whole"
+                    .to_owned(),
+            );
+            return Ok(());
+        };
+        let image = area.resolve(data).await?;
+        let prefix = read_prefix(&image, iso::REQUIRED_PREFIX_BYTES)
+            .await
+            .map_err(|source| ImportError::ReadStaged {
+                path: data.to_string(),
+                source,
+            })?;
+        let inspection = iso::inspect(&prefix, size(data), Some("iso"));
+        detection
+            .warnings
+            .extend(inspection.warnings.iter().map(ToString::to_string));
+        if let Some(primary) = inspection.primary.as_ref() {
+            detection.block_size = Some(primary.block_size);
+            detection.block_count = Some(primary.block_count);
+            detection.volume_label = Some(primary.volume_id.clone());
+            detection.filesystems = inspection
+                .filesystems
+                .iter()
+                .map(|f| ManifestFilesystem {
+                    filesystem_type: f.name.to_owned(),
+                    version: f.version.clone(),
+                    evidence: f.evidence.clone(),
+                })
+                .collect();
+            detection.evidence.push(format!(
+                "its data file is an ISO image of {} blocks",
+                primary.block_count
+            ));
+            detection.confidence = 0.99;
+        } else {
+            detection
+                .warnings
+                .push("the DVD image's data file holds no ISO 9660 volume".to_owned());
+        }
+        Ok(())
+    }
+
     /// Read enough of the primary component to classify it.
     async fn inspect_iso(
         &self,
@@ -726,6 +908,7 @@ impl ImportPipeline {
             subchannel_file: None,
             subchannel_laid: false,
             tree: None,
+            media_family: None,
         })
     }
 
@@ -989,21 +1172,21 @@ impl ImportPipeline {
         }
     }
 
-    /// Assemble the manifest from what the checkpoint recorded.
-    fn build_manifest(
-        artifact_id: ArtifactId,
-        request: &ImportRequest,
-        staged: &[LogicalPath],
-        checkpoint: &ImportCheckpoint,
+    /// What read the bytes, what checked them, the code their warnings
+    /// carry, and the medium the format implies.
+    ///
+    /// Named for what actually read the bytes, so a warning in a manifest can
+    /// be traced to the thing that produced it.
+    fn detector_names(
+        format: ArtifactFormat,
         detection: &Detection,
-    ) -> ArtifactManifest {
-        let format = checkpoint
-            .detected_format
-            .unwrap_or(ArtifactFormat::Unknown);
-
-        // Named for what actually read the bytes, so a warning in a manifest
-        // can be traced to the thing that produced it.
-        let (detector, validator, warning_code, media_family) = match format {
+    ) -> (
+        &'static str,
+        &'static str,
+        &'static str,
+        Option<MediaFamily>,
+    ) {
+        match format {
             ArtifactFormat::CueBin => (
                 "cue-parser",
                 "cue-structural",
@@ -1027,6 +1210,13 @@ impl ImportPipeline {
                 "CCD_STRUCTURAL_WARNING",
                 Some(MediaFamily::Cd),
             ),
+            // An MDS descriptor says which: a CD or a DVD.
+            ArtifactFormat::MdsMdf => (
+                "mds-parser",
+                "mds-structural",
+                "MDS_STRUCTURAL_WARNING",
+                detection.media_family,
+            ),
             // VIDEO_TS is DVD-Video's own directory; nothing else uses it.
             ArtifactFormat::VideoTsDirectory => (
                 "video-ts-parser",
@@ -1035,7 +1225,23 @@ impl ImportPipeline {
                 Some(MediaFamily::Dvd),
             ),
             _ => ("iso9660", "iso-structural", "ISO_STRUCTURAL_WARNING", None),
-        };
+        }
+    }
+
+    /// Assemble the manifest from what the checkpoint recorded.
+    fn build_manifest(
+        artifact_id: ArtifactId,
+        request: &ImportRequest,
+        staged: &[LogicalPath],
+        checkpoint: &ImportCheckpoint,
+        detection: &Detection,
+    ) -> ArtifactManifest {
+        let format = checkpoint
+            .detected_format
+            .unwrap_or(ArtifactFormat::Unknown);
+
+        let (detector, validator, warning_code, media_family) =
+            Self::detector_names(format, detection);
 
         let (components, total_bytes) =
             Self::build_components(request, staged, checkpoint, detection);
@@ -1165,6 +1371,9 @@ struct Detection {
     subchannel_laid: bool,
     /// A directory tree such as `VIDEO_TS`, when the staged files are one.
     tree: Option<TreeDetection>,
+    /// The medium, when the format says it and its name does not (an MDS
+    /// descriptor describes a CD or a DVD).
+    media_family: Option<MediaFamily>,
 }
 
 /// A recognised directory tree.
@@ -1196,6 +1405,7 @@ impl Detection {
             subchannel_file: None,
             subchannel_laid: false,
             tree: None,
+            media_family: None,
         }
     }
 }

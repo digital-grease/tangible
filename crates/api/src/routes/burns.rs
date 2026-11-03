@@ -524,6 +524,17 @@ fn eligibility(facts: &ArtifactBurnFacts) -> Result<Vec<String>, Problem> {
         ));
     }
 
+    // An MDS descriptor is Alcohol 120%'s, which no engine here reads; the
+    // CUE/BIN or ISO made from the image is what is burned
+    // (docs/plans/mds-images.md).
+    if facts.format == "mds_mdf" {
+        return Err(Problem::new(
+            ErrorCode::ValidationFailed,
+            "this is an MDS image, which Tangible does not burn as it is; make a CUE/BIN of a \
+             CD, or an ISO of a DVD, from it, and burn that",
+        ));
+    }
+
     // No engine here writes subchannel data, so a disc burned from an image
     // that keeps it would not be the artifact (the owner's choice,
     // 2026-10-27). A CUE/BIN made from it, which says it drops the
@@ -1261,6 +1272,17 @@ mod tests {
             total_bytes: 10,
             has_subchannel: false,
         }
+    }
+
+    #[test]
+    fn an_mds_image_is_burned_from_what_is_made_of_it() {
+        let problem = eligibility(&ArtifactBurnFacts {
+            format: "mds_mdf".to_owned(),
+            ..facts()
+        })
+        .expect_err("refused");
+        assert_eq!(problem.code, "VALIDATION_FAILED");
+        assert!(problem.detail.contains("MDS image"), "{}", problem.detail);
     }
 
     #[test]

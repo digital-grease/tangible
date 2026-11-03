@@ -1009,9 +1009,9 @@ fn clonecd_image(sectors: usize) -> Vec<u8> {
     image
 }
 
-/// Stage a CloneCD set and import it, answering the manifest and what the
+/// Stage a set of files and import it, answering the manifest and what the
 /// checkpoint warned.
-async fn import_clonecd(
+async fn import_set(
     files: &[(&str, Vec<u8>)],
     descriptor: &str,
 ) -> (tangible_domain::manifest::ArtifactManifest, Vec<String>) {
@@ -1045,7 +1045,7 @@ fn role_of(manifest: &tangible_domain::manifest::ArtifactManifest, name: &str) -
 
 #[tokio::test]
 async fn a_clonecd_set_imports_as_one_artifact_with_its_tracks_and_subchannel() {
-    let (manifest, warnings) = import_clonecd(
+    let (manifest, warnings) = import_set(
         &[
             ("Game.ccd", ccd_fixture("mixed-mode.ccd")),
             ("Game.img", clonecd_image(750)),
@@ -1104,7 +1104,7 @@ async fn a_clonecd_set_imports_as_one_artifact_with_its_tracks_and_subchannel() 
 
 #[tokio::test]
 async fn a_clonecd_image_without_its_subchannel_says_so() {
-    let (manifest, warnings) = import_clonecd(
+    let (manifest, warnings) = import_set(
         &[
             ("disc.CCD", ccd_fixture("data-only.ccd")),
             ("disc.img", clonecd_image(300)),
@@ -1135,7 +1135,7 @@ async fn a_clonecd_image_without_its_subchannel_says_so() {
 
 #[tokio::test]
 async fn a_clonecd_image_that_cannot_be_laid_out_is_kept_whole_and_still_marked_as_subchannel() {
-    let (manifest, warnings) = import_clonecd(
+    let (manifest, warnings) = import_set(
         &[
             ("multi.ccd", ccd_fixture("multi-session.ccd")),
             ("multi.img", clonecd_image(600)),
@@ -1157,4 +1157,167 @@ async fn a_clonecd_image_that_cannot_be_laid_out_is_kept_whole_and_still_marked_
     assert_eq!(manifest.components.len(), 3, "every file kept");
     // Still subchannel data, which is what stops it being burned as it is.
     assert_eq!(role_of(&manifest, "multi.sub"), ComponentRole::Subchannel);
+}
+
+// --- MDS/MDF -----------------------------------------------------------------
+
+fn mds_fixture(name: &str) -> Vec<u8> {
+    std::fs::read(format!(
+        "{}/../../fixtures/images/mds/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .expect("fixture")
+}
+
+#[tokio::test]
+async fn an_mds_cd_imports_with_its_tracks_laid_out_and_pregaps_generated() {
+    let (manifest, warnings) = import_set(
+        &[
+            ("Game.mds", mds_fixture("mixed-mode.mds")),
+            ("Game.mdf", clonecd_image(450)),
+        ],
+        "Game.mds",
+    )
+    .await;
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(manifest.classification.format, ArtifactFormat::MdsMdf);
+    assert_eq!(manifest.classification.media_family, Some(MediaFamily::Cd));
+    assert_eq!(manifest.classification.detectors[0].name, "mds-parser");
+    assert!(manifest.classification.format_confidence > 0.98);
+    assert_eq!(role_of(&manifest, "Game.mds"), ComponentRole::Descriptor);
+    assert_eq!(role_of(&manifest, "Game.mdf"), ComponentRole::TrackData);
+
+    let Topology::CdTracks { tracks, .. } = &manifest.topology else {
+        panic!("expected a track topology, got {:?}", manifest.topology);
+    };
+    let shape: Vec<_> = tracks
+        .iter()
+        .map(|t| {
+            (
+                t.number,
+                t.mode.as_str(),
+                t.start_lba,
+                t.sector_count,
+                t.pregap_sectors,
+            )
+        })
+        .collect();
+    assert_eq!(
+        shape,
+        [
+            (1, "MODE1/2352", 0, 300, 0),
+            (2, "AUDIO", 450, 100, 150),
+            (3, "AUDIO", 550, 50, 0),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn an_mds_dvd_whose_data_file_is_an_iso_is_described_as_one() {
+    let (manifest, warnings) = import_set(
+        &[
+            ("Film.mds", mds_fixture("dvd.mds")),
+            ("Film.mdf", iso_image("FILM_DISC", 64)),
+        ],
+        "Film.mds",
+    )
+    .await;
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(manifest.classification.format, ArtifactFormat::MdsMdf);
+    assert_eq!(manifest.classification.media_family, Some(MediaFamily::Dvd));
+    assert_eq!(role_of(&manifest, "Film.mdf"), ComponentRole::TrackData);
+    let Topology::SingleTrackBlockImage {
+        block_size,
+        block_count,
+        volume_labels,
+        ..
+    } = &manifest.topology
+    else {
+        panic!(
+            "expected a block image topology, got {:?}",
+            manifest.topology
+        );
+    };
+    assert_eq!((*block_size, *block_count), (2048, 64));
+    assert_eq!(volume_labels, &["FILM_DISC"]);
+
+    // What the ISO inspector says of the MDF is said of the import.
+    let mut short = iso_image("FILM_DISC", 64);
+    short.truncate(40 * 2048);
+    let (_, warnings) = import_set(
+        &[("Film.mds", mds_fixture("dvd.mds")), ("Film.mdf", short)],
+        "Film.mds",
+    )
+    .await;
+    assert!(
+        warnings.iter().any(|w| w.contains("truncated")),
+        "{warnings:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_mds_image_with_interleaved_subchannel_is_imported_whole_saying_why() {
+    let (manifest, warnings) = import_set(
+        &[
+            ("sub.mds", mds_fixture("subchannel.mds")),
+            ("sub.mdf", vec![0_u8; 100 * 2448]),
+        ],
+        "sub.mds",
+    )
+    .await;
+    assert_eq!(manifest.classification.format, ArtifactFormat::MdsMdf);
+    assert!(
+        matches!(manifest.topology, Topology::Unknown),
+        "{:?}",
+        manifest.topology
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("interleaves subchannel")),
+        "{warnings:?}"
+    );
+    assert_eq!(manifest.components.len(), 2, "every file kept");
+}
+
+#[tokio::test]
+async fn an_mds_descriptor_without_its_data_file_says_so() {
+    let (manifest, warnings) = import_set(
+        &[("lonely.mds", mds_fixture("single-data.mds"))],
+        "lonely.mds",
+    )
+    .await;
+    assert_eq!(manifest.classification.format, ArtifactFormat::MdsMdf);
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("there is no lonely.mdf")),
+        "{warnings:?}"
+    );
+    assert!(matches!(manifest.topology, Topology::Unknown));
+}
+
+#[tokio::test]
+async fn an_mds_data_file_is_found_in_the_descriptors_folder_regardless_of_case() {
+    let (manifest, warnings) = import_set(
+        &[
+            ("Disc/Game.mds", mds_fixture("single-data.mds")),
+            ("Disc/GAME.MDF", clonecd_image(300)),
+        ],
+        "Game.mds",
+    )
+    .await;
+    assert!(
+        warnings.iter().any(|w| w.contains("regardless of case")),
+        "{warnings:?}"
+    );
+    assert_eq!(
+        role_of(&manifest, "Disc/GAME.MDF"),
+        ComponentRole::TrackData
+    );
+    let Topology::CdTracks { tracks, .. } = &manifest.topology else {
+        panic!("{:?}", manifest.topology);
+    };
+    assert_eq!(tracks.len(), 1);
+    assert_eq!(tracks[0].sector_count, 300);
 }
