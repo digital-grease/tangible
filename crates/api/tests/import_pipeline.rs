@@ -1321,3 +1321,86 @@ async fn an_mds_data_file_is_found_in_the_descriptors_folder_regardless_of_case(
     assert_eq!(tracks.len(), 1);
     assert_eq!(tracks[0].sector_count, 300);
 }
+
+// --- CHD ---------------------------------------------------------------------
+
+fn chd_fixture(name: &str) -> Vec<u8> {
+    std::fs::read(format!(
+        "{}/../../fixtures/images/chd/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .expect("fixture")
+}
+
+fn evidence(manifest: &tangible_domain::manifest::ArtifactManifest) -> String {
+    manifest.classification.detectors[0].evidence.join("\n")
+}
+
+#[tokio::test]
+async fn a_cd_chd_imports_as_one_with_its_tracks_in_evidence() {
+    let (manifest, warnings) =
+        import_set(&[("Game.chd", chd_fixture("mixed-mode.chd"))], "Game.chd").await;
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(manifest.classification.format, ArtifactFormat::Chd);
+    assert_eq!(manifest.classification.media_family, Some(MediaFamily::Cd));
+    assert_eq!(manifest.classification.detectors[0].name, "chd-reader");
+    assert!(manifest.classification.format_confidence > 0.98);
+    assert_eq!(role_of(&manifest, "Game.chd"), ComponentRole::PrimaryImage);
+    // Its tracks are inside compressed hunks, which a track layout cannot
+    // place (OWNER_QUEUE 13).
+    assert!(matches!(manifest.topology, Topology::Unknown));
+    let evidence = evidence(&manifest);
+    for line in [
+        "CHD version 5: 752 units of 2448 bytes in hunks of 19584, compressed with cdlz, cdzl, cdfl",
+        "data SHA-1 548059e51d9b6b244a81e37589037e9fc12fb3c3",
+        "metadata: CHT2, CHT2, CHT2",
+        "track 1: MODE1_RAW, 300 frames",
+        "track 2: AUDIO, 300 frames, pregap 150 in the data",
+        "track 3: AUDIO, 150 frames",
+    ] {
+        assert!(evidence.contains(line), "{line:?} in {evidence}");
+    }
+}
+
+#[tokio::test]
+async fn a_chd_says_what_disc_it_holds_or_that_it_holds_none() {
+    let medium = |manifest: &tangible_domain::manifest::ArtifactManifest| {
+        manifest.classification.media_family
+    };
+    let (dvd, warnings) = import_set(&[("Film.chd", chd_fixture("dvd.chd"))], "Film.chd").await;
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(medium(&dvd), Some(MediaFamily::Dvd));
+
+    let (hd, warnings) = import_set(&[("drive.chd", chd_fixture("hd.chd"))], "drive.chd").await;
+    assert_eq!(hd.classification.format, ArtifactFormat::Chd);
+    assert_eq!(medium(&hd), None);
+    assert!(
+        warnings.iter().any(|w| w.contains("hard disk")),
+        "{warnings:?}"
+    );
+
+    let (_, warnings) = import_set(&[("delta.chd", chd_fixture("delta.chd"))], "delta.chd").await;
+    assert!(
+        warnings.iter().any(|w| w.contains("without that parent")),
+        "{warnings:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_chd_this_reader_cannot_read_is_still_a_chd_and_says_why() {
+    let mut old = chd_fixture("single-data.chd");
+    old[12..16].copy_from_slice(&4_u32.to_be_bytes());
+    let (manifest, warnings) = import_set(&[("old.chd", old)], "old.chd").await;
+    assert_eq!(manifest.classification.format, ArtifactFormat::Chd);
+    assert_eq!(manifest.classification.media_family, None);
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("version 4") && w.contains("chdman copy")),
+        "{warnings:?}"
+    );
+
+    // Named like one and not one: imported, not claimed.
+    let (manifest, _) = import_set(&[("fake.chd", vec![0_u8; 4096])], "fake.chd").await;
+    assert_ne!(manifest.classification.format, ArtifactFormat::Chd);
+}

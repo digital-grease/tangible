@@ -597,6 +597,18 @@ fn missing_image(number: usize, disc: &DiscInputs) -> String {
     } else if disc
         .artifacts
         .iter()
+        .any(|link| link.format == ArtifactFormat::Chd && link.loss_character.is_none())
+    {
+        // Not made here, so there is no original to have checked it against
+        // (docs/plans/chd-images.md; whether to send one as it is waits on
+        // the owner).
+        format!(
+            "disc {number} is linked only to a CHD imported as it is, which is not sent to RomM \
+             as it is; link a CUE/BIN or ISO image of it"
+        )
+    } else if disc
+        .artifacts
+        .iter()
         .any(|link| link.format == ArtifactFormat::Chd)
     {
         format!(
@@ -769,7 +781,15 @@ mod tests {
             "an MDS image is not sent to RomM as it is"
         );
         assert!(
-            missing_image(3, &disc(&[(ArtifactFormat::Chd, "unknown")])).contains("not checked")
+            missing_image(
+                3,
+                &derived(&[(ArtifactFormat::Chd, "unknown", Some(LossCharacter::Unknown))])
+            )
+            .contains("not checked")
+        );
+        assert!(
+            missing_image(7, &disc(&[(ArtifactFormat::Chd, "representation_of")]))
+                .contains("imported as it is")
         );
         assert!(
             missing_image(4, &disc(&[(ArtifactFormat::TocBin, "representation_of")]))

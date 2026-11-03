@@ -42,7 +42,7 @@ use tangible_domain::{
     ArtifactId, ComponentId, ImportJobId, ImportState, ImportTransitionError, LogicalPath,
     Sha256Digest,
 };
-use tangible_image::{ccd, cue, iso, mds, toc, video_ts};
+use tangible_image::{ccd, chd, cue, iso, mds, toc, video_ts};
 use tangible_storage::{
     FilesystemStore, IngestLimits, ManifestStore, ManifestStoreError, StagingArea, StagingError,
     StagingKind, StagingManager, StorageError,
@@ -352,10 +352,15 @@ impl ImportPipeline {
             .collect();
 
         match descriptors.as_slice() {
-            [] => match self.inspect_video_ts(area, staged).await? {
-                Some(detection) => Ok(detection),
-                None => self.inspect_iso(area, staged, request).await,
-            },
+            [] => {
+                if let Some(detection) = self.inspect_chd(area, staged).await? {
+                    return Ok(detection);
+                }
+                match self.inspect_video_ts(area, staged).await? {
+                    Some(detection) => Ok(detection),
+                    None => self.inspect_iso(area, staged, request).await,
+                }
+            }
             [only] if only.extension().as_deref() == Some("ccd") => {
                 match self.inspect_ccd(area, staged, only, checkpoint).await? {
                     Some(detection) => Ok(detection),
@@ -825,6 +830,62 @@ impl ImportPipeline {
         Ok(())
     }
 
+    /// Read a CHD's header and metadata, when one file was staged and it
+    /// starts as a CHD does (docs/plans/chd-images.md).
+    ///
+    /// Returns `None` for anything else. A CHD this reader cannot read in
+    /// full is claimed as a CHD, with no medium, and says why. The hunks are
+    /// never read here: chdman reads them, in a derivation.
+    async fn inspect_chd(
+        &self,
+        area: &StagingArea,
+        staged: &[LogicalPath],
+    ) -> Result<Option<Detection>, ImportError> {
+        let [only] = staged else {
+            return Ok(None);
+        };
+        let resolved = area.resolve(only).await?;
+        let read_err = |source| ImportError::ReadStaged {
+            path: only.to_string(),
+            source,
+        };
+        let prefix = read_prefix(&resolved, chd::SIGNATURE.len())
+            .await
+            .map_err(read_err)?;
+        if prefix != chd::SIGNATURE {
+            return Ok(None);
+        }
+        let read = tokio::task::spawn_blocking(move || {
+            let file = std::fs::File::open(&resolved)?;
+            let length = file.metadata()?.len();
+            Ok(chd::read(&mut std::io::BufReader::new(file), length))
+        })
+        .await
+        .map_err(|join| read_err(std::io::Error::other(join.to_string())))?
+        .map_err(read_err)?;
+
+        let description = match read {
+            Ok(description) => description,
+            Err(error) => {
+                let mut detection = Detection::plain(ArtifactFormat::Chd, 0.9);
+                detection
+                    .warnings
+                    .push(format!("the CHD could not be read in full: {error}"));
+                return Ok(Some(detection));
+            }
+        };
+        let mut detection = Detection::plain(ArtifactFormat::Chd, 0.99);
+        detection.media_family = match description.medium {
+            chd::ChdMedium::Cd => Some(MediaFamily::Cd),
+            chd::ChdMedium::GdRom => Some(MediaFamily::GdRom),
+            chd::ChdMedium::Dvd => Some(MediaFamily::Dvd),
+            chd::ChdMedium::HardDisk | chd::ChdMedium::Laserdisc | chd::ChdMedium::Unknown => None,
+        };
+        detection.evidence = chd_evidence(&description);
+        detection.warnings.clone_from(&description.warnings);
+        Ok(Some(detection))
+    }
+
     /// Read enough of the primary component to classify it.
     async fn inspect_iso(
         &self,
@@ -1217,6 +1278,13 @@ impl ImportPipeline {
                 "MDS_STRUCTURAL_WARNING",
                 detection.media_family,
             ),
+            // A CHD's metadata says which disc it holds, when it is one.
+            ArtifactFormat::Chd => (
+                "chd-reader",
+                "chd-structural",
+                "CHD_STRUCTURAL_WARNING",
+                detection.media_family,
+            ),
             // VIDEO_TS is DVD-Video's own directory; nothing else uses it.
             ArtifactFormat::VideoTsDirectory => (
                 "video-ts-parser",
@@ -1499,6 +1567,54 @@ async fn read_sectors(path: &std::path::Path, sectors: &[u64]) -> std::io::Resul
         read.push(buffer);
     }
     Ok(read)
+}
+
+/// What a CHD's header and metadata say, as evidence: its shape, its
+/// SHA-1s, its metadata, and each track.
+fn chd_evidence(description: &chd::ChdDescription) -> Vec<String> {
+    let header = &description.header;
+    let compressors = if header.compressors.is_empty() {
+        "nothing".to_owned()
+    } else {
+        header.compressors.join(", ")
+    };
+    let mut evidence = vec![
+        format!(
+            "CHD version 5: {} units of {} bytes in hunks of {}, compressed with {compressors}",
+            header.unit_count(),
+            header.unit_bytes,
+            header.hunk_bytes
+        ),
+        format!(
+            "data SHA-1 {}, SHA-1 {}",
+            chd::hex(&header.raw_sha1),
+            chd::hex(&header.sha1)
+        ),
+    ];
+    if let Some(parent) = &header.parent_sha1 {
+        evidence.push(format!("parent SHA-1 {}", chd::hex(parent)));
+    }
+    if !description.tags.is_empty() {
+        evidence.push(format!("metadata: {}", description.tags.join(", ")));
+    }
+    for track in &description.tracks {
+        let pregap = match (track.pregap, track.pregap_in_data) {
+            (0, _) => String::new(),
+            (frames, true) => format!(", pregap {frames} in the data"),
+            (frames, false) => format!(", pregap {frames} generated"),
+        };
+        let postgap = match track.postgap {
+            0 => String::new(),
+            frames => format!(", postgap {frames}"),
+        };
+        evidence.push(format!(
+            "track {}: {}, {} frames{pregap}{postgap}",
+            track.number,
+            track.track_type.as_str(),
+            track.frames
+        ));
+    }
+    evidence
 }
 
 async fn read_prefix(path: &std::path::Path, limit: usize) -> std::io::Result<Vec<u8>> {

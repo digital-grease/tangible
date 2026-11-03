@@ -8,6 +8,14 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
+- CHD images imported as originals are recognised: the header and the
+  metadata chain are read with a bounded, fuzzed reader checked against
+  chdman 0.251's own reading of CHDs it made, never the compressed data.
+  The CHD says which disc it holds (a CD, a GD-ROM or a DVD; a hard disk or
+  laserdisc is said not to be one), and its shape, SHA-1s and CD tracks
+  are recorded as evidence. A version other than 5, a delta that needs its
+  parent, and metadata that does not add up are imported and say so. An
+  imported CHD is not sent to RomM as it is.
 - Alcohol 120% images (MDS/MDF) are recognised and imported as one
   artifact: the binary `.mds` is read with a bounded, fuzzed parser written
   from libmirage's reading of the format and checked against libmirage

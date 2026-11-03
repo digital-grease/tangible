@@ -355,6 +355,13 @@ the same is refused, and the job says which track differed.
 `GET /api/v1/artifacts/<id>/lineage` shows what was made from what. A CHD is
 for RomM, not for burning: burn the image it was made from.
 
+A CHD can also be imported as it is. Tangible reads its header and metadata,
+never its compressed data, and records which disc it holds and its tracks.
+It is not burned, and it is not sent to RomM as it is, since nothing here
+checked it against an original; link a CUE/BIN or ISO of the same disc for
+that. A CHD older than version 5 says to update it with `chdman copy`, and
+a delta CHD, which needs its parent, says so.
+
 CUE/BIN images and CD ISOs work. The chdman in this image (0.251) cannot make
 DVD CHDs, and it misreads a cdrdao TOC whose track has its pregap in the file,
 so such a TOC is refused rather than converted wrongly.
