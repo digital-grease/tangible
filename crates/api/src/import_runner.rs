@@ -270,6 +270,10 @@ impl ImportRunner {
         // watching moves rather than sitting at "requested" for a minute.
         self.record(&job, ImportState::Hashing, &checkpoint).await;
 
+        // Held until the artifact is registered: collection waits for it, so
+        // an object this import finds already stored cannot be collected
+        // before it is counted (ADR 0020).
+        let _ingesting = self.pipeline.manifests().objects().ingesting().await;
         let outcome = self.pipeline.run(&request, &mut checkpoint).await;
 
         // Written whichever way it went: a failure that discarded the

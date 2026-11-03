@@ -1063,9 +1063,33 @@ manifest at `manifests/<artifact id>.json`. Copy that path back from your
 backup, keep it read-only as Tangible left it, then check the artifact
 again: one that reads back intact is marked intact.
 
+### Deleting an artifact
+
+An administrator can delete an artifact from its page ("Delete this
+artifact"), or with `POST /api/v1/artifacts/<id>/deletion-requests`. It is
+not deleted at once: it is pending for `TANGIBLE_DELETION_GRACE_DAYS` (7 by
+default), and until then "Keep it" (or `DELETE` on the same path) undoes the
+request. Meanwhile nothing new is burned or derived from it and the RomM
+export stops sending it, but it can still be downloaded or checked. When the
+grace period ends its bytes are removed and its record stays: its
+components and their hashes, its manifest, where it came from, what was made
+of it, its burns and the discs made from them. The library list leaves it
+out (`?deleted=true` lists what has been deleted).
+
+An imported original or a disc dump may be somebody's only copy, so
+deleting one needs a second confirmation (`"confirm_original": true`). An
+artifact with a retention lock is never deleted, and one is refused while a
+burn, a derivation, a check of it or its import's source removal is queued
+or under way. A stored file several artifacts share is removed only when
+the last of them is deleted, and only while no import or derivation is in
+the middle of storing files; otherwise the removal waits for the next pass,
+within a quarter of an hour. Every step is audited. Backups made before a
+deletion still hold the bytes.
+
 ### Finding files nothing needs
 
-Tangible never removes a stored file yet, but it can say which it would:
+Tangible removes a stored file only when an artifact that had it is
+deleted, as above. It can say which other files nothing needs:
 
 ```bash
 docker compose -f deploy/compose.yaml run --rm server gc
@@ -1086,7 +1110,8 @@ the unread one might name a listed file.
 
 The plan only reads; it removes nothing. If you remove a listed file by
 hand, stop the server first: an import that has just stored the same bytes
-again may not have recorded them yet.
+again may not have recorded them yet. A deleted artifact's kept manifest
+does not mark its files as needed.
 
 ## Identifying discs with DATs
 

@@ -520,15 +520,19 @@ async fn a_quarantined_artifact_is_not_burned() {
 async fn an_artifact_awaiting_deletion_is_not_burned() {
     let harness = harness().await;
     let world = seed(&harness.pool).await;
-    sqlx::query("UPDATE artifacts SET pending_deletion = TRUE WHERE id = $1::uuid")
-        .bind(&world.artifact)
-        .execute(&harness.pool)
-        .await
-        .expect("mark the artifact for deletion");
+    sqlx::query(
+        "UPDATE artifacts SET pending_deletion = TRUE, deletion_requested_at = now(),
+                deletion_requested_by = 'test', delete_after = now() + interval '7 days'
+         WHERE id = $1::uuid",
+    )
+    .bind(&world.artifact)
+    .execute(&harness.pool)
+    .await
+    .expect("mark the artifact for deletion");
 
     let (status, body) = harness.post("/api/v1/burn-jobs", create_body(&world)).await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(body["code"], "VALIDATION_FAILED");
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["code"], "ARTIFACT_DELETED");
 }
 
 #[tokio::test]

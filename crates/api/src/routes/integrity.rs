@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use tangible_db::integrity::{
     IntegrityCheckRecord, Requested, cancel_check, get_check, list_checks, request_check,
 };
+use tangible_domain::ArtifactId;
 use tangible_domain::IntegrityCheckId;
 use time::format_description::well_known::Rfc3339;
 use utoipa::ToSchema;
@@ -214,6 +215,8 @@ pub async fn validate_artifact(
     Path(artifact_id): Path<String>,
 ) -> Result<axum::response::Response, Problem> {
     let id = parse_id(&artifact_id, "artifact_id")?;
+    // A deleted artifact has nothing left to read (ADR 0020).
+    crate::deletion::refuse_if_deleted(&state, ArtifactId::from_uuid(id), true).await?;
     let requested = request_check(state.database().pool(), Some(id), &user.username)
         .await
         .map_err(|error| unavailable(&error))?;

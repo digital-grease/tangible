@@ -230,8 +230,10 @@ pub async fn objects_after(
         }
         None => {
             sqlx::query(
+                // Not those collected after their artifacts were deleted
+                // (ADR 0020): there is nothing left to read.
                 "SELECT sha256, size_bytes AS size FROM cas_objects
-                 WHERE $1::text IS NULL OR sha256 > $1
+                 WHERE removed_at IS NULL AND ($1::text IS NULL OR sha256 > $1)
                  ORDER BY sha256 LIMIT $2",
             )
             .bind(after)
@@ -274,7 +276,7 @@ pub async fn count_and_record_totals(
         None => {
             sqlx::query(
                 "SELECT count(*) AS objects, COALESCE(sum(size_bytes), 0)::bigint AS bytes
-                 FROM cas_objects",
+                 FROM cas_objects WHERE removed_at IS NULL",
             )
             .fetch_one(pool)
             .await
@@ -354,7 +356,8 @@ pub async fn record_progress(pool: &PgPool, progress: &Progress<'_>) -> Result<b
 pub async fn mark_object_damaged(pool: &PgPool, sha256: &str) -> Result<u64, DbError> {
     sqlx::query(
         "UPDATE artifacts SET integrity_state = 'damaged', integrity_checked_at = now()
-         WHERE id IN (SELECT artifact_id FROM artifact_components WHERE sha256 = $1)",
+         WHERE deleted_at IS NULL
+           AND id IN (SELECT artifact_id FROM artifact_components WHERE sha256 = $1)",
     )
     .bind(sha256)
     .execute(pool)

@@ -12,6 +12,7 @@ pub mod auth;
 pub mod background;
 pub mod burn_report;
 pub mod catalog;
+pub mod deletion;
 pub mod derivation;
 pub mod diagnostics;
 pub mod download_clients;
@@ -187,6 +188,8 @@ pub const API_BASE: &str = "/api/v1";
         routes::erasures::complete_drive_erasure,
         routes::dashboard::dashboard,
         events::event_stream,
+        deletion::request_artifact_deletion,
+        deletion::keep_pending_artifact,
         routes::audit::list_audit_log,
         routes::audit::get_audit_log_event,
         routes::worker_admin::list_all_workers,
@@ -219,6 +222,8 @@ pub const API_BASE: &str = "/api/v1";
         routes::accounts::CreateUserRequest,
         routes::artifacts::ArtifactSummaryPage,
         routes::artifacts::ArtifactSummary,
+        routes::artifacts::ArtifactDeletionView,
+        deletion::RequestDeletion,
         routes::artifacts::ArtifactDetail,
         routes::artifacts::ComponentView,
         routes::artifacts::DiscLayout,
@@ -526,6 +531,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/readyz", get(health::readyz))
         .nest(API_BASE, routes::accounts::router())
         .nest(API_BASE, events::router())
+        .nest(API_BASE, deletion::router())
         .nest(API_BASE, routes::artifacts::router())
         .nest(API_BASE, routes::burns::router())
         .nest(API_BASE, routes::imports::router())

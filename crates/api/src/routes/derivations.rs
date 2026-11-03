@@ -242,6 +242,8 @@ pub async fn request_derivative(
     Json(request): Json<RequestDerivation>,
 ) -> Result<(StatusCode, Json<DerivationRequestView>), Problem> {
     let id = parse_artifact(&artifact_id)?;
+    // Nothing new is made of bytes that are going (ADR 0020).
+    crate::deletion::refuse_if_deleted(&state, id, false).await?;
     let Some(derivations) = state.derivations() else {
         return Err(Problem::new(
             ErrorCode::Conflict,

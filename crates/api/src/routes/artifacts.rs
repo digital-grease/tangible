@@ -43,6 +43,10 @@ pub struct ArtifactSummary {
     pub format: String,
     /// Shape of the artifact.
     pub artifact_kind: String,
+    /// Where its bytes came from: `imported_original`, `derived`,
+    /// `physical_dump`, `generated` or `external_reference`. An imported
+    /// original or a dump needs `confirm_original` to be deleted.
+    pub origin: String,
     /// Structural validation outcome.
     pub validation_state: String,
     /// Number of files.
@@ -64,6 +68,44 @@ pub struct ArtifactSummary {
     /// The game of a loaded DAT it best matches, if any
     /// (docs/plans/dat-matching.md).
     pub best_match: Option<BestMatchView>,
+    /// Its deletion, once asked for (ADR 0020): pending until
+    /// `delete_after`, or deleted, its bytes gone and this record kept.
+    pub deletion: Option<ArtifactDeletionView>,
+}
+
+/// An artifact's deletion (ADR 0020).
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ArtifactDeletionView {
+    /// `pending` (the bytes go after `delete_after`, unless it is kept) or
+    /// `deleted` (they are gone).
+    pub state: String,
+    /// When it was asked for.
+    pub requested_at: String,
+    /// Who asked.
+    pub requested_by: String,
+    /// When the bytes may go, while pending.
+    pub delete_after: Option<String>,
+    /// When it was deleted.
+    pub deleted_at: Option<String>,
+}
+
+impl From<tangible_db::library::DeletionRecord> for ArtifactDeletionView {
+    fn from(record: tangible_db::library::DeletionRecord) -> Self {
+        use time::format_description::well_known::Rfc3339;
+        let at = |value: OffsetDateTime| value.format(&Rfc3339).unwrap_or_default();
+        Self {
+            state: if record.deleted_at.is_some() {
+                "deleted"
+            } else {
+                "pending"
+            }
+            .to_owned(),
+            requested_at: at(record.requested_at),
+            requested_by: record.requested_by,
+            delete_after: record.delete_after.map(at),
+            deleted_at: record.deleted_at.map(at),
+        }
+    }
 }
 
 /// The game of a loaded DAT an artifact best matches: an exact match
@@ -84,6 +126,7 @@ impl From<&ArtifactManifest> for ArtifactSummary {
             id: manifest.artifact_id.to_string(),
             format: manifest.classification.format.to_string(),
             artifact_kind: manifest.classification.artifact_kind.to_string(),
+            origin: manifest.origin.kind.to_string(),
             validation_state: manifest.validation.state.to_string(),
             component_count: manifest.components.len(),
             total_bytes: manifest.classification.total_bytes,
@@ -92,6 +135,7 @@ impl From<&ArtifactManifest> for ArtifactSummary {
             integrity_state: "unchecked".to_owned(),
             integrity_checked_at: None,
             best_match: None,
+            deletion: None,
         }
     }
 }
@@ -121,7 +165,7 @@ async fn with_integrity(state: &ApiState, summaries: &mut [ArtifactSummary]) {
     }
     match tangible_db::dats::best_matches(state.database().pool(), &ids).await {
         Ok(mut found) => {
-            for summary in summaries {
+            for summary in summaries.iter_mut() {
                 if let Some((game_name, kind, dat_name)) = uuid::Uuid::parse_str(&summary.id)
                     .ok()
                     .and_then(|id| found.remove(&id))
@@ -135,6 +179,19 @@ async fn with_integrity(state: &ApiState, summaries: &mut [ArtifactSummary]) {
             }
         }
         Err(error) => tracing::warn!(error = ?error, "DAT matches could not be read"),
+    }
+    match tangible_db::library::deletions_of(state.database().pool(), &ids).await {
+        Ok(mut found) => {
+            for summary in summaries {
+                if let Some(record) = uuid::Uuid::parse_str(&summary.id)
+                    .ok()
+                    .and_then(|id| found.remove(&id))
+                {
+                    summary.deletion = Some(record.into());
+                }
+            }
+        }
+        Err(error) => tracing::warn!(error = ?error, "deletions could not be read"),
     }
 }
 
@@ -478,6 +535,9 @@ pub struct ArtifactFilterQuery {
     pub created_after: Option<String>,
     /// Imported before this, RFC 3339.
     pub created_before: Option<String>,
+    /// `true` lists deleted artifacts only, the tombstones; otherwise they
+    /// are left out (ADR 0020).
+    pub deleted: Option<bool>,
 }
 
 /// A filter value, checked against what the server knows.
@@ -555,6 +615,7 @@ pub async fn list_artifacts(
         linked: filter.linked,
         created_after: instant(filter.created_after.as_ref(), "created_after")?,
         created_before: instant(filter.created_before.as_ref(), "created_before")?,
+        deleted: filter.deleted,
     };
 
     let ids: Vec<ArtifactId> = if catalogue_filter.is_empty() {
@@ -568,6 +629,15 @@ pub async fn list_artifacts(
         if let Some(after) = &after {
             ids.retain(|id| &id.to_string() > after);
         }
+        // A deleted artifact's manifest is kept as its record; the library
+        // lists what it holds (ADR 0020).
+        let deleted = tangible_db::library::deleted_artifact_ids(state.database().pool())
+            .await
+            .map_err(|error| {
+                tracing::error!(error = ?error, "could not read the deleted artifacts");
+                Problem::storage_unavailable()
+            })?;
+        ids.retain(|id| !deleted.contains(id.as_uuid()));
         ids.truncate(limit);
         ids
     } else {
@@ -865,6 +935,9 @@ pub async fn component_content(
         .parse::<tangible_domain::ComponentId>()
         .map_err(|_| Problem::invalid_parameter("component_id", "not a valid identifier"))?;
 
+    // Still readable while pending, so a copy can be taken; gone once
+    // deleted (ADR 0020).
+    crate::deletion::refuse_if_deleted(&state, id, true).await?;
     let manifest = load(&state, id).await?;
     let component = manifest
         .components

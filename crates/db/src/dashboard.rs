@@ -171,14 +171,18 @@ pub async fn summary(
     record.workers_pending = workers.try_get("pending").map_err(DbError::Query)?;
     record.workers_incompatible = workers.try_get("incompatible").map_err(DbError::Query)?;
 
-    record.artifacts_damaged =
-        count("SELECT count(*) FROM artifacts WHERE integrity_state = 'damaged'").await?;
-    record.artifacts_unchecked =
-        count("SELECT count(*) FROM artifacts WHERE integrity_state = 'unchecked'").await?;
+    record.artifacts_damaged = count(
+        "SELECT count(*) FROM artifacts WHERE integrity_state = 'damaged' AND deleted_at IS NULL",
+    )
+    .await?;
+    record.artifacts_unchecked = count(
+        "SELECT count(*) FROM artifacts WHERE integrity_state = 'unchecked' AND deleted_at IS NULL",
+    )
+    .await?;
 
     let stored = sqlx::query(
         "SELECT count(*) AS objects, coalesce(sum(size_bytes), 0)::bigint AS bytes
-         FROM cas_objects",
+         FROM cas_objects WHERE removed_at IS NULL",
     )
     .fetch_one(pool)
     .await

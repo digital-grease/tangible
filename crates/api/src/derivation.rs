@@ -1784,6 +1784,9 @@ impl DerivationRunner {
 
     async fn execute(&self, job: &DerivationJobRecord) {
         let pipeline = self.derivations.pipeline();
+        // Held until the derivative is registered, as an import holds it
+        // (ADR 0020).
+        let _ingesting = pipeline.manifests().objects().ingesting().await;
         let outcome = match pipeline.run(job).await {
             Ok(outcome) => outcome,
             Err(error) => {

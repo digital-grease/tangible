@@ -76,6 +76,9 @@ struct Inner {
     worker_credential_max_age_days: u32,
     /// What the event stream sends (API.md 12).
     events: crate::events::EventHub,
+    /// Days a deleted artifact's bytes are kept before they go
+    /// (`TANGIBLE_DELETION_GRACE_DAYS`, ADR 0020).
+    deletion_grace_days: u32,
 }
 
 /// How long a worker credential is used before rotation, unless configured.
@@ -129,6 +132,7 @@ impl ApiState {
                 oidc: None,
                 worker_credential_max_age_days: DEFAULT_WORKER_CREDENTIAL_MAX_AGE_DAYS,
                 events: crate::events::EventHub::new(),
+                deletion_grace_days: crate::deletion::DEFAULT_GRACE_DAYS,
             }),
         }
     }
@@ -159,6 +163,7 @@ impl ApiState {
                 oidc: None,
                 worker_credential_max_age_days: DEFAULT_WORKER_CREDENTIAL_MAX_AGE_DAYS,
                 events: crate::events::EventHub::new(),
+                deletion_grace_days: crate::deletion::DEFAULT_GRACE_DAYS,
             }),
         }
     }
@@ -242,6 +247,23 @@ impl ApiState {
         Self {
             inner: Arc::new(inner),
         }
+    }
+
+    /// Keep a deleted artifact's bytes for `days` days before they go; 0
+    /// removes them at the next pass.
+    #[must_use]
+    pub fn with_deletion_grace_days(self, days: u32) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.deletion_grace_days = days;
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Days a deleted artifact's bytes are kept.
+    #[must_use]
+    pub fn deletion_grace_days(&self) -> u32 {
+        self.inner.deletion_grace_days
     }
 
     /// What the event stream sends. Every clone of this state shares it.

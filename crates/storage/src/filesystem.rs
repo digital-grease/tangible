@@ -15,8 +15,10 @@
 //!   streaming and the object is stored under what was actually read, so a
 //!   caller cannot cause bytes to be filed under someone else's name.
 
+use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use sha2::{Digest, Sha256};
 use tangible_domain::Sha256Digest;
@@ -149,6 +151,21 @@ pub struct ObjectStat {
 #[derive(Debug, Clone)]
 pub struct FilesystemStore {
     root: PathBuf,
+    /// Held for reading by every ingest from storing bytes until its
+    /// artifact is registered, and for writing by collection (ADR 0020).
+    collection: Arc<tokio::sync::RwLock<()>>,
+}
+
+/// One collection lock per library root in this process, however many
+/// times the root is opened.
+fn collection_lock(root: &Path) -> Arc<tokio::sync::RwLock<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<tokio::sync::RwLock<()>>>>> = OnceLock::new();
+    let key = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let mut locks = LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    Arc::clone(locks.entry(key).or_default())
 }
 
 impl FilesystemStore {
@@ -205,7 +222,25 @@ impl FilesystemStore {
             }
         }
 
-        Ok(Self { root })
+        let collection = collection_lock(&root);
+        Ok(Self { root, collection })
+    }
+
+    /// Hold off collection while bytes are stored and their artifact
+    /// registered (ADR 0020). An ingest holds this from before it stores
+    /// anything until its artifact is in the catalogue, so an object it
+    /// deduplicated against cannot be collected between the two.
+    pub async fn ingesting(&self) -> tokio::sync::OwnedRwLockReadGuard<()> {
+        Arc::clone(&self.collection).read_owned().await
+    }
+
+    /// Exclude every ingest while objects are collected (ADR 0020), if
+    /// none is under way. Never waits: a waiting writer would hold back every
+    /// new ingest behind one long one, so collection waits for a moment when
+    /// nothing is ingesting instead.
+    #[must_use]
+    pub fn try_collecting(&self) -> Option<tokio::sync::OwnedRwLockWriteGuard<()>> {
+        Arc::clone(&self.collection).try_write_owned().ok()
     }
 
     /// The library root.

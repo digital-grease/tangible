@@ -1994,7 +1994,8 @@ pub struct ArtifactBurnFacts {
     pub validation_state: String,
     /// Whether the artifact is under quarantine.
     pub quarantine_state: String,
-    /// Whether its payload is scheduled for deletion.
+    /// Whether its payload is scheduled for deletion, or deleted
+    /// (ADR 0020).
     pub pending_deletion: bool,
     /// Detected container format.
     pub format: String,
@@ -2019,7 +2020,9 @@ pub async fn artifact_burn_facts(
     artifact_id: uuid::Uuid,
 ) -> Result<Option<ArtifactBurnFacts>, DbError> {
     let row = sqlx::query(
-        "SELECT validation_state, quarantine_state, pending_deletion, format, total_bytes,
+        "SELECT validation_state, quarantine_state,
+                (pending_deletion OR deleted_at IS NOT NULL) AS pending_deletion,
+                format, total_bytes,
                 EXISTS (SELECT 1 FROM artifact_components c
                         WHERE c.artifact_id = artifacts.id AND c.role = 'subchannel')
                     AS has_subchannel
@@ -2134,11 +2137,16 @@ pub async fn register_artifact(
     digests.sort_unstable();
     digests.dedup_by(|a, b| a.0 == b.0);
 
+    // An object collected after an artifact was deleted keeps its row; bytes
+    // that come back are stored again, and the row is the same object's
+    // (ADR 0020). The row is locked while it is collected, so this waits for
+    // a collection of it in progress.
     for (sha256, size_bytes) in &digests {
         sqlx::query(
             "INSERT INTO cas_objects (sha256, size_bytes)
              VALUES ($1, $2)
-             ON CONFLICT (sha256) DO NOTHING",
+             ON CONFLICT (sha256) DO UPDATE SET removed_at = NULL, updated_at = now()
+             WHERE cas_objects.removed_at IS NOT NULL",
         )
         .bind(sha256)
         .bind(size_bytes)

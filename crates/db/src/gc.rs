@@ -33,8 +33,12 @@ pub struct CatalogueMarks {
     /// each has promoted. The shape is the import runner's, so it reads
     /// them.
     pub import_checkpoints: Vec<Value>,
-    /// Every object the catalogue records, with the size it recorded.
+    /// Every object the catalogue records, with the size it recorded; not
+    /// those collected after their artifacts were deleted.
     pub recorded: Vec<(Sha256Digest, i64)>,
+    /// Deleted artifacts, whose kept manifests mark nothing live
+    /// (ADR 0020).
+    pub deleted: HashSet<tangible_domain::ArtifactId>,
 }
 
 /// Read the marks.
@@ -51,9 +55,12 @@ pub async fn catalogue_marks(pool: &PgPool) -> Result<CatalogueMarks, DbError> {
         .await
         .map_err(get)?;
 
+    // A deleted artifact's components are a record, not a use.
     let live: Vec<String> = sqlx::query_scalar(
-        "SELECT sha256 FROM artifact_components
-         UNION SELECT primary_sha256 FROM artifacts WHERE primary_sha256 IS NOT NULL
+        "SELECT c.sha256 FROM artifact_components c JOIN artifacts a ON a.id = c.artifact_id
+           WHERE a.deleted_at IS NULL
+         UNION SELECT primary_sha256 FROM artifacts
+           WHERE primary_sha256 IS NOT NULL AND deleted_at IS NULL
          UNION SELECT sha256 FROM cas_objects WHERE reference_count > 0 OR retention_lock",
     )
     .fetch_all(&mut *tx)
@@ -66,16 +73,22 @@ pub async fn catalogue_marks(pool: &PgPool) -> Result<CatalogueMarks, DbError> {
     .fetch_all(&mut *tx)
     .await
     .map_err(get)?;
-    let recorded = sqlx::query("SELECT sha256, size_bytes FROM cas_objects")
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(get)?
-        .iter()
-        .map(|row| {
-            let sha256: String = row.try_get("sha256").map_err(get)?;
-            Ok((digest(&sha256)?, row.try_get("size_bytes").map_err(get)?))
-        })
-        .collect::<Result<Vec<_>, DbError>>()?;
+    let deleted: Vec<uuid::Uuid> =
+        sqlx::query_scalar("SELECT id FROM artifacts WHERE deleted_at IS NOT NULL")
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(get)?;
+    let recorded =
+        sqlx::query("SELECT sha256, size_bytes FROM cas_objects WHERE removed_at IS NULL")
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(get)?
+            .iter()
+            .map(|row| {
+                let sha256: String = row.try_get("sha256").map_err(get)?;
+                Ok((digest(&sha256)?, row.try_get("size_bytes").map_err(get)?))
+            })
+            .collect::<Result<Vec<_>, DbError>>()?;
     tx.commit().await.map_err(get)?;
 
     Ok(CatalogueMarks {
@@ -85,6 +98,10 @@ pub async fn catalogue_marks(pool: &PgPool) -> Result<CatalogueMarks, DbError> {
             .collect::<Result<_, _>>()?,
         import_checkpoints,
         recorded,
+        deleted: deleted
+            .into_iter()
+            .map(tangible_domain::ArtifactId::from_uuid)
+            .collect(),
     })
 }
 

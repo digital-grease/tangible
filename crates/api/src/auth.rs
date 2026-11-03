@@ -183,8 +183,8 @@ pub enum Access {
 
 use Access::{Public, Signed, SignedOrLeaseholder, Worker};
 use Permission::{
-    Burn, Catalog, Diagnose, Erase, Import, ImportUrl, MaintainStorage, ManageDats,
-    ManageIntegrations, ManageUsers, ManageWorkers, Read, ReadAudit,
+    Burn, Catalog, DeleteArtifacts, Diagnose, Erase, Import, ImportUrl, MaintainStorage,
+    ManageDats, ManageIntegrations, ManageUsers, ManageWorkers, Read, ReadAudit,
 };
 
 /// Every operation the server answers, and what it requires.
@@ -364,6 +364,17 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
     ("POST", "/api/v1/worker-enrollments", Signed(ManageWorkers)),
     // The dashboard (docs/plans/dashboard.md): for anyone signed in.
     ("GET", "/api/v1/dashboard", Signed(Read)),
+    // Deleting artifacts, as tombstones (ADR 0020).
+    (
+        "POST",
+        "/api/v1/artifacts/{artifact_id}/deletion-requests",
+        Signed(DeleteArtifacts),
+    ),
+    (
+        "DELETE",
+        "/api/v1/artifacts/{artifact_id}/deletion-requests",
+        Signed(DeleteArtifacts),
+    ),
     // The event stream (API.md 12): what anyone who can read sees change.
     ("GET", "/api/v1/events", Signed(Read)),
     // The audit log (docs/plans/audit-log.md): read by administrators only.

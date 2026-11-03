@@ -499,8 +499,9 @@ fn validate(request: &CreateBurnJobRequest) -> Result<Validated, Problem> {
 fn eligibility(facts: &ArtifactBurnFacts) -> Result<Vec<String>, Problem> {
     if facts.pending_deletion {
         return Err(Problem::new(
-            ErrorCode::ValidationFailed,
-            "this artifact's payload is scheduled for deletion",
+            ErrorCode::ArtifactDeleted,
+            "this artifact is deleted, or pending deletion, so it cannot be burned; an \
+             administrator can keep it while it is pending",
         ));
     }
     if matches!(facts.quarantine_state.as_str(), "pending" | "confirmed") {
@@ -1439,7 +1440,7 @@ mod tests {
         facts.pending_deletion = true;
         assert_eq!(
             eligibility(&facts).expect_err("must refuse").code,
-            "VALIDATION_FAILED"
+            "ARTIFACT_DELETED"
         );
     }
 

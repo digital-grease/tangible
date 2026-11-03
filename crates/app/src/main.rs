@@ -251,9 +251,8 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         .with_auth(auth)
         .with_oidc_if(oidc)
         .with_reports(reports)
-        .with_diagnostics(diagnostics)
-        .with_decryption_allowed(serve.allow_decryption)
-        .with_worker_credential_max_age_days(serve.worker_credential_max_age_days);
+        .with_diagnostics(diagnostics);
+    let state = with_policies(state, serve);
     let state = match &secret_key {
         Some(key) => state.with_secret_key(Arc::clone(key)),
         None => state,
@@ -305,6 +304,7 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         .into_iter()
         .flatten()
         .chain(readers)
+        .chain(start_deletions(&state))
         .collect();
     serve_until_shutdown(serve, state, runners).await
 }
@@ -558,6 +558,27 @@ fn start_source_remover(
         let _ = stopped.await;
     }));
     (handle, (stop, task))
+}
+
+/// The server's policies that are plain settings: decryption, worker
+/// credential rotation, how long deleted artifacts' bytes are kept.
+fn with_policies(state: ApiState, serve: &ServeConfig) -> ApiState {
+    state
+        .with_decryption_allowed(serve.allow_decryption)
+        .with_worker_credential_max_age_days(serve.worker_credential_max_age_days)
+        .with_deletion_grace_days(serve.deletion_grace_days)
+}
+
+/// Start the runner that makes artifacts due for deletion into tombstones
+/// and collects their objects (ADR 0020), when there is a library.
+fn start_deletions(state: &ApiState) -> Option<Stoppable> {
+    let manifests = state.manifests()?.clone();
+    let runner = tangible_api::deletion::DeletionRunner::new(state.database().clone(), manifests);
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(runner.run(async {
+        let _ = stopped.await;
+    }));
+    Some((stop, task))
 }
 
 /// What a derivation pipeline is built from.
@@ -1466,6 +1487,7 @@ mod tests {
         "TANGIBLE_BUILD_REVISION",
         "TANGIBLE_BUILD_VERSION",
         "TANGIBLE_BURN_ENGINE",
+        "TANGIBLE_DELETION_GRACE_DAYS",
         "TANGIBLE_DERIVATION_ENGINE",
         "TANGIBLE_LOG",
         "TANGIBLE_LOG_JSON",

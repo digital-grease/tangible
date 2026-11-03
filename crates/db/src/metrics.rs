@@ -71,6 +71,11 @@ async fn grouped(pool: &PgPool, sql: &str) -> Result<Vec<(String, i64)>, DbError
         .map_err(DbError::Query)
 }
 
+/// What the store holds: not objects collected after their artifacts were
+/// deleted (ADR 0020).
+const STORED_OBJECTS: &str = "SELECT count(*), coalesce(sum(size_bytes), 0)::bigint \
+     FROM cas_objects WHERE removed_at IS NULL";
+
 /// Read one snapshot.
 ///
 /// # Errors
@@ -80,16 +85,15 @@ pub async fn snapshot(pool: &PgPool) -> Result<MetricsSnapshot, DbError> {
     let mut snapshot = MetricsSnapshot {
         artifacts_by_format: grouped(
             pool,
-            "SELECT format, count(*) FROM artifacts GROUP BY format ORDER BY format",
+            "SELECT format, count(*) FROM artifacts WHERE deleted_at IS NULL GROUP BY format ORDER BY format",
         )
         .await?,
         ..MetricsSnapshot::default()
     };
-    let (objects, bytes): (i64, i64) =
-        sqlx::query_as("SELECT count(*), coalesce(sum(size_bytes), 0)::bigint FROM cas_objects")
-            .fetch_one(pool)
-            .await
-            .map_err(DbError::Query)?;
+    let (objects, bytes): (i64, i64) = sqlx::query_as(STORED_OBJECTS)
+        .fetch_one(pool)
+        .await
+        .map_err(DbError::Query)?;
     snapshot.stored_objects = objects;
     snapshot.stored_bytes = bytes;
 
@@ -148,7 +152,7 @@ pub async fn snapshot(pool: &PgPool) -> Result<MetricsSnapshot, DbError> {
 
     snapshot.integrity = grouped(
         pool,
-        "SELECT integrity_state, count(*) FROM artifacts GROUP BY integrity_state \
+        "SELECT integrity_state, count(*) FROM artifacts WHERE deleted_at IS NULL GROUP BY integrity_state \
          ORDER BY integrity_state",
     )
     .await?;
@@ -162,7 +166,7 @@ pub async fn snapshot(pool: &PgPool) -> Result<MetricsSnapshot, DbError> {
 
     snapshot.preservation_hashes = grouped(
         pool,
-        "SELECT hashes_state, count(*) FROM artifacts GROUP BY hashes_state ORDER BY hashes_state",
+        "SELECT hashes_state, count(*) FROM artifacts WHERE deleted_at IS NULL GROUP BY hashes_state ORDER BY hashes_state",
     )
     .await?;
     snapshot.dats = sqlx::query_scalar("SELECT count(*) FROM dat_files")

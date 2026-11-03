@@ -16,6 +16,7 @@
 pub mod auth;
 pub mod burn;
 pub mod cd;
+pub mod deletion;
 pub mod derivation;
 pub mod digest;
 pub mod dvd;

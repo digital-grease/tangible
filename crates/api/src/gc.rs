@@ -160,11 +160,44 @@ pub async fn plan(
     settings: GcSettings,
 ) -> Result<GcPlan, GcError> {
     let inventory = manifests.objects().inventory().await?;
-    // The catalogue before the manifests: an import that completes between
-    // the two has published its manifest before it ended.
+    let marks = marks(database, manifests).await?;
+    Ok(assess(
+        &inventory,
+        &marks,
+        OffsetDateTime::now_utc(),
+        settings,
+    ))
+}
+
+/// What refers to stored objects, for collection (ADR 0020): the objects
+/// marked live, and whether every mark could be read. When one could not,
+/// something unread may name an object, and nothing is to be collected.
+///
+/// # Errors
+///
+/// As [`plan`].
+pub async fn live_objects(
+    database: &Database,
+    manifests: &ManifestStore,
+) -> Result<(HashSet<Sha256Digest>, bool), GcError> {
+    let marks = marks(database, manifests).await?;
+    let certain = marks.manifests_unreadable == 0 && marks.checkpoints_unreadable == 0;
+    Ok((marks.live, certain))
+}
+
+/// Read the marks: the catalogue's, then the manifests'. The catalogue
+/// first: an import that completes between the two has published its
+/// manifest before it ended.
+async fn marks(database: &Database, manifests: &ManifestStore) -> Result<Marks, GcError> {
     let catalogue = catalogue_marks(database.pool()).await?;
+    let deleted = catalogue.deleted.clone();
     let mut marks = from_catalogue(catalogue);
     for id in manifests.list().await? {
+        // A deleted artifact's manifest is kept as its record; it uses
+        // nothing (ADR 0020).
+        if deleted.contains(&id) {
+            continue;
+        }
         match manifests.read(id).await {
             Ok(manifest) => marks.live.extend(
                 manifest
@@ -180,12 +213,7 @@ pub async fn plan(
             }
         }
     }
-    Ok(assess(
-        &inventory,
-        &marks,
-        OffsetDateTime::now_utc(),
-        settings,
-    ))
+    Ok(marks)
 }
 
 fn from_catalogue(catalogue: CatalogueMarks) -> Marks {
@@ -507,6 +535,7 @@ mod tests {
                 json!({ "something": "else" }),
             ],
             recorded: Vec::new(),
+            deleted: HashSet::new(),
         };
         let marks = from_catalogue(catalogue);
         assert!(marks.live.contains(&digest(3)));

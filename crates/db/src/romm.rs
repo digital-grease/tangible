@@ -307,6 +307,9 @@ pub async fn export_inputs(
                  ORDER BY d.started_at DESC LIMIT 1) AS loss_character
          FROM artifact_disc_links l JOIN artifacts a ON a.id = l.artifact_id
          WHERE l.disc_id = ANY($1)
+           -- Neither an artifact being deleted nor a deleted one is a disc's
+           -- image any longer (ADR 0020).
+           AND NOT a.pending_deletion AND a.deleted_at IS NULL
          ORDER BY l.created_at, a.id",
     )
     .bind(&discs)

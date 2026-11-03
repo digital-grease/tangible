@@ -30,13 +30,19 @@ pub struct ArtifactFilter<'a> {
     pub created_after: Option<OffsetDateTime>,
     /// Catalogued before this.
     pub created_before: Option<OffsetDateTime>,
+    /// Deleted artifacts only (`true`); otherwise none (ADR 0020).
+    pub deleted: Option<bool>,
 }
 
 impl ArtifactFilter<'_> {
-    /// Whether it keeps everything.
+    /// Whether it keeps everything but the deleted.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        *self == Self::default()
+        Self {
+            deleted: None,
+            ..*self
+        } == Self::default()
+            && self.deleted != Some(true)
     }
 }
 
@@ -63,6 +69,7 @@ pub async fn filtered_artifact_ids(
                 OR $6 = EXISTS (SELECT 1 FROM artifact_disc_links l WHERE l.artifact_id = a.id))
            AND ($7::timestamptz IS NULL OR a.created_at >= $7)
            AND ($8::timestamptz IS NULL OR a.created_at < $8)
+           AND (a.deleted_at IS NOT NULL) = $10
          ORDER BY a.id
          LIMIT $9",
     )
@@ -75,7 +82,88 @@ pub async fn filtered_artifact_ids(
     .bind(filter.created_after)
     .bind(filter.created_before)
     .bind(limit)
+    .bind(filter.deleted.unwrap_or(false))
     .fetch_all(pool)
     .await
     .map_err(DbError::Query)
+}
+
+/// Every deleted artifact: what an unfiltered list, read from the
+/// manifests, leaves out (ADR 0020).
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn deleted_artifact_ids(
+    pool: &PgPool,
+) -> Result<std::collections::HashSet<uuid::Uuid>, DbError> {
+    let ids: Vec<uuid::Uuid> =
+        sqlx::query_scalar("SELECT id FROM artifacts WHERE deleted_at IS NOT NULL")
+            .fetch_all(pool)
+            .await
+            .map_err(DbError::Query)?;
+    Ok(ids.into_iter().collect())
+}
+
+/// An artifact's deletion, as a list shows it: asked for, and deleted when
+/// it has been.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeletionRecord {
+    /// When it was asked for.
+    pub requested_at: OffsetDateTime,
+    /// Who asked.
+    pub requested_by: String,
+    /// When the bytes may go, while pending.
+    pub delete_after: Option<OffsetDateTime>,
+    /// When it was deleted.
+    pub deleted_at: Option<OffsetDateTime>,
+}
+
+/// An artifact's deletion columns, as read: id, asked at, by, delete after,
+/// deleted at, pending.
+type DeletionRow = (
+    uuid::Uuid,
+    OffsetDateTime,
+    String,
+    Option<OffsetDateTime>,
+    Option<OffsetDateTime>,
+    bool,
+);
+
+/// The deletions of these artifacts that have been asked for.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn deletions_of(
+    pool: &PgPool,
+    ids: &[uuid::Uuid],
+) -> Result<std::collections::HashMap<uuid::Uuid, DeletionRecord>, DbError> {
+    let rows: Vec<DeletionRow> = sqlx::query_as(
+        "SELECT id, deletion_requested_at, deletion_requested_by, delete_after, deleted_at,
+                    pending_deletion
+             FROM artifacts
+             WHERE id = ANY($1) AND deletion_requested_at IS NOT NULL
+               AND deletion_requested_by IS NOT NULL",
+    )
+    .bind(ids)
+    .fetch_all(pool)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(id, requested_at, requested_by, delete_after, deleted_at, pending)| {
+                (
+                    id,
+                    DeletionRecord {
+                        requested_at,
+                        requested_by,
+                        delete_after: delete_after.filter(|_| pending),
+                        deleted_at,
+                    },
+                )
+            },
+        )
+        .collect())
 }

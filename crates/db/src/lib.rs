@@ -13,6 +13,7 @@ pub mod catalog_edits;
 pub mod changes;
 pub mod dashboard;
 pub mod dats;
+pub mod deletions;
 pub mod derivations;
 pub mod diagnostics;
 pub mod erasures;

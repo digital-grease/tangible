@@ -72,6 +72,12 @@ pub enum Permission {
     /// permission of its own lets a scoped role hold it one day without
     /// holding the rest.
     ReadAudit,
+    /// Ask for an artifact to be deleted, or keep one that was going to be
+    /// (ADR 0020).
+    ///
+    /// Administrators only: after the grace period the bytes are gone, and
+    /// an original may be somebody's only copy.
+    DeleteArtifacts,
 }
 
 impl Permission {
@@ -92,6 +98,7 @@ impl Permission {
             Self::MaintainStorage => "maintain_storage",
             Self::ManageDats => "manage_dats",
             Self::ReadAudit => "read_audit",
+            Self::DeleteArtifacts => "delete_artifacts",
         }
     }
 
@@ -108,7 +115,8 @@ impl Permission {
             | Self::ManageIntegrations
             | Self::MaintainStorage
             | Self::ManageDats
-            | Self::ReadAudit => Role::Administrator,
+            | Self::ReadAudit
+            | Self::DeleteArtifacts => Role::Administrator,
         }
     }
 }
@@ -205,6 +213,7 @@ mod tests {
             Permission::MaintainStorage,
             Permission::ManageDats,
             Permission::ReadAudit,
+            Permission::DeleteArtifacts,
         ] {
             assert!(!Role::Viewer.allows(permission), "{permission:?}");
         }
@@ -228,6 +237,7 @@ mod tests {
         assert!(!Role::Operator.allows(Permission::MaintainStorage));
         assert!(!Role::Operator.allows(Permission::ManageDats));
         assert!(!Role::Operator.allows(Permission::ReadAudit));
+        assert!(!Role::Operator.allows(Permission::DeleteArtifacts));
     }
 
     #[test]
@@ -244,6 +254,7 @@ mod tests {
             Permission::MaintainStorage,
             Permission::ManageDats,
             Permission::ReadAudit,
+            Permission::DeleteArtifacts,
         ] {
             assert!(Role::Administrator.allows(permission), "{permission:?}");
         }

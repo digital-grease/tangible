@@ -127,6 +127,18 @@
                 "null"
               ]
             }
+          },
+          {
+            "name": "deleted",
+            "in": "query",
+            "description": "`true` lists deleted artifacts only, the tombstones; otherwise they\nare left out (ADR 0020).",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -351,6 +363,133 @@
           },
           {
             "worker_credential": []
+          }
+        ]
+      }
+    },
+    "/api/v1/artifacts/{artifact_id}/deletion-requests": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Ask for an artifact to be deleted after the grace period.",
+        "description": "Ask for an artifact to be deleted: it is pending until its grace period (TANGIBLE_DELETION_GRACE_DAYS, 7 by default) ends, when its bytes are removed and its record kept, as a tombstone. Until then it can be kept. New burns, derivations and checks of it are refused meanwhile, and the RomM export stops using it. An original needs confirm_original. Refused with a retention lock, or while a burn, a derivation, a check or its import's source removal is queued or under way. Asking again while it is pending changes nothing. Needs an administrator, and is audited.",
+        "operationId": "request_artifact_deletion",
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "description": "Artifact identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestDeletion"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Pending deletion",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactDeletionView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Deleted already, retained, or in use",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "An original, without confirm_original",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Keep an artifact that was pending deletion.",
+        "description": "Keep an artifact that was pending deletion: the request is withdrawn and the artifact is as it was. Not possible once it is deleted. Needs an administrator, and is audited.",
+        "operationId": "keep_pending_artifact",
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "description": "Artifact identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Kept"
+          },
+          "404": {
+            "description": "No such artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Deleted already, or not pending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
           }
         ]
       }
@@ -7761,6 +7900,43 @@
   },
   "components": {
     "schemas": {
+      "ArtifactDeletionView": {
+        "type": "object",
+        "description": "An artifact's deletion (ADR 0020).",
+        "required": [
+          "state",
+          "requested_at",
+          "requested_by"
+        ],
+        "properties": {
+          "delete_after": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the bytes may go, while pending."
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was deleted."
+          },
+          "requested_at": {
+            "type": "string",
+            "description": "When it was asked for."
+          },
+          "requested_by": {
+            "type": "string",
+            "description": "Who asked."
+          },
+          "state": {
+            "type": "string",
+            "description": "`pending` (the bytes go after `delete_after`, unless it is kept) or\n`deleted` (they are gone)."
+          }
+        }
+      },
       "ArtifactDetail": {
         "allOf": [
           {
@@ -7833,6 +8009,7 @@
           "id",
           "format",
           "artifact_kind",
+          "origin",
           "validation_state",
           "component_count",
           "total_bytes",
@@ -7860,6 +8037,17 @@
             "description": "Number of files.",
             "minimum": 0
           },
+          "deletion": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ArtifactDeletionView",
+                "description": "Its deletion, once asked for (ADR 0020): pending until\n`delete_after`, or deleted, its bytes gone and this record kept."
+              }
+            ]
+          },
           "format": {
             "type": "string",
             "description": "Detected container format."
@@ -7882,6 +8070,10 @@
           "integrity_state": {
             "type": "string",
             "description": "What the last integrity check covering every object of it found:\n`unchecked`, `intact` or `damaged` (docs/plans/storage-integrity.md)."
+          },
+          "origin": {
+            "type": "string",
+            "description": "Where its bytes came from: `imported_original`, `derived`,\n`physical_dump`, `generated` or `external_reference`. An imported\noriginal or a dump needs `confirm_original` to be deleted."
           },
           "source_filename": {
             "type": [
@@ -12701,6 +12893,16 @@
           "version": {
             "type": "string",
             "description": "The version compiled into the server, such as `0.1.0`."
+          }
+        }
+      },
+      "RequestDeletion": {
+        "type": "object",
+        "description": "A request to delete an artifact.",
+        "properties": {
+          "confirm_original": {
+            "type": "boolean",
+            "description": "Required, true, to delete an original: an imported original or a\ndisc dump, which may be somebody's only copy."
           }
         }
       },

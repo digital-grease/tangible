@@ -84,6 +84,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/artifacts/{artifact_id}/deletion-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask for an artifact to be deleted after the grace period.
+         * @description Ask for an artifact to be deleted: it is pending until its grace period (TANGIBLE_DELETION_GRACE_DAYS, 7 by default) ends, when its bytes are removed and its record kept, as a tombstone. Until then it can be kept. New burns, derivations and checks of it are refused meanwhile, and the RomM export stops using it. An original needs confirm_original. Refused with a retention lock, or while a burn, a derivation, a check or its import's source removal is queued or under way. Asking again while it is pending changes nothing. Needs an administrator, and is audited.
+         */
+        post: operations["request_artifact_deletion"];
+        /**
+         * Keep an artifact that was pending deletion.
+         * @description Keep an artifact that was pending deletion: the request is withdrawn and the artifact is as it was. Not possible once it is deleted. Needs an administrator, and is audited.
+         */
+        delete: operations["keep_pending_artifact"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/artifacts/{artifact_id}/derivatives": {
         parameters: {
             query?: never;
@@ -2348,6 +2372,22 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description An artifact's deletion (ADR 0020). */
+        ArtifactDeletionView: {
+            /** @description When the bytes may go, while pending. */
+            delete_after?: string | null;
+            /** @description When it was deleted. */
+            deleted_at?: string | null;
+            /** @description When it was asked for. */
+            requested_at: string;
+            /** @description Who asked. */
+            requested_by: string;
+            /**
+             * @description `pending` (the bytes go after `delete_after`, unless it is kept) or
+             *     `deleted` (they are gone).
+             */
+            state: string;
+        };
         /** @description Everything known about one artifact, short of its full manifest. */
         ArtifactDetail: components["schemas"]["ArtifactSummary"] & {
             /** @description The files making up the artifact. */
@@ -2376,6 +2416,7 @@ export interface components {
             best_match?: null | components["schemas"]["BestMatchView"];
             /** @description Number of files. */
             component_count: number;
+            deletion?: null | components["schemas"]["ArtifactDeletionView"];
             /** @description Detected container format. */
             format: string;
             /**
@@ -2394,6 +2435,12 @@ export interface components {
              *     `unchecked`, `intact` or `damaged` (docs/plans/storage-integrity.md).
              */
             integrity_state: string;
+            /**
+             * @description Where its bytes came from: `imported_original`, `derived`,
+             *     `physical_dump`, `generated` or `external_reference`. An imported
+             *     original or a dump needs `confirm_original` to be deleted.
+             */
+            origin: string;
             /** @description Filename as received, when one was recorded. */
             source_filename?: string | null;
             /**
@@ -4561,6 +4608,14 @@ export interface components {
             /** @description The version compiled into the server, such as `0.1.0`. */
             version: string;
         };
+        /** @description A request to delete an artifact. */
+        RequestDeletion: {
+            /**
+             * @description Required, true, to delete an original: an imported original or a
+             *     disc dump, which may be somebody's only copy.
+             */
+            confirm_original?: boolean;
+        };
         /** @description A request for a derivative. */
         RequestDerivation: {
             /**
@@ -5488,6 +5543,11 @@ export interface operations {
                 created_after?: string | null;
                 /** @description Imported before this, RFC 3339. */
                 created_before?: string | null;
+                /**
+                 * @description `true` lists deleted artifacts only, the tombstones; otherwise they
+                 *     are left out (ADR 0020).
+                 */
+                deleted?: boolean | null;
             };
             header?: never;
             path?: never;
@@ -5639,6 +5699,99 @@ export interface operations {
             };
             /** @description The range lies outside the object */
             416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    request_artifact_deletion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Artifact identifier */
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestDeletion"];
+            };
+        };
+        responses: {
+            /** @description Pending deletion */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactDeletionView"];
+                };
+            };
+            /** @description No such artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Deleted already, retained, or in use */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description An original, without confirm_original */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    keep_pending_artifact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Artifact identifier */
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Kept */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Deleted already, or not pending */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

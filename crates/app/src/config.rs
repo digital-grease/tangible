@@ -304,6 +304,17 @@ pub struct ServeConfig {
     )]
     pub worker_credential_max_age_days: u32,
 
+    /// Days an artifact asked to be deleted stays pending, and can be kept,
+    /// before its bytes are removed, up to 3650 (ADR 0020). 0 removes them
+    /// at the next pass, within a quarter of an hour.
+    #[arg(
+        long,
+        env = "TANGIBLE_DELETION_GRACE_DAYS",
+        default_value_t = 7,
+        value_parser = clap::value_parser!(u32).range(0..=3650)
+    )]
+    pub deletion_grace_days: u32,
+
     /// Whether to compute every artifact's preservation hashes (CRC32, MD5
     /// and SHA-1 of its files and CD tracks) in the background, for matching
     /// against DATs. On by default; each artifact's stored bytes are read
@@ -670,6 +681,7 @@ mod tests {
         // A scrub reads every byte; the load is an administrator's choice.
         assert_eq!(parse().scrub_interval_days, 0);
         assert_eq!(parse().worker_credential_max_age_days, 90);
+        assert_eq!(parse().deletion_grace_days, 7);
         let cli = TestCli::try_parse_from(["tangible", "--scrub-interval-days", "30"])
             .expect("a month parses");
         assert_eq!(cli.serve.scrub_interval_days, 30);

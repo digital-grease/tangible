@@ -8,6 +8,22 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
+- Artifacts can be deleted, as tombstones (ADR 0020,
+  docs/plans/deletion.md). An administrator (new permission
+  `delete_artifacts`) asks with `POST /api/v1/artifacts/{id}/deletion-requests`
+  (an original needs `confirm_original`); the artifact is pending for
+  `TANGIBLE_DELETION_GRACE_DAYS` (7 by default), when `DELETE` on the same
+  path keeps it, and then its bytes are removed and its record kept:
+  components, hashes, manifest, lineage, burns and discs. Refused with a
+  retention lock (`ARTIFACT_RETAINED`) or while a burn, derivation, check
+  or source removal of it is under way (`ARTIFACT_IN_USE`); while pending,
+  burns and derivations of it are refused and the RomM export leaves it;
+  once deleted, its content and checks are refused (`ARTIFACT_DELETED`).
+  A stored file is removed only when no artifact still has it, under a lock
+  every import and derivation holds until it has registered what it
+  stored. The library list leaves deleted artifacts out (`?deleted=true`
+  lists them); every artifact view carries `deletion`, and `origin`. Scrubs, the GC plan,
+  restore checks, the dashboard and metrics leave them out. Migration 0033.
 - `GET /api/v1/events`, the server-sent event stream API.md 12 describes
   (docs/plans/event-stream.md): what changes in imports, burns and their
   progress, rips, erasures, derivations, workers and the library, as it
@@ -558,6 +574,9 @@ may change between minor versions, and the release notes say how.
 
 ### Changed
 
+- Burning an artifact pending deletion is refused with `ARTIFACT_DELETED`
+  (409), not `VALIDATION_FAILED`. No version set the old flag; a row that
+  had it, set by hand, is reset to kept by migration 0033.
 - A CHD imported as it is goes to RomM as it is once `chdman verify` has
   passed it (owner decision, OWNER_QUEUE 14; docs/plans/chd-images.md). The
   export runs the verify once per CHD and chdman version, on a server whose

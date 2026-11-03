@@ -123,6 +123,14 @@ pub enum ErrorCode {
     /// The password was right, and this account signs in through the
     /// identity provider instead (`TANGIBLE_PASSWORD_SIGN_IN=setup-only`).
     PasswordSignInOff,
+    /// The artifact is deleted, or pending deletion, so its bytes are not
+    /// to be used (ADR 0020).
+    ArtifactDeleted,
+    /// Work that reads the artifact is queued or under way, so it cannot be
+    /// deleted yet.
+    ArtifactInUse,
+    /// The artifact has a retention lock, so it cannot be deleted.
+    ArtifactRetained,
     /// Anything unanticipated.
     Internal,
 }
@@ -165,6 +173,9 @@ impl ErrorCode {
             Self::InsufficientSpace => "INSUFFICIENT_SPACE",
             Self::DatInvalid => "DAT_INVALID",
             Self::PasswordSignInOff => "PASSWORD_SIGN_IN_OFF",
+            Self::ArtifactDeleted => "ARTIFACT_DELETED",
+            Self::ArtifactInUse => "ARTIFACT_IN_USE",
+            Self::ArtifactRetained => "ARTIFACT_RETAINED",
             Self::Internal => "INTERNAL",
         }
     }
@@ -212,7 +223,10 @@ impl ErrorCode {
             | Self::SecretKeyMissing
             | Self::IntegrationOff
             | Self::IntegrationMisconfigured
-            | Self::IntegrationSecretUnreadable => StatusCode::CONFLICT,
+            | Self::IntegrationSecretUnreadable
+            | Self::ArtifactDeleted
+            | Self::ArtifactInUse
+            | Self::ArtifactRetained => StatusCode::CONFLICT,
             // The server is a gateway to the client here: the request was
             // fine, and what stands behind it failed.
             Self::IntegrationUnreachable
@@ -260,6 +274,9 @@ impl ErrorCode {
             Self::InsufficientSpace => "Not enough free space",
             Self::DatInvalid => "Not a DAT this server reads",
             Self::PasswordSignInOff => "This account signs in through the identity provider",
+            Self::ArtifactDeleted => "The artifact is deleted, or is being deleted",
+            Self::ArtifactInUse => "The artifact is in use",
+            Self::ArtifactRetained => "The artifact is retained",
             Self::Internal => "Internal error",
         }
     }
@@ -418,6 +435,9 @@ mod tests {
             ErrorCode::IntegrationUnreachable,
             ErrorCode::IntegrationAuthFailed,
             ErrorCode::IntegrationBadResponse,
+            ErrorCode::ArtifactDeleted,
+            ErrorCode::ArtifactInUse,
+            ErrorCode::ArtifactRetained,
             ErrorCode::IntegrationAddressRefused,
             ErrorCode::InsufficientSpace,
             ErrorCode::DatInvalid,
