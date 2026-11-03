@@ -240,6 +240,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/audit-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A page of audit events, newest first.
+         * @description List audit events, newest first: who did what, to what, and how it came out. Filter by action (or a kind of action, ending in `.`), actor, target and outcome. Use `next_cursor` for older events. Needs an administrator.
+         */
+        get: operations["list_audit_log"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/audit-events/{event_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One audit event.
+         * @description # Errors
+         *
+         *     `NOT_FOUND` for an unknown event.
+         */
+        get: operations["get_audit_log_event"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/burn-attempts/{attempt_id}": {
         parameters: {
             query?: never;
@@ -2215,6 +2257,39 @@ export interface components {
             items: components["schemas"]["ArtifactSummary"][];
             /** @description Cursor for the next page, or null when this is the last. */
             next_cursor?: string | null;
+        };
+        /** @description A page of audit events. */
+        AuditEventList: {
+            /** @description The events in this page, newest first. */
+            items: components["schemas"]["AuditEventView"][];
+            /** @description Cursor for the next, older, page, or null when this is the last. */
+            next_cursor?: string | null;
+        };
+        /** @description One audit event. */
+        AuditEventView: {
+            /** @description What, such as `worker.revoked`. */
+            action: string;
+            /**
+             * @description Who: a username, a worker's or integration's identifier, or the name
+             *     of a system task.
+             */
+            actor_id: string;
+            /** @description `user`, `worker`, `integration` or `system`. */
+            actor_type: string;
+            /** @description Opaque identifier. */
+            id: string;
+            /** @description What else was kept, redacted before it was written. */
+            metadata: Record<string, never>;
+            /** @description When it was written. */
+            occurred_at: string;
+            /** @description `success`, `failure` or `denied`. */
+            outcome: string;
+            /** @description The request it was part of, when one was recorded. */
+            request_id?: string | null;
+            /** @description Which one. */
+            target_id?: string | null;
+            /** @description What kind of thing it was done to. */
+            target_type: string;
         };
         /**
          * @description The game of a loaded DAT an artifact best matches: an exact match
@@ -5420,6 +5495,103 @@ export interface operations {
                 };
             };
             /** @description No such artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_audit_log: {
+        parameters: {
+            query?: {
+                /** @description Maximum items to return. Clamped to [`MAX_LIMIT`]. */
+                limit?: number | null;
+                /** @description Opaque cursor from a previous response's `next_cursor`. */
+                cursor?: string | null;
+                /**
+                 * @description An action, such as `worker.revoked`; ending in `.`, every action of
+                 *     that kind, such as `worker.`.
+                 */
+                action?: string | null;
+                /** @description Who did it. */
+                actor_id?: string | null;
+                /** @description What kind of thing it was done to, such as `worker`. */
+                target_type?: string | null;
+                /** @description Which one. */
+                target_id?: string | null;
+                /** @description `success`, `failure` or `denied`. */
+                outcome?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditEventList"];
+                };
+            };
+            /** @description A filter or cursor that will not do */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_audit_log_event: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Audit event identifier */
+                event_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The event */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditEventView"];
+                };
+            };
+            /** @description Not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such event */
             404: {
                 headers: {
                     [name: string]: unknown;

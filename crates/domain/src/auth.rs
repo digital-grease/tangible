@@ -66,6 +66,12 @@ pub enum Permission {
     /// Administrators only: a DAT is a large untrusted file the server
     /// parses, and loading one matches it against the whole library.
     ManageDats,
+    /// Read the audit log (API.md 8.10, docs/plans/audit-log.md).
+    ///
+    /// Administrators only: it says who did what to everything, and a
+    /// permission of its own lets a scoped role hold it one day without
+    /// holding the rest.
+    ReadAudit,
 }
 
 impl Permission {
@@ -85,6 +91,7 @@ impl Permission {
             Self::ManageIntegrations => "manage_integrations",
             Self::MaintainStorage => "maintain_storage",
             Self::ManageDats => "manage_dats",
+            Self::ReadAudit => "read_audit",
         }
     }
 
@@ -100,7 +107,8 @@ impl Permission {
             | Self::Diagnose
             | Self::ManageIntegrations
             | Self::MaintainStorage
-            | Self::ManageDats => Role::Administrator,
+            | Self::ManageDats
+            | Self::ReadAudit => Role::Administrator,
         }
     }
 }
@@ -196,6 +204,7 @@ mod tests {
             Permission::ManageIntegrations,
             Permission::MaintainStorage,
             Permission::ManageDats,
+            Permission::ReadAudit,
         ] {
             assert!(!Role::Viewer.allows(permission), "{permission:?}");
         }
@@ -218,6 +227,7 @@ mod tests {
         assert!(!Role::Operator.allows(Permission::ManageIntegrations));
         assert!(!Role::Operator.allows(Permission::MaintainStorage));
         assert!(!Role::Operator.allows(Permission::ManageDats));
+        assert!(!Role::Operator.allows(Permission::ReadAudit));
     }
 
     #[test]
@@ -233,6 +243,7 @@ mod tests {
             Permission::ManageIntegrations,
             Permission::MaintainStorage,
             Permission::ManageDats,
+            Permission::ReadAudit,
         ] {
             assert!(Role::Administrator.allows(permission), "{permission:?}");
         }

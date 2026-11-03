@@ -5,6 +5,7 @@
 
 pub mod accounts;
 pub mod artifacts;
+pub mod audit;
 pub mod burns;
 pub mod catalog;
 pub mod dats;

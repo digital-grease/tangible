@@ -177,6 +177,8 @@ pub const API_BASE: &str = "/api/v1";
         routes::erasures::cancel_one_erasure,
         routes::erasures::claim_drive_erasure,
         routes::erasures::complete_drive_erasure,
+        routes::audit::list_audit_log,
+        routes::audit::get_audit_log_event,
         routes::worker_admin::list_all_workers,
         routes::worker_admin::get_one_worker,
         routes::worker_admin::drain_one_worker,
@@ -327,6 +329,8 @@ pub const API_BASE: &str = "/api/v1";
         routes::workers::TrackVerificationReport,
         routes::workers::IssueEnrollmentRequest,
         routes::workers::IssuedEnrollment,
+        routes::audit::AuditEventView,
+        routes::audit::AuditEventList,
         routes::worker_admin::WorkerView,
         routes::worker_admin::WorkerDriveView,
         routes::worker_admin::WorkerList,
@@ -363,7 +367,8 @@ pub const API_BASE: &str = "/api/v1";
         (name = "imports", description = "Getting bytes into the library"),
         (name = "burns", description = "Burn jobs, attempts, and their events"),
         (name = "physical-copies", description = "The discs that actually exist"),
-        (name = "workers", description = "The burn-worker protocol"),
+        (name = "workers", description = "The burn-worker protocol, and workers as administrators manage them"),
+        (name = "audit", description = "Who did what: the audit log, for administrators"),
         (name = "reports", description = "Issue reports, prepared for the operator to review and send"),
         (name = "diagnostics", description = "The deployment's state as a checklist, for administrators"),
         (name = "rips", description = "Ripping the disc in a drive into the library"),
@@ -490,6 +495,7 @@ pub fn router(state: ApiState) -> Router {
         .nest(API_BASE, routes::catalog::router())
         .nest(API_BASE, routes::workers::router())
         .nest(API_BASE, routes::worker_admin::router())
+        .nest(API_BASE, routes::audit::router())
         .nest(API_BASE, routes::erasures::router())
         .nest(API_BASE, routes::integrations::router())
         .nest(API_BASE, routes::integrity::router())

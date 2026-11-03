@@ -867,6 +867,24 @@ That image is yours, not a Tangible release: it is outside the release's
 signature, SBOM, provenance and vulnerability scan. Rebuild it each time you
 upgrade, so it carries the new release and Debian's latest fixes.
 
+## The audit log
+
+Tangible records who did what: sign-ins refused, workers enrolled, drained
+and revoked, discs erased, rips and derivations asked for, DATs loaded,
+integrations changed, downloads deleted. An administrator reads it with
+`GET /api/v1/audit-events`, newest first, filtered by `action` (or every
+action of one kind, such as `worker.`), `actor_id`, `target_type`,
+`target_id` or `outcome`:
+
+```bash
+curl -sS -b "$jar" \
+  'http://localhost:8080/api/v1/audit-events?action=worker.revoked&limit=20'
+```
+
+Each event names the actor, the action, its target, how it came out, and
+what else was kept, which never includes a secret. The log is only read
+here; nothing removes an event. Back it up with the database.
+
 ## Diagnostics
 
 When something is wrong and the cause is not obvious, ask for the whole

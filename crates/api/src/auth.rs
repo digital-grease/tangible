@@ -184,7 +184,7 @@ pub enum Access {
 use Access::{Public, Signed, SignedOrLeaseholder, Worker};
 use Permission::{
     Burn, Catalog, Diagnose, Erase, Import, ImportUrl, MaintainStorage, ManageDats,
-    ManageIntegrations, ManageUsers, ManageWorkers, Read,
+    ManageIntegrations, ManageUsers, ManageWorkers, Read, ReadAudit,
 };
 
 /// Every operation the server answers, and what it requires.
@@ -354,6 +354,9 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
     // the worker protocol, authenticated by the worker's own credential or,
     // for consuming a token, by the token.
     ("POST", "/api/v1/worker-enrollments", Signed(ManageWorkers)),
+    // The audit log (docs/plans/audit-log.md): read by administrators only.
+    ("GET", "/api/v1/audit-events", Signed(ReadAudit)),
+    ("GET", "/api/v1/audit-events/{event_id}", Signed(ReadAudit)),
     // Workers as people manage them (docs/plans/worker-admin.md): seen as
     // drives are, changed by administrators.
     ("GET", "/api/v1/workers", Signed(Read)),
