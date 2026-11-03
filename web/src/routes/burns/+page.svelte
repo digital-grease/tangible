@@ -14,20 +14,17 @@
     type BurnJobPage,
   } from '$lib/burns';
   import type { LoadState } from '$lib/library';
+  import { watch } from '$lib/events';
 
   let view = $state<LoadState<BurnJobPage>>({ kind: 'loading' });
   let loadingMore = $state(false);
-  let timer: ReturnType<typeof setInterval> | undefined;
+  let stopWatching: (() => void) | undefined;
 
   /**
-   * How often the queue reconciles itself.
-   *
-   * A poll, not a stream. The event stream is the intended mechanism and this
-   * becomes its low-frequency fallback once it exists; until then a burn takes
-   * tens of minutes, so ten seconds is attentive enough and costs almost
-   * nothing.
+   * How often the queue polls where the browser has no event stream. With
+   * one, it refreshes as burns change and reconciles every minute.
    */
-  const RECONCILE_MS = 10_000;
+  const FALLBACK_MS = 10_000;
 
   async function refresh() {
     const next = await loadBurnQueue();
@@ -39,12 +36,10 @@
 
   onMount(async () => {
     await refresh();
-    timer = setInterval(refresh, RECONCILE_MS);
+    stopWatching = watch(['burns'], refresh, { fallbackMs: FALLBACK_MS });
   });
 
-  onDestroy(() => {
-    if (timer) clearInterval(timer);
-  });
+  onDestroy(() => stopWatching?.());
 
   async function loadMore() {
     if (view.kind !== 'ready' || !view.data.next_cursor || loadingMore) return;

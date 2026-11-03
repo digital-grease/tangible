@@ -383,3 +383,38 @@ describe('Imports page, removing sources', () => {
     expect(screen.getByText(/has moved the download since it was imported/)).toBeTruthy();
   });
 });
+
+describe('Imports page, live', () => {
+  it('refreshes when the event stream says an import changed', async () => {
+    const opened: string[] = [];
+    const listeners = new Map<string, ((event: MessageEvent) => void)[]>();
+    class StandInSource {
+      constructor(url: string) {
+        opened.push(url);
+      }
+      addEventListener(type: string, listener: (event: MessageEvent) => void) {
+        listeners.set(type, [...(listeners.get(type) ?? []), listener]);
+      }
+      close() {}
+    }
+    vi.stubGlobal('EventSource', StandInSource);
+    const asked = server({
+      '/api/v1/import-sources': sources(false),
+      '/api/v1/imports': { status: 200, body: { items: [DOWNLOADING] } },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    render(ImportsPage);
+    expect(await screen.findByText('disc.iso')).toBeTruthy();
+    await vi.waitFor(() => expect(opened).toEqual(['/api/v1/events?topics=imports']));
+    const before = asked.filter((request) => request.url === '/api/v1/imports').length;
+
+    for (const listener of listeners.get('import.changed') ?? []) {
+      listener({
+        data: JSON.stringify({ topic: 'imports', id: 'i1', state: 'complete' }),
+      } as MessageEvent);
+    }
+    await vi.waitFor(() =>
+      expect(asked.filter((request) => request.url === '/api/v1/imports').length).toBe(before + 1),
+    );
+  });
+});

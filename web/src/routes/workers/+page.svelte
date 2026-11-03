@@ -26,6 +26,7 @@
     type WorkerView,
   } from '$lib/workers';
   import type { Problem } from '$lib/session';
+  import { watch } from '$lib/events';
 
   type Load<T> =
     { kind: 'loading' } | { kind: 'ready'; data: T } | { kind: 'error'; problem: Problem };
@@ -47,6 +48,7 @@
   let eraseSubmitting = $state(false);
 
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let stopWatching: (() => void) | undefined;
 
   async function refresh() {
     const [workerResult, driveResult, erasureResult] = await Promise.all([
@@ -69,16 +71,26 @@
       erasureResult.kind === 'ok'
         ? { kind: 'ready', data: erasureResult.data.items }
         : { kind: 'error', problem: erasureResult.problem };
-    // Checked again only while something is still going. There is no event
-    // stream for erasures yet, so this is a slow poll and nothing more.
+    // Where the browser has no event stream, checked again only while an
+    // erasure is still going. With one, the page refreshes as workers,
+    // drives and erasures change, and reconciles every minute.
     clearTimeout(timer);
-    if (erasures.kind === 'ready' && anyOpen(erasures.data)) {
+    if (!streaming && erasures.kind === 'ready' && anyOpen(erasures.data)) {
       timer = setTimeout(refresh, 3000);
     }
   }
 
-  onMount(refresh);
-  onDestroy(() => clearTimeout(timer));
+  /** Whether the event stream drives this page. */
+  const streaming = typeof EventSource !== 'undefined';
+
+  onMount(() => {
+    void refresh();
+    if (streaming) stopWatching = watch(['workers', 'erasures'], refresh);
+  });
+  onDestroy(() => {
+    clearTimeout(timer);
+    stopWatching?.();
+  });
 
   async function change(worker: WorkerView, action: WorkerAction) {
     if (changing) return;

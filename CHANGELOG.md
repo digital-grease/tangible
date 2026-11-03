@@ -14,7 +14,10 @@ may change between minor versions, and the release notes say how.
   commits, heard from the database itself (migration 0031). Topics can be
   chosen; a client reconnecting with `Last-Event-ID` is sent what it
   missed, or `stream.reset` to reconcile. Streams end after ten minutes and
-  at shutdown.
+  at shutdown. The burn queue and each burn, the rips and each rip, the
+  imports and the Workers page now follow it, refreshing as things change
+  and reconciling every minute; where a browser has no EventSource they
+  poll as before.
 - Worker credentials are rotated (docs/plans/credential-rotation.md). A
   worker's heartbeat says `credential_rotation_required` when an
   administrator asked (`POST /api/v1/workers/{id}/rotate-credential`) or

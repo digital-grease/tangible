@@ -3,6 +3,7 @@
 <script lang="ts">
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import { onDestroy, onMount } from 'svelte';
+  import { watch } from '$lib/events';
   import {
     canCancel,
     clientOfSource,
@@ -72,15 +73,13 @@
     takesNzb ? !nzbFiles?.length : !torrentFiles?.length && magnet.trim() === '',
   );
 
-  let timer: ReturnType<typeof setInterval> | undefined;
+  let stopWatching: (() => void) | undefined;
 
   /**
-   * How often the list reconciles itself.
-   *
-   * A poll, not a stream, and the same fallback the burn queue uses: the
-   * event stream is the intended mechanism and this is what it replaces.
+   * How often the list polls where the browser has no event stream. With
+   * one, it refreshes as imports change and reconciles every minute.
    */
-  const RECONCILE_MS = 2_000;
+  const FALLBACK_MS = 2_000;
 
   async function refresh() {
     const next = await loadImports();
@@ -103,12 +102,10 @@
       s3Bucket = found.data.s3_sources[0]?.buckets[0] ?? '';
     }
     await refresh();
-    timer = setInterval(refresh, RECONCILE_MS);
+    stopWatching = watch(['imports'], refresh, { fallbackMs: FALLBACK_MS });
   });
 
-  onDestroy(() => {
-    if (timer) clearInterval(timer);
-  });
+  onDestroy(() => stopWatching?.());
 
   async function upload(event: SubmitEvent) {
     event.preventDefault();

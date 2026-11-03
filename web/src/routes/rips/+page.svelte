@@ -6,6 +6,7 @@
   // imported like an upload. Reading changes nothing on the disc.
   import { goto } from '$app/navigation';
   import { onDestroy, onMount } from 'svelte';
+  import { watch } from '$lib/events';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import RipDialog from '$lib/components/RipDialog.svelte';
   import { formatBytes } from '$lib/library';
@@ -24,10 +25,10 @@
   // get one, those that can decrypt or that read CDs with redumper.
   let choosing = $state<DriveView | null>(null);
   let dialogOpen = $state(false);
-  let timer: ReturnType<typeof setInterval> | undefined;
+  let stopWatching: (() => void) | undefined;
 
-  /** A poll while something is going; slow, since a CD takes minutes. */
-  const RECONCILE_MS = 3_000;
+  /** How often to poll, while something is going, where the browser has no event stream. */
+  const FALLBACK_MS = 3_000;
 
   async function refresh() {
     const [driveList, ripList] = await Promise.all([loadDrives(), loadRips()]);
@@ -39,12 +40,19 @@
 
   onMount(() => {
     void refresh();
-    timer = setInterval(() => {
-      if (rips.kind === 'ready' && rips.data.some((rip) => rip.is_open)) void refresh();
-    }, RECONCILE_MS);
+    // A rip or a drive changing is news; the timer only matters while a rip
+    // is going.
+    stopWatching = watch(
+      ['rips', 'workers'],
+      (reason) => {
+        if (reason === 'event' || (rips.kind === 'ready' && rips.data.some((rip) => rip.is_open)))
+          void refresh();
+      },
+      { fallbackMs: FALLBACK_MS },
+    );
   });
 
-  onDestroy(() => clearInterval(timer));
+  onDestroy(() => stopWatching?.());
 
   /** Rip straight away, or ask first where the drive offers a choice. */
   function choose(drive: DriveView) {

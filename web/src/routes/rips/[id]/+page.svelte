@@ -5,6 +5,7 @@
   // said, and where the result went. Withdrawing is offered while the disc
   // is being read or sent; reading changes nothing on it.
   import { onDestroy, onMount } from 'svelte';
+  import { names, watch } from '$lib/events';
   import { page } from '$app/state';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import { formatBytes } from '$lib/library';
@@ -35,9 +36,10 @@
   let events = $state<RipEventView[]>([]);
   let refusal = $state<Problem | null>(null);
   let working = $state(false);
-  let timer: ReturnType<typeof setInterval> | undefined;
+  let stopWatching: (() => void) | undefined;
 
-  const RECONCILE_MS = 2_000;
+  /** How often an open rip polls where the browser has no event stream. */
+  const FALLBACK_MS = 2_000;
   const id = $derived(page.params.id ?? '');
   const rip = $derived(view.kind === 'ready' ? view.data : null);
   const progress = $derived(ripProgress(events));
@@ -53,12 +55,16 @@
 
   onMount(() => {
     void refresh();
-    timer = setInterval(() => {
-      if (rip?.is_open !== false) void refresh();
-    }, RECONCILE_MS);
+    stopWatching = watch(
+      ['rips'],
+      (reason) => {
+        if (reason === 'event' || rip?.is_open !== false) void refresh();
+      },
+      { fallbackMs: FALLBACK_MS, relevant: (event) => names(event, id, 'rip_id') },
+    );
   });
 
-  onDestroy(() => clearInterval(timer));
+  onDestroy(() => stopWatching?.());
 
   async function withdraw() {
     working = true;

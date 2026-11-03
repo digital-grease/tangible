@@ -27,6 +27,7 @@
     type BurnJobDetail,
   } from '$lib/burns';
   import BurnReport from '$lib/components/BurnReport.svelte';
+  import { names, watch } from '$lib/events';
   import type { LoadState, Problem } from '$lib/library';
   import { loadReportSettings, type ReportSettings } from '$lib/report';
 
@@ -39,10 +40,23 @@
   /** A refused command, kept beside the button that was pressed. */
   let refusal = $state<Problem | null>(null);
   let working = $state(false);
-  let timer: ReturnType<typeof setInterval> | undefined;
+  let stopWatching: (() => void) | undefined;
 
-  /** As on the queue: a poll now, the event stream's fallback later. */
-  const RECONCILE_MS = 3_000;
+  /** How often a live burn polls where the browser has no event stream. */
+  const FALLBACK_MS = 3_000;
+
+  /** Refresh as this burn changes, while it is live. */
+  function startWatching() {
+    stopWatching ??= watch(['burns'], refresh, {
+      fallbackMs: FALLBACK_MS,
+      relevant: (event) => names(event, id, 'burn_job_id'),
+    });
+  }
+
+  function stopWatchingNow() {
+    stopWatching?.();
+    stopWatching = undefined;
+  }
 
   const id = $derived(page.params.id ?? '');
   const job = $derived(view.kind === 'ready' ? view.data : null);
@@ -65,25 +79,22 @@
       if (detail.kind === 'ready') latestDetail = detail.data;
     }
 
-    if (next.kind === 'ready' && !isLive(next.data.state) && timer) {
+    if (next.kind === 'ready' && !isLive(next.data.state)) {
       // Nothing further will change on its own.
-      clearInterval(timer);
-      timer = undefined;
+      stopWatchingNow();
     }
   }
 
   onMount(async () => {
     await refresh();
-    timer = setInterval(refresh, RECONCILE_MS);
+    if (view.kind !== 'ready' || isLive(view.data.state)) startWatching();
     // Once: whether to offer reports does not change while a page is open,
     // and a server that cannot say simply offers none.
     const settings = await loadReportSettings();
     if (settings.kind === 'ok') reportSettings = settings.data;
   });
 
-  onDestroy(() => {
-    if (timer) clearInterval(timer);
-  });
+  onDestroy(stopWatchingNow);
 
   async function cancel() {
     working = true;
@@ -119,7 +130,7 @@
       refusal = result.problem;
     } else {
       view = result;
-      if (!timer) timer = setInterval(refresh, RECONCILE_MS);
+      startWatching();
     }
     working = false;
   }
