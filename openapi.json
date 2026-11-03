@@ -2624,6 +2624,54 @@
         ]
       }
     },
+    "/api/v1/drives/{drive_id}": {
+      "get": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "One drive.",
+        "description": "# Errors\n\n`NOT_FOUND` for an unknown drive.",
+        "operationId": "get_one_drive",
+        "parameters": [
+          {
+            "name": "drive_id",
+            "in": "path",
+            "description": "Drive identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The drive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such drive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/drives/{drive_id}/erasures": {
       "post": {
         "tags": [

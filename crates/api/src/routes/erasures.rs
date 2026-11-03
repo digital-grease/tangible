@@ -23,8 +23,8 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use tangible_db::erasures::{
     CancelOutcome, DriveRecord, ErasureRecord, ErasureResult, RequestOutcome, WorkerOutcome,
-    cancel_erasure, claim_erasure, complete_erasure, get_erasure, list_drives, list_erasures,
-    request_erasure,
+    cancel_erasure, claim_erasure, complete_erasure, get_drive, get_erasure, list_drives,
+    list_erasures, request_erasure,
 };
 use tangible_domain::{DriveId, ErasureId, ErasureMode, ErasureState};
 use time::OffsetDateTime;
@@ -323,6 +323,36 @@ pub async fn list_all_drives(State(state): State<ApiState>) -> Result<Json<Drive
             .map(|drive| DriveView::new(drive, state.decryption_allowed()))
             .collect(),
     }))
+}
+
+/// One drive.
+///
+/// # Errors
+///
+/// `NOT_FOUND` for an unknown drive.
+#[utoipa::path(
+    get,
+    path = "/api/v1/drives/{drive_id}",
+    tag = "workers",
+    params(("drive_id" = String, Path, description = "Drive identifier")),
+    responses(
+        (status = 200, description = "The drive", body = DriveView),
+        (status = 404, description = "No such drive", body = Problem),
+    ),
+)]
+pub async fn get_one_drive(
+    State(state): State<ApiState>,
+    Path(drive_id): Path<String>,
+) -> Result<Json<DriveView>, Problem> {
+    let id = parse_drive(&drive_id)?;
+    get_drive(state.database().pool(), id)
+        .await
+        .map_err(|error| {
+            tracing::error!(error = ?error, "could not read a drive");
+            unavailable("the drive could not be read")
+        })?
+        .map(|drive| Json(DriveView::new(drive, state.decryption_allowed())))
+        .ok_or_else(|| Problem::not_found("drive", &drive_id))
 }
 
 // --- erasures, for people ----------------------------------------------------------
@@ -659,6 +689,7 @@ pub async fn complete_drive_erasure(
 pub fn router() -> Router<ApiState> {
     Router::new()
         .route("/drives", get(list_all_drives))
+        .route("/drives/{drive_id}", get(get_one_drive))
         .route("/drives/{drive_id}/erasures", post(request_drive_erasure))
         .route("/erasures", get(list_recent_erasures))
         .route("/erasures/{erasure_id}", get(get_one_erasure))

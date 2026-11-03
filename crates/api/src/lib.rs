@@ -177,6 +177,7 @@ pub const API_BASE: &str = "/api/v1";
         routes::romm::get_edition_romm,
         routes::romm::set_edition_romm_route,
         routes::erasures::list_all_drives,
+        routes::erasures::get_one_drive,
         routes::erasures::request_drive_erasure,
         routes::erasures::list_recent_erasures,
         routes::erasures::get_one_erasure,

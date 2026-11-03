@@ -802,6 +802,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/drives/{drive_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One drive.
+         * @description # Errors
+         *
+         *     `NOT_FOUND` for an unknown drive.
+         */
+        get: operations["get_one_drive"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/drives/{drive_id}/erasures": {
         parameters: {
             query?: never;
@@ -7003,6 +7025,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DriveList"];
+                };
+            };
+        };
+    };
+    get_one_drive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Drive identifier */
+                drive_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The drive */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriveView"];
+                };
+            };
+            /** @description No such drive */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };

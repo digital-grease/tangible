@@ -216,6 +216,20 @@ async fn an_administrator_asks_the_worker_erases_and_every_step_is_audited() {
     // This worker reported no connection, which the listing says plainly.
     assert_eq!(listed["connection"], "unknown");
     assert!(listed.get("firmware").is_some(), "{listed}");
+    // And one drive by itself says the same.
+    let (status, one) = harness
+        .admin("GET", &format!("/api/v1/drives/{}", worker.drive), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{one}");
+    assert_eq!(&one, listed);
+    let (status, _) = harness
+        .admin(
+            "GET",
+            &format!("/api/v1/drives/{}", uuid::Uuid::now_v7()),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 
     let erasure = harness.request(&worker.drive).await;
     let (_, queued) = harness

@@ -503,6 +503,7 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
     ("GET", "/api/v1/editions/{edition_id}/romm", Signed(Read)),
     ("PUT", "/api/v1/editions/{edition_id}/romm", Signed(Catalog)),
     ("GET", "/api/v1/drives", Signed(Read)),
+    ("GET", "/api/v1/drives/{drive_id}", Signed(Read)),
     ("POST", "/api/v1/drives/{drive_id}/erasures", Signed(Erase)),
     ("GET", "/api/v1/erasures", Signed(Read)),
     ("GET", "/api/v1/erasures/{erasure_id}", Signed(Read)),

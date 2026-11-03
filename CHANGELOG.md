@@ -8,6 +8,7 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
+- `GET /api/v1/drives/{id}` answers one drive as the drive list does.
 - The library can be filtered (docs/plans/library-filters.md):
   `GET /api/v1/artifacts` takes `format`, `origin`, `validation_state`,
   `integrity_state`, `linked` (`false` for artifacts linked to no disc)
