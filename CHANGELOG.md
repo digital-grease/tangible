@@ -19,7 +19,9 @@ may change between minor versions, and the release notes say how.
   out. Issuing, rotating and asking are audited. Workers show when their
   credential was issued and whether a rotation is due. The worker's
   identity file is now written readable by its user alone and flushed to
-  disk before it replaces the old one.
+  disk before it replaces the old one. The Workers page shows each
+  credential's age, or that a rotation is asked for or due, and has a
+  "Rotate credential" button for administrators.
 - `GET /api/v1/drives/{id}` answers one drive as the drive list does.
 - The library can be filtered (docs/plans/library-filters.md):
   `GET /api/v1/artifacts` takes `format`, `origin`, `validation_state`,

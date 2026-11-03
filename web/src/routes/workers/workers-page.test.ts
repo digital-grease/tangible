@@ -42,6 +42,9 @@ function worker(status: string) {
     last_seen_at: '2026-10-28T12:00:00Z',
     created_at: '2026-10-01T12:00:00Z',
     revoked_at: null,
+    credential_issued_at: new Date().toISOString(),
+    credential_rotation_requested_at: null as string | null,
+    credential_rotation_due: false,
     drives: [{ id: 'd1', name: 'sr0' }],
   };
 }
@@ -94,6 +97,38 @@ describe('Workers page', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Revoke bench…' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Revoke bench' }));
     await vi.waitFor(() => expect(asked).toContain('POST /api/v1/workers/w1/revoke'));
+  });
+
+  it('asks a worker to rotate its credential, then says it is asked', async () => {
+    const asked = page('online', {
+      'POST /api/v1/workers/w1/rotate-credential': {
+        status: 200,
+        body: { ...worker('online'), credential_rotation_requested_at: '2026-11-02T12:00:00Z' },
+      },
+    });
+    render(WorkersPage);
+    expect(await screen.findByText('Issued today')).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: "Rotate bench's credential" }));
+    await vi.waitFor(() => expect(asked).toContain('POST /api/v1/workers/w1/rotate-credential'));
+  });
+
+  it('shows a rotation already asked for and does not offer another', async () => {
+    server({
+      'GET /api/v1/workers?limit=200': {
+        status: 200,
+        body: {
+          items: [
+            { ...worker('online'), credential_rotation_requested_at: '2026-11-02T12:00:00Z' },
+          ],
+          next_cursor: null,
+        },
+      },
+      'GET /api/v1/drives': { status: 200, body: { items: [] } },
+      'GET /api/v1/erasures?limit=20': { status: 200, body: { items: [] } },
+    });
+    render(WorkersPage);
+    expect(await screen.findByText(/^Rotation asked for/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: "Rotate bench's credential" })).toBeNull();
   });
 
   it('says only an administrator can change workers', async () => {

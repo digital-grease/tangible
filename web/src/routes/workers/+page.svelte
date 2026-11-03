@@ -6,6 +6,7 @@
     anyOpen,
     cancelErasure,
     changeWorker,
+    credentialLabel,
     ENROLLMENT_MINUTES,
     connectionLabel,
     driveModel,
@@ -169,6 +170,7 @@
           <th scope="col">Status</th>
           <th scope="col">Version</th>
           <th scope="col">Last seen</th>
+          <th scope="col">Credential</th>
           <th scope="col">Drives</th>
           <th scope="col"><span class="visually-hidden">Actions</span></th>
         </tr>
@@ -183,9 +185,10 @@
             </td>
             <td>{worker.software_version}</td>
             <td>{when(worker.last_seen_at) || 'Never'}</td>
+            <td>{credentialLabel(worker)}</td>
             <td>{worker.drives.map((drive) => drive.name).join(', ') || 'None'}</td>
             <td>
-              {#each workerActions(worker.status) as action (action)}
+              {#each workerActions(worker.status, worker.credential_rotation_requested_at != null) as action (action)}
                 {#if action === 'revoke'}
                   <button type="button" onclick={() => (revoking = worker)}>
                     Revoke {worker.name}…
@@ -196,7 +199,11 @@
                     disabled={changing === worker.id}
                     onclick={() => change(worker, action)}
                   >
-                    {action === 'drain' ? `Drain ${worker.name}` : `Enable ${worker.name}`}
+                    {action === 'drain'
+                      ? `Drain ${worker.name}`
+                      : action === 'enable'
+                        ? `Enable ${worker.name}`
+                        : `Rotate ${worker.name}'s credential`}
                   </button>
                 {/if}
               {/each}
@@ -211,7 +218,9 @@
     <p>
       <small
         >Draining a worker lets it finish what it holds and gives it nothing new, for maintenance.
-        Enabling it undoes that.</small
+        Enabling it undoes that. Rotating its credential has the worker swap it for a new one
+        between jobs; the old one works until then, so nothing is interrupted. If the credential may
+        be known to somebody else, revoke the worker instead.</small
       >
     </p>
   {/if}

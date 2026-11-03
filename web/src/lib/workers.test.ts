@@ -6,6 +6,7 @@ import {
   anyOpen,
   cancelErasure,
   changeWorker,
+  credentialLabel,
   loadWorkers,
   workerActions,
   workerStatusLabel,
@@ -180,10 +181,48 @@ describe('managing workers', () => {
     expect(workerStatusLabel('draining')).toContain('taking nothing new');
     expect(workerStatusLabel('revoked')).toContain('refused');
     expect(workerStatusLabel('something-new')).toBe('something-new');
-    expect(workerActions('online')).toEqual(['drain', 'revoke']);
-    expect(workerActions('pending')).toEqual(['drain', 'revoke']);
-    expect(workerActions('draining')).toEqual(['enable', 'revoke']);
+    expect(workerActions('online')).toEqual(['drain', 'rotate-credential', 'revoke']);
+    expect(workerActions('pending')).toEqual(['drain', 'rotate-credential', 'revoke']);
+    expect(workerActions('draining')).toEqual(['enable', 'rotate-credential', 'revoke']);
     expect(workerActions('incompatible')).toEqual(['revoke']);
     expect(workerActions('revoked')).toEqual([]);
+  });
+
+  it('does not offer a rotation already asked for', () => {
+    expect(workerActions('online', true)).toEqual(['drain', 'revoke']);
+    expect(workerActions('draining', true)).toEqual(['enable', 'revoke']);
+  });
+});
+
+describe('a worker credential in words', () => {
+  const now = new Date('2026-11-02T12:00:00Z');
+  const base = {
+    status: 'online',
+    credential_issued_at: '2026-10-01T12:00:00Z',
+    credential_rotation_requested_at: null,
+    credential_rotation_due: false,
+  };
+
+  it('says how old it is', () => {
+    expect(credentialLabel(base, now)).toBe('Issued 32 days ago');
+    expect(credentialLabel({ ...base, credential_issued_at: '2026-11-01T11:00:00Z' }, now)).toBe(
+      'Issued yesterday',
+    );
+    expect(credentialLabel({ ...base, credential_issued_at: '2026-11-02T08:00:00Z' }, now)).toBe(
+      'Issued today',
+    );
+  });
+
+  it('says when a rotation is asked for or due', () => {
+    expect(
+      credentialLabel({ ...base, credential_rotation_requested_at: '2026-11-02T10:00:00Z' }, now),
+    ).toMatch(/^Rotation asked for/);
+    expect(credentialLabel({ ...base, credential_rotation_due: true }, now)).toMatch(
+      /^Due for rotation/,
+    );
+  });
+
+  it("calls a revoked worker's credential refused", () => {
+    expect(credentialLabel({ ...base, status: 'revoked' }, now)).toBe('Refused');
   });
 });

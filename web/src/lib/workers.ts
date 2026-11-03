@@ -30,9 +30,9 @@ export function loadWorkers(
 }
 
 /** What an administrator can do to a worker. */
-export type WorkerAction = 'drain' | 'enable' | 'revoke';
+export type WorkerAction = 'drain' | 'enable' | 'revoke' | 'rotate-credential';
 
-/** Drain, enable or revoke a worker, answering it as it now is. */
+/** Drain, enable, revoke or ask a worker to rotate its credential, answering it as it now is. */
 export function changeWorker(
   workerId: string,
   action: WorkerAction,
@@ -61,20 +61,51 @@ export function workerStatusLabel(status: string): string {
   }
 }
 
-/** What can be done to a worker in this status, as the server allows. */
-export function workerActions(status: string): WorkerAction[] {
+/**
+ * What can be done to a worker in this status, as the server allows.
+ *
+ * Rotation is not offered while one is already asked for, nor to an
+ * incompatible worker, which cannot take part in it.
+ */
+export function workerActions(status: string, rotationAsked = false): WorkerAction[] {
+  const rotate: WorkerAction[] = rotationAsked ? [] : ['rotate-credential'];
   switch (status) {
     case 'pending':
     case 'online':
     case 'offline':
-      return ['drain', 'revoke'];
+      return ['drain', ...rotate, 'revoke'];
     case 'draining':
-      return ['enable', 'revoke'];
+      return ['enable', ...rotate, 'revoke'];
     case 'incompatible':
       return ['revoke'];
     default:
       return [];
   }
+}
+
+/** How old a worker's credential is, and whether it is to be rotated, in words. */
+export function credentialLabel(
+  worker: Pick<
+    WorkerView,
+    | 'status'
+    | 'credential_issued_at'
+    | 'credential_rotation_requested_at'
+    | 'credential_rotation_due'
+  >,
+  now: Date = new Date(),
+): string {
+  if (worker.status === 'revoked') return 'Refused';
+  if (worker.credential_rotation_requested_at) {
+    return 'Rotation asked for: the worker rotates it between jobs';
+  }
+  if (worker.credential_rotation_due) {
+    return 'Due for rotation: the worker rotates it between jobs';
+  }
+  const days = Math.floor(
+    (now.getTime() - new Date(worker.credential_issued_at).getTime()) / 86_400_000,
+  );
+  if (!Number.isFinite(days) || days < 1) return 'Issued today';
+  return days === 1 ? 'Issued yesterday' : `Issued ${days} days ago`;
 }
 
 export type DriveView = components['schemas']['DriveView'];
