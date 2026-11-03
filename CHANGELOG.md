@@ -467,6 +467,9 @@ may change between minor versions, and the release notes say how.
 
 ### Fixed
 
+- A CHD is refused for burning, on the server and on its page. With no
+  track layout a worker would have written it as a data disc, putting the
+  CHD's compressed bytes on the medium rather than the disc they hold.
 - A database connection can no longer be lent out still inside a
   transaction. sqlx gave one back that way when a transaction's `BEGIN`
   was cut short (a client that went away mid-request, a timeout), and every

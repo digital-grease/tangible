@@ -278,6 +278,9 @@ describe('subchannel', () => {
     const mds = notBurnedAsItIs({ format: 'mds_mdf', components: plain } as never);
     expect(mds).toContain('Alcohol 120%');
     expect(mds).toContain('or an ISO');
+    expect(notBurnedAsItIs({ format: 'chd', components: plain } as never)).toContain(
+      'compressed bytes',
+    );
     expect(notBurnedAsItIs({ format: 'cue_bin', components: plain } as never)).toBeNull();
   });
 });

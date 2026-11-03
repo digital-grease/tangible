@@ -198,6 +198,12 @@ export function notBurnedAsItIs(
       'subchannel and says so, and burn that.'
     );
   }
+  if (detail.format === 'chd') {
+    return (
+      'A CHD is a disc compressed, and burning it would write the compressed bytes rather than ' +
+      'the disc. Burn the CUE/BIN or ISO it was made from, or one made from it.'
+    );
+  }
   if (detail.format === 'mds_mdf') {
     return (
       'Tangible does not burn Alcohol 120% images. Make a CUE/BIN of it (of a CD) or an ISO ' +

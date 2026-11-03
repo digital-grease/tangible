@@ -352,7 +352,8 @@ The CHD becomes a new artifact, linked to the same disc as its original, and
 the original is never changed. Before it is kept, the CHD is extracted again
 and compared with the original track by track; one that does not come back
 the same is refused, and the job says which track differed.
-`GET /api/v1/artifacts/<id>/lineage` shows what was made from what.
+`GET /api/v1/artifacts/<id>/lineage` shows what was made from what. A CHD is
+for RomM, not for burning: burn the image it was made from.
 
 CUE/BIN images and CD ISOs work. The chdman in this image (0.251) cannot make
 DVD CHDs, and it misreads a cdrdao TOC whose track has its pregap in the file,

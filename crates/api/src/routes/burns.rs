@@ -535,6 +535,17 @@ fn eligibility(facts: &ArtifactBurnFacts) -> Result<Vec<String>, Problem> {
         ));
     }
 
+    // A CHD is a disc compressed into hunks. With no track layout the worker
+    // would write it as a data disc, putting the compressed bytes on the
+    // medium rather than the disc they hold.
+    if facts.format == "chd" {
+        return Err(Problem::new(
+            ErrorCode::ValidationFailed,
+            "this is a CHD, a disc compressed, and burning it would write the compressed bytes \
+             rather than the disc; burn the CUE/BIN or ISO it was made from, or one made from it",
+        ));
+    }
+
     // No engine here writes subchannel data, so a disc burned from an image
     // that keeps it would not be the artifact (the owner's choice,
     // 2026-10-27). A CUE/BIN made from it, which says it drops the
@@ -1283,6 +1294,21 @@ mod tests {
         .expect_err("refused");
         assert_eq!(problem.code, "VALIDATION_FAILED");
         assert!(problem.detail.contains("MDS image"), "{}", problem.detail);
+    }
+
+    #[test]
+    fn a_chd_is_not_burned_as_its_compressed_bytes() {
+        let problem = eligibility(&ArtifactBurnFacts {
+            format: "chd".to_owned(),
+            ..facts()
+        })
+        .expect_err("refused");
+        assert_eq!(problem.code, "VALIDATION_FAILED");
+        assert!(
+            problem.detail.contains("compressed bytes"),
+            "{}",
+            problem.detail
+        );
     }
 
     #[test]
