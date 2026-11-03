@@ -13,7 +13,9 @@ may change between minor versions, and the release notes say how.
   (or a kind of action, such as `worker.`), actor, target and outcome, and
   `GET /api/v1/audit-events/{id}`. A new permission, `read_audit`, held by
   administrators, guards both. The events have been written all along;
-  until now only the database could show them.
+  until now only the database could show them. The web UI's Audit log page
+  shows them in words, filtered by kind, who and what, with older events
+  on request.
 - Workers can be managed (docs/plans/worker-admin.md): `GET /api/v1/workers`
   and `GET /api/v1/workers/{id}` list them with their status and drives,
   and an administrator can drain one (it finishes what it holds and is

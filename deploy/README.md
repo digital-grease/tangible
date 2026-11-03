@@ -871,10 +871,10 @@ upgrade, so it carries the new release and Debian's latest fixes.
 
 Tangible records who did what: sign-ins refused, workers enrolled, drained
 and revoked, discs erased, rips and derivations asked for, DATs loaded,
-integrations changed, downloads deleted. An administrator reads it with
-`GET /api/v1/audit-events`, newest first, filtered by `action` (or every
-action of one kind, such as `worker.`), `actor_id`, `target_type`,
-`target_id` or `outcome`:
+integrations changed, downloads deleted. An administrator reads it on the
+Audit log page, or with `GET /api/v1/audit-events`, newest first, filtered
+by `action` (or every action of one kind, such as `worker.`), `actor_id`,
+`target_type`, `target_id` or `outcome`:
 
 ```bash
 curl -sS -b "$jar" \

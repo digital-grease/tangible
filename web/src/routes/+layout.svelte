@@ -145,6 +145,11 @@
             >
           </li>
           <li>
+            <a href="/audit" aria-current={page.url.pathname === '/audit' ? 'page' : undefined}
+              >Audit log</a
+            >
+          </li>
+          <li>
             <a
               href="/diagnostics"
               aria-current={page.url.pathname === '/diagnostics' ? 'page' : undefined}
