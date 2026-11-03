@@ -57,6 +57,9 @@ pub async fn scrub_command(common: &CommonConfig, scrub: &ScrubConfig) -> Result
         Requested::NoSuchArtifact => {
             anyhow::bail!("the catalogue has no artifact with that id")
         }
+        Requested::Deleted => {
+            anyhow::bail!("that artifact is deleted: its bytes are gone")
+        }
     };
     if scrub.no_wait {
         return Ok(());

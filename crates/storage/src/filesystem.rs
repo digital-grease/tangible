@@ -243,6 +243,13 @@ impl FilesystemStore {
         Arc::clone(&self.collection).try_write_owned().ok()
     }
 
+    /// Exclude every ingest while objects are collected, waiting for those
+    /// under way to finish and holding new ones back meanwhile: for when
+    /// [`Self::try_collecting`] has found no quiet moment for too long.
+    pub async fn collecting(&self) -> tokio::sync::OwnedRwLockWriteGuard<()> {
+        Arc::clone(&self.collection).write_owned().await
+    }
+
     /// The library root.
     #[must_use]
     pub fn root(&self) -> &Path {

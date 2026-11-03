@@ -41,7 +41,7 @@ pub async fn claim_next_unhashed(
              hashes_lease_until = now() + ($2::bigint * interval '1 second')
          WHERE id = (
              SELECT id FROM artifacts
-             WHERE hashes_state = 'pending'
+             WHERE hashes_state = 'pending' AND deleted_at IS NULL
                AND (hashes_lease_until IS NULL OR hashes_lease_until < now())
              ORDER BY id
              LIMIT 1
@@ -72,7 +72,7 @@ pub async fn claim_for_hashing(
         "UPDATE artifacts SET
              hashes_lease_owner = $2,
              hashes_lease_until = now() + ($3::bigint * interval '1 second')
-         WHERE id = $1 AND hashes_state = 'pending'
+         WHERE id = $1 AND hashes_state = 'pending' AND deleted_at IS NULL
            AND (hashes_lease_until IS NULL OR hashes_lease_until < now())",
     )
     .bind(artifact_id)
@@ -205,7 +205,7 @@ pub async fn fail_hashing(
 }
 
 /// Ask for an artifact's hashes again. Answers whether there is such an
-/// artifact.
+/// artifact with bytes to hash: false for a deleted one too.
 ///
 /// # Errors
 ///
@@ -219,7 +219,7 @@ pub async fn request_hashes(
     let done = sqlx::query(
         "UPDATE artifacts SET hashes_state = 'pending', hashed_at = NULL, hashes_error = NULL,
              hashes_attempts = 0, hashes_lease_owner = NULL, hashes_lease_until = NULL
-         WHERE id = $1",
+         WHERE id = $1 AND deleted_at IS NULL",
     )
     .bind(artifact_id)
     .execute(&mut *tx)

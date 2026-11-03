@@ -5987,6 +5987,15 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
+            /** @description The artifact is deleted (ARTIFACT_DELETED) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     artifact_lineage: {
@@ -6083,6 +6092,15 @@ export interface operations {
             };
             /** @description No such artifact */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The artifact is deleted (ARTIFACT_DELETED) */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6684,7 +6702,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Not in a state that can be retried */
+            /** @description Not in a state that can be retried, or its artifact is deleted or pending deletion */
             409: {
                 headers: {
                     [name: string]: unknown;

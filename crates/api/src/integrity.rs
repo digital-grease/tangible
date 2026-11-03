@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use tangible_db::integrity::{
     IntegrityCheckRecord, MAX_KEPT_PROBLEMS, Progress, catalogued_components, claim_next_check,
     complete_check, count_and_record_totals, mark_artifact_damaged, mark_object_damaged,
-    objects_after, queue_scheduled_scrub, record_progress,
+    object_removed, objects_after, queue_scheduled_scrub, record_progress,
 };
 use tangible_db::{Database, DbError};
 use tangible_domain::{ArtifactId, IntegrityProblemKind, Sha256Digest};
@@ -186,7 +186,12 @@ impl IntegrityRunner {
                 break;
             }
             for (sha256, size) in batch {
-                if let Some(found) = self.verify(&sha256, size).await {
+                let found = match self.verify(&sha256, size).await {
+                    // Collected since the walk listed it: gone on purpose.
+                    Some(_) if object_removed(pool, &sha256).await? => None,
+                    found => found,
+                };
+                if let Some(found) = found {
                     mark_object_damaged(pool, &sha256).await?;
                     walk.found(found);
                 }

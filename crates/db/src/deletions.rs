@@ -262,21 +262,47 @@ pub async fn keep_artifact(
     Ok(DeletionChange::Done(next))
 }
 
-/// Artifacts whose grace period has ended, oldest due first.
+/// An artifact whose grace period has ended, and when it did: also where
+/// the next page of them starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Due {
+    /// The artifact.
+    pub id: ArtifactId,
+    /// When its grace period ended.
+    pub delete_after: OffsetDateTime,
+}
+
+/// Up to `limit` artifacts whose grace period has ended, oldest due first,
+/// after `after` when given: a pass pages through them all, so artifacts
+/// held at the front cannot keep the rest waiting.
 ///
 /// # Errors
 ///
 /// [`DbError::Query`] on a database failure.
-pub async fn due_for_deletion(pool: &PgPool, limit: i64) -> Result<Vec<ArtifactId>, DbError> {
-    let ids: Vec<uuid::Uuid> = sqlx::query_scalar(
-        "SELECT id FROM artifacts WHERE pending_deletion AND delete_after <= now()
-         ORDER BY delete_after, id LIMIT $1",
+pub async fn due_for_deletion(
+    pool: &PgPool,
+    after: Option<Due>,
+    limit: i64,
+) -> Result<Vec<Due>, DbError> {
+    let rows: Vec<(uuid::Uuid, OffsetDateTime)> = sqlx::query_as(
+        "SELECT id, delete_after FROM artifacts
+         WHERE pending_deletion AND delete_after <= now()
+           AND ($1::timestamptz IS NULL OR (delete_after, id) > ($1, $2))
+         ORDER BY delete_after, id LIMIT $3",
     )
+    .bind(after.map(|due| due.delete_after))
+    .bind(after.map(|due| *due.id.as_uuid()))
     .bind(limit)
     .fetch_all(pool)
     .await
     .map_err(DbError::Query)?;
-    Ok(ids.into_iter().map(ArtifactId::from_uuid).collect())
+    Ok(rows
+        .into_iter()
+        .map(|(id, delete_after)| Due {
+            id: ArtifactId::from_uuid(id),
+            delete_after,
+        })
+        .collect())
 }
 
 /// What making a tombstone came to.
@@ -328,17 +354,32 @@ pub async fn make_tombstone(pool: &PgPool, id: ArtifactId) -> Result<Tombstone, 
     .execute(&mut *tx)
     .await
     .map_err(DbError::Query)?;
-    // One reference per distinct object, as registration added them.
+    // One reference per distinct object, as registration added them, the
+    // rows locked in digest order as registration locks them, so the two
+    // cannot each hold a row the other waits for.
     let released = sqlx::query(
-        "UPDATE cas_objects SET reference_count = reference_count - 1, updated_at = now()
-         WHERE reference_count > 0
-           AND sha256 IN (SELECT DISTINCT sha256 FROM artifact_components WHERE artifact_id = $1)",
+        "WITH locked AS (
+             SELECT sha256 FROM cas_objects
+             WHERE reference_count > 0
+               AND sha256 IN (SELECT sha256 FROM artifact_components WHERE artifact_id = $1)
+             ORDER BY sha256
+             FOR UPDATE
+         )
+         UPDATE cas_objects o SET reference_count = o.reference_count - 1, updated_at = now()
+         FROM locked WHERE o.sha256 = locked.sha256",
     )
     .bind(id.as_uuid())
     .execute(&mut *tx)
     .await
     .map_err(DbError::Query)?
     .rows_affected();
+    // A derivation that made it is no longer the answer to asking for that
+    // derivative again: asked for, it is made anew.
+    sqlx::query("UPDATE derivations SET superseded = TRUE WHERE child_artifact_id = $1")
+        .bind(id.as_uuid())
+        .execute(&mut *tx)
+        .await
+        .map_err(DbError::Query)?;
     sqlx::query(
         "INSERT INTO audit_events
              (id, actor_type, actor_id, action, target_type, target_id, outcome, metadata)

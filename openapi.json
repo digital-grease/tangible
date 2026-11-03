@@ -727,6 +727,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The artifact is deleted (ARTIFACT_DELETED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -870,6 +880,16 @@
           },
           "404": {
             "description": "No such artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The artifact is deleted (ARTIFACT_DELETED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1877,7 +1897,7 @@
             }
           },
           "409": {
-            "description": "Not in a state that can be retried",
+            "description": "Not in a state that can be retried, or its artifact is deleted or pending deletion",
             "content": {
               "application/json": {
                 "schema": {

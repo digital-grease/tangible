@@ -288,7 +288,7 @@ impl SourceRemover {
                     self.integrity.nudge();
                     Ok(())
                 }
-                Requested::NoSuchArtifact => {
+                Requested::NoSuchArtifact | Requested::Deleted => {
                     self.finish(
                         removal,
                         Outcome::Kept("The artifact this import made is gone".to_owned()),

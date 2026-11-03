@@ -1665,6 +1665,8 @@ pub enum RetryOutcome {
         /// The state it is in.
         state: BurnJobState,
     },
+    /// Its artifact is deleted or pending deletion (ADR 0020).
+    ArtifactDeleted,
 }
 
 /// Requeue a failed or cancelled job for another attempt.
@@ -1698,6 +1700,22 @@ pub async fn retry_burn_job(
     if state.retry().is_err() {
         tx.rollback().await.map_err(DbError::Query)?;
         return Ok(Err(RetryOutcome::NotRetryable { state }));
+    }
+
+    // Shared, as a deletion request locks it: either that comes first, and
+    // this refuses, or it waits and finds this job holding the artifact.
+    let gone: bool = sqlx::query_scalar(
+        "SELECT a.pending_deletion OR a.deleted_at IS NOT NULL
+         FROM artifacts a JOIN burn_jobs j ON j.artifact_id = a.id
+         WHERE j.id = $1 FOR SHARE OF a",
+    )
+    .bind(id.as_uuid())
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
+    if gone {
+        tx.rollback().await.map_err(DbError::Query)?;
+        return Ok(Err(RetryOutcome::ArtifactDeleted));
     }
 
     // Belt and braces, for the same reason cancellation checks it: a job row
@@ -2137,16 +2155,14 @@ pub async fn register_artifact(
     digests.sort_unstable();
     digests.dedup_by(|a, b| a.0 == b.0);
 
-    // An object collected after an artifact was deleted keeps its row; bytes
-    // that come back are stored again, and the row is the same object's
-    // (ADR 0020). The row is locked while it is collected, so this waits for
-    // a collection of it in progress.
+    // An object collected after an artifact was deleted keeps its row
+    // (ADR 0020); it is marked present again below, only when this call
+    // counts it.
     for (sha256, size_bytes) in &digests {
         sqlx::query(
             "INSERT INTO cas_objects (sha256, size_bytes)
              VALUES ($1, $2)
-             ON CONFLICT (sha256) DO UPDATE SET removed_at = NULL, updated_at = now()
-             WHERE cas_objects.removed_at IS NOT NULL",
+             ON CONFLICT (sha256) DO NOTHING",
         )
         .bind(sha256)
         .bind(size_bytes)
@@ -2206,10 +2222,16 @@ pub async fn register_artifact(
 
     // One increment per distinct object, matching what was attached. Counting
     // per component would double-count an artifact that references the same
-    // bytes twice and pin the object forever.
+    // bytes twice and pin the object forever. An object collected before is
+    // present again: this import stored its bytes anew (the store's
+    // collection lock, held by the import, kept collection from running
+    // between the two). In digest order, as a tombstone locks them. A replay
+    // reaches none of this, so it cannot mark a collected object present.
     for (sha256, _) in &digests {
         sqlx::query(
-            "UPDATE cas_objects SET reference_count = reference_count + 1 WHERE sha256 = $1",
+            "UPDATE cas_objects
+             SET reference_count = reference_count + 1, removed_at = NULL, updated_at = now()
+             WHERE sha256 = $1",
         )
         .bind(sha256)
         .execute(&mut *tx)

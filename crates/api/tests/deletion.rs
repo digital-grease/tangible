@@ -455,3 +455,186 @@ async fn collection_waits_for_an_ingest_under_way() {
     harness.runner.pass().await.unwrap();
     assert!(!harness.objects.object_path(&digest).exists());
 }
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_tombstone_is_not_counted_hashed_or_checked_again_and_its_derivation_is_superseded() {
+    let _serial = SERIAL.lock().await;
+    let harness = harness().await;
+    let parent = harness.import("parent.bin", &unique("parent")).await;
+    let child = harness.import("child.bin", &unique("child")).await;
+    let digest = harness.digest_of(child).await;
+    sqlx::query("UPDATE artifacts SET origin = 'derived' WHERE id = $1")
+        .bind(child.as_uuid())
+        .execute(&harness.pool)
+        .await
+        .unwrap();
+    let fingerprint = "ab".repeat(32);
+    sqlx::query(
+        "INSERT INTO derivations (id, parent_artifact_id, child_artifact_id, transformation,
+                                  tool_name, tool_version, command_fingerprint)
+         VALUES ($1, $2, $3, 'test', 'test', '1', $4)",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(parent.as_uuid())
+    .bind(child.as_uuid())
+    .bind(&fingerprint)
+    .execute(&harness.pool)
+    .await
+    .unwrap();
+    let (status, _) = harness
+        .admin(
+            "POST",
+            &format!("/api/v1/artifacts/{child}/deletion-requests"),
+            Some(json!({})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    harness.runner.pass().await.unwrap();
+    assert_eq!(harness.reference_count(&digest).await, (0, true));
+
+    // Asking for that derivative again makes it anew.
+    let superseded: bool =
+        sqlx::query_scalar("SELECT superseded FROM derivations WHERE child_artifact_id = $1")
+            .bind(child.as_uuid())
+            .fetch_one(&harness.pool)
+            .await
+            .unwrap();
+    assert!(superseded);
+
+    // Registering it again, as a replayed import would, counts nothing and
+    // does not mark the collected object present.
+    let manifest = harness.pipeline.manifests().read(child).await.unwrap();
+    let replay = catalog::register_manifest(&harness.database, &manifest)
+        .await
+        .unwrap();
+    assert!(!replay.created);
+    assert_eq!(harness.reference_count(&digest).await, (0, true));
+
+    // Nothing to hash.
+    let (status, body) = harness
+        .admin(
+            "POST",
+            &format!("/api/v1/artifacts/{child}/identification/rehash"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "ARTIFACT_DELETED");
+    sqlx::query("UPDATE artifacts SET hashes_state = 'pending' WHERE id = $1")
+        .bind(child.as_uuid())
+        .execute(&harness.pool)
+        .await
+        .unwrap();
+    assert!(
+        !tangible_db::identification::claim_for_hashing(&harness.pool, *child.as_uuid(), "t", 60)
+            .await
+            .unwrap(),
+        "a deleted artifact is never taken for hashing"
+    );
+
+    // Nothing to check.
+    let requested =
+        tangible_db::integrity::request_check(&harness.pool, Some(*child.as_uuid()), "test")
+            .await
+            .unwrap();
+    assert!(
+        matches!(requested, tangible_db::integrity::Requested::Deleted),
+        "{requested:?}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn artifacts_held_at_the_front_do_not_keep_the_rest_waiting() {
+    let _serial = SERIAL.lock().await;
+    let harness = harness().await;
+    let held = harness.import("held.bin", &unique("held")).await;
+    let after = harness.import("after.bin", &unique("after")).await;
+    for artifact in [held, after] {
+        let (status, _) = harness
+            .admin(
+                "POST",
+                &format!("/api/v1/artifacts/{artifact}/deletion-requests"),
+                Some(json!({ "confirm_original": true })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+    }
+    // Locked after it was asked for: due first, and held.
+    sqlx::query("UPDATE artifacts SET retention_lock = TRUE WHERE id = $1")
+        .bind(held.as_uuid())
+        .execute(&harness.pool)
+        .await
+        .unwrap();
+
+    let runner = harness.runner.clone().with_batch(1);
+    let pass = runner.pass().await.unwrap();
+    assert!(pass.deferred >= 1, "{pass:?}");
+    let deleted: Vec<bool> = sqlx::query_scalar(
+        "SELECT deleted_at IS NOT NULL FROM artifacts WHERE id = ANY($1) ORDER BY id = $2",
+    )
+    .bind([*held.as_uuid(), *after.as_uuid()])
+    .bind(held.as_uuid())
+    .fetch_all(&harness.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        deleted,
+        [true, false],
+        "the one behind it is deleted, not it"
+    );
+    sqlx::query("UPDATE artifacts SET retention_lock = FALSE WHERE id = $1")
+        .bind(held.as_uuid())
+        .execute(&harness.pool)
+        .await
+        .unwrap();
+    let (status, _) = harness
+        .admin(
+            "DELETE",
+            &format!("/api/v1/artifacts/{held}/deletion-requests"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn collection_deferred_too_long_waits_for_the_ingest_and_holds_new_ones_back() {
+    let _serial = SERIAL.lock().await;
+    let harness = harness().await;
+    let artifact = harness.import("starved.bin", &unique("starved")).await;
+    let digest = harness.digest_of(artifact).await;
+    harness
+        .admin(
+            "POST",
+            &format!("/api/v1/artifacts/{artifact}/deletion-requests"),
+            Some(json!({ "confirm_original": true })),
+        )
+        .await;
+
+    let ingesting = harness.objects.ingesting().await;
+    let runner = harness
+        .runner
+        .clone()
+        .with_max_deferral(std::time::Duration::ZERO);
+    let pass = tokio::spawn(async move { runner.pass().await.unwrap() });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!pass.is_finished(), "it waits for the ingest under way");
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            harness.objects.ingesting()
+        )
+        .await
+        .is_err(),
+        "a new ingest waits behind it"
+    );
+    drop(ingesting);
+
+    let pass = pass.await.unwrap();
+    assert!(pass.collection_waited, "{pass:?}");
+    assert!(!pass.collection_deferred);
+    assert!(!harness.objects.object_path(&digest).exists());
+}

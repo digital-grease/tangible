@@ -537,6 +537,41 @@ async fn an_artifact_awaiting_deletion_is_not_burned() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
+async fn a_burn_of_an_artifact_awaiting_deletion_is_not_retried() {
+    let harness = harness().await;
+    let world = seed(&harness.pool).await;
+    let job = queue(&harness, &world).await;
+    sqlx::query("UPDATE burn_jobs SET state = 'failed', completed_at = now() WHERE id = $1::uuid")
+        .bind(&job)
+        .execute(&harness.pool)
+        .await
+        .expect("fail the job");
+    // Asked for while the job was failed, so nothing held it.
+    sqlx::query(
+        "UPDATE artifacts SET pending_deletion = TRUE, deletion_requested_at = now(),
+                deletion_requested_by = 'test', delete_after = now() + interval '7 days'
+         WHERE id = $1::uuid",
+    )
+    .bind(&world.artifact)
+    .execute(&harness.pool)
+    .await
+    .expect("mark the artifact for deletion");
+
+    let (status, body) = harness
+        .post(&format!("/api/v1/burn-jobs/{job}/retry"), json!({}))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "ARTIFACT_DELETED");
+    let state: String = sqlx::query_scalar("SELECT state FROM burn_jobs WHERE id = $1::uuid")
+        .bind(&job)
+        .fetch_one(&harness.pool)
+        .await
+        .expect("job");
+    assert_eq!(state, "failed", "not requeued");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn an_empty_verification_policy_is_refused() {
     let harness = harness().await;
     let world = seed(&harness.pool).await;

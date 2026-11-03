@@ -16,7 +16,7 @@
 //! The record (row, components, manifest, history) stays.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -25,7 +25,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use tangible_db::Database;
 use tangible_db::deletions::{
-    DeletionChange, Hold, Tombstone, audit_collection, begin_removal, collectable_objects,
+    DeletionChange, Due, Hold, Tombstone, audit_collection, begin_removal, collectable_objects,
     deletion_state, due_for_deletion, keep_artifact, make_tombstone, request_deletion,
 };
 use tangible_domain::ArtifactId;
@@ -45,8 +45,13 @@ pub const DEFAULT_GRACE_DAYS: u32 = 7;
 /// How often the runner looks for artifacts due, when nothing prompts it.
 const INTERVAL: Duration = Duration::from_secs(15 * 60);
 
-/// How many artifacts one pass makes into tombstones.
+/// How many artifacts due are read at a time.
 const BATCH: i64 = 100;
+
+/// How long collection waits for a moment when nothing is ingesting before
+/// it waits for the ingests under way instead, holding new ones back: a
+/// library imported into without pause would otherwise never be collected.
+const MAX_DEFERRAL: Duration = Duration::from_secs(6 * 60 * 60);
 
 /// Refuse to use an artifact's bytes when it is deleted or, unless
 /// `pending_is_usable`, pending deletion.
@@ -256,6 +261,9 @@ pub struct DeletionPass {
     /// Whether collection waited for another pass because an import or a
     /// derivation was under way.
     pub collection_deferred: bool,
+    /// Whether collection, deferred too long, waited for the ingests under
+    /// way and held new ones back.
+    pub collection_waited: bool,
 }
 
 /// Makes due artifacts tombstones and collects their objects.
@@ -264,6 +272,11 @@ pub struct DeletionRunner {
     database: Database,
     manifests: ManifestStore,
     nudge: Arc<Notify>,
+    /// Since when collection has found ingests under way, each time it
+    /// looked.
+    deferred_since: Arc<std::sync::Mutex<Option<Instant>>>,
+    max_deferral: Duration,
+    batch: i64,
 }
 
 impl DeletionRunner {
@@ -274,7 +287,31 @@ impl DeletionRunner {
             database,
             manifests,
             nudge: Arc::new(Notify::new()),
+            deferred_since: Arc::default(),
+            max_deferral: MAX_DEFERRAL,
+            batch: BATCH,
         }
+    }
+
+    /// How many artifacts due are read at a time.
+    #[must_use]
+    pub const fn with_batch(mut self, batch: i64) -> Self {
+        self.batch = if batch < 1 { 1 } else { batch };
+        self
+    }
+
+    /// How long collection defers to ingests before it waits for them.
+    #[must_use]
+    pub const fn with_max_deferral(mut self, max_deferral: Duration) -> Self {
+        self.max_deferral = max_deferral;
+        self
+    }
+
+    /// When collection first deferred, of the deferrals since it last ran.
+    fn deferred_since(&self) -> std::sync::MutexGuard<'_, Option<Instant>> {
+        self.deferred_since
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Run until `shutdown` resolves.
@@ -314,20 +351,61 @@ impl DeletionRunner {
     pub async fn pass(&self) -> Result<DeletionPass, crate::gc::GcError> {
         let pool = self.database.pool();
         let mut pass = DeletionPass::default();
-        for id in due_for_deletion(pool, BATCH).await? {
-            match make_tombstone(pool, id).await? {
-                Tombstone::Made => {
-                    tracing::warn!(artifact_id = %id, "artifact deleted: its bytes are being removed");
-                    pass.deleted += 1;
+        let mut after = None;
+        loop {
+            let due = due_for_deletion(pool, after, self.batch).await?;
+            for &Due { id, .. } in &due {
+                match make_tombstone(pool, id).await? {
+                    Tombstone::Made => {
+                        tracing::warn!(artifact_id = %id, "artifact deleted: its bytes are being removed");
+                        pass.deleted += 1;
+                    }
+                    Tombstone::NotNow(why) => {
+                        tracing::info!(artifact_id = %id, %why, "a deletion is deferred");
+                        pass.deferred += 1;
+                    }
                 }
-                Tombstone::NotNow(why) => {
-                    tracing::info!(artifact_id = %id, %why, "a deletion is deferred");
-                    pass.deferred += 1;
+            }
+            match due.last() {
+                Some(last) if i64::try_from(due.len()).unwrap_or(i64::MAX) >= self.batch => {
+                    after = Some(*last);
                 }
+                _ => break,
             }
         }
         self.collect(&mut pass).await?;
         Ok(pass)
+    }
+
+    /// The store's collection lock: at once if nothing is ingesting; after
+    /// waiting for what is, once collection has deferred for too long; or
+    /// `None`, deferred to another pass.
+    async fn collection_lock(
+        &self,
+        objects: &tangible_storage::FilesystemStore,
+        pass: &mut DeletionPass,
+    ) -> Option<tokio::sync::OwnedRwLockWriteGuard<()>> {
+        if let Some(lock) = objects.try_collecting() {
+            *self.deferred_since() = None;
+            return Some(lock);
+        }
+        let waited = self
+            .deferred_since()
+            .get_or_insert_with(Instant::now)
+            .elapsed();
+        if waited < self.max_deferral {
+            pass.collection_deferred = true;
+            return None;
+        }
+        tracing::warn!(
+            deferred_minutes = waited.as_secs() / 60,
+            "collection has found imports under way for too long; it waits for them \
+             now, and new imports wait for it"
+        );
+        let lock = objects.collecting().await;
+        *self.deferred_since() = None;
+        pass.collection_waited = true;
+        Some(lock)
     }
 
     /// Remove the objects only deleted artifacts had.
@@ -341,8 +419,7 @@ impl DeletionRunner {
         // counted before collection looks, or found missing and stored again
         // after.
         let objects = self.manifests.objects();
-        let Some(_collecting) = objects.try_collecting() else {
-            pass.collection_deferred = true;
+        let Some(_collecting) = self.collection_lock(objects, pass).await else {
             return Ok(());
         };
         let candidates = collectable_objects(pool).await?;
@@ -355,9 +432,9 @@ impl DeletionRunner {
                 pass.objects_kept += 1;
                 continue;
             }
-            // The row is locked while the bytes go: an artifact being
-            // registered that would count it waits, then finds it removed
-            // and stores its own copy's row again.
+            // The row is locked while the bytes go, as a second guard: no
+            // ingest is between storing bytes and registering them while the
+            // collection lock is held, so none can count it meanwhile.
             let Some(removal) = begin_removal(pool, &sha256).await? else {
                 pass.objects_kept += 1;
                 continue;

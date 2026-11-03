@@ -234,7 +234,7 @@ pub async fn get_identification(
 ///
 /// # Errors
 ///
-/// `NOT_FOUND` for no such artifact.
+/// `NOT_FOUND` for no such artifact, `ARTIFACT_DELETED` for a deleted one.
 #[utoipa::path(
     post,
     path = "/api/v1/artifacts/{artifact_id}/identification/rehash",
@@ -245,6 +245,7 @@ pub async fn get_identification(
     responses(
         (status = 202, description = "Queued", body = IdentificationView),
         (status = 404, description = "No such artifact", body = Problem),
+        (status = 409, description = "The artifact is deleted (ARTIFACT_DELETED)", body = Problem),
     ),
 )]
 pub async fn rehash(
@@ -260,6 +261,8 @@ pub async fn rehash(
             unavailable("the hashes could not be asked for")
         })?;
     if !found {
+        // A deleted artifact has no bytes to hash (ADR 0020).
+        crate::deletion::refuse_if_deleted(&state, id, true).await?;
         return Err(Problem::not_found("artifact", &id.to_string()));
     }
     tracing::info!(artifact_id = %id, by = %user.username, "preservation hashes asked for again");

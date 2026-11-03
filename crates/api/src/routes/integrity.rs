@@ -184,6 +184,10 @@ fn answered(
             "artifact",
             &artifact.map(|id| id.to_string()).unwrap_or_default(),
         )),
+        Requested::Deleted => Err(Problem::new(
+            ErrorCode::ArtifactDeleted,
+            "this artifact is deleted: its bytes are gone, and its record is all that is left",
+        )),
     }
 }
 
@@ -207,6 +211,7 @@ fn answered(
         (status = 202, description = "Queued", body = IntegrityCheckView),
         (status = 200, description = "A check of it is already under way", body = IntegrityCheckView),
         (status = 404, description = "No such artifact", body = Problem),
+        (status = 409, description = "The artifact is deleted (ARTIFACT_DELETED)", body = Problem),
     ),
 )]
 pub async fn validate_artifact(

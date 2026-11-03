@@ -105,6 +105,8 @@ pub enum Requested {
     AlreadyActive(IntegrityCheckRecord),
     /// No such artifact.
     NoSuchArtifact,
+    /// The artifact is deleted: its bytes are gone (ADR 0020).
+    Deleted,
 }
 
 /// Ask for a check of `artifact_id`, or of everything when `None`.
@@ -122,6 +124,29 @@ pub async fn request_check(
     } else {
         IntegrityScope::All
     };
+    let mut tx = pool.begin().await.map_err(DbError::Query)?;
+    // Shared, so a tombstone made meanwhile either comes first, and this
+    // refuses, or waits, and finds this check holding it (ADR 0020).
+    if let Some(id) = artifact_id {
+        let deleted: Option<bool> = sqlx::query_scalar(
+            "SELECT deleted_at IS NOT NULL FROM artifacts WHERE id = $1 FOR SHARE",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(DbError::Query)?;
+        match deleted {
+            None => {
+                tx.rollback().await.map_err(DbError::Query)?;
+                return Ok(Requested::NoSuchArtifact);
+            }
+            Some(true) => {
+                tx.rollback().await.map_err(DbError::Query)?;
+                return Ok(Requested::Deleted);
+            }
+            Some(false) => {}
+        }
+    }
     let inserted = sqlx::query(&format!(
         "INSERT INTO integrity_checks (id, scope, artifact_id, created_by)
          VALUES ($1, $2, $3, $4)
@@ -131,14 +156,21 @@ pub async fn request_check(
     .bind(scope.as_str())
     .bind(artifact_id)
     .bind(actor)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await;
     match inserted {
-        Ok(row) => Ok(Requested::Queued(from_row(&row)?)),
+        Ok(row) => {
+            let check = from_row(&row)?;
+            tx.commit().await.map_err(DbError::Query)?;
+            Ok(Requested::Queued(check))
+        }
         Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("23503") => {
             Ok(Requested::NoSuchArtifact)
         }
         Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("23505") => {
+            // The failed insert ended the transaction; the one under way is
+            // read outside it.
+            drop(tx);
             let row = sqlx::query(&format!(
                 "SELECT {COLUMNS} FROM integrity_checks
                  WHERE scope = $1 AND artifact_id IS NOT DISTINCT FROM $2
@@ -346,6 +378,22 @@ pub async fn record_progress(pool: &PgPool, progress: &Progress<'_>) -> Result<b
     .await
     .map_err(DbError::Query)?;
     Ok(result.rows_affected() > 0)
+}
+
+/// Whether object `sha256` was collected (ADR 0020): its bytes are gone on
+/// purpose, so a check that finds them gone has found nothing wrong.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn object_removed(pool: &PgPool, sha256: &str) -> Result<bool, DbError> {
+    let removed: Option<bool> =
+        sqlx::query_scalar("SELECT removed_at IS NOT NULL FROM cas_objects WHERE sha256 = $1")
+            .bind(sha256)
+            .fetch_optional(pool)
+            .await
+            .map_err(DbError::Query)?;
+    Ok(removed.unwrap_or(false))
 }
 
 /// Mark every artifact that names object `sha256` damaged, now.

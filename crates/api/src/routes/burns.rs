@@ -489,6 +489,15 @@ fn validate(request: &CreateBurnJobRequest) -> Result<Validated, Problem> {
     })
 }
 
+/// The refusal to burn an artifact that is deleted or pending deletion.
+fn artifact_deleted() -> Problem {
+    Problem::new(
+        ErrorCode::ArtifactDeleted,
+        "this artifact is deleted, or pending deletion, so it cannot be burned; an \
+         administrator can keep it while it is pending",
+    )
+}
+
 /// Decide whether an artifact may be burned, and what to say about it.
 ///
 /// Refusals are limited to the two cases where writing the disc would be
@@ -498,11 +507,7 @@ fn validate(request: &CreateBurnJobRequest) -> Result<Validated, Problem> {
 /// should support and describe honestly, not prevent.
 fn eligibility(facts: &ArtifactBurnFacts) -> Result<Vec<String>, Problem> {
     if facts.pending_deletion {
-        return Err(Problem::new(
-            ErrorCode::ArtifactDeleted,
-            "this artifact is deleted, or pending deletion, so it cannot be burned; an \
-             administrator can keep it while it is pending",
-        ));
+        return Err(artifact_deleted());
     }
     if matches!(facts.quarantine_state.as_str(), "pending" | "confirmed") {
         return Err(Problem::new(
@@ -1010,8 +1015,9 @@ pub async fn cancel_job(
 ///
 /// # Errors
 ///
-/// `NOT_FOUND`, or `NOT_RETRYABLE` if the job finished cleanly, needs a human,
-/// or is still running.
+/// `NOT_FOUND`, `NOT_RETRYABLE` if the job finished cleanly, needs a human,
+/// or is still running, or `ARTIFACT_DELETED` if its artifact is deleted or
+/// pending deletion.
 #[utoipa::path(
     post,
     path = "/api/v1/burn-jobs/{burn_job_id}/retry",
@@ -1023,7 +1029,8 @@ pub async fn cancel_job(
     responses(
         (status = 200, description = "Requeued", body = BurnJobDetail),
         (status = 404, description = "No such burn job", body = Problem),
-        (status = 409, description = "Not in a state that can be retried", body = Problem),
+        (status = 409, description = "Not in a state that can be retried, or its artifact is \
+                                      deleted or pending deletion", body = Problem),
     ),
 )]
 pub async fn retry_job(
@@ -1043,6 +1050,7 @@ pub async fn retry_job(
             RetryOutcome::NotRetryable { state } => {
                 Problem::new(ErrorCode::NotRetryable, retry_refusal(state))
             }
+            RetryOutcome::ArtifactDeleted => artifact_deleted(),
         })?;
 
     tracing::info!(burn_job_id = %id, "burn job requeued");
@@ -1101,6 +1109,7 @@ pub async fn resolve_attention(
                 ErrorCode::NotRetryable,
                 format!("this burn is not asking for attention; it is {state}"),
             ),
+            RetryOutcome::ArtifactDeleted => artifact_deleted(),
         })?;
 
     tracing::info!(burn_job_id = %id, "burn job attention resolved");
