@@ -12,6 +12,7 @@
 //! descriptors, CHD headers and metadata, DVD-Video `VIDEO_TS` trees, and
 //! Logiqx XML DATs.
 
+pub mod archive;
 pub mod ccd;
 pub mod chd;
 pub mod chdman;

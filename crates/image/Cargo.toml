@@ -13,6 +13,16 @@ hex = "0.4.3"
 # serde, no encodings but UTF-8, and it expands no entity but XML's own.
 quick-xml = "0.42.0"
 serde = { version = "1.0.229", features = ["derive"] }
+# Archive imports (docs/plans/archives.md): ZIP, 7z and tar, the owner's
+# choice of 2026-11-02, read in pure Rust with no C library. Only what
+# unpacking needs: ZIP's stored and deflate entries, 7z without its AES or
+# bzip2, tar without extended attributes, gzip and xz for compressed tars.
+# No RAR: its decoder is not free software.
+flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
+lzma-rust2 = { version = "0.23.0", default-features = false, features = ["std", "xz"] }
+sevenz-rust2 = { version = "0.24.2", default-features = false }
+tar = { version = "0.4.46", default-features = false }
+zip = { version = "9.3.0", default-features = false, features = ["deflate-flate2"] }
 # A DVD CHD's ISO is checked against the CHD's data SHA-1
 # (docs/plans/chd-images.md); already in the tree for preservation hashes.
 sha1 = "0.10.7"

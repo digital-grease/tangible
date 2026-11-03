@@ -43,6 +43,7 @@ pub const TARGETS: &[Target] = &[
     ("dat", dat_file),
     ("mds", mds_descriptor),
     ("chd", chd_image),
+    ("archive", archive),
 ];
 
 /// Fixture directories, relative to the repository root, that also seed a
@@ -53,6 +54,7 @@ pub const FIXTURE_SEEDS: &[(&str, &str)] = &[
     ("ccd", "fixtures/images/ccd"),
     ("mds", "fixtures/images/mds"),
     ("chd", "fixtures/images/chd"),
+    ("archive", "fixtures/images/archives"),
     ("cdrdao_output", "fixtures/tool-output/cdrdao"),
     ("xorriso_output", "fixtures/tool-output/xorriso"),
     ("report_scrub", "fixtures/tool-output/cdrdao"),
@@ -136,6 +138,63 @@ pub fn chd_image(data: &[u8]) {
     if header.parent_sha1.is_some() {
         assert!(description.warnings.iter().any(|w| w.contains("parent")));
     }
+}
+
+/// An archive an import arrived in (docs/plans/archives.md), unpacked within
+/// small limits. Whatever it unpacks is a regular file inside the
+/// destination, listed with its true length, within the limits; nothing is
+/// a link and nothing lands outside.
+pub fn archive(data: &[u8]) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use tangible_image::archive::{ArchiveLimits, detect, unpack};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let scratch = std::env::temp_dir().join(format!(
+        "tangible-fuzz-archive-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(scratch.join("out")).expect("scratch");
+    let input = scratch.join("input");
+    std::fs::write(&input, data).expect("input");
+    let limits = ArchiveLimits {
+        max_entries: 64,
+        max_expanded_bytes: 8 << 20,
+        max_ratio: 1_000,
+        ratio_floor_bytes: 1 << 20,
+        max_dictionary_bytes: 16 << 20,
+        deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(5)),
+    };
+    let out = scratch.join("out");
+    if let Ok(Some(kind)) = detect(&input)
+        && let Ok(unpacked) = unpack(&input, kind, &out, &limits)
+    {
+        assert!(unpacked.expanded_bytes <= limits.max_expanded_bytes);
+        assert!(unpacked.files.len() as u64 <= limits.max_entries);
+        let mut total = 0;
+        for (path, length) in &unpacked.files {
+            let file = out.join(path.as_str());
+            let metadata = std::fs::symlink_metadata(&file).expect("listed files exist");
+            assert!(metadata.is_file(), "{path} is a regular file");
+            assert_eq!(metadata.len(), *length);
+            assert!(!path.as_str().starts_with(".tangible-"));
+            total += length;
+        }
+        assert_eq!(total, unpacked.expanded_bytes);
+    }
+    // Nothing anywhere under the destination is a link, whatever happened.
+    let mut stack = vec![out];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).expect("walk").flatten() {
+            let kind = entry.file_type().expect("type");
+            assert!(!kind.is_symlink(), "{} is a link", entry.path().display());
+            if kind.is_dir() {
+                stack.push(entry.path());
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&scratch);
 }
 
 /// A Logiqx DAT. What it accepts has a name, and every text and hash it
