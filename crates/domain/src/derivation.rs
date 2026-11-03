@@ -73,7 +73,8 @@ impl Transformation {
     pub const fn output_format(self) -> ArtifactFormat {
         match self {
             Self::ChdCreateCd | Self::ChdCreateDvd => ArtifactFormat::Chd,
-            Self::CueBinFromCcd => ArtifactFormat::CueBin,
+            Self::CueBinFromCcd | Self::CueBinFromMds => ArtifactFormat::CueBin,
+            Self::IsoFromMds => ArtifactFormat::Iso,
         }
     }
 
@@ -82,14 +83,17 @@ impl Transformation {
     pub const fn tool_name(self) -> &'static str {
         match self {
             Self::ChdCreateCd | Self::ChdCreateDvd => CHDMAN,
-            Self::CueBinFromCcd => TANGIBLE,
+            Self::CueBinFromCcd | Self::CueBinFromMds | Self::IsoFromMds => TANGIBLE,
         }
     }
 
     /// Whether Tangible does it itself, needing no derivation engine.
     #[must_use]
     pub const fn is_in_process(self) -> bool {
-        matches!(self, Self::CueBinFromCcd)
+        matches!(
+            self,
+            Self::CueBinFromCcd | Self::CueBinFromMds | Self::IsoFromMds
+        )
     }
 
     /// Whether it takes options: only the CHD transformations do.
@@ -124,10 +128,15 @@ impl Transformation {
             // is a CloneCD image.
             (Self::ChdCreateCd, ArtifactFormat::CueBin | ArtifactFormat::TocBin)
             | (Self::CueBinFromCcd, ArtifactFormat::CcdImgSub) => Ok(()),
-            (Self::ChdCreateCd, ArtifactFormat::Iso) => media_must_be(&[MediaFamily::Cd]),
+            // An ISO's bytes do not say whether it was a CD; an MDS
+            // descriptor does.
+            (Self::ChdCreateCd, ArtifactFormat::Iso)
+            | (Self::CueBinFromMds, ArtifactFormat::MdsMdf) => media_must_be(&[MediaFamily::Cd]),
             (Self::ChdCreateDvd, ArtifactFormat::Iso) => {
                 media_must_be(&[MediaFamily::Dvd, MediaFamily::Bluray])
             }
+            // An MDS descriptor says which it is.
+            (Self::IsoFromMds, ArtifactFormat::MdsMdf) => media_must_be(&[MediaFamily::Dvd]),
             (transformation, format) => Err(NotApplicable::Format {
                 transformation,
                 format,
@@ -145,9 +154,15 @@ impl Transformation {
 
     /// Every transformation that applies, in the order preferred.
     pub fn all_suited_to(format: ArtifactFormat, media: MediaFamily) -> impl Iterator<Item = Self> {
-        [Self::ChdCreateCd, Self::ChdCreateDvd, Self::CueBinFromCcd]
-            .into_iter()
-            .filter(move |t| t.check_applies(format, media).is_ok())
+        [
+            Self::ChdCreateCd,
+            Self::ChdCreateDvd,
+            Self::CueBinFromCcd,
+            Self::CueBinFromMds,
+            Self::IsoFromMds,
+        ]
+        .into_iter()
+        .filter(move |t| t.check_applies(format, media).is_ok())
     }
 }
 
@@ -227,7 +242,10 @@ impl ChdOptions {
         match transformation {
             // Takes none; a CD's defaults stand in for a caller that asks
             // anyway, and [`DerivationSpec::new`] refuses them.
-            Transformation::ChdCreateCd | Transformation::CueBinFromCcd => Self {
+            Transformation::ChdCreateCd
+            | Transformation::CueBinFromCcd
+            | Transformation::CueBinFromMds
+            | Transformation::IsoFromMds => Self {
                 compression: vec![ChdCodec::Cdlz, ChdCodec::Cdzl, ChdCodec::Cdfl],
                 hunk_bytes: 8 * CD_FRAME_BYTES,
             },
@@ -455,6 +473,50 @@ pub fn content_digest<'a>(
 #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_mds_image_is_made_into_a_cue_bin_or_an_iso_by_its_medium() {
+        let cue = Transformation::CueBinFromMds;
+        let iso = Transformation::IsoFromMds;
+        assert_eq!(cue.output_format(), ArtifactFormat::CueBin);
+        assert_eq!(iso.output_format(), ArtifactFormat::Iso);
+        for t in [cue, iso] {
+            assert_eq!(t.tool_name(), TANGIBLE);
+            assert!(t.is_in_process() && !t.takes_options());
+            assert!(
+                t.check_applies(ArtifactFormat::Iso, MediaFamily::Dvd)
+                    .is_err()
+            );
+        }
+        assert!(
+            cue.check_applies(ArtifactFormat::MdsMdf, MediaFamily::Cd)
+                .is_ok()
+        );
+        assert!(matches!(
+            cue.check_applies(ArtifactFormat::MdsMdf, MediaFamily::Dvd),
+            Err(NotApplicable::Media { .. })
+        ));
+        assert!(
+            iso.check_applies(ArtifactFormat::MdsMdf, MediaFamily::Dvd)
+                .is_ok()
+        );
+        assert!(
+            iso.check_applies(ArtifactFormat::MdsMdf, MediaFamily::Cd)
+                .is_err()
+        );
+        assert_eq!(
+            Transformation::suited_to(ArtifactFormat::MdsMdf, MediaFamily::Cd),
+            Some(cue)
+        );
+        assert_eq!(
+            Transformation::suited_to(ArtifactFormat::MdsMdf, MediaFamily::Dvd),
+            Some(iso)
+        );
+        assert_eq!(
+            Transformation::suited_to(ArtifactFormat::MdsMdf, MediaFamily::Unknown),
+            None
+        );
+    }
 
     #[test]
     fn a_cue_bin_is_made_from_a_clonecd_image_by_tangible_with_no_options() {

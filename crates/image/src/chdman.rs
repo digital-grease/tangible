@@ -140,9 +140,11 @@ impl DerivationEngine for Chdman {
                 "chdman {} cannot make DVD CHDs; createdvd arrived in 0.{FIRST_DVD_MINOR}",
                 self.version
             )),
-            Transformation::CueBinFromCcd => {
-                Err("chdman does not make CUE/BIN images; Tangible makes them itself".to_owned())
-            }
+            Transformation::CueBinFromCcd
+            | Transformation::CueBinFromMds
+            | Transformation::IsoFromMds => Err(
+                "chdman does not make CUE/BIN or ISO images; Tangible makes them itself".to_owned(),
+            ),
         }
     }
 
@@ -168,10 +170,12 @@ impl DerivationEngine for Chdman {
             Transformation::ChdCreateCd => "createcd",
             Transformation::ChdCreateDvd => "createdvd",
             // Refused by check_supported above.
-            Transformation::CueBinFromCcd => {
+            Transformation::CueBinFromCcd
+            | Transformation::CueBinFromMds
+            | Transformation::IsoFromMds => {
                 return Err(DeriveError::Failed {
                     code: "DERIVATION_UNSUPPORTED",
-                    detail: "chdman does not make CUE/BIN images".to_owned(),
+                    detail: "chdman does not make CUE/BIN or ISO images".to_owned(),
                     retryable: false,
                 });
             }
@@ -236,9 +240,11 @@ impl Chdman {
             retryable: false,
         };
         match request.transformation {
-            Transformation::CueBinFromCcd => Err(DeriveError::Failed {
+            Transformation::CueBinFromCcd
+            | Transformation::CueBinFromMds
+            | Transformation::IsoFromMds => Err(DeriveError::Failed {
                 code: "DERIVATION_UNSUPPORTED",
-                detail: "chdman does not make CUE/BIN images".to_owned(),
+                detail: "chdman does not make CUE/BIN or ISO images".to_owned(),
                 retryable: false,
             }),
             Transformation::ChdCreateDvd => {

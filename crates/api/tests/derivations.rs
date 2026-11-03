@@ -788,3 +788,213 @@ async fn the_cue_bin_of_a_clonecd_image_can_be_made_into_a_chd() {
         .await;
     assert_eq!(chd_done["state"], "complete", "{chd_done}");
 }
+
+fn mds_fixture(name: &str) -> Vec<u8> {
+    std::fs::read(format!(
+        "{}/../../fixtures/images/mds/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap()
+}
+
+/// `sectors` raw sectors, the first a mode 1 data sector tagged so the image
+/// is this test's own, each followed by `subchannel` bytes of 0xAA.
+fn raw_sectors(tag: &str, sectors: usize, subchannel: usize) -> (Vec<u8>, Vec<u8>) {
+    let mut main = vec![0_u8; RAW * sectors];
+    main[..12].copy_from_slice(&[
+        0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0,
+    ]);
+    main[15] = 1;
+    main[16..16 + tag.len()].copy_from_slice(tag.as_bytes());
+    for (sector, bytes) in main.chunks_exact_mut(RAW).enumerate().skip(1) {
+        bytes[..8].copy_from_slice(&(sector as u64).to_le_bytes());
+    }
+    let mut interleaved = Vec::with_capacity((RAW + subchannel) * sectors);
+    for bytes in main.chunks_exact(RAW) {
+        interleaved.extend_from_slice(bytes);
+        interleaved.resize(interleaved.len() + subchannel, 0xAA);
+    }
+    (main, interleaved)
+}
+
+/// A minimal ISO of 64 2048-byte blocks, tagged in its last block.
+fn iso_volume(tag: &str) -> Vec<u8> {
+    let mut bytes = vec![0_u8; 16 * 2048];
+    let mut pvd = vec![0_u8; 2048];
+    pvd[0] = 1;
+    pvd[1..6].copy_from_slice(b"CD001");
+    pvd[6] = 1;
+    pvd[40..72].fill(b' ');
+    pvd[40..49].copy_from_slice(b"FILM_DISC");
+    pvd[80..84].copy_from_slice(&64_u32.to_le_bytes());
+    pvd[84..88].copy_from_slice(&64_u32.to_be_bytes());
+    pvd[128..130].copy_from_slice(&2048_u16.to_le_bytes());
+    pvd[130..132].copy_from_slice(&2048_u16.to_be_bytes());
+    bytes.extend_from_slice(&pvd);
+    let mut terminator = vec![0_u8; 2048];
+    terminator[0] = 255;
+    terminator[1..6].copy_from_slice(b"CD001");
+    terminator[6] = 1;
+    bytes.extend_from_slice(&terminator);
+    bytes.resize(64 * 2048, 0);
+    bytes[63 * 2048..63 * 2048 + tag.len()].copy_from_slice(tag.as_bytes());
+    bytes
+}
+
+/// Ask for the derivative that suits `parent`, run it, and answer the
+/// child's id and manifest.
+async fn derive_and_run(h: &Harness, parent: &str, transformation: &str) -> (String, Value) {
+    let (_, lineage) = h
+        .send("GET", &format!("/api/v1/artifacts/{parent}/lineage"), None)
+        .await;
+    assert_eq!(
+        lineage["suggested_transformation"], transformation,
+        "{lineage}"
+    );
+    let (status, asked) = h.derive(parent, json!({})).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{asked}");
+    assert_eq!(asked["job"]["transformation"], transformation);
+    assert_eq!(asked["job"]["tool_name"], "tangible");
+    let job = asked["job"]["id"].as_str().unwrap().to_owned();
+    assert!(h.runner.step().await.unwrap(), "the runner found the job");
+    let (_, done) = h
+        .send("GET", &format!("/api/v1/derivation-jobs/{job}"), None)
+        .await;
+    assert_eq!(done["state"], "complete", "{done}");
+    let child = done["child_artifact_id"].as_str().unwrap().to_owned();
+    let (_, manifest) = h
+        .send("GET", &format!("/api/v1/artifacts/{child}/manifest"), None)
+        .await;
+    assert_eq!(manifest["lineage"]["transformation"], transformation);
+    assert_eq!(manifest["lineage"]["loss_character"], "lossy");
+    assert_eq!(manifest["lineage"]["parent_artifact_id"], parent);
+    (child, manifest)
+}
+
+fn stored_text(h: &Harness, component: &Value) -> Vec<u8> {
+    let digest: tangible_domain::Sha256Digest = component["content"]["sha256"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    std::fs::read(h.objects.object_path(&digest)).unwrap()
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_mds_cd_becomes_a_cue_bin_whose_bin_is_its_mdf() {
+    let h = harness_using(None).await;
+    let _queue = exclusive_queue(h.pool()).await;
+    let (image, _) = raw_sectors(&uuid::Uuid::now_v7().simple().to_string(), 450, 0);
+    let parent = h
+        .import(&[
+            ("Game.mds", mds_fixture("mixed-mode.mds")),
+            ("Game.mdf", image),
+        ])
+        .await;
+    let (_, before) = h
+        .send("GET", &format!("/api/v1/artifacts/{parent}/manifest"), None)
+        .await;
+    let (_, manifest) = derive_and_run(&h, &parent, "cue_bin_from_mds").await;
+
+    assert_eq!(manifest["classification"]["format"], "cue_bin");
+    assert_eq!(manifest["classification"]["media_family"], "cd");
+    assert_eq!(manifest["validation"]["state"], "valid");
+    let evidence = manifest["classification"]["detectors"][0]["evidence"].to_string();
+    assert!(
+        evidence.contains("not carried: the descriptor's raw table of contents"),
+        "{evidence}"
+    );
+    assert_eq!(track_shapes(&manifest), track_shapes(&before));
+    let bin = component(&manifest, "Game.bin");
+    assert_eq!(
+        bin["content"]["sha256"],
+        component(&before, "Game.mdf")["content"]["sha256"],
+        "the BIN is the MDF, the same stored object"
+    );
+    let sheet = String::from_utf8(stored_text(&h, component(&manifest, "Game.cue"))).unwrap();
+    assert!(sheet.starts_with("FILE \"Game.bin\" BINARY\n"), "{sheet}");
+    assert!(
+        sheet.contains("PREGAP 00:02:00"),
+        "track 2's pregap: {sheet}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_mds_cd_with_subchannel_becomes_a_cue_bin_without_it() {
+    let h = harness_using(None).await;
+    let _queue = exclusive_queue(h.pool()).await;
+    let (main, interleaved) = raw_sectors(&uuid::Uuid::now_v7().simple().to_string(), 100, 96);
+    let parent = h
+        .import(&[
+            ("Sub.mds", mds_fixture("subchannel.mds")),
+            ("Sub.mdf", interleaved),
+        ])
+        .await;
+    let (_, before) = h
+        .send("GET", &format!("/api/v1/artifacts/{parent}/manifest"), None)
+        .await;
+    assert_eq!(before["topology"]["kind"], "unknown", "imported whole");
+
+    let (_, manifest) = derive_and_run(&h, &parent, "cue_bin_from_mds").await;
+    let evidence = manifest["classification"]["detectors"][0]["evidence"].to_string();
+    assert!(
+        evidence.contains("not carried: the subchannel and the descriptor's raw table of contents"),
+        "{evidence}"
+    );
+    assert_eq!(
+        track_shapes(&manifest),
+        [json!([1, "MODE1/2352", 0, 0, 100, 0, [{ "number": 1, "relative_lba": 0 }], null, []])]
+    );
+    let bin = component(&manifest, "Sub.bin");
+    assert_eq!(bin["length_bytes"], RAW * 100);
+    assert!(
+        stored_text(&h, bin) == main,
+        "each sector's first 2352 bytes, nothing else"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_mds_dvd_becomes_the_iso_its_mdf_is() {
+    let h = harness_using(None).await;
+    let _queue = exclusive_queue(h.pool()).await;
+    let parent = h
+        .import(&[
+            ("Film.mds", mds_fixture("dvd.mds")),
+            (
+                "Film.mdf",
+                iso_volume(&uuid::Uuid::now_v7().simple().to_string()),
+            ),
+        ])
+        .await;
+    let (_, before) = h
+        .send("GET", &format!("/api/v1/artifacts/{parent}/manifest"), None)
+        .await;
+    let (child, manifest) = derive_and_run(&h, &parent, "iso_from_mds").await;
+
+    assert_eq!(manifest["classification"]["format"], "iso");
+    assert_eq!(manifest["classification"]["media_family"], "dvd");
+    assert_eq!(manifest["validation"]["state"], "valid");
+    assert_eq!(manifest["topology"]["kind"], "single_track_block_image");
+    assert_eq!(manifest["topology"]["block_count"], 64);
+    assert_eq!(manifest["topology"]["volume_labels"], json!(["FILM_DISC"]));
+    let iso = component(&manifest, "Film.iso");
+    assert_eq!(iso["role"], "primary_image");
+    assert_eq!(
+        iso["content"]["sha256"],
+        component(&before, "Film.mdf")["content"]["sha256"],
+        "the ISO is the MDF, the same stored object"
+    );
+
+    // An ISO burns; nothing of the MDS is left to refuse it.
+    let facts = tangible_db::repositories::artifact_burn_facts(
+        h.pool(),
+        uuid::Uuid::parse_str(&child).unwrap(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(facts.format, "iso");
+}

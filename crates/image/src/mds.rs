@@ -17,7 +17,9 @@
 //! The MDF does not hold pregaps: a track's pregap is generated, as a CUE
 //! sheet's PREGAP is. [`layout`] lays a CD image without subchannel out like
 //! a CUE sheet's tracks over one data file; anything else is described but
-//! not laid out, and says why.
+//! not laid out, and says why. [`layout_without_subchannel`] gives the layout
+//! of an image with interleaved subchannel once it is taken out, for making a
+//! CUE/BIN of one.
 
 use crate::cue::{CdLayout, TrackLayout};
 use tangible_domain::cd::{SampleByteOrder, TrackFlag};
@@ -532,6 +534,14 @@ pub fn layout(descriptor: &MdsDescriptor, data_bytes: u64) -> Result<CdLayout, M
         if track.subchannel == Subchannel::PwInterleaved {
             return Err(MdsLayoutError::Subchannel(track.number));
         }
+        // A disc's tracks are numbered one after another.
+        if let Some(before) = position
+            .checked_sub(1)
+            .and_then(|p| descriptor.tracks.get(p))
+            && track.number != before.number + 1
+        {
+            return Err(MdsLayoutError::Order(track.number));
+        }
         if track.files.len() != 1 || track.files.first() != first_file {
             return Err(MdsLayoutError::Files);
         }
@@ -591,6 +601,53 @@ pub fn layout(descriptor: &MdsDescriptor, data_bytes: u64) -> Result<CdLayout, M
         session_count: 1,
         warnings: Vec::new(),
     })
+}
+
+/// Bytes of subchannel after every sector of a track that interleaves it.
+pub const SUBCHANNEL_BYTES: u32 = 96;
+
+/// The raw sector a track that interleaves subchannel carries before it.
+pub const RAW_SECTOR_BYTES: u32 = 2352;
+
+/// The layout a CD image whose every track interleaves subchannel would have
+/// with the subchannel taken out of every sector: the same tracks over a data
+/// file of 2352-byte sectors, `data_bytes` being the interleaved file's size.
+///
+/// What [`layout`] refuses with [`MdsLayoutError::Subchannel`] can be made
+/// into a CUE/BIN this way, by copying the first 2352 bytes of each sector.
+///
+/// # Errors
+///
+/// [`MdsLayoutError`] when a track does not interleave subchannel after a
+/// raw sector, does not start on a sector boundary, or when [`layout`]
+/// refuses what is left.
+pub fn layout_without_subchannel(
+    descriptor: &MdsDescriptor,
+    data_bytes: u64,
+) -> Result<CdLayout, MdsLayoutError> {
+    let interleaved = u64::from(RAW_SECTOR_BYTES + SUBCHANNEL_BYTES);
+    let mut stripped = descriptor.clone();
+    for track in &mut stripped.tracks {
+        if track.subchannel != Subchannel::PwInterleaved
+            || track.sector_size != RAW_SECTOR_BYTES + SUBCHANNEL_BYTES
+        {
+            return Err(MdsLayoutError::SectorSize {
+                track: track.number,
+                mode: track.mode,
+                size: track.sector_size,
+            });
+        }
+        if track.start_offset % interleaved != 0 {
+            return Err(MdsLayoutError::Order(track.number));
+        }
+        track.subchannel = Subchannel::None;
+        track.sector_size = RAW_SECTOR_BYTES;
+        track.start_offset = track.start_offset / interleaved * u64::from(RAW_SECTOR_BYTES);
+    }
+    layout(
+        &stripped,
+        data_bytes / interleaved * u64::from(RAW_SECTOR_BYTES),
+    )
 }
 
 #[cfg(test)]
@@ -770,6 +827,41 @@ mod tests {
     }
 
     #[test]
+    fn lays_out_an_image_with_subchannel_as_it_would_be_without_it() {
+        let descriptor = parse(&fixture("subchannel")).unwrap();
+        let interleaved = RAW + u64::from(SUBCHANNEL_BYTES);
+        let laid = layout_without_subchannel(&descriptor, 100 * interleaved).unwrap();
+        assert_eq!(laid.tracks.len(), 1);
+        let track = &laid.tracks[0];
+        assert_eq!(
+            (
+                track.mode.as_str(),
+                track.start_lba,
+                track.sector_count,
+                track.file_offset_bytes
+            ),
+            ("MODE1/2352", 0, 100, 0)
+        );
+        assert_eq!(laid.total_sectors(), 100);
+        // A sector short is past the end, as the interleaved file would be.
+        assert_eq!(
+            layout_without_subchannel(&descriptor, 99 * interleaved + RAW),
+            Err(MdsLayoutError::PastEnd(1))
+        );
+        // Nothing to take out of an image without subchannel.
+        assert!(matches!(
+            layout_without_subchannel(&parse(&fixture("mixed-mode")).unwrap(), u64::MAX),
+            Err(MdsLayoutError::SectorSize { track: 1, .. })
+        ));
+        let mut unaligned = descriptor;
+        unaligned.tracks[0].start_offset = 1;
+        assert_eq!(
+            layout_without_subchannel(&unaligned, u64::MAX),
+            Err(MdsLayoutError::Order(1))
+        );
+    }
+
+    #[test]
     fn says_why_an_image_is_not_laid_out() {
         let not = |name: &str| layout(&parse(&fixture(name)).unwrap(), u64::MAX).unwrap_err();
         assert_eq!(not("dvd"), MdsLayoutError::Dvd);
@@ -781,6 +873,10 @@ mod tests {
         let mut gap = parse(&fixture("mixed-mode")).unwrap();
         gap.tracks[2].start_offset += 1;
         assert_eq!(layout(&gap, u64::MAX), Err(MdsLayoutError::Order(3)));
+        // Found by fuzzing: two tracks numbered alike, which no sheet says.
+        let mut twice = parse(&fixture("mixed-mode")).unwrap();
+        twice.tracks[2].number = 2;
+        assert_eq!(layout(&twice, u64::MAX), Err(MdsLayoutError::Order(2)));
         let mut size = parse(&fixture("mixed-mode")).unwrap();
         size.tracks[1].sector_size = 2048;
         assert!(matches!(

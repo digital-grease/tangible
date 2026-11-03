@@ -649,6 +649,14 @@ string_enum! {
         /// written from its tracks, and its IMG as the BIN. Drops the
         /// subchannel (docs/plans/ccd-images.md).
         CueBinFromCcd => "cue_bin_from_ccd",
+        /// An Alcohol 120% CD image to a CUE/BIN, made by Tangible itself:
+        /// a sheet written from its tracks, and its MDF as the BIN, or a BIN
+        /// with the subchannel taken out of every sector when the MDF
+        /// interleaves it (docs/plans/mds-images.md).
+        CueBinFromMds => "cue_bin_from_mds",
+        /// An Alcohol 120% DVD image whose one MDF is an ISO's bytes to that
+        /// ISO, made by Tangible itself from the same stored object.
+        IsoFromMds => "iso_from_mds",
     }
 }
 

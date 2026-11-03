@@ -4026,10 +4026,13 @@ export interface components {
              */
             hunk_bytes?: number | null;
             /**
-             * @description `chd_create_cd`, `chd_create_dvd`, or `cue_bin_from_ccd` (a CUE/BIN
-             *     of a CloneCD image, which drops its subchannel, made by Tangible
-             *     itself and taking no options). Omitted, the one that suits the
-             *     artifact and that this server can run.
+             * @description `chd_create_cd`, `chd_create_dvd`, `cue_bin_from_ccd` (a CUE/BIN of a
+             *     CloneCD image, which drops its subchannel), `cue_bin_from_mds` (a
+             *     CUE/BIN of an Alcohol 120% CD image, without any subchannel it
+             *     interleaves) or `iso_from_mds` (the ISO an Alcohol 120% DVD image's
+             *     data file is). The last three are made by Tangible itself and take no
+             *     options. Omitted, the one that suits the artifact and that this server
+             *     can run.
              */
             transformation?: string | null;
         };

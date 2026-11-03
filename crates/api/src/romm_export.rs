@@ -580,6 +580,18 @@ fn missing_image(number: usize, disc: &DiscInputs) -> String {
              emulator reads; make a CUE/BIN of it (which drops the subchannel) or a CHD, or \
              link a CUE/BIN or ISO image of it"
         )
+    } else if disc
+        .artifacts
+        .iter()
+        .any(|link| link.format == ArtifactFormat::MdsMdf)
+    {
+        // Neither RomM's emulators nor chdman read MDS; Tangible makes a
+        // CUE/BIN or ISO of one itself (docs/plans/mds-images.md).
+        format!(
+            "disc {number} is linked only to an Alcohol 120% (MDS/MDF) image, which RomM's \
+             emulators do not read; make a CUE/BIN (of a CD) or an ISO (of a DVD) of it, or \
+             link a CUE/BIN or ISO image of it"
+        )
     } else if disc.artifacts.is_empty() {
         format!("disc {number} has no image linked")
     } else if disc
@@ -745,6 +757,16 @@ mod tests {
             chosen_artifact(&disc(&[(ArtifactFormat::CcdImgSub, "representation_of")])),
             None,
             "a CloneCD image is not sent to RomM as it is"
+        );
+        let mds = missing_image(6, &disc(&[(ArtifactFormat::MdsMdf, "representation_of")]));
+        assert!(
+            mds.contains("MDS/MDF") && mds.contains("make a CUE/BIN"),
+            "{mds}"
+        );
+        assert_eq!(
+            chosen_artifact(&disc(&[(ArtifactFormat::MdsMdf, "representation_of")])),
+            None,
+            "an MDS image is not sent to RomM as it is"
         );
         assert!(
             missing_image(3, &disc(&[(ArtifactFormat::Chd, "unknown")])).contains("not checked")

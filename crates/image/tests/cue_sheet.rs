@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2026 digitalgrease
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! Writing CUE sheets: what the CUE/BIN made from a CloneCD image is
-//! described by (docs/plans/ccd-images.md C3). A sheet written from a layout
-//! must read back, through the same parser imports use, as the same layout.
+//! Writing CUE sheets: what the CUE/BIN made from a CloneCD or Alcohol 120%
+//! image is described by (docs/plans/ccd-images.md C3, mds-images.md M3). A
+//! sheet written from a layout must read back, through the same parser
+//! imports use, as the same layout.
 
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
@@ -21,6 +22,30 @@ fn a_sheet_written_from_a_layout_reads_back_as_the_same_tracks() {
     let back = layout(&parse(written.as_bytes()).unwrap(), &[6000 * 2352]).unwrap();
     assert_eq!(back.tracks, laid.tracks);
     assert_eq!(back.catalog, laid.catalog);
+}
+
+#[test]
+fn a_generated_pregap_is_written_as_pregap_and_reads_back_the_same() {
+    // An Alcohol 120% image's tracks are laid out so (docs/plans/mds-images.md).
+    let text: &[u8] = b"FILE \"Game.bin\" BINARY\n  TRACK 01 MODE1/2352\n    \
+        INDEX 01 00:00:00\n  TRACK 02 AUDIO\n    PREGAP 00:02:00\n    INDEX 01 00:04:00\n  \
+        TRACK 03 AUDIO\n    INDEX 01 00:05:25\n";
+    let laid = layout(&parse(text).unwrap(), &[450 * 2352]).unwrap();
+    assert_eq!(
+        (laid.tracks[1].start_lba, laid.tracks[1].pregap_sectors),
+        (450, 150)
+    );
+    assert_eq!(laid.tracks[2].start_lba, 550, "the disc stays ahead");
+    let written = write_sheet(&laid, "Game.bin").unwrap();
+    assert_eq!(written.as_bytes(), text, "{written}");
+
+    // A gap partly generated and partly in the file is not one a sheet says.
+    let mut split = laid;
+    split.tracks[1].pregap_sectors = 151;
+    assert!(matches!(
+        write_sheet(&split, "Game.bin"),
+        Err(SheetError::NotExpressible { track: 2, .. })
+    ));
 }
 
 #[test]

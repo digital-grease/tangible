@@ -1590,7 +1590,8 @@ pub enum SheetError {
     #[error("the file name cannot be written in a sheet")]
     UnquotableName,
     /// A layout this writer does not express: more than one file, a sector
-    /// size other than 2352, or a gap the burner would have to generate.
+    /// size other than 2352, or a gap partly generated and partly in the
+    /// file.
     #[error("track {track}: {reason}")]
     NotExpressible {
         /// The track.
@@ -1612,9 +1613,10 @@ fn timecode(sectors: u64) -> String {
 /// `file_name`: the catalogue number, then per track its mode, flags, ISRC
 /// and index points, at their positions in the file.
 ///
-/// Only a layout the sheet says exactly is written: one file, every track's
-/// pregap inside the file, and a sector size of 2352. Read back with
-/// [`parse`] and [`layout`], the sheet gives the same tracks.
+/// Only a layout the sheet says exactly is written: one file, a sector size
+/// of 2352, and every track's pregap either inside the file (an INDEX 00) or
+/// generated (a PREGAP), not part of each. Read back with [`parse`] and
+/// [`layout`], the sheet gives the same tracks.
 ///
 /// # Errors
 ///
@@ -1635,6 +1637,8 @@ pub fn write_sheet(laid: &CdLayout, file_name: &str) -> Result<String, SheetErro
         let _ = writeln!(sheet, "CATALOG {catalog}");
     }
     let _ = writeln!(sheet, "FILE \"{file_name}\" BINARY");
+    // Sectors of generated gap so far: the disc is ahead of the file by this.
+    let mut generated: u64 = 0;
     for track in &laid.tracks {
         let refuse = |reason| SheetError::NotExpressible {
             track: track.number,
@@ -1646,9 +1650,23 @@ pub fn write_sheet(laid: &CdLayout, file_name: &str) -> Result<String, SheetErro
         if !matches!(track.mode.as_str(), "AUDIO" | "MODE1/2352" | "MODE2/2352") {
             return Err(refuse("its sectors are not 2352 bytes"));
         }
-        if track.file_offset_bytes != track.start_lba.saturating_mul(2352) {
-            return Err(refuse("part of its pregap is not in the file"));
+        if track.file_offset_bytes % 2352 != 0 {
+            return Err(refuse("it does not start on a sector in the file"));
         }
+        let file_sector = track.file_offset_bytes / 2352;
+        // What the disc is ahead of the file by here, less what it already
+        // was: the gap generated before this track.
+        let gap = track
+            .start_lba
+            .checked_sub(file_sector)
+            .and_then(|ahead| ahead.checked_sub(generated))
+            .ok_or(refuse("it starts in the file before it starts on the disc"))?;
+        if gap > 0 && (gap != track.pregap_sectors || track.indexes.iter().any(|(n, _)| *n == 0)) {
+            return Err(refuse(
+                "its pregap is partly generated and partly in the file",
+            ));
+        }
+        generated += gap;
         if track.number == 0 || track.number > 99 {
             return Err(refuse("its number is not 1 to 99"));
         }
@@ -1660,11 +1678,15 @@ pub fn write_sheet(laid: &CdLayout, file_name: &str) -> Result<String, SheetErro
         if let Some(isrc) = &track.isrc {
             let _ = writeln!(sheet, "    ISRC {isrc}");
         }
+        if gap > 0 {
+            let _ = writeln!(sheet, "    PREGAP {}", timecode(gap));
+        }
+        // INDEX points are positions in the file.
         for (number, relative) in &track.indexes {
             let _ = writeln!(
                 sheet,
                 "    INDEX {number:02} {}",
-                timecode(track.start_lba.saturating_add(*relative))
+                timecode(file_sector.saturating_add(*relative))
             );
         }
     }

@@ -59,7 +59,9 @@ pub const FIXTURE_SEEDS: &[(&str, &str)] = &[
 
 /// An MDS descriptor. What it accepts has 1 to 99 tracks numbered 1 to 99,
 /// each with plain file names; what it lays out, against data files of
-/// several sizes, is in order on the disc and in the file, and inside it.
+/// several sizes and with or without its subchannel, is in order on the disc
+/// and in the file, and inside it; and a CUE sheet written for a layout reads
+/// back as the same tracks, as the CUE/BIN made of one must.
 pub fn mds_descriptor(data: &[u8]) {
     let Ok(descriptor) = mds::parse(data) else {
         return;
@@ -74,19 +76,40 @@ pub fn mds_descriptor(data: &[u8]) {
             );
         }
     }
-    for size in [0_u64, 2352 * 300, 2352 * 1000, u64::MAX] {
-        let Ok(laid) = mds::layout(&descriptor, size) else {
-            continue;
-        };
-        let mut disc = 0_u64;
-        let mut file = 0_u64;
-        for track in &laid.tracks {
-            assert!(track.start_lba >= disc, "tracks in order on the disc");
-            assert!(track.file_offset_bytes >= file, "tracks in order in the file");
-            assert!(track.sector_count > 0);
-            disc = track.start_lba + track.sector_count;
-            file = track.file_offset_bytes;
-            assert!(file <= size, "inside the data file");
+    for size in [0_u64, 2352 * 300, 2448 * 300, 2352 * 1000, u64::MAX] {
+        let laid = [
+            mds::layout(&descriptor, size),
+            mds::layout_without_subchannel(&descriptor, size),
+        ];
+        for laid in laid.into_iter().flatten() {
+            let mut disc = 0_u64;
+            let mut file = 0_u64;
+            for track in &laid.tracks {
+                assert!(track.start_lba >= disc, "tracks in order on the disc");
+                assert!(
+                    track.file_offset_bytes >= file,
+                    "tracks in order in the file"
+                );
+                assert!(track.sector_count > 0);
+                disc = track.start_lba + track.sector_count;
+                file = track.file_offset_bytes;
+                assert!(file <= size, "inside the data file");
+            }
+            // A BIN that ends where the last track does, as the derivative's.
+            let end = laid.tracks.last().and_then(|track| {
+                track
+                    .sector_count
+                    .checked_mul(2352)?
+                    .checked_add(track.file_offset_bytes)
+            });
+            if let (Ok(sheet), Some(end)) = (cue::write_sheet(&laid, "disc.bin"), end) {
+                let parsed = cue::parse(sheet.as_bytes()).expect("a written sheet parses");
+                let back = cue::layout(&parsed, &[end]).expect("a written sheet lays out");
+                assert_eq!(
+                    back.tracks, laid.tracks,
+                    "the sheet says the same:\n{sheet}"
+                );
+            }
         }
     }
 }
@@ -107,7 +130,9 @@ pub fn dat_file(data: &[u8]) {
         if let Some(value) = value {
             assert_eq!(value.len(), digits, "a hash is its algorithm's length");
             assert!(
-                value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+                value
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
                 "a hash is lowercase hex"
             );
         }

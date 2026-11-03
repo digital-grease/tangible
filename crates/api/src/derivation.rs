@@ -16,6 +16,11 @@
 //! read back to check it gives the same tracks, and the parent's IMG as the
 //! BIN, the same stored object, so no bytes are copied.
 //!
+//! So are an Alcohol 120% image's (docs/plans/mds-images.md): a CUE/BIN of a
+//! CD, its MDF the BIN, or, when the MDF interleaves subchannel, a BIN of
+//! each sector's first 2352 bytes; and the ISO a DVD image's one MDF is,
+//! read back as one and kept as the same stored object.
+//!
 //! The queue discipline is the import queue's. A claim takes a lease, a
 //! worker that dies leaves a job that becomes claimable again, and a
 //! retryable failure is held off before it is offered again.
@@ -42,8 +47,8 @@ use tangible_domain::manifest::{
     Track, TrackIndex, Validation, ValidatorResult,
 };
 use tangible_domain::{ArtifactId, ComponentId, LogicalPath, LossCharacter, Transformation};
-use tangible_image::cue;
 use tangible_image::derive::{DerivationEngine, DeriveError, DeriveRequest};
+use tangible_image::{cue, iso, mds};
 use tangible_storage::{
     FilesystemStore, IngestLimits, ManifestStore, ManifestStoreError, StagingError, StagingKind,
     StagingManager,
@@ -346,10 +351,13 @@ impl DerivationPipeline {
         let id = job.id.to_string();
         let _ = self.staging.discard(StagingKind::Derivatives, &id).await;
         let area = self.staging.create(StagingKind::Derivatives, &id).await?;
-        let result = if planned.spec.transformation.is_in_process() {
-            self.cue_from_ccd(&area, job, &parent, &planned).await
-        } else {
-            self.derive_in(&area, job, &parent, &planned).await
+        let result = match planned.spec.transformation {
+            Transformation::CueBinFromCcd => self.cue_from_ccd(&area, job, &parent, &planned).await,
+            Transformation::CueBinFromMds => self.cue_from_mds(&area, job, &parent, &planned).await,
+            Transformation::IsoFromMds => self.iso_from_mds(job, &parent, &planned).await,
+            Transformation::ChdCreateCd | Transformation::ChdCreateDvd => {
+                self.derive_in(&area, job, &parent, &planned).await
+            }
         };
         if let Err(error) = self.staging.discard(StagingKind::Derivatives, &id).await {
             tracing::warn!(job_id = %job.id, error = ?error, "could not remove a derivation's staging area");
@@ -467,19 +475,199 @@ impl DerivationPipeline {
                 || "disc".to_owned(),
                 |component| file_stem(&component.logical_path),
             );
-        let bin_name = format!("{stem}.bin");
-        let cue_name = LogicalPath::parse(&format!("{stem}.cue"))
-            .map_err(|e| DerivationError::Materialize(e.to_string()))?;
-        let bin_path = LogicalPath::parse(&bin_name)
-            .map_err(|e| DerivationError::Materialize(e.to_string()))?;
-
         let laid = cue::CdLayout {
             catalog: catalog.clone(),
             tracks: tracks.iter().map(track_layout).collect(),
             session_count: *session_count,
             warnings: Vec::new(),
         };
-        let (sheet, back) = checked_sheet(&laid, &bin_name, image.length_bytes)?;
+        let mut dropped = vec!["the raw table of contents".to_owned()];
+        if subchannel.as_ref().is_some_and(|s| s.present) {
+            dropped.insert(0, "the subchannel".to_owned());
+        }
+        let draft = CueBinDraft {
+            laid,
+            stem,
+            bin: image.clone(),
+            dropped,
+        };
+        self.store_cue_bin(area, job, parent, planned, draft, started)
+            .await
+    }
+
+    /// Make a CUE/BIN of an Alcohol 120% CD image, in-process, from its
+    /// descriptor read again: its MDF as the BIN when it holds plain
+    /// sectors, otherwise a new BIN of each sector without its subchannel.
+    async fn cue_from_mds(
+        &self,
+        area: &tangible_storage::StagingArea,
+        job: &DerivationJobRecord,
+        parent: &ArtifactManifest,
+        planned: &PlannedDerivation,
+    ) -> Result<DerivationOutcome, DerivationError> {
+        let started = OffsetDateTime::now_utc();
+        let (stem, descriptor) = self.mds_descriptor(parent).await?;
+        let data = only_data_file(parent)?;
+        let mut dropped = vec!["the descriptor's raw table of contents".to_owned()];
+        if descriptor.has_dpm {
+            dropped.push("its DPM data".to_owned());
+        }
+
+        if descriptor
+            .tracks
+            .iter()
+            .all(|track| track.subchannel == mds::Subchannel::None)
+        {
+            let laid = mds::layout(&descriptor, data.length_bytes)
+                .map_err(|e| not_expressible(e.to_string()))?;
+            let draft = CueBinDraft {
+                laid,
+                stem,
+                bin: data.clone(),
+                dropped,
+            };
+            return self
+                .store_cue_bin(area, job, parent, planned, draft, started)
+                .await;
+        }
+
+        let laid = mds::layout_without_subchannel(&descriptor, data.length_bytes)
+            .map_err(|e| not_expressible(e.to_string()))?;
+        let staged = LogicalPath::parse(&format!("output/{stem}.bin"))
+            .map_err(|e| DerivationError::Materialize(e.to_string()))?;
+        let at = area.prepare_parent(&staged).await?;
+        strip_subchannel(
+            &self.objects.object_path(&data.content.sha256),
+            &at,
+            laid.total_sectors(),
+        )
+        .await
+        .map_err(|e| {
+            DerivationError::Materialize(format!("could not take out the subchannel: {e}"))
+        })?;
+        let ingested = area.promote(&staged, &self.objects, self.limits).await?;
+        dropped.insert(0, "the subchannel".to_owned());
+        let draft = CueBinDraft {
+            laid,
+            stem,
+            bin: stored_component(staged, ingested.digest, ingested.size_bytes),
+            dropped,
+        };
+        self.store_cue_bin(area, job, parent, planned, draft, started)
+            .await
+    }
+
+    /// Make the ISO an Alcohol 120% DVD image's one MDF is, in-process: the
+    /// MDF read back as an ISO 9660 volume, and kept as the same stored
+    /// object under an `.iso` name.
+    async fn iso_from_mds(
+        &self,
+        job: &DerivationJobRecord,
+        parent: &ArtifactManifest,
+        planned: &PlannedDerivation,
+    ) -> Result<DerivationOutcome, DerivationError> {
+        let started = OffsetDateTime::now_utc();
+        let (stem, descriptor) = self.mds_descriptor(parent).await?;
+        let data = only_data_file(parent)?;
+        let at_start = matches!(
+            descriptor.tracks.as_slice(),
+            [track] if track.start_offset == 0 && track.files.len() == 1
+        );
+        if !at_start {
+            return Err(not_expressible(
+                "the DVD image is not one track at the start of one data file".to_owned(),
+            ));
+        }
+        let path = self.objects.object_path(&data.content.sha256);
+        let prefix = read_prefix(&path, iso::REQUIRED_PREFIX_BYTES)
+            .await
+            .map_err(|e| DerivationError::Materialize(format!("could not read the MDF: {e}")))?;
+        let inspection = iso::inspect(&prefix, data.length_bytes, Some("iso"));
+        if inspection.primary.is_none() {
+            return Err(not_equivalent(
+                "the data file holds no ISO 9660 volume".to_owned(),
+            ));
+        }
+        let completed = OffsetDateTime::now_utc();
+        let mut dropped =
+            vec!["the descriptor, with any disc structures and BCA it holds".to_owned()];
+        if descriptor.has_dpm {
+            dropped.push("its DPM data".to_owned());
+        }
+        let notes = vec![
+            format!("not carried: {}", listed(&dropped)),
+            "the ISO is the MDF's own bytes, read back as an ISO 9660 volume".to_owned(),
+        ];
+        let name = LogicalPath::parse(&format!("{stem}.iso"))
+            .map_err(|e| DerivationError::Materialize(e.to_string()))?;
+        let child = ArtifactId::generate();
+        let manifest = iso_manifest(&IsoManifest {
+            child,
+            job,
+            parent,
+            planned,
+            iso: (name, data),
+            inspection: &inspection,
+            notes: &notes,
+            started,
+            completed,
+        });
+        self.manifests.write(&manifest).await?;
+        Ok(DerivationOutcome {
+            child_artifact_id: child,
+            loss_character: LossCharacter::Lossy,
+        })
+    }
+
+    /// An MDS image's descriptor, read again from the store, and the stem its
+    /// derivatives are named for.
+    async fn mds_descriptor(
+        &self,
+        parent: &ArtifactManifest,
+    ) -> Result<(String, mds::MdsDescriptor), DerivationError> {
+        let component = parent
+            .components
+            .iter()
+            .find(|component| component.role == ComponentRole::Descriptor)
+            .ok_or(DerivationError::NoInput("descriptor"))?;
+        let limit = mds::MAX_DESCRIPTOR_BYTES;
+        let bytes = read_prefix(
+            &self.objects.object_path(&component.content.sha256),
+            limit + 1,
+        )
+        .await
+        .map_err(|e| DerivationError::Materialize(format!("could not read the descriptor: {e}")))?;
+        if bytes.len() as u64 != component.length_bytes {
+            return Err(DerivationError::Materialize(format!(
+                "{} is {} bytes in the store, and its manifest says {}",
+                component.logical_path.as_str(),
+                bytes.len(),
+                component.length_bytes
+            )));
+        }
+        let descriptor = mds::parse(&bytes)
+            .map_err(|e| not_expressible(format!("the descriptor could not be read: {e}")))?;
+        Ok((file_stem(&component.logical_path), descriptor))
+    }
+
+    /// Write a CUE sheet for a draft, read it back, store it, and publish
+    /// the CUE/BIN's manifest.
+    async fn store_cue_bin(
+        &self,
+        area: &tangible_storage::StagingArea,
+        job: &DerivationJobRecord,
+        parent: &ArtifactManifest,
+        planned: &PlannedDerivation,
+        draft: CueBinDraft,
+        started: OffsetDateTime,
+    ) -> Result<DerivationOutcome, DerivationError> {
+        let stem = &draft.stem;
+        let bin_name = format!("{stem}.bin");
+        let cue_name = LogicalPath::parse(&format!("{stem}.cue"))
+            .map_err(|e| DerivationError::Materialize(e.to_string()))?;
+        let bin_path = LogicalPath::parse(&bin_name)
+            .map_err(|e| DerivationError::Materialize(e.to_string()))?;
+        let (sheet, back) = checked_sheet(&draft.laid, &bin_name, draft.bin.length_bytes)?;
 
         let staged = LogicalPath::parse(&format!("output/{}", cue_name.as_str()))
             .map_err(|e| DerivationError::Materialize(e.to_string()))?;
@@ -490,14 +678,11 @@ impl DerivationPipeline {
         let ingested = area.promote(&staged, &self.objects, self.limits).await?;
         let completed = OffsetDateTime::now_utc();
 
-        let mut dropped = vec!["the raw table of contents".to_owned()];
-        if subchannel.as_ref().is_some_and(|s| s.present) {
-            dropped.insert(0, "the subchannel".to_owned());
-        }
         let notes = vec![
-            format!("not carried: {}", dropped.join(" and ")),
+            format!("not carried: {}", listed(&draft.dropped)),
             "the sheet was read back and gives the same tracks".to_owned(),
         ];
+        let image = &draft.bin;
         let child = ArtifactId::generate();
         let manifest = cue_bin_manifest(&CueBinManifest {
             child,
@@ -616,6 +801,108 @@ fn file_stem(path: &LogicalPath) -> String {
         .to_owned()
 }
 
+/// A derivation Tangible cannot express for this parent: it will not change.
+fn not_expressible(detail: String) -> DerivationError {
+    DerivationError::Engine(DeriveError::Failed {
+        code: "DERIVATION_NOT_EXPRESSIBLE",
+        detail,
+        retryable: false,
+    })
+}
+
+/// A derivative that did not read back as what it was made from.
+fn not_equivalent(detail: String) -> DerivationError {
+    DerivationError::Engine(DeriveError::Failed {
+        code: "DERIVATION_NOT_EQUIVALENT",
+        detail,
+        retryable: false,
+    })
+}
+
+/// Things in a sentence: `a`, `a and b`, `a, b and c`.
+fn listed(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [only] => only.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// The one data file of an image whose tracks are all in it.
+fn only_data_file(parent: &ArtifactManifest) -> Result<&Component, DerivationError> {
+    let mut data = parent
+        .components
+        .iter()
+        .filter(|component| component.role == ComponentRole::TrackData);
+    let first = data.next().ok_or(DerivationError::NoInput("data file"))?;
+    if data.next().is_some() {
+        return Err(not_expressible(
+            "the image is in more than one data file".to_owned(),
+        ));
+    }
+    Ok(first)
+}
+
+/// A component for an object just stored; its name, role and place are
+/// the manifest's to set.
+fn stored_component(
+    logical_path: LogicalPath,
+    digest: tangible_domain::Sha256Digest,
+    length: u64,
+) -> Component {
+    Component {
+        id: ComponentId::generate(),
+        logical_path,
+        source_filename: None,
+        role: ComponentRole::TrackData,
+        ordinal: 0,
+        length_bytes: length,
+        storage: StorageRef::for_digest(&digest),
+        content: ContentHashes {
+            sha256: digest,
+            sha1: None,
+            md5: None,
+            crc32: None,
+        },
+        media_type: None,
+        attributes: Extensions::new(),
+    }
+}
+
+/// Copy the first `sectors` sectors of an image that interleaves 96 bytes of
+/// subchannel after each 2352, without the subchannel. Streamed: a chunk of
+/// sectors at a time, never the whole image.
+async fn strip_subchannel(source: &Path, destination: &Path, sectors: u64) -> std::io::Result<()> {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    const CHUNK: usize = 256;
+    let raw = mds::RAW_SECTOR_BYTES as usize;
+    let whole = raw + mds::SUBCHANNEL_BYTES as usize;
+    let mut reader = tokio::fs::File::open(source).await?;
+    let mut writer = tokio::io::BufWriter::new(tokio::fs::File::create(destination).await?);
+    let mut buffer = vec![0_u8; whole * CHUNK];
+    let mut left = sectors;
+    while left > 0 {
+        let count = usize::try_from(left).map_or(CHUNK, |left| left.min(CHUNK));
+        let chunk = &mut buffer[..whole * count];
+        reader.read_exact(chunk).await?;
+        for sector in chunk.chunks_exact(whole) {
+            writer.write_all(&sector[..raw]).await?;
+        }
+        left = left.saturating_sub(count as u64);
+    }
+    writer.flush().await?;
+    writer.into_inner().sync_all().await
+}
+
+/// Read at most `limit` bytes from the start of a file.
+async fn read_prefix(path: &Path, limit: usize) -> std::io::Result<Vec<u8>> {
+    use tokio::io::AsyncReadExt as _;
+    let file = tokio::fs::File::open(path).await?;
+    let mut buffer = Vec::new();
+    file.take(limit as u64).read_to_end(&mut buffer).await?;
+    Ok(buffer)
+}
+
 /// A manifest track as the CUE writer takes it, all in one file.
 fn track_layout(track: &Track) -> cue::TrackLayout {
     cue::TrackLayout {
@@ -666,6 +953,15 @@ fn manifest_tracks(layout: &cue::CdLayout, component: ComponentId) -> Vec<Track>
             hashes: std::collections::BTreeMap::new(),
         })
         .collect()
+}
+
+/// A CUE/BIN to be written: its tracks, the name its files take, the data
+/// file that is its BIN, and what of the parent it does not carry.
+struct CueBinDraft {
+    laid: cue::CdLayout,
+    stem: String,
+    bin: Component,
+    dropped: Vec<String>,
 }
 
 struct CueBinManifest<'a> {
@@ -807,6 +1103,158 @@ fn cue_bin_manifest(input: &CueBinManifest<'_>) -> ArtifactManifest {
         },
         extensions: Extensions::new(),
     }
+}
+
+struct IsoManifest<'a> {
+    child: ArtifactId,
+    job: &'a DerivationJobRecord,
+    parent: &'a ArtifactManifest,
+    planned: &'a PlannedDerivation,
+    /// The ISO: its name, and the parent's data file it is.
+    iso: (LogicalPath, &'a Component),
+    inspection: &'a iso::IsoInspection,
+    notes: &'a [String],
+    started: OffsetDateTime,
+    completed: OffsetDateTime,
+}
+
+/// An ISO derivative's manifest: the parent's data file under an `.iso`
+/// name, described as the ISO inspector read it, and its lineage, lossy.
+fn iso_manifest(input: &IsoManifest<'_>) -> ArtifactManifest {
+    let (name, data) = &input.iso;
+    let component = Component {
+        id: ComponentId::generate(),
+        logical_path: name.clone(),
+        source_filename: Some(name.as_str().to_owned()),
+        role: ComponentRole::PrimaryImage,
+        ordinal: 0,
+        // The same stored object as the parent's MDF: nothing is copied.
+        ..(*data).clone()
+    };
+    let tool = &input.planned.spec.tool;
+    let mut evidence = vec![format!(
+        "made by {} {} from artifact {}",
+        tool.name, tool.version, input.parent.artifact_id
+    )];
+    evidence.extend(input.notes.iter().cloned());
+    evidence.extend(input.inspection.evidence.iter().cloned());
+    let topology = iso_topology(input.inspection);
+    let validators = iso_validators(input.inspection);
+    ArtifactManifest {
+        schema: SCHEMA_ID.to_owned(),
+        artifact_id: input.child,
+        created_at: input.completed,
+        origin: Origin {
+            kind: ArtifactOrigin::Derived,
+            source_kind: "derivation".to_owned(),
+            source_reference: Some(input.job.id.to_string()),
+            source_filename: Some(name.as_str().to_owned()),
+            acquired_at: Some(input.completed),
+            operator_note: None,
+            physical_dump: None,
+        },
+        classification: Classification {
+            artifact_kind: ArtifactKind::SingleFileImage,
+            format: ArtifactFormat::Iso,
+            format_confidence: 1.0,
+            detectors: vec![Detector {
+                name: tool.name.clone(),
+                version: tool.version.clone(),
+                evidence,
+            }],
+            media_family: input.parent.classification.media_family,
+            total_bytes: component.length_bytes,
+        },
+        components: vec![component],
+        topology,
+        validation: Validation {
+            state: if input.inspection.warnings.is_empty() {
+                ValidationState::Valid
+            } else {
+                ValidationState::ValidWithWarnings
+            },
+            validated_at: Some(input.completed),
+            validators,
+        },
+        lineage: Some(Lineage {
+            parent_artifact_id: input.parent.artifact_id,
+            transformation: input.planned.spec.transformation.to_string(),
+            tool: tool.clone(),
+            normalized_options: input
+                .planned
+                .spec
+                .normalized_options()
+                .into_iter()
+                .collect(),
+            command_fingerprint: input.planned.fingerprint.clone(),
+            loss_character: LossCharacter::Lossy,
+            started_at: Some(input.started),
+            completed_at: Some(input.completed),
+        }),
+        associations: vec![],
+        compatibility: Compatibility {
+            structurally_valid: true,
+            burn_support: BurnSupport {
+                // As for an imported ISO: no engine has been consulted.
+                state: "unknown".to_owned(),
+                profiles: vec![],
+                engines: vec![],
+                warnings: vec![],
+            },
+            target_claims: vec![],
+        },
+        extensions: Extensions::new(),
+    }
+}
+
+/// An ISO's topology, as the inspector read its primary volume.
+fn iso_topology(inspection: &iso::IsoInspection) -> Topology {
+    inspection
+        .primary
+        .as_ref()
+        .map_or(Topology::Unknown, |primary| {
+            Topology::SingleTrackBlockImage {
+                block_size: primary.block_size,
+                block_count: primary.block_count,
+                volume_labels: Some(primary.volume_id.clone())
+                    .filter(|label| !label.is_empty())
+                    .into_iter()
+                    .collect(),
+                filesystems: inspection
+                    .filesystems
+                    .iter()
+                    .map(|f| tangible_domain::manifest::FilesystemEvidence {
+                        filesystem_type: f.name.to_owned(),
+                        version: f.version.clone(),
+                        evidence: f.evidence.clone(),
+                    })
+                    .collect(),
+            }
+        })
+}
+
+/// An ISO's validators, as an imported ISO's: what the inspector warned of,
+/// it says.
+fn iso_validators(inspection: &iso::IsoInspection) -> Vec<ValidatorResult> {
+    let result = |result: &str, code: &str, details: Extensions| ValidatorResult {
+        name: "iso-structural".to_owned(),
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        result: result.to_owned(),
+        code: code.to_owned(),
+        details,
+    };
+    if inspection.warnings.is_empty() {
+        return vec![result("pass", "ISO_PRIMARY_VOLUME_READ", Extensions::new())];
+    }
+    inspection
+        .warnings
+        .iter()
+        .map(|warning| {
+            let mut details = Extensions::new();
+            details.insert("message".to_owned(), serde_json::json!(warning.to_string()));
+            result("warning", "ISO_STRUCTURAL_WARNING", details)
+        })
+        .collect()
 }
 
 /// The derivative's file name: the input's name with a `.chd` extension.
@@ -1158,6 +1606,16 @@ mod tests {
         assert_eq!(name("tracks/disc.toc"), "disc.chd");
         assert_eq!(name("disc.iso"), "disc.chd");
         assert_eq!(name("noextension"), "noextension.chd");
+    }
+
+    #[test]
+    fn what_is_not_carried_reads_as_a_sentence() {
+        let list =
+            |items: &[&str]| listed(&items.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>());
+        assert_eq!(list(&[]), "");
+        assert_eq!(list(&["a"]), "a");
+        assert_eq!(list(&["a", "b"]), "a and b");
+        assert_eq!(list(&["a", "b", "c"]), "a, b and c");
     }
 
     #[test]

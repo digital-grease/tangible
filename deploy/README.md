@@ -270,7 +270,8 @@ For each disc the export takes a checked CHD when the disc has one (see
 TOC reaches RomM through its CHD, since RomM's emulators do not read TOC
 files. A CloneCD (CCD/IMG/SUB) image is not exported as it is either, since
 not every emulator reads one; its disc reaches RomM through a CUE/BIN or CHD
-made from it. A CHD that was not checked against its original is never
+made from it. Nor is an Alcohol 120% (MDS/MDF) image: its disc reaches RomM
+through the CUE/BIN or ISO made from it. A CHD that was not checked against its original is never
 exported.
 
 ### Connecting to RomM's API
@@ -377,6 +378,30 @@ The CUE/BIN drops the subchannel and the raw table of contents, and its
 lineage records it as lossy, saying so. It then works as any CUE/BIN: it can
 be burned, made into a CHD, and sent to RomM. The CloneCD image itself is
 kept as it was.
+
+### A CUE/BIN or ISO of an Alcohol 120% image
+
+Nothing Tangible burns with, and none of RomM's emulators or chdman, reads
+an Alcohol 120% (MDS/MDF) image, so Tangible makes one of each itself,
+whatever `TANGIBLE_DERIVATION_ENGINE` says. Ask for it with
+`POST /api/v1/artifacts/{id}/derivatives` and an empty body, which takes the
+one that suits the image:
+
+- a CD image becomes a CUE/BIN (`cue_bin_from_mds`). The sheet is written
+  from the descriptor's tracks, its pregaps as PREGAP, and read back to
+  check it says the same. The BIN is the MDF itself, the same stored bytes,
+  unless the MDF holds 96 bytes of subchannel after every sector: then the
+  BIN is a new file of each sector without them, which takes the space of
+  a copy.
+- a DVD image whose one MDF holds the whole disc becomes an ISO
+  (`iso_from_mds`): the MDF read back as an ISO 9660 volume, the same
+  stored bytes under an `.iso` name, so nothing is copied.
+
+Both are recorded as lossy: the descriptor is not carried, nor any
+subchannel. Each then works as any CUE/BIN or ISO does: it can be burned,
+made into a CHD, and sent to RomM. The MDS image itself is kept as it was.
+An image Tangible imported whole (several sessions, or a DVD in several
+files) cannot be made into either, and the job says why.
 
 ## Importing from a URL
 

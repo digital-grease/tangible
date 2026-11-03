@@ -20,6 +20,16 @@ may change between minor versions, and the release notes say how.
   MDF is an ISO is described as one. An image with subchannel after every
   sector, several sessions or a DVD in several files is imported whole,
   saying why. An MDS image is refused for burning as it is.
+- An MDS image can be made into what burns and plays, by Tangible itself
+  with no derivation engine: a CD into a CUE/BIN (`cue_bin_from_mds`),
+  its BIN the MDF's own stored bytes, or, when the MDF interleaves
+  subchannel, a new BIN of each sector without it; a DVD whose one MDF is
+  an ISO into that ISO (`iso_from_mds`), the same stored bytes, read back as
+  an ISO 9660 volume. Both are lossy, saying what they do not carry. The
+  CUE sheet writer now writes a generated pregap as PREGAP. A disc linked
+  only to an MDS image says what to make of it before RomM gets it.
+  Database migration 0027 widens the derivation jobs' transformation
+  constraint, additively.
 - Signing in through an OpenID Connect provider, such as VoidAuth (ADR
   0018): authorization code flow with PKCE, ID tokens checked for
   signature, issuer, audience, expiry and nonce, and each sign-in bound to
