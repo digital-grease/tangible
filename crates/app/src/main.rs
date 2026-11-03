@@ -1233,6 +1233,22 @@ async fn doctor_report(common: &CommonConfig, doctor: &DoctorConfig) -> Result<(
     Ok(())
 }
 
+/// Check the worker's server URL, and say how far plain HTTP may go.
+///
+/// Called first: a server URL with a password in it is refused, and must not
+/// reach the log on its way to being refused. The runtime checks it again when
+/// it is assembled, and its name again at start (`tangible_burn::transport`).
+fn checked_server_url(worker: &WorkerConfig) -> Result<tangible_burn::PlainHttp> {
+    let plain_http = if worker.plain_http {
+        tangible_burn::PlainHttp::Allowed
+    } else {
+        tangible_burn::PlainHttp::LocalOnly
+    };
+    tangible_burn::ServerUrl::parse(&worker.server_url, plain_http)
+        .context("the server URL cannot be used")?;
+    Ok(plain_http)
+}
+
 /// Run one burn worker until it is asked to stop.
 ///
 /// The worker owns a drive, so shutdown is not simply "exit": the runtime
@@ -1242,6 +1258,9 @@ async fn doctor_report(common: &CommonConfig, doctor: &DoctorConfig) -> Result<(
 async fn burn_worker_command(worker: &WorkerConfig) -> Result<()> {
     use tangible_burn::runner::WorkerSettings;
     use tangible_burn::{CdrdaoEngine, CombinedEngine, FakeEngine, XorrisoEngine};
+
+    // Before anything else, and before anything logs it.
+    let plain_http = checked_server_url(worker)?;
 
     // Absolute, because the engines refuse to hand a tool a relative path
     // that could be read as an option, and because the working directory of a
@@ -1288,6 +1307,7 @@ async fn burn_worker_command(worker: &WorkerConfig) -> Result<()> {
 
     let settings = WorkerSettings {
         enrollment_token: worker.enrollment_token.clone(),
+        plain_http,
         decryption,
         redumper,
         device_alias: worker.device_alias.to_string_lossy().into_owned(),
@@ -1463,6 +1483,7 @@ mod tests {
         "TANGIBLE_WATCH_ROOTS",
         "TANGIBLE_WEB_ROOT",
         "TANGIBLE_WORKER_NAME",
+        "TANGIBLE_WORKER_PLAIN_HTTP",
         "TANGIBLE_WORKER_STATE_DIR",
     ];
 
@@ -1713,5 +1734,60 @@ mod tests {
         .expect("parse");
         let shown = format!("{:?}", cli.command);
         assert!(!shown.contains("tgw_enroll_placeholder"), "{shown}");
+    }
+
+    /// Everything a test's log lines say, in one buffer.
+    #[derive(Clone, Default)]
+    struct CapturedLog(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CapturedLog {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if let Ok(mut log) = self.0.lock() {
+                log.extend_from_slice(bytes);
+            }
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_server_url_carrying_a_password_is_refused_before_it_is_logged() {
+        // Regression: the worker logged its server URL at start, before
+        // anything checked it, so a password in the URL reached the log.
+        let log = CapturedLog::default();
+        let writer = log.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_max_level(tracing::Level::TRACE)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        // Never created: the refusal comes before anything is written.
+        let state = std::env::temp_dir().join("tangible-server-url-check");
+        let cli = Cli::try_parse_from([
+            "tangible",
+            "burn-worker",
+            "--server-url",
+            "https://worker:hunter2@tangible.example.lan",
+            "--state-dir",
+            &state.display().to_string(),
+        ])
+        .expect("parse");
+        let Command::BurnWorker(worker) = cli.command else {
+            panic!("not burn-worker");
+        };
+
+        let error = burn_worker_command(&worker).await.unwrap_err();
+        let shown = format!("{error:#}");
+        assert!(
+            shown.contains("must not carry a user name or password"),
+            "{shown}"
+        );
+        assert!(!shown.contains("hunter2"), "{shown}");
+        let logged = String::from_utf8(log.0.lock().expect("log").clone()).expect("utf-8");
+        assert!(!logged.contains("hunter2"), "{logged}");
     }
 }

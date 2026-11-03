@@ -532,8 +532,24 @@ may change between minor versions, and the release notes say how.
   download, or prepare as an issue (`GET /api/v1/diagnostics` and
   `/diagnostics/report`, new permission `diagnose`).
 
+### Changed
+
+- **A worker refuses plain HTTP that would leave its machine** (breaking
+  for a remote worker given an `http://` server URL). An `http://`
+  `TANGIBLE_SERVER_URL` is accepted only where the server's address is
+  loopback or, in a container, on a network the container is attached to,
+  as the Compose network in `compose.hardware.yaml` is; elsewhere the worker
+  stops at start and says which address and why. Use an `https://` URL, or
+  set the new `TANGIBLE_WORKER_PLAIN_HTTP=true` to accept plain HTTP across
+  the network. A server URL carrying a user name or password is refused,
+  and the worker no longer follows redirects. BURN_WORKER_PROTOCOL.md 5 has
+  always required this; the worker did not enforce it.
+
 ### Fixed
 
+- A burn worker no longer writes its server URL to the log before checking
+  it. A password in `TANGIBLE_SERVER_URL` reached the start-up log line;
+  such a URL is now refused before anything is logged.
 - A CHD is refused for burning, on the server and on its page. With no
   track layout a worker would have written it as a data disc, putting the
   CHD's compressed bytes on the medium rather than the disc they hold.

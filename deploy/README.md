@@ -175,6 +175,30 @@ docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml up -d
 One worker per drive. To add a second, copy the `burner-sr0` service, rename
 it, and map that drive's own block device.
 
+### A worker on another machine
+
+A worker sends its credential with every request and every image it burns
+or rips crosses the same connection, so it decides at start how it may
+reach its server:
+
+- An `https://` server URL: TLS, with the server's certificate checked.
+  This is what a worker on another machine should use.
+- An `http://` URL to a server whose address is loopback, or, in a
+  container, on a network the container is attached to: accepted as it is.
+  That is the Compose network in `compose.hardware.yaml`, where the worker
+  reaches `http://server:8080` and nothing leaves the host. The networks are
+  read from the container's own routing table, so any Docker address pool
+  counts, while the LAN, reached through the network's gateway, does not.
+- Any other `http://` URL: the worker refuses to start, and says which
+  address would leave the machine and why. Set
+  `TANGIBLE_WORKER_PLAIN_HTTP=true` to accept plain HTTP there anyway; the
+  worker then logs a warning at every start.
+
+A URL with a user name or password in it is refused, and the worker never
+follows a redirect. A container on the host's network, or on a macvlan or
+ipvlan network, is attached to the LAN itself, so the LAN would count as
+local there; Tangible's Compose files use neither.
+
 ## Draining and revoking a worker
 
 The Workers page (or `GET /api/v1/workers`) lists the workers, their

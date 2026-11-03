@@ -537,6 +537,22 @@ pub struct WorkerConfig {
     )]
     pub server_url: String,
 
+    /// Let an `http://` server URL reach a server anywhere.
+    ///
+    /// Without it, plain HTTP is accepted only where the server's address is
+    /// loopback or, in a container, on a network the container is attached
+    /// to, such as the Compose network a worker shares with its server.
+    /// Anywhere else the credential and every image would cross the network
+    /// unencrypted, so the worker refuses to start and says why
+    /// (BURN_WORKER_PROTOCOL.md 5). An `https://` URL needs neither.
+    #[arg(
+        long,
+        env = "TANGIBLE_WORKER_PLAIN_HTTP",
+        default_value_t = false,
+        action = clap::ArgAction::Set
+    )]
+    pub plain_http: bool,
+
     /// Name this worker enrolls under, and the name an operator sees.
     #[arg(long, env = "TANGIBLE_WORKER_NAME", default_value = "burn-worker")]
     pub worker_name: String,

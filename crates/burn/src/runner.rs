@@ -48,6 +48,7 @@ use crate::plan::{
 };
 use crate::redumper::{CdDumper, Redumper};
 use crate::ripping::{CdReader, Decrypting, RipOptions, RipOutcome, rip_disc};
+use crate::transport::{PlainHttp, ServerUrl, ServerUrlError, Transport};
 use crate::worker::{EventBuffer, RecoveryRecord, RecoveryStore, WorkerStage, plan_for};
 
 /// How a worker is configured.
@@ -55,6 +56,9 @@ use crate::worker::{EventBuffer, RecoveryRecord, RecoveryStore, WorkerStage, pla
 pub struct WorkerSettings {
     /// Base URL of the Tangible server.
     pub server_url: String,
+    /// Whether an `http://` server URL may reach a server beyond this
+    /// machine and its container networks ([`crate::transport`]).
+    pub plain_http: PlainHttp,
     /// Name to enroll under, and the name an operator sees.
     pub worker_name: String,
     /// One-use enrollment token, needed only until this worker has a
@@ -99,6 +103,7 @@ impl WorkerSettings {
     ) -> Self {
         Self {
             server_url: server_url.into(),
+            plain_http: PlainHttp::LocalOnly,
             worker_name: worker_name.into(),
             enrollment_token: None,
             state_dir,
@@ -120,6 +125,11 @@ impl WorkerSettings {
 /// Why the worker stopped.
 #[derive(Debug, thiserror::Error)]
 pub enum RunnerError {
+    /// The server URL is not one this worker may use. Terminal: it is
+    /// configuration, and no retry changes it.
+    #[error("the server URL cannot be used")]
+    ServerUrl(#[from] ServerUrlError),
+
     /// The server refused something the worker cannot proceed without.
     #[error("the server refused")]
     Client(#[from] ClientError),
@@ -196,6 +206,8 @@ impl EventSink for BufferSink {
 /// Runs one worker against one server and one drive.
 pub struct WorkerRuntime<E: BurnEngine> {
     settings: WorkerSettings,
+    /// The server URL, checked against the transport rules.
+    server: ServerUrl,
     client: WorkerClient,
     engine: E,
     /// Held for as long as this worker runs, for engines that drive hardware.
@@ -212,9 +224,13 @@ impl<E: BurnEngine> WorkerRuntime<E> {
     ///
     /// # Errors
     ///
-    /// [`RunnerError::Client`] if the HTTP client cannot be built.
+    /// [`RunnerError::ServerUrl`] if the server URL is not usable, as plain
+    /// HTTP to an address beyond this machine and its container networks is
+    /// not without the operator's say-so, or [`RunnerError::Client`] if the
+    /// HTTP client cannot be built.
     pub fn new(settings: WorkerSettings, engine: E) -> Result<Self, RunnerError> {
-        let client = WorkerClient::new(&settings.server_url)?;
+        let server = ServerUrl::parse(&settings.server_url, settings.plain_http)?;
+        let client = WorkerClient::for_server(&server)?;
         // dvdbackup at its one installed place, only when the image was
         // found to have it.
         let css = settings
@@ -229,6 +245,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             .map(|build| Arc::new(Redumper::installed(build)) as Arc<dyn CdDumper>);
         Ok(Self {
             settings,
+            server,
             client,
             engine,
             drive: None,
@@ -525,14 +542,39 @@ impl<E: BurnEngine> WorkerRuntime<E> {
     ///
     /// # Errors
     ///
-    /// [`RunnerError::Drive`] if this worker cannot have its drive,
-    /// [`RunnerError::NeedsAttention`] if a previous attempt cannot be
-    /// reconciled, [`RunnerError::NotEnrolled`] without a credential, or
-    /// [`RunnerError::Client`] if the credential is revoked.
+    /// [`RunnerError::ServerUrl`] if the server's name resolves to an
+    /// address plain HTTP may not reach, [`RunnerError::Drive`] if this
+    /// worker cannot have its drive, [`RunnerError::NeedsAttention`] if a
+    /// previous attempt cannot be reconciled, [`RunnerError::NotEnrolled`]
+    /// without a credential, or [`RunnerError::Client`] if the credential is
+    /// revoked.
     pub async fn run<S>(&mut self, shutdown: S) -> Result<(), RunnerError>
     where
         S: Future<Output = ()> + Send,
     {
+        // First of all: a worker whose server URL would be refused at every
+        // connection says why now, before it holds a drive or enrolls.
+        self.server.check_resolution().await?;
+        match self.server.transport() {
+            Transport::Tls => {
+                tracing::info!(
+                    transport = Transport::Tls.as_str(),
+                    "talking to the server over TLS"
+                );
+            }
+            Transport::PlainLocal => tracing::info!(
+                transport = Transport::PlainLocal.as_str(),
+                "talking to the server over plain HTTP, which stays on this machine or a network \
+                 this container is attached to"
+            ),
+            Transport::PlainAccepted => tracing::warn!(
+                transport = Transport::PlainAccepted.as_str(),
+                "talking to the server over plain HTTP, wherever it is, as \
+                 TANGIBLE_WORKER_PLAIN_HTTP allows: the credential and every image cross the \
+                 network unencrypted"
+            ),
+        }
+
         // Before enrolling, and before announcing a drive. A worker that
         // cannot have this drive should not appear in the server's list of
         // workers that have one.
@@ -2048,5 +2090,48 @@ mod tests {
         let settings = WorkerSettings::new("http://server", "w", PathBuf::from("/tmp/x"));
         assert!(settings.media_wait > settings.media_poll_interval);
         assert!(settings.report_interval < settings.media_wait);
+    }
+
+    #[test]
+    fn plain_http_stays_local_unless_the_operator_says_otherwise() {
+        let settings = WorkerSettings::new("http://192.0.2.1:8080", "w", PathBuf::from("/tmp/x"));
+        assert_eq!(settings.plain_http, PlainHttp::LocalOnly);
+        let refused = WorkerRuntime::new(settings.clone(), FakeEngine::new("/nonexistent"));
+        assert!(
+            matches!(
+                refused,
+                Err(RunnerError::ServerUrl(ServerUrlError::NotLocal { .. }))
+            ),
+            "a worker must not start talking plain HTTP off this machine"
+        );
+
+        let accepted = WorkerSettings {
+            plain_http: PlainHttp::Allowed,
+            ..settings
+        };
+        let runtime =
+            WorkerRuntime::new(accepted, FakeEngine::new("/nonexistent")).expect("accepted");
+        assert_eq!(runtime.server.transport(), Transport::PlainAccepted);
+    }
+
+    #[tokio::test]
+    async fn a_server_name_that_would_be_refused_stops_the_worker_before_it_starts() {
+        // The name does not resolve, so the check at start cannot pass, and
+        // the worker stops there: before it takes its drive or enrolls.
+        let settings = WorkerSettings::new(
+            "http://tangible.invalid:8080",
+            "w",
+            PathBuf::from("/nonexistent"),
+        );
+        let mut runtime =
+            WorkerRuntime::new(settings, FakeEngine::new("/nonexistent")).expect("a name");
+        let error = runtime.run(std::future::pending()).await.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                RunnerError::ServerUrl(ServerUrlError::Unresolved { .. })
+            ),
+            "{error:?}"
+        );
     }
 }

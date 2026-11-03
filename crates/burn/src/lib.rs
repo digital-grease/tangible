@@ -28,6 +28,7 @@ pub mod redumper;
 pub mod ripping;
 pub mod runner;
 pub mod space;
+pub mod transport;
 pub mod worker;
 pub mod xorriso;
 
@@ -47,6 +48,7 @@ pub use plan::{
     WriteMode, WriteReport,
 };
 pub use runner::{RunnerError, WorkerRuntime, WorkerSettings};
+pub use transport::{LocalNetworks, PlainHttp, ServerUrl, ServerUrlError, Transport};
 pub use worker::{
     EventBuffer, EventError, Lease, RecoveryDirective, RecoveryError, RecoveryPlan, RecoveryRecord,
     RecoveryStore, UnknownStage, WorkerEvent, WorkerStage, plan_for,

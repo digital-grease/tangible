@@ -40,6 +40,12 @@ services:
     group_add:
       - "${TANGIBLE_OPTICAL_GID:?set TANGIBLE_OPTICAL_GID to the group that owns the drive: stat -c %g /dev/sr0}"
     environment:
+      # Plain HTTP, accepted because the server's address is on the Compose
+      # network this container is attached to: the credential and the images
+      # never leave this host. A worker on another machine needs an https://
+      # URL instead, or TANGIBLE_WORKER_PLAIN_HTTP=true to accept plain HTTP
+      # across the network; without either it refuses to start
+      # (deploy/README.md, "A worker on another machine").
       TANGIBLE_SERVER_URL: http://server:8080
       # The drive's path inside this container, not on the host.
       TANGIBLE_BLOCK_DEVICE: /dev/sr0

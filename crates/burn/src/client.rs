@@ -31,6 +31,7 @@ use tangible_domain::{
 use time::OffsetDateTime;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
+use crate::transport::{PlainHttp, ServerUrl, ServerUrlError};
 use crate::worker::{RecoveryRecord, WorkerEvent, WorkerStage};
 
 /// How long any single protocol request may take.
@@ -49,6 +50,10 @@ pub const PROTOCOL_VERSION: &str = "1alpha1";
 /// Why a request failed.
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
+    /// The server URL is not one this worker may use.
+    #[error(transparent)]
+    ServerUrl(#[from] ServerUrlError),
+
     /// The server could not be reached, or the response was not usable.
     #[error("could not reach the server")]
     Transport(#[source] reqwest::Error),
@@ -509,23 +514,37 @@ pub struct WorkerClient {
 }
 
 impl WorkerClient {
-    /// A client for the server at `base_url`.
+    /// A client for the server at `base_url`, with plain HTTP only where it
+    /// stays local ([`crate::transport`]).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::ServerUrl`] if the URL is not usable, or
+    /// [`ClientError::Transport`] if the HTTP client cannot be built.
+    pub fn new(base_url: &str) -> Result<Self, ClientError> {
+        Self::for_server(&ServerUrl::parse(base_url, PlainHttp::LocalOnly)?)
+    }
+
+    /// A client for `server`, under its transport's rules: https only for
+    /// TLS, the server's name checked at every connection for plain HTTP
+    /// that must stay local, and no redirect followed in any.
     ///
     /// # Errors
     ///
     /// [`ClientError::Transport`] if the HTTP client cannot be built.
-    pub fn new(base_url: &str) -> Result<Self, ClientError> {
-        let http = reqwest::Client::builder()
-            .timeout(REQUEST_TIMEOUT)
-            .user_agent(concat!("tangible-burn-worker/", env!("CARGO_PKG_VERSION")))
+    pub fn for_server(server: &ServerUrl) -> Result<Self, ClientError> {
+        let http = server
+            .configure(
+                reqwest::Client::builder()
+                    .timeout(REQUEST_TIMEOUT)
+                    .user_agent(concat!("tangible-burn-worker/", env!("CARGO_PKG_VERSION"))),
+            )
             .build()
             .map_err(ClientError::Transport)?;
 
         Ok(Self {
             http,
-            // Trailing slashes are trimmed once here rather than guarded at
-            // every call site.
-            base: base_url.trim_end_matches('/').to_owned(),
+            base: server.base().to_owned(),
             credential: None,
         })
     }
@@ -1343,6 +1362,73 @@ mod tests {
 
         let client = WorkerClient::new("http://server:8080").expect("client");
         assert_eq!(client.url("/api/v1/x"), "http://server:8080/api/v1/x");
+    }
+
+    #[test]
+    fn plain_http_beyond_this_machine_is_refused_by_default() {
+        // TEST-NET-1 is on no network this machine or container is attached
+        // to, wherever the test runs.
+        let error = WorkerClient::new("http://192.0.2.1:8080").unwrap_err();
+        assert!(
+            matches!(
+                error,
+                ClientError::ServerUrl(ServerUrlError::NotLocal { .. })
+            ),
+            "{error:?}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("TANGIBLE_WORKER_PLAIN_HTTP=true"),
+            "{error}"
+        );
+
+        // TLS to the same address, or plain HTTP the operator accepted, is
+        // not this check's business.
+        WorkerClient::new("https://192.0.2.1:8443").expect("tls");
+        WorkerClient::for_server(
+            &ServerUrl::parse("http://192.0.2.1:8080", PlainHttp::Allowed).expect("accepted"),
+        )
+        .expect("client");
+    }
+
+    #[tokio::test]
+    async fn a_redirect_is_refused_rather_than_followed() {
+        use std::io::{Read as _, Write as _};
+
+        // A server that answers the first request with a redirect off this
+        // machine. Following it would carry the credential there.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("address").port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = stream.read(&mut chunk).expect("read");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..read]);
+            }
+            stream
+                .write_all(
+                    b"HTTP/1.1 307 Temporary Redirect\r\n\
+                      Location: http://192.0.2.1/api/v1/workers/w/heartbeat\r\n\
+                      Content-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .expect("write");
+        });
+
+        let client = WorkerClient::new(&format!("http://127.0.0.1:{port}"))
+            .expect("loopback")
+            .with_credential("tgw_live_placeholder");
+        let error = client.heartbeat("w").await.unwrap_err();
+        assert!(
+            matches!(error, ClientError::Refused { status: 307, .. }),
+            "{error:?}"
+        );
+        server.join().expect("server");
     }
 
     #[test]
