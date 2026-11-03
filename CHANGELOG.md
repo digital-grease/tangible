@@ -14,7 +14,8 @@ may change between minor versions, and the release notes say how.
   given no new burns, rips or erasures; its heartbeat says `drain`), enable
   it again, or revoke it, which refuses its credential from its next request
   for good. Each change is audited. Until now nothing set a worker draining
-  or revoked short of editing the database.
+  or revoked short of editing the database. The Workers page lists them,
+  with Drain, Enable and Revoke (which asks first and says what it does).
 - CHD images imported as originals are recognised: the header and the
   metadata chain are read with a bounded, fuzzed reader checked against
   chdman 0.251's own reading of CHDs it made, never the compressed data.

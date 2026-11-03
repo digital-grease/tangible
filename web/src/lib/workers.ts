@@ -17,6 +17,66 @@ export function issueEnrollment(
   return apiCall(fetcher, '/api/v1/worker-enrollments', 'POST', { expires_in_minutes: minutes });
 }
 
+export type WorkerView = components['schemas']['WorkerView'];
+
+/** How many workers the page asks for at once: more than a deployment has. */
+export const WORKER_PAGE = 200;
+
+/** The workers, oldest first. */
+export function loadWorkers(
+  fetcher: typeof fetch = apiFetch,
+): Promise<Result<components['schemas']['WorkerList']>> {
+  return apiCall(fetcher, `/api/v1/workers?limit=${WORKER_PAGE}`);
+}
+
+/** What an administrator can do to a worker. */
+export type WorkerAction = 'drain' | 'enable' | 'revoke';
+
+/** Drain, enable or revoke a worker, answering it as it now is. */
+export function changeWorker(
+  workerId: string,
+  action: WorkerAction,
+  fetcher: typeof fetch = apiFetch,
+): Promise<Result<WorkerView>> {
+  return apiCall(fetcher, `/api/v1/workers/${encodeURIComponent(workerId)}/${action}`, 'POST');
+}
+
+/** A worker's status, in words. Never colour alone. */
+export function workerStatusLabel(status: string): string {
+  switch (status) {
+    case 'pending':
+      return 'Enrolled, not heard from yet';
+    case 'online':
+      return 'Taking work';
+    case 'offline':
+      return 'Not heard from lately';
+    case 'draining':
+      return 'Draining: finishing what it holds, taking nothing new';
+    case 'revoked':
+      return 'Revoked: its credential is refused';
+    case 'incompatible':
+      return 'Incompatible with this server';
+    default:
+      return status;
+  }
+}
+
+/** What can be done to a worker in this status, as the server allows. */
+export function workerActions(status: string): WorkerAction[] {
+  switch (status) {
+    case 'pending':
+    case 'online':
+    case 'offline':
+      return ['drain', 'revoke'];
+    case 'draining':
+      return ['enable', 'revoke'];
+    case 'incompatible':
+      return ['revoke'];
+    default:
+      return [];
+  }
+}
+
 export type DriveView = components['schemas']['DriveView'];
 export type ErasureView = components['schemas']['ErasureView'];
 export type ErasureMode = 'quick' | 'full';

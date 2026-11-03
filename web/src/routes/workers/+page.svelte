@@ -5,6 +5,7 @@
   import {
     anyOpen,
     cancelErasure,
+    changeWorker,
     ENROLLMENT_MINUTES,
     connectionLabel,
     driveModel,
@@ -12,18 +13,29 @@
     issueEnrollment,
     loadDrives,
     loadErasures,
+    loadWorkers,
     requestErasure,
+    workerActions,
+    workerStatusLabel,
     type DriveView,
     type ErasureMode,
     type ErasureView,
     type IssuedEnrollment,
+    type WorkerAction,
+    type WorkerView,
   } from '$lib/workers';
   import type { Problem } from '$lib/session';
 
   type Load<T> =
     { kind: 'loading' } | { kind: 'ready'; data: T } | { kind: 'error'; problem: Problem };
 
+  let workers = $state<Load<{ items: WorkerView[]; more: boolean }>>({ kind: 'loading' });
   let drives = $state<Load<DriveView[]>>({ kind: 'loading' });
+
+  // A change asked of a worker, and the one being confirmed before a revoke.
+  let changing = $state<string | null>(null);
+  let revoking = $state<WorkerView | null>(null);
+  let workerProblem = $state<Problem | null>(null);
   let erasures = $state<Load<ErasureView[]>>({ kind: 'loading' });
 
   // The erase form, for one drive at a time.
@@ -36,7 +48,18 @@
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   async function refresh() {
-    const [driveResult, erasureResult] = await Promise.all([loadDrives(), loadErasures()]);
+    const [workerResult, driveResult, erasureResult] = await Promise.all([
+      loadWorkers(),
+      loadDrives(),
+      loadErasures(),
+    ]);
+    workers =
+      workerResult.kind === 'ok'
+        ? {
+            kind: 'ready',
+            data: { items: workerResult.data.items, more: workerResult.data.next_cursor != null },
+          }
+        : { kind: 'error', problem: workerResult.problem };
     drives =
       driveResult.kind === 'ok'
         ? { kind: 'ready', data: driveResult.data.items }
@@ -55,6 +78,20 @@
 
   onMount(refresh);
   onDestroy(() => clearTimeout(timer));
+
+  async function change(worker: WorkerView, action: WorkerAction) {
+    if (changing) return;
+    changing = worker.id;
+    workerProblem = null;
+    const result = await changeWorker(worker.id, action);
+    changing = null;
+    if (result.kind === 'error') {
+      workerProblem = result.problem;
+      return;
+    }
+    revoking = null;
+    await refresh();
+  }
 
   function startErase(drive: DriveView) {
     erasingDrive = drive;
@@ -114,6 +151,106 @@
 <svelte:head><title>Workers — Tangible</title></svelte:head>
 
 <h1>Workers</h1>
+
+<section aria-labelledby="workers-heading" aria-busy={workers.kind === 'loading'}>
+  <h2 id="workers-heading">Workers</h2>
+  {#if workers.kind === 'loading'}
+    <p>Loading workers…</p>
+  {:else if workers.kind === 'error'}
+    <div role="alert"><p>{workers.problem.detail}</p></div>
+  {:else if workers.data.items.length === 0}
+    <p>No workers yet. Enroll one below.</p>
+  {:else}
+    <table>
+      <caption>Every enrolled worker, oldest first</caption>
+      <thead>
+        <tr>
+          <th scope="col">Worker</th>
+          <th scope="col">Status</th>
+          <th scope="col">Version</th>
+          <th scope="col">Last seen</th>
+          <th scope="col">Drives</th>
+          <th scope="col"><span class="visually-hidden">Actions</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        {#each workers.data.items as worker (worker.id)}
+          <tr>
+            <th scope="row">{worker.name}</th>
+            <td>
+              {workerStatusLabel(worker.status)}
+              {#if worker.revoked_at}<br /><small>since {when(worker.revoked_at)}</small>{/if}
+            </td>
+            <td>{worker.software_version}</td>
+            <td>{when(worker.last_seen_at) || 'Never'}</td>
+            <td>{worker.drives.map((drive) => drive.name).join(', ') || 'None'}</td>
+            <td>
+              {#each workerActions(worker.status) as action (action)}
+                {#if action === 'revoke'}
+                  <button type="button" onclick={() => (revoking = worker)}>
+                    Revoke {worker.name}…
+                  </button>
+                {:else}
+                  <button
+                    type="button"
+                    disabled={changing === worker.id}
+                    onclick={() => change(worker, action)}
+                  >
+                    {action === 'drain' ? `Drain ${worker.name}` : `Enable ${worker.name}`}
+                  </button>
+                {/if}
+              {/each}
+            </td>
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+    {#if workers.data.more}
+      <p><small>Showing the first 200 workers.</small></p>
+    {/if}
+    <p>
+      <small
+        >Draining a worker lets it finish what it holds and gives it nothing new, for maintenance.
+        Enabling it undoes that.</small
+      >
+    </p>
+  {/if}
+
+  <div role="alert">
+    {#if workerProblem}
+      <p>
+        <strong>Not changed.</strong>
+        {workerProblem.code === 'FORBIDDEN'
+          ? 'Only an administrator can change workers.'
+          : workerProblem.detail}
+      </p>
+    {/if}
+  </div>
+
+  {#if revoking}
+    {@const worker = revoking}
+    <form
+      class="danger"
+      aria-labelledby="revoke-heading"
+      onsubmit={(event) => {
+        event.preventDefault();
+        void change(worker, 'revoke');
+      }}
+    >
+      <h3 id="revoke-heading">Revoke {worker.name}</h3>
+      <p>
+        <strong>Its credential is refused from its next request, for good.</strong> It can no longer take
+        work, renew a lease or report. A burn it is writing is not interrupted by the server; its lease
+        lapses as a lost worker's does. To use the machine again, issue a new enrollment token and enroll
+        it under a new name.
+      </p>
+      <button type="submit" disabled={changing === worker.id}>
+        {changing === worker.id ? 'Revoking…' : `Revoke ${worker.name}`}
+      </button>
+      <button type="button" onclick={() => (revoking = null)}>Keep {worker.name}</button>
+    </form>
+  {/if}
+</section>
 
 <section aria-labelledby="drives-heading" aria-busy={drives.kind === 'loading'}>
   <h2 id="drives-heading">Drives</h2>

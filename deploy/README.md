@@ -177,8 +177,9 @@ it, and map that drive's own block device.
 
 ## Draining and revoking a worker
 
-`GET /api/v1/workers` lists the workers, their status, when each was last
-heard from and its drives. An administrator can change one:
+The Workers page (or `GET /api/v1/workers`) lists the workers, their
+status, when each was last heard from and its drives. An administrator can
+change one there, or by the API:
 
 - **Drain** (`POST /api/v1/workers/<id>/drain`) before maintenance: at its
   next heartbeat the worker is told to take no new work, and asking for any

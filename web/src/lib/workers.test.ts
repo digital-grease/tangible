@@ -5,6 +5,10 @@ import { describe, expect, it } from 'vitest';
 import {
   anyOpen,
   cancelErasure,
+  changeWorker,
+  loadWorkers,
+  workerActions,
+  workerStatusLabel,
   connectionLabel,
   driveModel,
   erasureStateLabel,
@@ -141,5 +145,45 @@ describe('drive descriptions', () => {
     expect(connectionLabel('sata')).toBe('SATA');
     expect(connectionLabel('unknown')).toBe('Not known');
     expect(connectionLabel('thunderbolt')).toBe('Not known');
+  });
+});
+
+describe('managing workers', () => {
+  const recording = (status: number, body: unknown) => {
+    const seen: { path: string; method: string }[] = [];
+    const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
+      seen.push({ path: String(input), method: init?.method ?? 'GET' });
+      return {
+        ok: status < 400,
+        status,
+        headers: new Headers(),
+        json: async () => body,
+      } as Response;
+    }) as typeof fetch;
+    return { seen, fetcher };
+  };
+
+  it('lists workers and changes one by its action', async () => {
+    const list = recording(200, { items: [], next_cursor: null });
+    await loadWorkers(list.fetcher);
+    expect(list.seen[0]).toEqual({ path: '/api/v1/workers?limit=200', method: 'GET' });
+
+    for (const action of ['drain', 'enable', 'revoke'] as const) {
+      const change = recording(200, { id: 'w 1', status: 'draining' });
+      const result = await changeWorker('w 1', action, change.fetcher);
+      expect(change.seen[0]).toEqual({ path: `/api/v1/workers/w%201/${action}`, method: 'POST' });
+      expect(result.kind).toBe('ok');
+    }
+  });
+
+  it('says each status in words and offers only what the server allows', () => {
+    expect(workerStatusLabel('draining')).toContain('taking nothing new');
+    expect(workerStatusLabel('revoked')).toContain('refused');
+    expect(workerStatusLabel('something-new')).toBe('something-new');
+    expect(workerActions('online')).toEqual(['drain', 'revoke']);
+    expect(workerActions('pending')).toEqual(['drain', 'revoke']);
+    expect(workerActions('draining')).toEqual(['enable', 'revoke']);
+    expect(workerActions('incompatible')).toEqual(['revoke']);
+    expect(workerActions('revoked')).toEqual([]);
   });
 });
