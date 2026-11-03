@@ -8,6 +8,16 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
+- The catalog can be edited (docs/plans/catalog-editing.md): `PATCH` on a
+  title, edition, disc set or disc changes the fields given, `null`
+  clearing one that may be empty. Every catalog row now has a `version`,
+  its `ETag`; an edit sent with `If-Match` naming a version somebody has
+  since changed is refused with `409 RESOURCE_VERSION_CONFLICT` rather than
+  overwriting their change. A renamed title's sort title follows the name
+  unless it was set on its own. Disc numbers stay unique within a set.
+  Edits need the `catalog` permission and are audited. `GET
+  /api/v1/editions/{id}` and `/disc-sets/{id}` are new. Database migration
+  0029 adds the version columns, additively.
 - The audit log can be read (docs/plans/audit-log.md):
   `GET /api/v1/audit-events`, newest first and paged, filtered by action
   (or a kind of action, such as `worker.`), actor, target and outcome, and

@@ -648,6 +648,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/disc-sets/{disc_set_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One disc set.
+         * @description Fetch one disc set, its version as its ETag.
+         */
+        get: operations["get_one_disc_set"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change a disc set.
+         * @description Change the fields given of a disc set, as a title is changed. Audited.
+         */
+        patch: operations["edit_one_disc_set"];
+        trace?: never;
+    };
     "/api/v1/disc-sets/{disc_set_id}/discs": {
         parameters: {
             query?: never;
@@ -689,7 +713,11 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Change a disc.
+         * @description Change the fields given of a disc, as a title is changed. Audited.
+         */
+        patch: operations["edit_one_disc"];
         trace?: never;
     };
     "/api/v1/discs/{disc_id}/artifact-links": {
@@ -792,6 +820,30 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/editions/{edition_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One edition.
+         * @description Fetch one edition, its version as its ETag.
+         */
+        get: operations["get_one_edition"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change an edition.
+         * @description Change the fields given of an edition, as a title is changed. Audited.
+         */
+        patch: operations["edit_one_edition"];
         trace?: never;
     };
     "/api/v1/editions/{edition_id}/disc-sets": {
@@ -1733,7 +1785,11 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Change a title.
+         * @description Change the fields given of a title. Send the `ETag` it was read with as `If-Match` to be refused, rather than overwrite, if it has changed since. Audited.
+         */
+        patch: operations["edit_one_title"];
         trace?: never;
     };
     "/api/v1/titles/{title_id}/editions": {
@@ -3093,6 +3149,12 @@ export interface components {
             name: string;
             /** @description What shape of set it is. */
             set_kind: string;
+            /**
+             * Format: int64
+             * @description Its version, also its `ETag`: 1 when catalogued, one more for each
+             *     edit. Send it as `If-Match` to change it only as read.
+             */
+            version: number;
         };
         /** @description One disc. */
         DiscView: {
@@ -3130,6 +3192,12 @@ export interface components {
              * @description Which disc of the set it is.
              */
             sequence_number: number;
+            /**
+             * Format: int64
+             * @description Its version, also its `ETag`: 1 when catalogued, one more for each
+             *     edit. Send it as `If-Match` to change it only as read.
+             */
+            version: number;
             /** @description The volume label read from an image of it. */
             volume_label?: string | null;
         };
@@ -3230,6 +3298,58 @@ export interface components {
             /** @description The worker's status. */
             worker_status: string;
         };
+        /** @description A change to a disc. Fields left out are left alone. */
+        EditDiscRequest: {
+            /** @description What it is called, when it has a name of its own; null clears it. */
+            display_name?: string | null;
+            /** @description What kind of medium it is. */
+            media_family?: string | null;
+            /** @description Which region it plays in; null clears it. */
+            region?: string | null;
+            /**
+             * Format: int32
+             * @description Which disc of the set it is, from 1; unique within the set.
+             */
+            sequence_number?: number | null;
+        };
+        /** @description A change to a disc set. Fields left out are left alone. */
+        EditDiscSetRequest: {
+            /**
+             * Format: int32
+             * @description How many discs it should contain, at least 1; null clears it.
+             */
+            disc_count_expected?: number | null;
+            /** @description What the set is called. */
+            name?: string | null;
+            /** @description What shape of set it is. */
+            set_kind?: string | null;
+        };
+        /** @description A change to an edition. Fields left out are left alone. */
+        EditEditionRequest: {
+            /** @description What this release is called. */
+            display_name?: string | null;
+            /** @description Who published it; null clears it. */
+            publisher?: string | null;
+            /** @description Which region it was sold in; null clears it. */
+            region?: string | null;
+        };
+        /** @description A change to a title. Fields left out are left alone. */
+        EditTitleRequest: {
+            /** @description What it is called. */
+            display_title?: string | null;
+            /** @description What kind of work it is. */
+            kind?: string | null;
+            /**
+             * Format: int32
+             * @description When it was released, from 1870 to 2200; null clears it.
+             */
+            release_year?: number | null;
+            /**
+             * @description What it sorts as. Left out while the display title changes, it
+             *     follows the display title if it was the display title before.
+             */
+            sort_title?: string | null;
+        };
         /** @description An edition's RomM settings and how its export stands. */
         EditionRommView: {
             /** @description When the exporter last looked. */
@@ -3281,6 +3401,12 @@ export interface components {
             set_count: number;
             /** @description The title it belongs to. */
             title_id: string;
+            /**
+             * Format: int64
+             * @description Its version, also its `ETag`: 1 when catalogued, one more for each
+             *     edit. Send it as `If-Match` to change it only as read.
+             */
+            version: number;
         };
         /** @description One engine a worker can run. */
         EngineReport: {
@@ -4764,6 +4890,12 @@ export interface components {
             release_year?: number | null;
             /** @description What it sorts as. */
             sort_title: string;
+            /**
+             * Format: int64
+             * @description Its version, also its `ETag`: 1 when catalogued, one more for each
+             *     edit. Send it as `If-Match` to change it only as read.
+             */
+            version: number;
         };
         /**
          * @description One CD track's hashes: of its bytes from its first in the file (its
@@ -6341,6 +6473,95 @@ export interface operations {
             };
         };
     };
+    get_one_disc_set: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Disc set identifier */
+                disc_set_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The disc set */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscSetView"];
+                };
+            };
+            /** @description No such disc set */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    edit_one_disc_set: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The ETag it was read with */
+                "If-Match"?: string | null;
+            };
+            path: {
+                /** @description Disc set identifier */
+                disc_set_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditDiscSetRequest"];
+            };
+        };
+        responses: {
+            /** @description The disc set as it now is */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscSetView"];
+                };
+            };
+            /** @description No such disc set */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Changed since it was read */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A value that will not do */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     list_set_discs: {
         parameters: {
             query?: never;
@@ -6441,6 +6662,63 @@ export interface operations {
             };
             /** @description No such disc */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    edit_one_disc: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The ETag it was read with */
+                "If-Match"?: string | null;
+            };
+            path: {
+                /** @description Disc identifier */
+                disc_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditDiscRequest"];
+            };
+        };
+        responses: {
+            /** @description The disc as it now is */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscView"];
+                };
+            };
+            /** @description No such disc */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Changed since it was read, or the number is taken */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A value that will not do */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6636,6 +6914,95 @@ export interface operations {
                 };
             };
             /** @description `keep` or `cd_engine` is not one this server knows */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_one_edition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Edition identifier */
+                edition_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The edition */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EditionView"];
+                };
+            };
+            /** @description No such edition */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    edit_one_edition: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The ETag it was read with */
+                "If-Match"?: string | null;
+            };
+            path: {
+                /** @description Edition identifier */
+                edition_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditEditionRequest"];
+            };
+        };
+        responses: {
+            /** @description The edition as it now is */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EditionView"];
+                };
+            };
+            /** @description No such edition */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Changed since it was read */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A value that will not do */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -8744,6 +9111,63 @@ export interface operations {
             };
             /** @description No such title */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    edit_one_title: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The ETag it was read with */
+                "If-Match"?: string | null;
+            };
+            path: {
+                /** @description Title identifier */
+                title_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditTitleRequest"];
+            };
+        };
+        responses: {
+            /** @description The title as it now is */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TitleView"];
+                };
+            };
+            /** @description No such title */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Changed since it was read */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A value that will not do */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

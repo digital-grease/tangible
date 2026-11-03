@@ -61,6 +61,9 @@ pub enum ErrorCode {
     /// Distinct from a plain conflict because the fix is different: the caller
     /// must use a new key, not wait and retry.
     IdempotencyConflict,
+    /// An update named a version (`If-Match`) the resource is no longer at:
+    /// somebody else changed it first. Read it again, then decide.
+    ResourceVersionConflict,
     /// The request was well formed but asks for something impossible.
     ValidationFailed,
     /// The request names a resource that does not exist.
@@ -140,6 +143,7 @@ impl ErrorCode {
             Self::RateLimited => "RATE_LIMITED",
             Self::Conflict => "CONFLICT",
             Self::IdempotencyConflict => "IDEMPOTENCY_CONFLICT",
+            Self::ResourceVersionConflict => "RESOURCE_VERSION_CONFLICT",
             Self::ValidationFailed => "VALIDATION_FAILED",
             Self::ReferenceNotFound => "REFERENCE_NOT_FOUND",
             Self::WriteInProgress => "WRITE_IN_PROGRESS",
@@ -198,6 +202,7 @@ impl ErrorCode {
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             Self::Conflict
             | Self::IdempotencyConflict
+            | Self::ResourceVersionConflict
             | Self::WriteInProgress
             | Self::NotRetryable
             | Self::DecryptionOff
@@ -233,6 +238,7 @@ impl ErrorCode {
             Self::RateLimited => "Too many attempts",
             Self::Conflict => "Conflicting request",
             Self::IdempotencyConflict => "Idempotency key reused",
+            Self::ResourceVersionConflict => "Changed since it was read",
             Self::ValidationFailed => "Request is not valid",
             Self::ReferenceNotFound => "Referenced resource does not exist",
             Self::WriteInProgress => "A write is already in progress",
@@ -394,6 +400,7 @@ mod tests {
             ErrorCode::RateLimited,
             ErrorCode::Conflict,
             ErrorCode::IdempotencyConflict,
+            ErrorCode::ResourceVersionConflict,
             ErrorCode::ValidationFailed,
             ErrorCode::ReferenceNotFound,
             ErrorCode::WriteInProgress,

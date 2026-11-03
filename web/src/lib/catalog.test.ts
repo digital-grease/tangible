@@ -56,6 +56,7 @@ const disc = (overrides: Partial<DiscView> = {}): DiscView => ({
   artifact_count: 0,
   copy_count: 0,
   created_at: '2026-01-01T00:00:00Z',
+  version: 1,
   ...overrides,
 });
 
@@ -67,6 +68,7 @@ const set = (overrides: Partial<DiscSetView> = {}): DiscSetView => ({
   disc_count_expected: 2,
   disc_count: 1,
   created_at: '2026-01-01T00:00:00Z',
+  version: 1,
   ...overrides,
 });
 

@@ -463,3 +463,258 @@ async fn a_catalogued_disc_can_have_a_burn_queued_against_it() {
     assert_eq!(status, StatusCode::CREATED, "{job}");
     assert_eq!(job["disc_id"], disc);
 }
+
+// --- editing (docs/plans/catalog-editing.md) -------------------------------------
+
+impl Harness {
+    /// A PATCH, with `If-Match` when given; answers the status, the body and
+    /// the ETag.
+    async fn patch(
+        &self,
+        path: &str,
+        if_match: Option<&str>,
+        body: serde_json::Value,
+    ) -> (StatusCode, serde_json::Value, Option<String>) {
+        let mut request = Request::builder()
+            .method("PATCH")
+            .uri(path)
+            .header("content-type", "application/json");
+        if let Some(version) = if_match {
+            request = request.header("if-match", version);
+        }
+        let mut request = request.body(Body::from(body.to_string())).expect("build");
+        self.session.apply(&mut request);
+        let response = self.router.clone().oneshot(request).await.expect("route");
+        let status = response.status();
+        let etag = response
+            .headers()
+            .get("etag")
+            .map(|value| value.to_str().unwrap().to_owned());
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .expect("read the body");
+        let body = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, body, etag)
+    }
+
+    async fn etag(&self, path: &str) -> String {
+        let mut request = Request::builder()
+            .uri(path)
+            .body(Body::empty())
+            .expect("build");
+        self.session.apply(&mut request);
+        let response = self.router.clone().oneshot(request).await.expect("route");
+        assert_eq!(response.status(), StatusCode::OK);
+        response.headers()["etag"].to_str().unwrap().to_owned()
+    }
+
+    async fn audited(&self, target: &str) -> Vec<serde_json::Value> {
+        sqlx::query_scalar("SELECT metadata FROM audit_events WHERE target_id = $1 ORDER BY id")
+            .bind(target)
+            .fetch_all(&self.pool)
+            .await
+            .expect("audit")
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_title_is_changed_as_asked_and_only_as_read() {
+    let h = harness().await;
+    let (title, _, _, _) = h.a_disc().await;
+    let path = format!("/api/v1/titles/{title}");
+    assert_eq!(h.etag(&path).await, "\"1\"");
+
+    // Renamed: the sort title, which was only ever the name, follows it.
+    let (status, renamed, etag) = h
+        .patch(
+            &path,
+            Some("\"1\""),
+            json!({ "display_title": "  The Matrix " }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{renamed}");
+    assert_eq!(renamed["display_title"], "The Matrix");
+    assert_eq!(renamed["sort_title"], "The Matrix");
+    assert_eq!(renamed["release_year"], 1999);
+    assert_eq!(renamed["version"], 2);
+    assert_eq!(etag.as_deref(), Some("\"2\""));
+
+    // A sort title of its own stays when the name changes again.
+    h.patch(&path, None, json!({ "sort_title": "Matrix, The" }))
+        .await;
+    let (_, again, _) = h
+        .patch(
+            &path,
+            None,
+            json!({ "display_title": "The Matrix (1999)", "release_year": null }),
+        )
+        .await;
+    assert_eq!(again["sort_title"], "Matrix, The");
+    assert_eq!(
+        again["release_year"],
+        serde_json::Value::Null,
+        "null clears it"
+    );
+    assert_eq!(again["version"], 4);
+
+    // Made against version 2, which it has moved past: refused, unchanged.
+    let (status, stale, _) = h
+        .patch(
+            &path,
+            Some("\"2\""),
+            json!({ "display_title": "Overwritten" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{stale}");
+    assert_eq!(stale["code"], "RESOURCE_VERSION_CONFLICT");
+    assert!(
+        stale["detail"].as_str().unwrap().contains("version 4"),
+        "{stale}"
+    );
+
+    // Nothing to change changes nothing, not even the version.
+    let (status, same, _) = h
+        .patch(
+            &path,
+            Some("\"4\""),
+            json!({ "display_title": "The Matrix (1999)" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{same}");
+    assert_eq!(same["version"], 4);
+
+    // Values that will not do, and a field that does not exist.
+    for (body, why) in [
+        (json!({ "kind": "opera" }), "kind"),
+        (json!({ "display_title": "  " }), "blank"),
+        (json!({ "release_year": 1500 }), "year"),
+    ] {
+        let (status, refused, _) = h.patch(&path, None, body).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{why}: {refused}");
+    }
+    let (status, _, _) = h.patch(&path, None, json!({ "colour": "red" })).await;
+    assert!(status.is_client_error(), "{status}");
+    // Found by review: null for a name refused rather than ignored, and a
+    // NUL refused as a value rather than failing in the database.
+    let (status, _, _) = h.patch(&path, None, json!({ "display_title": null })).await;
+    assert!(status.is_client_error(), "{status}");
+    let (status, refused, _) = h
+        .patch(&path, None, json!({ "display_title": "Doom\u{0}" }))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    let (status, refused, _) = h.patch(&path, Some("seven"), json!({})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+
+    // Each change audited with the fields it changed.
+    let audits = h.audited(&title).await;
+    assert_eq!(audits.len(), 3, "{audits:?}");
+    assert_eq!(audits[0]["fields"], json!(["display_title", "sort_title"]));
+    assert_eq!(
+        audits[2]["fields"],
+        json!(["display_title", "release_year"])
+    );
+    assert_eq!(audits[2]["version"], 4);
+
+    let (status, _, _) = h
+        .patch(
+            &format!("/api/v1/titles/{}", uuid::Uuid::now_v7()),
+            None,
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_edition_a_set_and_a_disc_are_changed_and_disc_numbers_stay_unique() {
+    let h = harness().await;
+    let (_, edition, set, disc) = h.a_disc().await;
+
+    let edition_path = format!("/api/v1/editions/{edition}");
+    let (status, read) = h.get(&edition_path).await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    assert_eq!(read["region"], "PAL");
+    let (status, changed, _) = h
+        .patch(
+            &edition_path,
+            Some(&h.etag(&edition_path).await),
+            json!({ "publisher": "Warner", "region": null }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    assert_eq!(changed["publisher"], "Warner");
+    assert_eq!(changed["region"], serde_json::Value::Null);
+
+    let set_path = format!("/api/v1/disc-sets/{set}");
+    assert_eq!(h.etag(&set_path).await, "\"1\"");
+    let (status, refused, _) = h
+        .patch(&set_path, None, json!({ "disc_count_expected": 0 }))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    let (status, changed, _) = h
+        .patch(
+            &set_path,
+            None,
+            json!({ "disc_count_expected": 3, "set_kind": "season_box" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    assert_eq!(changed["disc_count_expected"], 3);
+    assert_eq!(changed["set_kind"], "season_box");
+
+    // A second disc, then an edit that would give it the first one's number.
+    let (_, second) = h
+        .post(
+            &format!("/api/v1/disc-sets/{set}/discs"),
+            json!({ "sequence_number": 2, "media_family": "dvd" }),
+        )
+        .await;
+    let second = second["id"].as_str().unwrap().to_owned();
+    let (status, taken, _) = h
+        .patch(
+            &format!("/api/v1/discs/{second}"),
+            None,
+            json!({ "sequence_number": 1 }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{taken}");
+    assert_eq!(taken["code"], "CONFLICT");
+
+    let disc_path = format!("/api/v1/discs/{disc}");
+    let (status, changed, etag) = h
+        .patch(
+            &disc_path,
+            Some("\"1\""),
+            json!({ "display_name": null, "media_family": "bluray", "region": "B" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    assert_eq!(changed["display_name"], serde_json::Value::Null);
+    assert_eq!(changed["media_family"], "bluray");
+    assert_eq!(changed["region"], "B");
+    assert_eq!(etag.as_deref(), Some("\"2\""));
+    let (status, refused, _) = h
+        .patch(&disc_path, None, json!({ "media_family": "laserdisc" }))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_viewer_reads_the_catalog_and_changes_none_of_it() {
+    let admin = harness().await;
+    let (title, _, _, _) = admin.a_disc().await;
+    let viewer = Harness {
+        session: support::sign_in(&admin.pool, tangible_domain::Role::Viewer).await,
+        router: admin.router.clone(),
+        pool: admin.pool.clone(),
+    };
+    let path = format!("/api/v1/titles/{title}");
+    assert_eq!(viewer.etag(&path).await, "\"1\"");
+    let (status, _, _) = viewer
+        .patch(&path, None, json!({ "display_title": "Mine" }))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}

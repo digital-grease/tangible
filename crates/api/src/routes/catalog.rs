@@ -44,6 +44,10 @@ use time::format_description::well_known::Rfc3339;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::problem::{ErrorCode, Problem};
+use crate::routes::catalog_edits::{
+    edit_one_disc, edit_one_disc_set, edit_one_edition, edit_one_title, get_one_disc_set,
+    get_one_edition, with_etag,
+};
 use crate::state::ApiState;
 
 /// Largest page a caller may ask for.
@@ -90,6 +94,9 @@ pub struct TitleView {
     pub edition_count: i64,
     /// When it was catalogued.
     pub created_at: String,
+    /// Its version, also its `ETag`: 1 when catalogued, one more for each
+    /// edit. Send it as `If-Match` to change it only as read.
+    pub version: i64,
 }
 
 impl From<TitleRecord> for TitleView {
@@ -102,6 +109,7 @@ impl From<TitleRecord> for TitleView {
             release_year: record.release_year,
             edition_count: record.edition_count,
             created_at: rfc3339(record.created_at),
+            version: record.version,
         }
     }
 }
@@ -136,6 +144,9 @@ pub struct EditionView {
     pub set_count: i64,
     /// When it was catalogued.
     pub created_at: String,
+    /// Its version, also its `ETag`: 1 when catalogued, one more for each
+    /// edit. Send it as `If-Match` to change it only as read.
+    pub version: i64,
 }
 
 impl From<EditionRecord> for EditionView {
@@ -148,6 +159,7 @@ impl From<EditionRecord> for EditionView {
             region: record.region,
             set_count: record.set_count,
             created_at: rfc3339(record.created_at),
+            version: record.version,
         }
     }
 }
@@ -172,6 +184,9 @@ pub struct DiscSetView {
     pub disc_count: i64,
     /// When it was catalogued.
     pub created_at: String,
+    /// Its version, also its `ETag`: 1 when catalogued, one more for each
+    /// edit. Send it as `If-Match` to change it only as read.
+    pub version: i64,
 }
 
 impl From<DiscSetRecord> for DiscSetView {
@@ -184,6 +199,7 @@ impl From<DiscSetRecord> for DiscSetView {
             disc_count_expected: record.disc_count_expected,
             disc_count: record.disc_count,
             created_at: rfc3339(record.created_at),
+            version: record.version,
         }
     }
 }
@@ -216,6 +232,9 @@ pub struct DiscView {
     pub copy_count: i64,
     /// When it was catalogued.
     pub created_at: String,
+    /// Its version, also its `ETag`: 1 when catalogued, one more for each
+    /// edit. Send it as `If-Match` to change it only as read.
+    pub version: i64,
 }
 
 impl From<DiscRecord> for DiscView {
@@ -232,6 +251,7 @@ impl From<DiscRecord> for DiscView {
             artifact_count: record.artifact_count,
             copy_count: record.copy_count,
             created_at: rfc3339(record.created_at),
+            version: record.version,
         }
     }
 }
@@ -480,7 +500,7 @@ pub async fn create_new_title(
 pub async fn get_one_title(
     State(state): State<ApiState>,
     Path(title_id): Path<String>,
-) -> Result<Json<TitleView>, Problem> {
+) -> Result<axum::response::Response, Problem> {
     let id = title_id
         .parse::<TitleId>()
         .map_err(|_| Problem::invalid_parameter("title_id", "not a valid identifier"))?;
@@ -491,7 +511,8 @@ pub async fn get_one_title(
             unavailable("the title could not be read")
         })?
         .ok_or_else(|| Problem::not_found("title", &id.to_string()))?;
-    Ok(Json(TitleView::from(title)))
+    let version = title.version;
+    Ok(with_etag(TitleView::from(title), version))
 }
 
 // --- editions ------------------------------------------------------------------
@@ -821,7 +842,7 @@ pub async fn create_set_disc(
 pub async fn get_one_disc(
     State(state): State<ApiState>,
     Path(disc_id): Path<String>,
-) -> Result<Json<DiscView>, Problem> {
+) -> Result<axum::response::Response, Problem> {
     let id = disc_id
         .parse::<DiscId>()
         .map_err(|_| Problem::invalid_parameter("disc_id", "not a valid identifier"))?;
@@ -832,7 +853,8 @@ pub async fn get_one_disc(
             unavailable("the disc could not be read")
         })?
         .ok_or_else(|| Problem::not_found("disc", &id.to_string()))?;
-    Ok(Json(DiscView::from(disc)))
+    let version = disc.version;
+    Ok(with_etag(DiscView::from(disc), version))
 }
 
 /// The artifacts linked to a disc.
@@ -967,20 +989,31 @@ pub async fn link_artifact(
 pub fn router() -> Router<ApiState> {
     Router::new()
         .route("/titles", get(list_all_titles).post(create_new_title))
-        .route("/titles/{title_id}", get(get_one_title))
+        .route(
+            "/titles/{title_id}",
+            get(get_one_title).patch(edit_one_title),
+        )
         .route(
             "/titles/{title_id}/editions",
             get(list_title_editions).post(create_title_edition),
+        )
+        .route(
+            "/editions/{edition_id}",
+            get(get_one_edition).patch(edit_one_edition),
         )
         .route(
             "/editions/{edition_id}/disc-sets",
             get(list_edition_sets).post(create_edition_set),
         )
         .route(
+            "/disc-sets/{disc_set_id}",
+            get(get_one_disc_set).patch(edit_one_disc_set),
+        )
+        .route(
             "/disc-sets/{disc_set_id}/discs",
             get(list_set_discs).post(create_set_disc),
         )
-        .route("/discs/{disc_id}", get(get_one_disc))
+        .route("/discs/{disc_id}", get(get_one_disc).patch(edit_one_disc))
         .route("/discs/{disc_id}/artifacts", get(list_linked_artifacts))
         .route("/discs/{disc_id}/artifact-links", post(link_artifact))
 }

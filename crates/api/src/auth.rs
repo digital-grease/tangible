@@ -248,6 +248,13 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
     ("GET", "/api/v1/titles", Signed(Read)),
     ("POST", "/api/v1/titles", Signed(Catalog)),
     ("GET", "/api/v1/titles/{title_id}", Signed(Read)),
+    // Editing the catalog needs what creating it does
+    // (docs/plans/catalog-editing.md).
+    ("PATCH", "/api/v1/titles/{title_id}", Signed(Catalog)),
+    ("GET", "/api/v1/editions/{edition_id}", Signed(Read)),
+    ("PATCH", "/api/v1/editions/{edition_id}", Signed(Catalog)),
+    ("GET", "/api/v1/disc-sets/{disc_set_id}", Signed(Read)),
+    ("PATCH", "/api/v1/disc-sets/{disc_set_id}", Signed(Catalog)),
     ("GET", "/api/v1/titles/{title_id}/editions", Signed(Read)),
     (
         "POST",
@@ -271,6 +278,7 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
         Signed(Catalog),
     ),
     ("GET", "/api/v1/discs/{disc_id}", Signed(Read)),
+    ("PATCH", "/api/v1/discs/{disc_id}", Signed(Catalog)),
     ("GET", "/api/v1/discs/{disc_id}/artifacts", Signed(Read)),
     (
         "POST",

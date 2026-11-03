@@ -1985,6 +1985,142 @@
         ]
       }
     },
+    "/api/v1/disc-sets/{disc_set_id}": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "One disc set.",
+        "description": "Fetch one disc set, its version as its ETag.",
+        "operationId": "get_one_disc_set",
+        "parameters": [
+          {
+            "name": "disc_set_id",
+            "in": "path",
+            "description": "Disc set identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The disc set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscSetView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such disc set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Change a disc set.",
+        "description": "Change the fields given of a disc set, as a title is changed. Audited.",
+        "operationId": "edit_one_disc_set",
+        "parameters": [
+          {
+            "name": "disc_set_id",
+            "in": "path",
+            "description": "Disc set identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag it was read with",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditDiscSetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The disc set as it now is",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscSetView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such disc set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Changed since it was read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A value that will not do",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/disc-sets/{disc_set_id}/discs": {
       "get": {
         "tags": [
@@ -2134,6 +2270,94 @@
           },
           "404": {
             "description": "No such disc",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Change a disc.",
+        "description": "Change the fields given of a disc, as a title is changed. Audited.",
+        "operationId": "edit_one_disc",
+        "parameters": [
+          {
+            "name": "disc_id",
+            "in": "path",
+            "description": "Disc identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag it was read with",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditDiscRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The disc as it now is",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such disc",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Changed since it was read, or the number is taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A value that will not do",
             "content": {
               "application/json": {
                 "schema": {
@@ -2429,6 +2653,142 @@
           },
           "422": {
             "description": "`keep` or `cd_engine` is not one this server knows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/editions/{edition_id}": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "One edition.",
+        "description": "Fetch one edition, its version as its ETag.",
+        "operationId": "get_one_edition",
+        "parameters": [
+          {
+            "name": "edition_id",
+            "in": "path",
+            "description": "Edition identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The edition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditionView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such edition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Change an edition.",
+        "description": "Change the fields given of an edition, as a title is changed. Audited.",
+        "operationId": "edit_one_edition",
+        "parameters": [
+          {
+            "name": "edition_id",
+            "in": "path",
+            "description": "Edition identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag it was read with",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditEditionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The edition as it now is",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditionView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such edition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Changed since it was read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A value that will not do",
             "content": {
               "application/json": {
                 "schema": {
@@ -5530,6 +5890,94 @@
           },
           "404": {
             "description": "No such title",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Change a title.",
+        "description": "Change the fields given of a title. Send the `ETag` it was read with as `If-Match` to be refused, rather than overwrite, if it has changed since. Audited.",
+        "operationId": "edit_one_title",
+        "parameters": [
+          {
+            "name": "title_id",
+            "in": "path",
+            "description": "Title identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag it was read with",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditTitleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The title as it now is",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TitleView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such title",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Changed since it was read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A value that will not do",
             "content": {
               "application/json": {
                 "schema": {
@@ -9013,7 +9461,8 @@
           "name",
           "set_kind",
           "disc_count",
-          "created_at"
+          "created_at",
+          "version"
         ],
         "properties": {
           "created_at": {
@@ -9048,6 +9497,11 @@
           "set_kind": {
             "type": "string",
             "description": "What shape of set it is."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its version, also its `ETag`: 1 when catalogued, one more for each\nedit. Send it as `If-Match` to change it only as read."
           }
         }
       },
@@ -9062,7 +9516,8 @@
           "compatibility_claim",
           "artifact_count",
           "copy_count",
-          "created_at"
+          "created_at",
+          "version"
         ],
         "properties": {
           "artifact_count": {
@@ -9113,6 +9568,11 @@
             "type": "integer",
             "format": "int32",
             "description": "Which disc of the set it is."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its version, also its `ETag`: 1 when catalogued, one more for each\nedit. Send it as `If-Match` to change it only as read."
           },
           "volume_label": {
             "type": [
@@ -9321,6 +9781,135 @@
           }
         }
       },
+      "EditDiscRequest": {
+        "type": "object",
+        "description": "A change to a disc. Fields left out are left alone.",
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it is called, when it has a name of its own; null clears it."
+          },
+          "media_family": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What kind of medium it is."
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which region it plays in; null clears it."
+          },
+          "sequence_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Which disc of the set it is, from 1; unique within the set."
+          }
+        },
+        "additionalProperties": false
+      },
+      "EditDiscSetRequest": {
+        "type": "object",
+        "description": "A change to a disc set. Fields left out are left alone.",
+        "properties": {
+          "disc_count_expected": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How many discs it should contain, at least 1; null clears it."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the set is called."
+          },
+          "set_kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What shape of set it is."
+          }
+        },
+        "additionalProperties": false
+      },
+      "EditEditionRequest": {
+        "type": "object",
+        "description": "A change to an edition. Fields left out are left alone.",
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What this release is called."
+          },
+          "publisher": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who published it; null clears it."
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which region it was sold in; null clears it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "EditTitleRequest": {
+        "type": "object",
+        "description": "A change to a title. Fields left out are left alone.",
+        "properties": {
+          "display_title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it is called."
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What kind of work it is."
+          },
+          "release_year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "When it was released, from 1870 to 2200; null clears it."
+          },
+          "sort_title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it sorts as. Left out while the display title changes, it\nfollows the display title if it was the display title before."
+          }
+        },
+        "additionalProperties": false
+      },
       "EditionRommView": {
         "type": "object",
         "description": "An edition's RomM settings and how its export stands.",
@@ -9417,7 +10006,8 @@
           "title_id",
           "display_name",
           "set_count",
-          "created_at"
+          "created_at",
+          "version"
         ],
         "properties": {
           "created_at": {
@@ -9454,6 +10044,11 @@
           "title_id": {
             "type": "string",
             "description": "The title it belongs to."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its version, also its `ETag`: 1 when catalogued, one more for each\nedit. Send it as `If-Match` to change it only as read."
           }
         }
       },
@@ -12753,7 +13348,8 @@
           "display_title",
           "sort_title",
           "edition_count",
-          "created_at"
+          "created_at",
+          "version"
         ],
         "properties": {
           "created_at": {
@@ -12788,6 +13384,11 @@
           "sort_title": {
             "type": "string",
             "description": "What it sorts as."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its version, also its `ETag`: 1 when catalogued, one more for each\nedit. Send it as `If-Match` to change it only as read."
           }
         }
       },

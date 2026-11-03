@@ -281,7 +281,7 @@ pub(crate) async fn drive_has_active_attempt(
 }
 
 /// Whether an error is a unique-constraint violation.
-fn is_unique_violation(error: &sqlx::Error) -> bool {
+pub(crate) fn is_unique_violation(error: &sqlx::Error) -> bool {
     // 23505 is the SQLSTATE for unique_violation. Matching the code rather
     // than the message text keeps this working across locales and versions.
     matches!(
@@ -3300,6 +3300,8 @@ pub struct TitleRecord {
     pub edition_count: i64,
     /// When it was catalogued.
     pub created_at: OffsetDateTime,
+    /// Its version: 1 when catalogued, one more for each edit.
+    pub version: i64,
 }
 
 /// A particular release of a title.
@@ -3319,6 +3321,8 @@ pub struct EditionRecord {
     pub set_count: i64,
     /// When it was catalogued.
     pub created_at: OffsetDateTime,
+    /// Its version: 1 when catalogued, one more for each edit.
+    pub version: i64,
 }
 
 /// The discs an edition shipped as.
@@ -3338,6 +3342,8 @@ pub struct DiscSetRecord {
     pub disc_count: i64,
     /// When it was catalogued.
     pub created_at: OffsetDateTime,
+    /// Its version: 1 when catalogued, one more for each edit.
+    pub version: i64,
 }
 
 /// One disc within a set. The canonical object of the whole system.
@@ -3365,6 +3371,8 @@ pub struct DiscRecord {
     pub copy_count: i64,
     /// When it was catalogued.
     pub created_at: OffsetDateTime,
+    /// Its version: 1 when catalogued, one more for each edit.
+    pub version: i64,
 }
 
 /// A new title.
@@ -3406,8 +3414,8 @@ pub async fn create_title(pool: &PgPool, new: NewTitle<'_>) -> Result<TitleRecor
     })
 }
 
-const TITLE_SELECT: &str = "
-    SELECT t.id, t.kind, t.display_title, t.sort_title, t.release_year, t.created_at,
+pub(crate) const TITLE_SELECT: &str = "
+    SELECT t.id, t.kind, t.display_title, t.sort_title, t.release_year, t.created_at, t.version,
            coalesce(counted.editions, 0) AS edition_count
     FROM titles t
     LEFT JOIN LATERAL (
@@ -3415,7 +3423,7 @@ const TITLE_SELECT: &str = "
     ) counted ON true
 ";
 
-fn title_from_row(row: &sqlx::postgres::PgRow) -> Result<TitleRecord, DbError> {
+pub(crate) fn title_from_row(row: &sqlx::postgres::PgRow) -> Result<TitleRecord, DbError> {
     Ok(TitleRecord {
         id: TitleId::from_uuid(row.try_get("id").map_err(DbError::Query)?),
         kind: row.try_get("kind").map_err(DbError::Query)?,
@@ -3424,6 +3432,7 @@ fn title_from_row(row: &sqlx::postgres::PgRow) -> Result<TitleRecord, DbError> {
         release_year: row.try_get("release_year").map_err(DbError::Query)?,
         edition_count: row.try_get("edition_count").map_err(DbError::Query)?,
         created_at: row.try_get("created_at").map_err(DbError::Query)?,
+        version: row.try_get("version").map_err(DbError::Query)?,
     })
 }
 
@@ -3534,8 +3543,8 @@ pub async fn create_edition(
     Ok(Ok(edition))
 }
 
-const EDITION_SELECT: &str = "
-    SELECT e.id, e.title_id, e.display_name, e.publisher, e.region, e.created_at,
+pub(crate) const EDITION_SELECT: &str = "
+    SELECT e.id, e.title_id, e.display_name, e.publisher, e.region, e.created_at, e.version,
            coalesce(counted.sets, 0) AS set_count
     FROM editions e
     LEFT JOIN LATERAL (
@@ -3543,7 +3552,7 @@ const EDITION_SELECT: &str = "
     ) counted ON true
 ";
 
-fn edition_from_row(row: &sqlx::postgres::PgRow) -> Result<EditionRecord, DbError> {
+pub(crate) fn edition_from_row(row: &sqlx::postgres::PgRow) -> Result<EditionRecord, DbError> {
     Ok(EditionRecord {
         id: EditionId::from_uuid(row.try_get("id").map_err(DbError::Query)?),
         title_id: TitleId::from_uuid(row.try_get("title_id").map_err(DbError::Query)?),
@@ -3552,6 +3561,7 @@ fn edition_from_row(row: &sqlx::postgres::PgRow) -> Result<EditionRecord, DbErro
         region: row.try_get("region").map_err(DbError::Query)?,
         set_count: row.try_get("set_count").map_err(DbError::Query)?,
         created_at: row.try_get("created_at").map_err(DbError::Query)?,
+        version: row.try_get("version").map_err(DbError::Query)?,
     })
 }
 
@@ -3637,8 +3647,9 @@ pub async fn create_disc_set(
     Ok(Ok(set))
 }
 
-const DISC_SET_SELECT: &str = "
+pub(crate) const DISC_SET_SELECT: &str = "
     SELECT s.id, s.edition_id, s.name, s.set_kind, s.disc_count_expected, s.created_at,
+           s.version,
            coalesce(counted.discs, 0) AS disc_count
     FROM disc_sets s
     LEFT JOIN LATERAL (
@@ -3646,7 +3657,7 @@ const DISC_SET_SELECT: &str = "
     ) counted ON true
 ";
 
-fn disc_set_from_row(row: &sqlx::postgres::PgRow) -> Result<DiscSetRecord, DbError> {
+pub(crate) fn disc_set_from_row(row: &sqlx::postgres::PgRow) -> Result<DiscSetRecord, DbError> {
     Ok(DiscSetRecord {
         id: DiscSetId::from_uuid(row.try_get("id").map_err(DbError::Query)?),
         edition_id: EditionId::from_uuid(row.try_get("edition_id").map_err(DbError::Query)?),
@@ -3655,6 +3666,7 @@ fn disc_set_from_row(row: &sqlx::postgres::PgRow) -> Result<DiscSetRecord, DbErr
         disc_count_expected: row.try_get("disc_count_expected").map_err(DbError::Query)?,
         disc_count: row.try_get("disc_count").map_err(DbError::Query)?,
         created_at: row.try_get("created_at").map_err(DbError::Query)?,
+        version: row.try_get("version").map_err(DbError::Query)?,
     })
 }
 
@@ -3749,9 +3761,9 @@ pub async fn create_disc(
     Ok(Ok(disc))
 }
 
-const DISC_SELECT: &str = "
+pub(crate) const DISC_SELECT: &str = "
     SELECT d.id, d.disc_set_id, d.sequence_number, d.display_name, d.media_family,
-           d.region, d.volume_label, d.compatibility_claim, d.created_at,
+           d.region, d.volume_label, d.compatibility_claim, d.created_at, d.version,
            coalesce(links.artifacts, 0) AS artifact_count,
            coalesce(copies.made, 0) AS copy_count
     FROM discs d
@@ -3763,7 +3775,7 @@ const DISC_SELECT: &str = "
     ) copies ON true
 ";
 
-fn disc_from_row(row: &sqlx::postgres::PgRow) -> Result<DiscRecord, DbError> {
+pub(crate) fn disc_from_row(row: &sqlx::postgres::PgRow) -> Result<DiscRecord, DbError> {
     Ok(DiscRecord {
         id: DiscId::from_uuid(row.try_get("id").map_err(DbError::Query)?),
         disc_set_id: DiscSetId::from_uuid(row.try_get("disc_set_id").map_err(DbError::Query)?),
@@ -3776,6 +3788,7 @@ fn disc_from_row(row: &sqlx::postgres::PgRow) -> Result<DiscRecord, DbError> {
         artifact_count: row.try_get("artifact_count").map_err(DbError::Query)?,
         copy_count: row.try_get("copy_count").map_err(DbError::Query)?,
         created_at: row.try_get("created_at").map_err(DbError::Query)?,
+        version: row.try_get("version").map_err(DbError::Query)?,
     })
 }
 

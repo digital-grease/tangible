@@ -8,6 +8,7 @@ pub mod artifacts;
 pub mod audit;
 pub mod burns;
 pub mod catalog;
+pub mod catalog_edits;
 pub mod dats;
 pub mod derivations;
 pub mod diagnostics;
