@@ -53,6 +53,10 @@ export function transformationLabel(transformation: string): string {
       return 'CUE/BIN of an Alcohol 120% image';
     case 'iso_from_mds':
       return 'ISO of an Alcohol 120% DVD image';
+    case 'cue_bin_from_chd':
+      return 'CUE/BIN extracted from a CHD';
+    case 'iso_from_chd':
+      return 'ISO extracted from a CHD';
     default:
       return transformation;
   }
@@ -100,6 +104,26 @@ export function derivativeOffer(transformation: string): DerivativeOffer {
         'Makes an ISO of this Alcohol 120% DVD image, which can be burned, made into a CHD and ' +
         'sent to RomM. It leaves out the MDS descriptor, and says so. The ISO is the same stored ' +
         'bytes as the MDF, so no space is used, and the original is not changed.',
+      exists: 'An ISO of this already exists.',
+    };
+  }
+  if (transformation === 'cue_bin_from_chd') {
+    return {
+      action: 'Make a CUE/BIN',
+      explanation:
+        'Extracts this CHD into a CUE/BIN, which can be burned, made into a checked CHD and ' +
+        'sent to RomM. chdman checks the CHD first, and the CUE/BIN is kept only if it holds ' +
+        'exactly the data the CHD does. It is a full-size copy, and the original is not changed.',
+      exists: 'A CUE/BIN of this already exists.',
+    };
+  }
+  if (transformation === 'iso_from_chd') {
+    return {
+      action: 'Make an ISO',
+      explanation:
+        'Extracts this CHD into the ISO it holds, which can be burned, made into a checked CHD ' +
+        'and sent to RomM. chdman checks the CHD first, and the ISO is kept only if it is ' +
+        'exactly the data the CHD holds. It is a full-size copy, and the original is not changed.',
       exists: 'An ISO of this already exists.',
     };
   }

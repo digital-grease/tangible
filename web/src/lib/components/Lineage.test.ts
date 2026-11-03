@@ -59,6 +59,14 @@ describe('the Derivatives section', () => {
     expect(await screen.findByText('An ISO of this already exists.')).toBeTruthy();
   });
 
+  it('offers a CUE/BIN extracted from an imported CD CHD', async () => {
+    server('cue_bin_from_chd');
+    render(Lineage, { artifactId: 'a1' });
+    expect(await screen.findByRole('button', { name: 'Make a CUE/BIN' })).toBeTruthy();
+    expect(screen.getByText(/Extracts this CHD/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Make a CHD' })).toBeNull();
+  });
+
   it('offers a CHD where that is what suits, and nothing where nothing does', async () => {
     server('chd_create_cd');
     const { unmount } = render(Lineage, { artifactId: 'a1' });

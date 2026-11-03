@@ -26,6 +26,8 @@ may change between minor versions, and the release notes say how.
   not offered extraction: what it was made from is the CUE/BIN or ISO.
   Database migration 0028 widens the derivation jobs' transformation
   constraint, additively.
+- The web UI offers "Make a CUE/BIN" or "Make an ISO" on an imported CHD's
+  page, saying chdman checks it and that it is a full-size copy.
 - Alcohol 120% images (MDS/MDF) are recognised and imported as one
   artifact: the binary `.mds` is read with a bounded, fuzzed parser written
   from libmirage's reading of the format and checked against libmirage

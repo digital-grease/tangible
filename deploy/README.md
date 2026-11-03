@@ -358,9 +358,10 @@ for RomM, not for burning: burn the image it was made from.
 A CHD can also be imported as it is. Tangible reads its header and metadata,
 never its compressed data, and records which disc it holds and its tracks.
 It is not burned, and it is not sent to RomM as it is, since nothing here
-checked it against an original. Instead, ask for what it holds (the same
-request, with an empty body): chdman verifies the CHD and extracts a CD CHD
-to a CUE/BIN, or a DVD CHD to its ISO. The CUE/BIN is made into a CHD again
+checked it against an original. Instead, ask for what it holds, with "Make a
+CUE/BIN" or "Make an ISO" on its page (or the same request, with an empty
+body): chdman verifies the CHD and extracts a CD CHD to a CUE/BIN, or a DVD
+CHD to its ISO. The CUE/BIN is made into a CHD again
 and kept only if that CHD holds the same data as the original, by its data
 SHA-1; the ISO only if its own SHA-1 is the CHD's data SHA-1. What comes
 out burns, makes a checked CHD and goes to RomM like any CUE/BIN or ISO,

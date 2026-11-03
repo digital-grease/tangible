@@ -99,6 +99,21 @@ describe('what is offered', () => {
     expect(iso.exists).toBe('An ISO of this already exists.');
   });
 
+  it('names what is extracted from a CHD, and says it is checked and full size', () => {
+    expect(transformationLabel('cue_bin_from_chd')).toBe('CUE/BIN extracted from a CHD');
+    expect(transformationLabel('iso_from_chd')).toBe('ISO extracted from a CHD');
+    const offers: [string, string][] = [
+      ['cue_bin_from_chd', 'Make a CUE/BIN'],
+      ['iso_from_chd', 'Make an ISO'],
+    ];
+    for (const [transformation, action] of offers) {
+      const offer = derivativeOffer(transformation);
+      expect(offer.action).toBe(action);
+      expect(offer.explanation).toContain('kept only if');
+      expect(offer.explanation).toContain('full-size copy');
+    }
+  });
+
   it('offers a CHD for everything else', () => {
     for (const transformation of ['chd_create_cd', 'chd_create_dvd']) {
       expect(derivativeOffer(transformation).action).toBe('Make a CHD');
