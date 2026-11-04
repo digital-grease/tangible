@@ -19,6 +19,7 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use serde_json::Value;
 use sqlx::PgPool;
+use tangible_api::deletion::DeletionRunner;
 use tangible_api::integrity::{Integrity, IntegrityRunner, IntegrityRunnerSettings};
 use tangible_api::{ApiState, ImportCheckpoint, ImportPipeline, ImportRequest, catalog, router};
 use tangible_domain::{ImportJobId, LogicalPath, Role};
@@ -101,15 +102,27 @@ impl Harness {
     /// An artifact of fresh random files, catalogued: its id and its
     /// objects' paths.
     async fn import(&self, files: &[(&str, usize)]) -> (String, Vec<PathBuf>) {
+        let files: Vec<(&str, Vec<u8>)> = files
+            .iter()
+            .map(|(name, size)| {
+                // Fresh bytes each time, so no two artifacts share an object.
+                let seed = uuid::Uuid::now_v7();
+                let bytes = (0..*size)
+                    .map(|i| seed.as_bytes()[i % 16].wrapping_add(u8::try_from(i % 251).unwrap()))
+                    .collect();
+                (*name, bytes)
+            })
+            .collect();
+        self.import_these(&files).await
+    }
+
+    /// An artifact of exactly these files, catalogued: its id and its
+    /// objects' paths.
+    async fn import_these(&self, files: &[(&str, Vec<u8>)]) -> (String, Vec<PathBuf>) {
         let import_id = ImportJobId::generate();
         let area = self.pipeline.open_area(import_id).await.unwrap();
-        for (name, size) in files {
-            // Fresh bytes each time, so no two artifacts share an object.
-            let seed = uuid::Uuid::now_v7();
-            let bytes: Vec<u8> = (0..*size)
-                .map(|i| seed.as_bytes()[i % 16].wrapping_add(u8::try_from(i % 251).unwrap()))
-                .collect();
-            area.write(&LogicalPath::parse(name).unwrap(), &bytes)
+        for (name, bytes) in files {
+            area.write(&LogicalPath::parse(name).unwrap(), bytes)
                 .await
                 .unwrap();
         }
@@ -181,6 +194,66 @@ impl Harness {
             .await;
         assert!(status.is_success(), "{check}");
         check
+    }
+
+    /// A full scrub that another process took, got as far as `after`, and
+    /// left: the next step takes it over and reads only what sorts after.
+    async fn full_scrub_left_after(&self, after: &str) -> String {
+        let (status, check) = self
+            .send(
+                &self.admin,
+                Method::POST,
+                "/api/v1/integrity-checks",
+                Some(serde_json::json!({ "scope": "all" })),
+            )
+            .await;
+        assert!(status.is_success(), "{check}");
+        let id = check["id"].as_str().unwrap().to_owned();
+        let claimed = tangible_db::integrity::claim_next_check(&self.pool, "gone", 1)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(claimed.id.to_string(), id);
+        assert!(
+            tangible_db::integrity::record_progress(
+                &self.pool,
+                &tangible_db::integrity::Progress {
+                    id: claimed.id,
+                    owner: "gone",
+                    objects_checked: 0,
+                    bytes_checked: 0,
+                    resume_after: Some(after),
+                    new_problems: &[],
+                    new_problem_count: 0,
+                    lease_seconds: 1,
+                },
+            )
+            .await
+            .unwrap()
+        );
+        tokio::time::sleep(Duration::from_millis(1_200)).await;
+        id
+    }
+
+    /// Delete an original with no grace period, and collect its objects.
+    async fn delete_now(&self, artifact: &str) {
+        let state = self.state.clone().with_deletion_grace_days(0);
+        let mut request = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/api/v1/artifacts/{artifact}/deletion-requests"))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({ "confirm_original": true }).to_string(),
+            ))
+            .unwrap();
+        self.admin.apply(&mut request);
+        let response = router(state).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let pass = DeletionRunner::new(self.database.clone(), self.manifests.clone())
+            .pass()
+            .await
+            .unwrap();
+        assert!(pass.deleted >= 1, "{pass:?}");
     }
 
     async fn run_all(&self) {
@@ -457,6 +530,101 @@ async fn a_check_taken_over_resumes_after_the_last_object_it_finished() {
     assert_eq!(done["state"], "complete", "{done}");
     assert_eq!(done["objects_checked"], 3);
     assert_eq!(done["problem_count"], 0, "resumed after the first: {done}");
+}
+
+/// Bytes whose SHA-256 sorts after `after`, made by counting.
+fn bytes_sorting_after(after: &str) -> (String, Vec<u8>) {
+    use sha2::Digest as _;
+    let seed = uuid::Uuid::now_v7();
+    for counter in 0_u64.. {
+        let mut bytes = seed.as_bytes().to_vec();
+        bytes.extend_from_slice(&counter.to_le_bytes());
+        bytes.resize(1_000, 0x5a);
+        let digest = hex::encode(sha2::Sha256::digest(&bytes));
+        if digest.as_str() > after {
+            return (digest, bytes);
+        }
+    }
+    unreachable!("some count sorts after any digest but the last")
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_object_collected_while_a_scrub_reads_is_not_reported() {
+    // A full scrub lists objects a batch at a time. One collected after its
+    // batch was listed, its artifact deleted (ADR 0020), is gone on purpose:
+    // the scrub must not report it missing.
+    //
+    // The scrub is made to read only this test's two objects, so what it
+    // finds is exact: both sort after every object the shared database
+    // already holds, and the scrub resumes after the last of those. The
+    // first is a named pipe, so reading it waits until the test has
+    // collected the second.
+    let harness = harness().await;
+    let highest: String = sqlx::query_scalar("SELECT COALESCE(max(sha256), '') FROM cas_objects")
+        .fetch_one(&harness.pool)
+        .await
+        .unwrap();
+    let (one, one_bytes) = bytes_sorting_after(&highest);
+    let (two, two_bytes) = bytes_sorting_after(&highest);
+    let ((first, first_bytes), (second, second_bytes)) = if one < two {
+        ((one, one_bytes), (two, two_bytes))
+    } else {
+        ((two, two_bytes), (one, one_bytes))
+    };
+    let (kept, kept_paths) = harness
+        .import_these(&[("kept.bin", first_bytes.clone())])
+        .await;
+    let (deleted, deleted_paths) = harness.import_these(&[("deleted.bin", second_bytes)]).await;
+    assert!(kept_paths[0].ends_with(&first) && deleted_paths[0].ends_with(&second));
+
+    // Reading the kept object waits for the test.
+    writable(&kept_paths[0]);
+    std::fs::remove_file(&kept_paths[0]).unwrap();
+    let made = std::process::Command::new("mkfifo")
+        .arg(&kept_paths[0])
+        .status()
+        .unwrap();
+    assert!(made.success());
+
+    let id = harness.full_scrub_left_after(&highest).await;
+    let runner = harness.runner.clone();
+    let scrub = tokio::spawn(async move { runner.step().await });
+
+    // Opening the pipe to write returns once the scrub has opened it to
+    // read: both objects are listed, and the first is being read.
+    let pipe = kept_paths[0].clone();
+    let mut writer = tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio::task::spawn_blocking(move || std::fs::OpenOptions::new().write(true).open(pipe)),
+    )
+    .await
+    .expect("the scrub reads the kept object")
+    .unwrap()
+    .unwrap();
+
+    // Meanwhile the other artifact is deleted and its object collected.
+    harness.delete_now(&deleted).await;
+    assert!(!deleted_paths[0].exists(), "the object is collected");
+
+    // The kept object reads back whole.
+    std::io::Write::write_all(&mut writer, &first_bytes).unwrap();
+    drop(writer);
+    let ran = tokio::time::timeout(Duration::from_secs(30), scrub)
+        .await
+        .expect("the scrub ends")
+        .unwrap()
+        .unwrap();
+    assert!(ran, "the scrub was claimed");
+
+    let done = harness.check(&id).await;
+    assert_eq!(done["state"], "complete", "{done}");
+    assert_eq!(done["objects_checked"], 2, "{done}");
+    assert_eq!(
+        done["problem_count"], 0,
+        "the collected object is not a problem: {done}"
+    );
+    assert_ne!(harness.artifact(&kept).await["integrity_state"], "damaged");
 }
 
 #[tokio::test]
