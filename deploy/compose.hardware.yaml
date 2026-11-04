@@ -20,6 +20,11 @@ services:
     image: ghcr.io/digital-grease/tangible:v0.1.0
     command: ["burn-worker"]
     restart: unless-stopped
+    # A worker asked to stop while it writes or erases a disc finishes
+    # first, the read-back and report included: stopping part of the way
+    # ruins the disc. Anything else stops at once. `docker compose stop` and
+    # `down` wait up to this long; `docker compose kill` does not wait.
+    stop_grace_period: 2h
     depends_on:
       server:
         condition: service_healthy

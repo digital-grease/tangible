@@ -231,6 +231,11 @@ pub struct WorkerRuntime<E: BurnEngine> {
     /// What reads a CD with its read offset corrected, when this worker's
     /// image has redumper (ADR 0015).
     cd_dumper: Option<Arc<dyn CdDumper>>,
+    /// Set while the step under way is changing the disc in the drive, a
+    /// write or an erase, so a request to stop waits for it to end: stopping
+    /// part of the way through ruins the disc, and leaves an attempt only a
+    /// person can account for.
+    changing_disc: AtomicBool,
 }
 
 impl<E: BurnEngine> WorkerRuntime<E> {
@@ -265,6 +270,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             drive: None,
             css,
             cd_dumper,
+            changing_disc: AtomicBool::new(false),
         })
     }
 
@@ -610,42 +616,55 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         loop {
             let may_rotate =
                 rotation_failed_at.is_none_or(|at| at.elapsed() >= ROTATION_RETRY_INTERVAL);
-            let step = self.step(&identity, drive_id, may_rotate);
             let mut rotate = false;
-            tokio::select! {
-                () = &mut shutdown => {
-                    tracing::info!("shutting down after the current step");
-                    return Ok(());
+            let result = {
+                let mut step = std::pin::pin!(self.step(&identity, drive_id, may_rotate));
+                tokio::select! {
+                    () = &mut shutdown => {
+                        if !self.changing_disc.load(Ordering::SeqCst) {
+                            // Stopping harms no disc: a burn short of its
+                            // write fails with no disc spent, to be
+                            // retried, and a rip is closed as abandoned, to
+                            // be asked for again.
+                            tracing::info!("shutting down");
+                            return Ok(());
+                        }
+                        tracing::warn!(
+                            "asked to stop while writing or erasing the disc in the drive; \
+                             stopping once that ends, since stopping now would ruin the disc"
+                        );
+                        return self.stop_after(step.await);
+                    }
+                    result = &mut step => result,
                 }
-                result = step => {
-                    match result {
-                        Ok(Step::Worked) => {}
-                        Ok(Step::RotateCredential) => rotate = true,
-                        Ok(Step::Idle) => {
-                            // Nothing to do. Sleeping here rather than
-                            // hammering the queue.
-                            tokio::select! {
-                                () = &mut shutdown => return Ok(()),
-                                () = tokio::time::sleep(self.settings.poll_interval) => {}
-                            }
-                        }
-                        Err(RunnerError::Client(error)) if error.is_unauthenticated() => {
-                            // Revoked. Retrying cannot help and a worker that
-                            // kept trying would fill an operator's logs with
-                            // the same refusal.
-                            tracing::error!("this worker's credential is no longer accepted");
-                            return Err(RunnerError::Client(error));
-                        }
-                        Err(RunnerError::NeedsAttention) => return Err(RunnerError::NeedsAttention),
-                        Err(error) => {
-                            // Everything else is treated as weather: a server
-                            // restart, a network blip. Log and try again.
-                            tracing::warn!(error = ?error, "step failed; retrying");
-                            tokio::select! {
-                                () = &mut shutdown => return Ok(()),
-                                () = tokio::time::sleep(self.settings.poll_interval) => {}
-                            }
-                        }
+            };
+            self.changing_disc.store(false, Ordering::SeqCst);
+            match result {
+                Ok(Step::Worked) => {}
+                Ok(Step::RotateCredential) => rotate = true,
+                Ok(Step::Idle) => {
+                    // Nothing to do. Sleeping here rather than hammering the
+                    // queue.
+                    tokio::select! {
+                        () = &mut shutdown => return Ok(()),
+                        () = tokio::time::sleep(self.settings.poll_interval) => {}
+                    }
+                }
+                Err(RunnerError::Client(error)) if error.is_unauthenticated() => {
+                    // Revoked. Retrying cannot help and a worker that kept
+                    // trying would fill an operator's logs with the same
+                    // refusal.
+                    tracing::error!("this worker's credential is no longer accepted");
+                    return Err(RunnerError::Client(error));
+                }
+                Err(RunnerError::NeedsAttention) => return Err(RunnerError::NeedsAttention),
+                Err(error) => {
+                    // Everything else is treated as weather: a server restart,
+                    // a network blip. Log and try again.
+                    tracing::warn!(error = ?error, "step failed; retrying");
+                    tokio::select! {
+                        () = &mut shutdown => return Ok(()),
+                        () = tokio::time::sleep(self.settings.poll_interval) => {}
                     }
                 }
             }
@@ -668,6 +687,29 @@ impl<E: BurnEngine> WorkerRuntime<E> {
                         rotation_failed_at = Some(std::time::Instant::now());
                     }
                 }
+            }
+        }
+    }
+
+    /// How a run asked to stop ends, once the write or erase it waited for
+    /// has.
+    fn stop_after(&self, result: Result<Step, RunnerError>) -> Result<(), RunnerError> {
+        self.changing_disc.store(false, Ordering::SeqCst);
+        match result {
+            Ok(_) => {
+                tracing::info!("the disc in the drive is no longer changing; shutting down");
+                Ok(())
+            }
+            Err(RunnerError::Client(error)) if error.is_unauthenticated() => {
+                tracing::error!("this worker's credential is no longer accepted");
+                Err(RunnerError::Client(error))
+            }
+            Err(RunnerError::NeedsAttention) => Err(RunnerError::NeedsAttention),
+            Err(error) => {
+                // The disc is done with. What the server has not heard about
+                // the recovery record still holds, and the next run reports.
+                tracing::warn!(error = ?error, "the last step failed; shutting down");
+                Ok(())
             }
         }
     }
@@ -784,6 +826,9 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             mode = %erasure.mode,
             "erasing the disc in the drive, as requested"
         );
+
+        // From here a request to stop waits for the erase to end.
+        self.changing_disc.store(true, Ordering::SeqCst);
 
         // A full erase can take most of an hour, and a worker that went quiet
         // for that long would look gone. Heartbeats carry on beside it.
@@ -1352,6 +1397,10 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         medium_body: PhysicalMediumBody,
         buffer: &Arc<std::sync::Mutex<EventBuffer>>,
     ) -> Result<AttemptOutcome, RunnerError> {
+        // From here a request to stop waits for the attempt to end, its
+        // read-back and report included, so the server hears how it went.
+        self.changing_disc.store(true, Ordering::SeqCst);
+
         // The irreversible transition. The record goes to disk first, and it
         // is what a restarted worker reads to know it must not write again.
         self.write_record(&RecoveryRecord {

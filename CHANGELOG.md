@@ -628,6 +628,15 @@ may change between minor versions, and the release notes say how.
 
 ### Fixed
 
+- A burn worker asked to stop while it writes or erases a disc now
+  finishes first, the read-back and report included, and then stops.
+  It used to stop at once: the writing tool, which runs inside the worker's
+  container, was killed with it, so the disc was ruined, and the worker
+  came back with an attempt only a person could account for. Anything else
+  (a download, a preflight, a wait for a disc, a rip) still stops at once.
+  Compose now gives a worker two hours to stop (`stop_grace_period`) and
+  the server a minute, where Docker's default is ten seconds, which was
+  shorter than the server's own 30 seconds for requests under way.
 - A CHD sent to RomM is recorded in its export receipt as `chd`; it was
   recorded as `cue_bin`.
 - A burn worker no longer writes its server URL to the log before checking

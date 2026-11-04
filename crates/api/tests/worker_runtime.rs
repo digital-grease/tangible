@@ -483,6 +483,122 @@ impl BurnEngine for DataOnlyEngine {
     }
 }
 
+/// An engine whose write and erase each stop part of the way until a test
+/// lets them go on, so a test can ask the worker to stop mid-write.
+#[derive(Clone)]
+struct HeldEngine {
+    inner: FakeEngine,
+    /// Told once the write or erase has begun.
+    started: std::sync::Arc<tokio::sync::Notify>,
+    /// Waited on before the write or erase goes on.
+    release: std::sync::Arc<tokio::sync::Notify>,
+}
+
+impl HeldEngine {
+    fn new(inner: FakeEngine) -> Self {
+        Self {
+            inner,
+            started: std::sync::Arc::default(),
+            release: std::sync::Arc::default(),
+        }
+    }
+
+    async fn hold(&self) {
+        self.started.notify_one();
+        self.release.notified().await;
+    }
+}
+
+#[async_trait::async_trait]
+impl BurnEngine for HeldEngine {
+    fn name(&self) -> &'static str {
+        self.inner.name()
+    }
+
+    fn version(&self) -> String {
+        self.inner.version()
+    }
+
+    fn uses_hardware(&self) -> bool {
+        false
+    }
+
+    fn supports_mode(&self, mode: WriteMode) -> bool {
+        self.inner.supports_mode(mode)
+    }
+
+    async fn probe_drive(&self, drive: &DriveRef) -> Result<DriveCapabilities, EngineError> {
+        self.inner.probe_drive(drive).await
+    }
+
+    async fn inspect_medium(&self, drive: &DriveRef) -> Result<MediumInfo, EngineError> {
+        self.inner.inspect_medium(drive).await
+    }
+
+    async fn preflight(&self, plan: &BurnPlan) -> Result<PreflightReport, EngineError> {
+        self.inner.preflight(plan).await
+    }
+
+    async fn write(
+        &self,
+        plan: &BurnPlan,
+        sink: &dyn EventSink,
+    ) -> Result<WriteReport, EngineError> {
+        self.hold().await;
+        self.inner.write(plan, sink).await
+    }
+
+    async fn verify(
+        &self,
+        plan: &BurnPlan,
+        sink: &dyn EventSink,
+    ) -> Result<VerifyReport, EngineError> {
+        self.inner.verify(plan, sink).await
+    }
+
+    async fn blank(
+        &self,
+        request: &BlankRequest,
+        sink: &dyn EventSink,
+    ) -> Result<BlankReport, EngineError> {
+        self.hold().await;
+        self.inner.blank(request, sink).await
+    }
+
+    async fn eject(&self, drive: &DriveRef) -> Result<(), EngineError> {
+        self.inner.eject(drive).await
+    }
+}
+
+/// Run a worker until `stopped` resolves.
+fn spawn_worker<E: BurnEngine + 'static>(
+    settings: WorkerSettings,
+    engine: E,
+    stopped: tokio::sync::oneshot::Receiver<()>,
+) -> tokio::task::JoinHandle<Result<(), tangible_burn::runner::RunnerError>> {
+    tokio::spawn(async move {
+        let mut runtime = WorkerRuntime::new(settings, engine).expect("runtime");
+        runtime
+            .run(async {
+                let _ = stopped.await;
+            })
+            .await
+    })
+}
+
+/// Wait for `notify` to be told, failing the test after half a minute.
+async fn told(notify: &tokio::sync::Notify, what: &str) {
+    tokio::time::timeout(Duration::from_secs(30), notify.notified())
+        .await
+        .unwrap_or_else(|_| panic!("{what} never began"));
+}
+
+/// Whether the worker is still running a little after it was asked to stop.
+async fn still_running<T>(worker: &tokio::task::JoinHandle<T>) -> bool {
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    !worker.is_finished()
+}
+
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
 async fn a_worker_enrolls_claims_burns_and_reports_without_help() {
@@ -1135,6 +1251,168 @@ async fn a_worker_erases_the_disc_it_is_asked_to_and_only_that() {
         "DVD-RW sequential recording"
     );
     assert_eq!(record["medium_before"]["sessions"], 1);
+
+    server.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_worker_asked_to_stop_mid_write_finishes_the_burn_first() {
+    // Stopping a write ruins the disc, and a worker that restarts with a
+    // write unaccounted for needs a person. So a stop asked for mid-write
+    // waits for the attempt to end, read-back and report included, and the
+    // worker leaves nothing to reconcile.
+    let _queue = exclusive_queue().await;
+    let mut server = server().await;
+    server.drain_queue().await;
+
+    let image = iso_image("STOPPING", 32);
+    let artifact = server.import(&image).await;
+    let disc = server.seed_disc().await;
+    let job = server.queue_burn(&disc, &artifact).await;
+
+    let worker_dir = TempDir::new().expect("temp dir");
+    let token = server.enrollment_token().await;
+    let settings = settings(&server, worker_dir.path().to_path_buf(), token);
+    let state_dir = settings.state_dir.clone();
+    let engine = HeldEngine::new(FakeEngine::new(state_dir.join("media")));
+    let (started, release) = (engine.started.clone(), engine.release.clone());
+
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let worker = spawn_worker(settings, engine, stopped);
+
+    told(&started, "the write").await;
+    let _ = stop.send(());
+    assert!(
+        still_running(&worker).await,
+        "the worker stopped part of the way through a write"
+    );
+    release.notify_one();
+    let outcome = tokio::time::timeout(Duration::from_secs(30), worker)
+        .await
+        .expect("the worker stops once the burn ends")
+        .expect("the worker task");
+    assert!(outcome.is_ok(), "the worker exited badly: {outcome:?}");
+
+    let settled = server.get(&format!("/api/v1/burn-jobs/{job}")).await;
+    assert_eq!(settled["state"], "complete", "{settled}");
+    assert_eq!(settled["attempts"][0]["state"], "verified", "{settled}");
+    assert!(
+        !state_dir.join("recovery.json").exists(),
+        "the server heard how the burn ended, so nothing is left to reconcile"
+    );
+
+    server.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_worker_asked_to_stop_while_waiting_for_a_disc_stops_at_once() {
+    // Only a write or an erase is waited for. A worker waiting for a disc
+    // has changed nothing, and stops when asked.
+    let _queue = exclusive_queue().await;
+    let mut server = server().await;
+    server.drain_queue().await;
+
+    let artifact = server.import(&iso_image("NODISCYET", 20)).await;
+    let disc = server.seed_disc().await;
+    let job = server.queue_burn(&disc, &artifact).await;
+
+    let worker_dir = TempDir::new().expect("temp dir");
+    let token = server.enrollment_token().await;
+    let mut settings = settings(&server, worker_dir.path().to_path_buf(), token);
+    settings.media_wait = Duration::from_secs(600);
+    let engine = FakeEngine::new(settings.state_dir.join("media")).with_behaviour(FakeBehaviour {
+        no_medium: true,
+        ..FakeBehaviour::default()
+    });
+
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let worker = spawn_worker(settings, engine, stopped);
+
+    // Waiting: the worker has asked for a disc.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let view = server.get(&format!("/api/v1/burn-jobs/{job}")).await;
+        if let Some(attempt) = view["attempts"][0]["id"].as_str() {
+            let events = server
+                .get(&format!("/api/v1/burn-attempts/{attempt}/events?limit=500"))
+                .await;
+            let asked = events["items"]
+                .as_array()
+                .is_some_and(|items| items.iter().any(|event| event["code"] == "MEDIA_REQUIRED"));
+            if asked {
+                break;
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the worker never asked for a disc"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let _ = stop.send(());
+    let outcome = tokio::time::timeout(Duration::from_secs(5), worker)
+        .await
+        .expect("a worker waiting for a disc stops when asked")
+        .expect("the worker task");
+    assert!(outcome.is_ok(), "the worker exited badly: {outcome:?}");
+
+    server.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_worker_asked_to_stop_mid_erase_finishes_the_erase_first() {
+    let _queue = exclusive_queue().await;
+    let mut server = server().await;
+    server.drain_queue().await;
+
+    let worker_dir = TempDir::new().expect("temp dir");
+    let token = server.enrollment_token().await;
+    let settings = settings(&server, worker_dir.path().to_path_buf(), token);
+    let engine = HeldEngine::new(
+        FakeEngine::new(settings.state_dir.join("media")).with_behaviour(FakeBehaviour {
+            medium_profile: Some("DVD-RW sequential recording".to_owned()),
+            medium_sessions: 1,
+            ..FakeBehaviour::default()
+        }),
+    );
+    let (started, release) = (engine.started.clone(), engine.release.clone());
+
+    let drive = {
+        let mut runtime = WorkerRuntime::new(settings.clone(), engine.clone()).expect("runtime");
+        let mut identity = runtime.identify().await.expect("enroll");
+        runtime.announce(&mut identity).await.expect("announce")
+    };
+    let (status, requested) = server
+        .post(
+            &format!("/api/v1/drives/{drive}/erasures"),
+            serde_json::json!({ "mode": "quick", "confirm_data_loss": true }),
+        )
+        .await;
+    assert_eq!(status, 201, "{requested}");
+    let erasure = requested["id"].as_str().expect("an erasure").to_owned();
+
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let worker = spawn_worker(settings, engine, stopped);
+
+    told(&started, "the erase").await;
+    let _ = stop.send(());
+    assert!(
+        still_running(&worker).await,
+        "the worker stopped part of the way through an erase"
+    );
+    release.notify_one();
+    let outcome = tokio::time::timeout(Duration::from_secs(30), worker)
+        .await
+        .expect("the worker stops once the erase ends")
+        .expect("the worker task");
+    assert!(outcome.is_ok(), "the worker exited badly: {outcome:?}");
+
+    let record = server.get(&format!("/api/v1/erasures/{erasure}")).await;
+    assert_eq!(record["state"], "erased", "{record}");
 
     server.stop().await;
 }

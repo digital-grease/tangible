@@ -175,6 +175,18 @@ docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml up -d
 One worker per drive. To add a second, copy the `burner-sr0` service, rename
 it, and map that drive's own block device.
 
+A worker asked to stop (`docker compose stop`, `down`, or a redeploy) while
+it writes or erases a disc finishes that first, reads the disc back, reports,
+and only then stops: stopping part of the way ruins the disc, and a worker
+that comes back with a write unaccounted for needs a person to look at the
+drive before it takes more work. Its log says it is waiting. Compose waits
+up to two hours (`stop_grace_period` in `compose.hardware.yaml`), longer
+than a full erase or a dual-layer DVD; `docker compose kill` stops it at
+once, disc and all. Anything else a worker is doing stops at once: a burn
+that had not begun writing fails with no disc spent, and can be retried; a
+rip is closed as abandoned, to be asked for again. To keep a worker from
+starting new work before maintenance, drain it first (below).
+
 ### A worker on another machine
 
 A worker sends its credential with every request and every image it burns

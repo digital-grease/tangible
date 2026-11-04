@@ -17,6 +17,11 @@ services:
     image: ghcr.io/digital-grease/tangible:v0.1.0
     command: ["serve"]
     restart: unless-stopped
+    # Asked to stop, the server gives requests under way 30 seconds, then
+    # lets background work under way finish. Docker's own default is 10
+    # seconds; past this, what is still running is killed, as in a crash,
+    # and taken up again the way a crash's would be.
+    stop_grace_period: 1m
     depends_on:
       postgres:
         condition: service_healthy
