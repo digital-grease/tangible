@@ -1,4 +1,4 @@
-Cdrdao version 1.2.4 - (C) Andreas Mueller <andreas@daneb.de>
+Cdrdao version 1.2.5 - (C) Andreas Mueller <andreas@daneb.de>
 
 Usage: cdrdao <command> [options] [toc-file]
 command:
@@ -14,6 +14,7 @@ command:
   discid     - prints out CDDB information
   msinfo     - shows multi session info, output is suited for scripts
   drive-info - shows drive information
+  cdtext     - shows CD CD-TEXT content
   unlock     - unlock drive after failed writing
   blank      - blank a CD-RW
   scanbus    - scan for devices

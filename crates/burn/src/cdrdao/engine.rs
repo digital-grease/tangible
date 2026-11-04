@@ -171,7 +171,7 @@ impl CdrdaoEngine {
         let arguments = command::show_toc(&path).map_err(|error| unusable(&error))?;
         let run = self.run(&arguments, CHECK_TIMEOUT).await?;
         let text = run.text();
-        if parse::version(&text).is_none() {
+        if text.trim().is_empty() {
             return Err(not_cdrdao());
         }
 
@@ -855,9 +855,16 @@ impl Run {
     }
 }
 
+/// What a command that printed nothing at all, or a binary whose usage names
+/// no cdrdao version, is taken for.
+///
+/// Only the usage carries the version banner from cdrdao 1.2.5 on (1.2.4
+/// printed it before every command's output), so the version probe at start
+/// is what says the binary is cdrdao. A command since that says nothing is
+/// not one cdrdao ran.
 fn not_cdrdao() -> EngineError {
     EngineError::Unsupported {
-        what: "the configured binary does not identify itself as cdrdao".to_owned(),
+        what: "the configured binary does not answer as cdrdao does".to_owned(),
     }
 }
 
@@ -1259,7 +1266,7 @@ impl BurnEngine for CdrdaoEngine {
         self.check_cancelled()?;
         let run = self.run(&command::disk_info(drive), PROBE_TIMEOUT).await?;
         let text = run.text();
-        if parse::version(&text).is_none() {
+        if text.trim().is_empty() {
             return Err(not_cdrdao());
         }
         if parse::device_unavailable(&text) {
@@ -1675,6 +1682,63 @@ mod tests {
                 .iter()
                 .any(|event| event.code == "WRITE_RETRIED")
         );
+    }
+
+    /// A stand-in for cdrdao 1.2.5, which names its version only in its
+    /// usage: `show-toc` and `disk-info` print what 1.2.5 prints, banner and
+    /// all left out.
+    #[cfg(unix)]
+    fn stub_cdrdao_1_2_5(dir: &std::path::Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let unbannered = |name: &str| {
+            let mut kept = String::new();
+            for line in fixture(name).lines() {
+                if !line.starts_with("Cdrdao version ") {
+                    kept.push_str(line);
+                    kept.push('\n');
+                }
+            }
+            kept
+        };
+        std::fs::write(dir.join("usage.txt"), fixture("version.txt")).unwrap();
+        std::fs::write(dir.join("toc.txt"), fixture("show-toc-mixed.txt")).unwrap();
+        std::fs::write(dir.join("disk.txt"), unbannered("disk-info-blank-cdr.txt")).unwrap();
+        let script = dir.join("cdrdao");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\n\
+             dir=$(dirname \"$0\")\n\
+             case \"$1\" in\n\
+             show-toc) cat \"$dir/toc.txt\";;\n\
+             disk-info) cat \"$dir/disk.txt\";;\n\
+             *) cat \"$dir/usage.txt\"; exit 1;;\n\
+             esac\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        script
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cdrdao_1_2_5_is_believed_without_a_banner_on_every_command() {
+        // cdrdao 1.2.4 printed its banner before every command's output, and
+        // a command without it was taken for a binary that was not cdrdao:
+        // with 1.2.5 every table of contents and every disc was refused.
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = CdrdaoEngine::at(stub_cdrdao_1_2_5(dir.path()), dir.path().join("toc"));
+        assert_eq!(engine.probe_version().await.unwrap(), "1.2.5");
+        let failures = engine
+            .check_table_of_contents(&mixed())
+            .await
+            .expect("cdrdao's reading of the table of contents");
+        assert!(failures.is_empty(), "{failures:?}");
+        let medium = engine
+            .inspect_medium(&mixed().drive)
+            .await
+            .expect("cdrdao's report on the disc");
+        assert_eq!(medium.profile, "CD-R");
+        assert!(medium.blank);
     }
 
     #[tokio::test]

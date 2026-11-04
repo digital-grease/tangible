@@ -100,8 +100,10 @@ pub fn messages(output: &str) -> Vec<Message> {
 
 /// The version cdrdao names in its banner.
 ///
-/// Every command prints `Cdrdao version 1.2.4 - (C) ...` first. `None` means
-/// the binary is not cdrdao, rather than that parsing failed.
+/// The usage, which is what running cdrdao with no command prints, starts
+/// `Cdrdao version 1.2.5 - (C) ...`. cdrdao 1.2.4 printed the same line before
+/// every command's output; 1.2.5 prints it only there. `None` means the binary
+/// is not cdrdao, rather than that parsing failed.
 #[must_use]
 pub fn version(output: &str) -> Option<String> {
     lines(output).find_map(|line| {
@@ -786,7 +788,15 @@ mod tests {
 
     #[test]
     fn the_banner_names_the_version() {
-        assert_eq!(version(&captured("version.txt")).as_deref(), Some("1.2.4"));
+        assert_eq!(version(&captured("version.txt")).as_deref(), Some("1.2.5"));
+        // Every command's output carried it in 1.2.4; a drive's capture still
+        // does.
+        assert_eq!(
+            version(&captured("disk-info-blank-cdr.txt")).as_deref(),
+            Some("1.2.4")
+        );
+        // From 1.2.5 only the usage does.
+        assert_eq!(version(&captured("show-toc-mixed.txt")), None);
     }
 
     #[test]

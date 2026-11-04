@@ -1,4 +1,3 @@
-Cdrdao version 1.2.4 - (C) Andreas Mueller <andreas@daneb.de>
 Starting read test...
 Process can be aborted with QUIT signal (usually CTRL-\).
 WARNING: Cannot lock memory pages: Cannot allocate memory

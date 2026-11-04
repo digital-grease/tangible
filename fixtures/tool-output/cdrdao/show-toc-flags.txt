@@ -1,4 +1,3 @@
-Cdrdao version 1.2.4 - (C) Andreas Mueller <andreas@daneb.de>
 TOC TYPE: CD_ROM
 TRACK  1  Mode MODE1_RAW:
           COPY PERMITTED

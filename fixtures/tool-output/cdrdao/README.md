@@ -14,14 +14,17 @@ and delete it from `assembled/` when you do.
 
 ## Provenance
 
-cdrdao 1.2.4, package `1:1.2.4-3` from `debian:bookworm-slim`. That is the
-base image and package the worker image installs (`deploy/Dockerfile`), so
-these are the messages the shipped worker will see. Captured 2026-09-29 in a
-container with no optical drive:
+The captured files without a drive are from cdrdao 1.2.5, package
+`1:1.2.5-2` from `debian:trixie-slim`. That is the base image and package the
+worker image installs (`deploy/Dockerfile`), so these are the messages the
+shipped worker will see. Captured 2026-11-03 in a container with no optical
+drive; they were first captured from cdrdao 1.2.4 (`1:1.2.4-3`, bookworm) on
+2026-09-29, and 1.2.5 differs only in the banner (item 7 below) and its
+usage, which lists `cdtext`:
 
 ```bash
 cat > Dockerfile <<'DOCKERFILE'
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 RUN apt-get update && apt-get install --no-install-recommends -y cdrdao
 DOCKERFILE
 docker build -t tangible-cdrdao-capture .
@@ -37,9 +40,9 @@ ran against, in the shapes the TOC writer produces. `exit-codes.txt` records
 each command's exit status, because several of the findings below are about
 the exit status disagreeing with the output.
 
-Four files are captured from a real drive, a Slimtype DVD A DS8A8SH (firmware
-KS21) on USB, passed to the same container as `--device /dev/sr0`, on
-2026-09-29: `drive-info.txt` and `disk-info-no-disc.txt` with the tray empty,
+Four files are captured from a real drive, with cdrdao 1.2.4, so they still
+carry its banner: a Slimtype DVD A DS8A8SH (firmware KS21) on USB, passed to
+the container as `--device /dev/sr0`, on 2026-09-29: `drive-info.txt` and `disk-info-no-disc.txt` with the tray empty,
 then `disk-info-blank-cdr.txt` and `write-simulate.txt` with a blank 80 minute
 CD-R in it. The latter is the engine's own write arguments and table of
 contents with `--simulate` added: the drive goes through the whole write with
@@ -91,12 +94,18 @@ would guess:
    itself, and does not count a gap the file carries twice.
 6. **An empty drive retries for about thirty seconds** ("Unit not ready, still
    trying...", ten times at three-second intervals) before giving up.
+7. **From 1.2.5, only the usage names the version.** 1.2.4 printed
+   `Cdrdao version 1.2.4 - (C) ...` before every command's output, and the
+   engine took a command without it for a binary that was not cdrdao, which
+   with 1.2.5 refused every table of contents and every disc. The version
+   probe at start reads the usage; a command after it is checked only for
+   having said something.
 
 ## What each file is for
 
 | File | What it is |
 | --- | --- |
-| `version.txt` | No arguments. The first line names the version; exit 1. |
+| `version.txt` | No arguments: the usage, whose first line names the version; exit 1. The only output that names it from 1.2.5 on. |
 | `show-toc-*.txt` | cdrdao's reading of each TOC in `toc/`, which the engine compares against the plan before a write. |
 | `show-toc-missing-file.txt`, `-too-long`, `-too-short` | Inconsistent tables of contents that still exit 0. |
 | `show-toc-syntax-error.txt` | The one case that exits non-zero. |

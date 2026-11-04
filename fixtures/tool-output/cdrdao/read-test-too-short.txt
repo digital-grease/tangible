@@ -1,4 +1,3 @@
-Cdrdao version 1.2.4 - (C) Andreas Mueller <andreas@daneb.de>
 WARNING: Track 1: Length is shorter than 4 seconds.
 ERROR: The toc check function detected at least one warning.
 ERROR: If you record this toc the resulting CD might be unusable
