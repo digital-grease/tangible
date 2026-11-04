@@ -4,10 +4,11 @@
 //! The chdman engine.
 //!
 //! chdman, from MAME, turns a disc image into a CHD. Creating one is not
-//! enough to trust it: chdman 0.251 reads a cdrdao table of contents whose
-//! track starts with an in-file pregap (`START`) as a gap with nothing
-//! stored, and the CHD it writes holds that track's data shifted by the
-//! pregap, at the right length. Nothing but a byte comparison shows it.
+//! enough to trust it: chdman 0.251 and 0.276 (Debian 12's and 13's) read a
+//! cdrdao table of contents whose track starts with an in-file pregap
+//! (`START`) as a gap with nothing stored, and the CHD they write holds
+//! that track's data shifted by the pregap, at the right length. Nothing but
+//! a byte comparison shows it.
 //!
 //! So every CHD is made, verified by chdman against its own checksums, then
 //! extracted again and compared with the parent, track by track, through
@@ -342,8 +343,8 @@ impl Chdman {
         let cwd = request.input_dir;
         self.chdman(&["verify", "-i", input_text], cwd, "verify")
             .await?;
-        // extractraw rather than extractdvd, which chdman 0.251 lacks: a DVD
-        // CHD's data is the ISO's bytes, whatever made it.
+        // extractraw rather than extractdvd, which chdman before 0.262
+        // lacks: a DVD CHD's data is the ISO's bytes, whatever made it.
         self.chdman(
             &["extractraw", "-i", input_text, "-o", output],
             cwd,

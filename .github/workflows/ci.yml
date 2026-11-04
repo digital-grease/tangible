@@ -62,6 +62,10 @@ jobs:
     # TANGIBLE_HARDWARE_TESTS is for.
     name: Burn engines against the real tools
     runs-on: ubuntu-latest
+    # The Debian the image is built on (deploy/Dockerfile's build stage), so
+    # these are the xorriso, cdrdao and chdman versions that ship: the
+    # runner's own Ubuntu has a chdman too old to make DVD CHDs.
+    container: rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3
     env:
       TANGIBLE_XORRISO_TESTS: "1"
       TANGIBLE_CDRDAO_TESTS: "1"
@@ -72,8 +76,8 @@ jobs:
 
       - name: Install xorriso, cdrdao and chdman
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y xorriso cdrdao mame-tools
+          apt-get update
+          apt-get install --no-install-recommends -y xorriso cdrdao mame-tools
 
       - name: xorriso engine
         run: cargo test -p tangible-burn --all-features --test xorriso_engine

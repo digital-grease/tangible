@@ -447,9 +447,10 @@ it. A CHD older than version 5 says to update it with `chdman copy`; a
 delta CHD, which needs its parent, and a CD CHD that keeps subcode, which a
 CUE/BIN cannot hold, are not extracted, and say so.
 
-CUE/BIN images and CD ISOs work. The chdman in this image (0.251) cannot make
-DVD CHDs, and it misreads a cdrdao TOC whose track has its pregap in the file,
-so such a TOC is refused rather than converted wrongly.
+CUE/BIN images and ISOs of CDs and DVDs work; a DVD's ISO becomes a DVD
+CHD, which comes back byte for byte. The chdman in this image (0.276), like
+the 0.251 before it, misreads a cdrdao TOC whose track has its pregap in the
+file, so such a TOC is refused rather than converted wrongly.
 
 A conversion needs room in the staging volume for a copy of the original and
 the CHD, briefly. Set `TANGIBLE_DERIVATION_ENGINE=none` to turn CHDs off.

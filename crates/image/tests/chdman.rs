@@ -187,15 +187,23 @@ async fn a_toc_whose_pregap_chdman_misreads_is_refused() {
         b"CD_ROM\n\nTRACK MODE1_RAW\nDATAFILE \"disc.bin\" 00:04:00\n\nTRACK AUDIO\nDATAFILE \"disc.bin\" #705600 00:04:50\nSTART 00:02:00\n\nTRACK AUDIO\nDATAFILE \"disc.bin\" #1528800 00:02:25\n",
     );
     let result = derive(&engine, dir.path(), "disc.toc", Transformation::ChdCreateCd).await;
-    if engine.tool_version() == "0.251" {
-        // chdman 0.251 stores this track's data shifted by its pregap; the
-        // round trip is what catches it.
-        let error = result.expect_err("chdman 0.251 misreads START; the CHD must be refused");
-        assert_eq!(error.code(), "DERIVATION_NOT_EQUIVALENT", "{error}");
-        assert!(error.to_string().contains("track 2"), "{error}");
-    } else if let Ok((loss, _)) = result {
-        // A later chdman may read it correctly; then it must truly match.
-        assert_eq!(loss, LossCharacter::StructurallyEquivalent);
+    // chdman 0.251 and 0.276, Debian 12's and 13's, store this track's data
+    // shifted by its pregap; the round trip is what catches it.
+    let misreads = matches!(engine.tool_version().as_str(), "0.251" | "0.276");
+    match result {
+        Err(error) => {
+            assert_eq!(error.code(), "DERIVATION_NOT_EQUIVALENT", "{error}");
+            assert!(error.to_string().contains("track 2"), "{error}");
+        }
+        Ok((loss, _)) => {
+            assert!(
+                !misreads,
+                "chdman {} misreads START; the CHD must be refused",
+                engine.tool_version()
+            );
+            // A chdman that reads it correctly must truly match.
+            assert_eq!(loss, LossCharacter::StructurallyEquivalent);
+        }
     }
 }
 
@@ -231,6 +239,49 @@ async fn a_dvd_chd_is_refused_by_a_chdman_without_createdvd() {
     .await
     .unwrap_err();
     assert_eq!(error.code(), "DERIVATION_UNSUPPORTED");
+}
+
+#[tokio::test]
+async fn a_dvd_iso_makes_a_dvd_chd_that_extracts_to_the_same_iso() {
+    let Some(engine) = chdman().await else { return };
+    if engine
+        .check_supported(Transformation::ChdCreateDvd)
+        .is_err()
+    {
+        // A chdman before createdvd; the test above covers it.
+        return;
+    }
+    let (dir, input) = input_dir();
+    let iso = noise(2048 * 400, 6);
+    write(&input, "disc.iso", &iso);
+    let (loss, _) = derive(
+        &engine,
+        dir.path(),
+        "disc.iso",
+        Transformation::ChdCreateDvd,
+    )
+    .await
+    .expect("a DVD CHD that round-trips");
+    assert_eq!(loss, LossCharacter::BitExactRepack);
+
+    // The CHD createdvd made, imported as an original, extracts to the ISO
+    // it was made of.
+    let made = dir.path().join("out").join("disc.chd");
+    std::fs::rename(&made, input.join("made.chd")).unwrap();
+    let loss = extract(
+        &engine,
+        dir.path(),
+        "made.chd",
+        "back.iso",
+        Transformation::IsoFromChd,
+    )
+    .await
+    .expect("extracted and checked");
+    assert_eq!(loss, LossCharacter::StructurallyEquivalent);
+    assert_eq!(
+        std::fs::read(dir.path().join("out").join("back.iso")).unwrap(),
+        iso
+    );
 }
 
 // --- CHDs imported as originals, extracted (docs/plans/chd-images.md) --------

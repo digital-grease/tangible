@@ -602,6 +602,20 @@ may change between minor versions, and the release notes say how.
 
 ### Changed
 
+- The image is built on Debian 13 (trixie), moving from Debian 12
+  (bookworm), now oldstable, and every tool in it moves too: chdman 0.251
+  to 0.276, which makes DVD CHDs (a DVD's ISO gets one, made with
+  `createdvd` and checked by extracting it again byte for byte), cdrdao
+  1.2.4 to 1.2.5, xorriso 1.5.4 to 1.5.6, glibc 2.36 to 2.41. chdman 0.276
+  still misreads a cdrdao TOC whose track has its pregap in the file, and
+  such a TOC is still refused. cdrdao 1.2.5 names its version only in its
+  usage, where 1.2.4 named it before every command's output; the worker now
+  takes the version from its probe at start, where it took a command
+  without the banner for a binary that was not cdrdao, which with 1.2.5
+  would have refused every CD burn. The opt-in decryption image's build
+  stages are on trixie too (dvdbackup 0.4.2-5); rebuild it from the new
+  release. CI runs the engine tests in the same Debian, so they test the
+  versions that ship.
 - Burning an artifact pending deletion is refused with `ARTIFACT_DELETED`
   (409), not `VALIDATION_FAILED`. No version set the old flag; a row that
   had it, set by hand, is reset to kept by migration 0033.

@@ -13,7 +13,7 @@
 
 # The web UI: a static build, served by the server from the same origin as
 # the API. Node exists only in this stage; the runtime image has none.
-FROM node:24-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS web
+FROM node:24-trixie-slim@sha256:54f84b4cf8432b21aaffd5d3ce8d41e12cea0d10d33c09d2f3c9879d49d6b446 AS web
 WORKDIR /web
 RUN npm install --global pnpm@11.26.0
 # Dependencies first, from the lockfile alone, so they are cached across
@@ -23,7 +23,7 @@ RUN pnpm install --frozen-lockfile
 COPY web ./
 RUN pnpm build
 
-FROM rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS build
+FROM rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3 AS build
 WORKDIR /src
 
 # Cache dependencies separately from source.
@@ -37,7 +37,7 @@ RUN cargo build --release --locked -p tangible-app
 COPY deploy/third-party-notices.py ./deploy/
 RUN python3 deploy/third-party-notices.py > THIRD_PARTY_NOTICES-rust.txt
 
-FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS runtime
+FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS runtime
 
 # xorriso for ISO-oriented workflows, cdrdao for DAO/audio/mixed-mode CD,
 # mame-tools for chdman, which makes CHD derivatives (it brings SDL2 and its

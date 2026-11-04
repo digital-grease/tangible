@@ -44,7 +44,7 @@ ARG TANGIBLE_IMAGE
 
 # libdvdcss is compiled in a throwaway stage, so the worker image gets the
 # library and its licence and none of the compiler.
-FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS libdvdcss
+FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS libdvdcss
 
 # To move to a newer release: take the version and its .sha256 file from
 # https://download.videolan.org/pub/videolan/libdvdcss/ and check that file
@@ -75,7 +75,7 @@ RUN curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
 
 # redumper is fetched in a throwaway stage too, so the worker image gets the
 # binary and its licence and nothing used to fetch them.
-FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS redumper
+FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS redumper
 
 # To move to a newer build: take the build number and each zip's SHA-256
 # from https://github.com/superg/redumper/releases (GitHub shows a digest
