@@ -57,7 +57,7 @@ replaced assembled files of the same names. The assembled empty-drive file had
 nine "still trying" lines where the drive printed ten and lacked the drive
 banner, and the parser read both the same.
 
-Three of them were captured again on 2026-11-11 with cdrdao 1.2.5 from the
+Four of them were captured again on 2026-11-11 with cdrdao 1.2.5 from the
 Debian 13 image, in the worker's confinement (`--cap-drop ALL`,
 no-new-privileges, read-only root, the drive's group), the drive now on its
 own power supply: `disk-info-blank-cdr.txt` (a blank CMC CD-R; the same as
@@ -66,10 +66,10 @@ arguments with `--simulate`, on `toc/mixed.toc` and generated data: 4150
 blocks; in this confinement cdrdao warns that it cannot set up real-time
 scheduling, where 1.2.4 without it warned that it could not lock memory), and
 `drive-info.txt` (with a written CD-R in the tray, so the reading speeds
-differ from the empty tray's). `disk-info-no-disc.txt` and
-`write-success.txt` are still 1.2.4's: the first needs an empty tray, the
-second a raw capture of a real burn's stderr, and the sources' format strings
-for both are unchanged in 1.2.5.
+differ from the empty tray's), and `disk-info-no-disc.txt` (the tray empty:
+ten retries, then giving up, as 1.2.4 did, without the banner).
+`write-success.txt` is still 1.2.4's: it needs a raw capture of a real burn's
+stderr, and the source's format strings for it are unchanged in 1.2.5.
 
 The same capture showed that cdrdao talks to the drive through `/dev/sr0`
 with no `/dev/sg` node loaded.

@@ -251,6 +251,7 @@ What has actually been burned and checked, through the worker as it deploys
 | Slimtype DVD A DS8A8SH, firmware KS21 | USB | CD-R, 80 minutes (CMC Magnetics) | ISO through xorriso, read back identical; mixed-mode CUE/BIN through cdrdao, data track identical, audio measured |
 | Slimtype DVD A DS8A8SH, firmware KS21 | USB | DVD-RW (Ritek) | burned and read back identical, a second burn refused, erased on request, burned again and read back identical |
 | Slimtype DVD A DS8A8SH, firmware KS21 | USB, on its own power supply | CD-R, 80 minutes (CMC Magnetics) | with the Debian 13 image (cdrdao 1.2.5, xorriso 1.5.6): mixed-mode disc through cdrdao, data track identical, audio measured; ripped with cdrdao and with redumper, data and tone identical |
+| Slimtype DVD A DS8A8SH, firmware KS21 | USB, on its own power supply | DVD-RW (Ritek) | with the Debian 13 image (xorriso 1.5.6): burned and read back identical, a second burn refused, erased on request (1,726 seconds for a quick erase), burned again and read back identical; ripped, the image and its padding with no read errors |
 
 A USB drive powered only through a hub may drop off its bus as it spins
 up, and a drop during a write ruins the disc. This drive did, behind a
