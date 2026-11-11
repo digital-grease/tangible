@@ -55,6 +55,7 @@ identifies one physical drive and has no business in a public repository.
 | `write-dummy-cdr.txt` | A real dummy write. Note the `libburn : NOTE :` line: the library that drives the laser reports under its own prefix, which the parser did not recognise until this capture. |
 | `toc-address-rejected.txt` | xorriso 1.5.4 in the worker image, run by the operator in the first end-to-end run, refusing `/dev/disc-block`: libburn treats only drive names it enumerates as drives. The engine reports this as the drive being unavailable, not as an empty tray. |
 | `toc-no-disc.txt` | `-toc` on a real drive with an empty tray. It says `Media current: is not recognizable`, which the parser used to read as a profile, so an empty drive looked like a disc that could not be written. |
+| `toc-lost-connection.txt` | `-toc` on a real blank CD-R in the Slimtype DS8A8SH, on 2026-11-03 with xorriso 1.5.6 from the Debian 13 image, when the drive dropped off USB part of the way through (its hub chain reset). stderr as the terminal showed it; stdout was empty; exit 5. The summary printed first names a blank CD-R and nothing of its capacity, which the engine used to read as a CD-R that could not be written. |
 | `write-success-then-abort.txt` | **The interesting one.** The write completed and xorriso then crashed on shutdown, exiting non-zero. |
 
 That last file is why the parser reports what the output said and leaves the

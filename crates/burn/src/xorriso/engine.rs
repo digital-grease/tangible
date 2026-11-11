@@ -1031,6 +1031,39 @@ mod tests {
         assert!(log.is_char_boundary(log.len()));
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_drive_that_drops_off_part_of_the_way_through_is_unavailable() {
+        // A stand-in for xorriso that prints what the real one printed when a
+        // USB drive dropped off its bus mid-report, and exits as it did.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let output = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/tool-output/xorriso/toc-lost-connection.txt"
+        ))
+        .unwrap();
+        std::fs::write(dir.path().join("toc.txt"), output).unwrap();
+        let script = dir.path().join("xorriso");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\ncat \"$(dirname \"$0\")/toc.txt\" >&2\nexit 5\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let engine = XorrisoEngine::at(script);
+        let drive = DriveRef {
+            worker_id: tangible_domain::WorkerId::generate(),
+            drive_id: tangible_domain::DriveId::generate(),
+            device_alias: "/dev/sr0".to_owned(),
+        };
+        let error = engine.inspect_medium(&drive).await.unwrap_err();
+        assert!(
+            matches!(error, EngineError::DriveUnavailable { .. }),
+            "{error:?}"
+        );
+    }
+
     #[test]
     fn a_written_medium_is_read_as_not_blank_and_writable() {
         let report = parse::medium(

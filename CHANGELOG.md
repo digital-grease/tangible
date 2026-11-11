@@ -642,6 +642,10 @@ may change between minor versions, and the release notes say how.
 
 ### Fixed
 
+- A drive that drops off its bus while xorriso reads what is in it (a USB
+  drive whose hub resets, seen on the bench) is reported as unavailable.
+  xorriso had already printed a summary naming a blank CD-R and nothing of
+  its capacity, and the worker read that as a CD-R it could not write.
 - A burn worker asked to stop while it writes or erases a disc now
   finishes first, the read-back and report included, and then stops.
   It used to stop at once: the writing tool, which runs inside the worker's

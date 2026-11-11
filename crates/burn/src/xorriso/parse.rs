@@ -382,11 +382,14 @@ pub fn write_outcome(output: &str) -> WriteOutcome {
 
 /// Why xorriso would not use the drive, when it says it would not.
 ///
-/// Two shapes, both from a real drive: the address was refused outright
+/// Three shapes, all from a real drive: the address was refused outright
 /// ("Drive address '/dev/disc-block' rejected because: not MMC ..."), which is
-/// what libburn does with a path it does not enumerate as a drive, or no drive
-/// was acquired at all. Either is a fault in how the worker reaches the drive,
-/// not a fact about the disc, and is reported as such.
+/// what libburn does with a path it does not enumerate as a drive; no drive
+/// was acquired at all; or the drive went away part of the way through ("Lost
+/// connection to drive", a USB drive dropping off its bus), after xorriso had
+/// already printed a summary of the disc that says nothing of its capacity.
+/// Each is a fault in how the worker reaches the drive, not a fact about the
+/// disc, and is reported as such.
 #[must_use]
 pub fn drive_refused(output: &str) -> Option<String> {
     output.lines().find_map(|line| {
@@ -394,7 +397,8 @@ pub fn drive_refused(output: &str) -> Option<String> {
         let refused = message.starts_with("Drive address") && message.contains("rejected because")
             || message.starts_with("No input drive acquired")
             || message.starts_with("No output drive acquired")
-            || message.starts_with("Cannot acquire drive");
+            || message.starts_with("Cannot acquire drive")
+            || message.starts_with("Lost connection to drive");
         (refused && FATAL_SEVERITIES.contains(&severity.as_str())).then_some(message)
     })
 }
@@ -867,6 +871,16 @@ xorriso 1.5.6 : RockRidge filesystem manipulator, libburnia project.
         let output = fixture("toc-address-rejected.txt");
         let reason = drive_refused(&output).expect("a refusal");
         assert!(reason.contains("rejected because: not MMC"), "{reason}");
+    }
+
+    #[test]
+    fn a_drive_lost_part_of_the_way_through_is_a_refusal_not_a_blank_disc() {
+        // A USB drive dropped off its bus after xorriso's first summary, which
+        // names a blank CD-R and nothing of what can be written to it. Read as
+        // a medium, that was a CD-R that could not be written.
+        let output = fixture("toc-lost-connection.txt");
+        let reason = drive_refused(&output).expect("a refusal");
+        assert_eq!(reason, "Lost connection to drive");
     }
 
     #[test]
