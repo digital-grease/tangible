@@ -40,22 +40,37 @@ ran against, in the shapes the TOC writer produces. `exit-codes.txt` records
 each command's exit status, because several of the findings below are about
 the exit status disagreeing with the output.
 
-Four files are captured from a real drive, with cdrdao 1.2.4, so they still
-carry its banner: a Slimtype DVD A DS8A8SH (firmware KS21) on USB, passed to
-the container as `--device /dev/sr0`, on 2026-09-29: `drive-info.txt` and `disk-info-no-disc.txt` with the tray empty,
-then `disk-info-blank-cdr.txt` and `write-simulate.txt` with a blank 80 minute
-CD-R in it. The latter is the engine's own write arguments and table of
+Files captured from a real drive, a Slimtype DVD A DS8A8SH (firmware KS21) on
+USB, passed to the container as `--device /dev/sr0`. First on 2026-09-29 with
+cdrdao 1.2.4: `drive-info.txt` and `disk-info-no-disc.txt` with the tray
+empty, then `disk-info-blank-cdr.txt` and `write-simulate.txt` with a blank 80
+minute CD-R in it, the latter the engine's own write arguments and table of
 contents with `--simulate` added: the drive goes through the whole write with
 the laser off, and the disc was checked blank afterwards. Finally
-`write-success.txt`, the first real burn: the engine's own `write()` on the same
-disc, its stderr kept byte for byte. The disc was then read back over SCSI with
-`cdrdao read-cd`: the data track was byte-identical to the ISO it was written
-from, and the audio track was sample-identical to the tone, which is what shows
-the per-file `SWAP` is right. `drive-info.txt`, `disk-info-no-disc.txt`,
-`disk-info-blank-cdr.txt` and `write-success.txt` replaced assembled files of
-the same names. The
-assembled empty-drive file had nine "still trying" lines where the drive
-printed ten and lacked the drive banner, and the parser read both the same.
+`write-success.txt`, the first real burn: the engine's own `write()` on the
+same disc, its stderr kept byte for byte. The disc was then read back over
+SCSI with `cdrdao read-cd`: the data track was byte-identical to the ISO it was
+written from, and the audio track was sample-identical to the tone, which is
+what shows the per-file `SWAP` is right. `drive-info.txt`,
+`disk-info-no-disc.txt`, `disk-info-blank-cdr.txt` and `write-success.txt`
+replaced assembled files of the same names. The assembled empty-drive file had
+nine "still trying" lines where the drive printed ten and lacked the drive
+banner, and the parser read both the same.
+
+Three of them were captured again on 2026-11-11 with cdrdao 1.2.5 from the
+Debian 13 image, in the worker's confinement (`--cap-drop ALL`,
+no-new-privileges, read-only root, the drive's group), the drive now on its
+own power supply: `disk-info-blank-cdr.txt` (a blank CMC CD-R; the same as
+1.2.4's but for the banner), `write-simulate.txt` (the engine's write
+arguments with `--simulate`, on `toc/mixed.toc` and generated data: 4150
+blocks; in this confinement cdrdao warns that it cannot set up real-time
+scheduling, where 1.2.4 without it warned that it could not lock memory), and
+`drive-info.txt` (with a written CD-R in the tray, so the reading speeds
+differ from the empty tray's). `disk-info-no-disc.txt` and
+`write-success.txt` are still 1.2.4's: the first needs an empty tray, the
+second a raw capture of a real burn's stderr, and the sources' format strings
+for both are unchanged in 1.2.5.
+
 The same capture showed that cdrdao talks to the drive through `/dev/sr0`
 with no `/dev/sg` node loaded.
 

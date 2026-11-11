@@ -789,14 +789,15 @@ mod tests {
     #[test]
     fn the_banner_names_the_version() {
         assert_eq!(version(&captured("version.txt")).as_deref(), Some("1.2.5"));
-        // Every command's output carried it in 1.2.4; a drive's capture still
-        // does.
+        // Every command's output carried it in 1.2.4; the first real burn's
+        // capture, from 1.2.4, still does.
         assert_eq!(
-            version(&captured("disk-info-blank-cdr.txt")).as_deref(),
+            version(&captured("write-success.txt")).as_deref(),
             Some("1.2.4")
         );
-        // From 1.2.5 only the usage does.
+        // From 1.2.5 only the usage does, with a drive or without.
         assert_eq!(version(&captured("show-toc-mixed.txt")), None);
+        assert_eq!(version(&captured("disk-info-blank-cdr.txt")), None);
     }
 
     #[test]
@@ -1115,20 +1116,21 @@ mod tests {
 
     #[test]
     fn a_real_simulated_write_completes_and_counts_the_generated_gap() {
-        // Captured with --simulate against a blank CD-R: the engine's own
-        // arguments and table of contents, the laser off. 3561 blocks is the
-        // data track, the audio track and the two-second gap between them.
+        // Captured with --simulate against a blank CD-R, by cdrdao 1.2.5 in
+        // the worker's confinement: the engine's own write arguments and
+        // toc/mixed.toc, the laser off. 4150 blocks is the data track, the
+        // two-second gap and the audio track.
         let output = captured("write-simulate.txt");
         let outcome = write_outcome(&output);
         assert!(outcome.reported_complete, "{:?}", outcome.events);
         assert!(outcome.failures.is_empty(), "{:?}", outcome.failures);
-        assert_eq!(outcome.blocks_written, Some(1161 + 150 + 2250));
-        assert_eq!(outcome.last_progress, Some((7, 7)));
+        assert_eq!(outcome.blocks_written, Some(1000 + 150 + 3000));
+        assert_eq!(outcome.last_progress, Some((9, 9)));
         assert!(
             outcome
                 .warnings
                 .iter()
-                .any(|warning| warning.contains("Cannot lock memory pages")),
+                .any(|warning| warning.contains("real time scheduling")),
             "a worker without the capability sees this: {:?}",
             outcome.warnings
         );
