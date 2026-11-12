@@ -149,7 +149,48 @@ async fn refuse_completions(
     next.run(request).await
 }
 
-async fn server_from(decryption_allowed: bool, refused: Option<RefusedCompletions>) -> Server {
+/// A claim's response as a hostile server might send it: the value at
+/// `pointer` replaced, in the answer to a POST whose path ends `path_suffix`.
+#[derive(Clone)]
+struct RewrittenClaims {
+    path_suffix: &'static str,
+    pointer: &'static str,
+    value: serde_json::Value,
+}
+
+async fn rewrite_claims(
+    axum::extract::State(rewrite): axum::extract::State<RewrittenClaims>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let rewriting = request.method() == axum::http::Method::POST
+        && request.uri().path().ends_with(rewrite.path_suffix);
+    let response = next.run(request).await;
+    if !rewriting || response.status() != axum::http::StatusCode::OK {
+        return response;
+    }
+    let (mut parts, body) = response.into_parts();
+    let bytes = axum::body::to_bytes(body, usize::MAX)
+        .await
+        .expect("the claim");
+    let mut claim: serde_json::Value = serde_json::from_slice(&bytes).expect("a claim");
+    *claim
+        .pointer_mut(rewrite.pointer)
+        .expect("the field to rewrite") = rewrite.value.clone();
+    parts.headers.remove(axum::http::header::CONTENT_LENGTH);
+    axum::response::Response::from_parts(
+        parts,
+        axum::body::Body::from(serde_json::to_vec(&claim).expect("json")),
+    )
+}
+
+/// What a test does to the server's answers.
+enum Tamper {
+    RefuseCompletions(RefusedCompletions),
+    RewriteClaims(RewrittenClaims),
+}
+
+async fn server_from(decryption_allowed: bool, tamper: Option<Tamper>) -> Server {
     let url = std::env::var("TANGIBLE_TEST_DATABASE_URL")
         .or_else(|_| std::env::var("TANGIBLE_DATABASE_URL"))
         .expect("set TANGIBLE_TEST_DATABASE_URL to run integration tests");
@@ -186,11 +227,13 @@ async fn server_from(decryption_allowed: bool, refused: Option<RefusedCompletion
             upload_part_bytes: tangible_domain::upload::PART_BYTES,
         })
         .with_decryption_allowed(decryption_allowed);
-    let app = match refused {
-        Some(refused) => router(state).layer(axum::middleware::from_fn_with_state(
-            refused,
-            refuse_completions,
-        )),
+    let app = match tamper {
+        Some(Tamper::RefuseCompletions(refused)) => router(state).layer(
+            axum::middleware::from_fn_with_state(refused, refuse_completions),
+        ),
+        Some(Tamper::RewriteClaims(rewrite)) => router(state).layer(
+            axum::middleware::from_fn_with_state(rewrite, rewrite_claims),
+        ),
         None => router(state),
     };
     let handle = tokio::spawn(async move {
@@ -775,7 +818,7 @@ async fn a_worker_whose_report_is_not_taken_asks_again_before_taking_more() {
     // server had not heard about.
     let _queue = exclusive_queue().await;
     let refused = RefusedCompletions::new(3, axum::http::StatusCode::SERVICE_UNAVAILABLE);
-    let mut server = server_from(false, Some(refused.clone())).await;
+    let mut server = server_from(false, Some(Tamper::RefuseCompletions(refused.clone()))).await;
     server.drain_queue().await;
 
     let artifact = server.import(&iso_image("ASKAGAIN", 24)).await;
@@ -824,7 +867,7 @@ async fn a_worker_whose_report_is_refused_settles_it_before_taking_more() {
     // person must look.
     let _queue = exclusive_queue().await;
     let refused = RefusedCompletions::new(1, axum::http::StatusCode::NOT_FOUND);
-    let mut server = server_from(false, Some(refused.clone())).await;
+    let mut server = server_from(false, Some(Tamper::RefuseCompletions(refused.clone()))).await;
     server.drain_queue().await;
 
     let artifact = server.import(&iso_image("REFUSED", 24)).await;
@@ -857,6 +900,102 @@ async fn a_worker_whose_report_is_refused_settles_it_before_taking_more() {
     );
     let first_now = server.get(&format!("/api/v1/burn-jobs/{first}")).await;
     assert_eq!(first_now["attempt_count"], 1, "{first_now}");
+
+    server.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_worker_fetches_its_manifest_from_its_own_server_whatever_the_claim_says() {
+    // Found by the 2026-11-12 security review: the worker pasted the
+    // claim's manifest path onto its server's address, so a path beginning
+    // `@` named another host, and the worker's credential went there.
+    let _queue = exclusive_queue().await;
+    let mut server = server_from(
+        false,
+        Some(Tamper::RewriteClaims(RewrittenClaims {
+            path_suffix: "/claims",
+            pointer: "/artifact/manifest_url",
+            value: serde_json::json!("@127.0.0.1:9/elsewhere"),
+        })),
+    )
+    .await;
+    server.drain_queue().await;
+
+    let artifact = server.import(&iso_image("OWNSERVER", 24)).await;
+    let disc = server.seed_disc().await;
+    let job = server.queue_burn(&disc, &artifact).await;
+
+    let worker_dir = TempDir::new().expect("temp dir");
+    let token = server.enrollment_token().await;
+    let settings = settings(&server, worker_dir.path().to_path_buf(), token);
+    let engine = FakeEngine::new(settings.state_dir.join("media"));
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let worker = spawn_worker(settings, engine, stopped);
+
+    let settled = server.await_settled(&job).await;
+    let _ = stop.send(());
+    let _ = worker.await;
+    assert_eq!(settled["state"], "complete", "{settled}");
+    assert_eq!(settled["attempts"][0]["state"], "verified", "{settled}");
+
+    server.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_rip_claim_whose_id_is_a_path_touches_nothing() {
+    // Found by the 2026-11-12 security review: the worker named a directory
+    // after the claim's rip id and emptied it first, so `../something`
+    // removed whatever that led to: its credential, its recovery record.
+    let _queue = exclusive_queue().await;
+    let mut server = server_from(
+        false,
+        Some(Tamper::RewriteClaims(RewrittenClaims {
+            path_suffix: "/rip-claims",
+            pointer: "/rip_id",
+            value: serde_json::json!("../kept"),
+        })),
+    )
+    .await;
+    server.drain_queue().await;
+
+    let worker_dir = TempDir::new().expect("temp dir");
+    let kept = worker_dir.path().join("kept");
+    std::fs::create_dir_all(&kept).expect("a folder beside the rips");
+    std::fs::write(kept.join("precious"), b"keep me").expect("a file in it");
+    let token = server.enrollment_token().await;
+    let settings = settings(&server, worker_dir.path().to_path_buf(), token);
+    let engine = || FakeEngine::new(settings.state_dir.join("media")).with_behaviour(pressed_cd());
+    let drive = {
+        let mut runtime = WorkerRuntime::new(settings.clone(), engine()).expect("runtime");
+        let mut identity = runtime.identify().await.expect("enroll");
+        runtime.announce(&mut identity).await.expect("announce")
+    };
+    let (status, requested) = server
+        .post(
+            &format!("/api/v1/drives/{drive}/rips"),
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, 201, "{requested}");
+    let rip = requested["id"].as_str().expect("a rip").to_owned();
+
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let engine = engine();
+    let worker = spawn_worker(settings, engine, stopped);
+    // The claim is taken, and its answer refused as it is read.
+    server
+        .rip_until(&rip, |record| record["state"] != "queued")
+        .await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let _ = stop.send(());
+    let _ = worker.await;
+
+    assert_eq!(
+        std::fs::read(kept.join("precious")).expect("the file is still there"),
+        b"keep me"
+    );
 
     server.stop().await;
 }

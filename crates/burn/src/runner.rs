@@ -26,8 +26,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tangible_domain::{
-    ArtifactId, BurnAttemptId, BurnJobId, CdRipEngine, DriveId, RipOriginal, SecretString,
-    Sha256Digest, WorkerId,
+    ArtifactId, BurnAttemptId, BurnJobId, CdRipEngine, DriveId, RipJobId, RipOriginal,
+    SecretString, Sha256Digest, WorkerId,
 };
 use time::OffsetDateTime;
 
@@ -911,7 +911,7 @@ impl EventSink for RipSink {
 /// failed keeps its events for the next try.
 async fn flush_rip_events(
     client: &WorkerClient,
-    rip_id: &str,
+    rip_id: RipJobId,
     events: &std::sync::Mutex<RipEvents>,
 ) -> RipStanding {
     let batch: Vec<RipEventBody> = match events.lock() {
@@ -937,7 +937,7 @@ async fn flush_rip_events(
 async fn rip_reporter(
     client: WorkerClient,
     worker_id: String,
-    rip_id: String,
+    rip_id: RipJobId,
     events: Arc<std::sync::Mutex<RipEvents>>,
     cancel: CancelToken,
     stop: Arc<AtomicBool>,
@@ -951,7 +951,7 @@ async fn rip_reporter(
         if let Err(error) = client.heartbeat(&worker_id).await {
             tracing::warn!(error = ?error, "heartbeat failed while ripping");
         }
-        if flush_rip_events(&client, &rip_id, &events).await == RipStanding::Stop {
+        if flush_rip_events(&client, rip_id, &events).await == RipStanding::Stop {
             tracing::info!(%rip_id, "the rip was withdrawn; stopping");
             cancel.cancel();
             break;
@@ -969,7 +969,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         rip: &RipClaim,
     ) -> Result<(), RunnerError> {
         tracing::info!(rip_id = %rip.rip_id, "ripping the disc in the drive, as requested");
-        let dir = self.rips_root().join(&rip.rip_id);
+        let dir = self.rips_root().join(rip.rip_id.to_string());
         let _ = tokio::fs::remove_dir_all(&dir).await;
 
         let events = Arc::new(std::sync::Mutex::new(RipEvents::default()));
@@ -978,7 +978,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         let reporter = tokio::spawn(rip_reporter(
             self.client.clone(),
             identity.worker_id.clone(),
-            rip.rip_id.clone(),
+            rip.rip_id,
             Arc::clone(&events),
             cancel.clone(),
             Arc::clone(&stop),
@@ -1090,14 +1090,14 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             tracing::info!(rip_id = %rip.rip_id, "rip withdrawn; nothing to send");
             return Ok(());
         };
-        if flush_rip_events(&self.client, &rip.rip_id, events).await == RipStanding::Stop {
+        if flush_rip_events(&self.client, rip.rip_id, events).await == RipStanding::Stop {
             tracing::info!(rip_id = %rip.rip_id, "rip withdrawn before it could be sent");
             return Ok(());
         }
         for name in &completion.outputs {
             let standing = self
                 .client
-                .upload_rip_file(&rip.rip_id, name, &dir.join(name))
+                .upload_rip_file(rip.rip_id, name, &dir.join(name))
                 .await?;
             if standing == RipStanding::Stop {
                 tracing::info!(rip_id = %rip.rip_id, "rip withdrawn while sending");
@@ -1110,7 +1110,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             error_code = ?completion.error_code,
             "rip finished"
         );
-        self.client.complete_rip(&rip.rip_id, &completion).await?;
+        self.client.complete_rip(rip.rip_id, &completion).await?;
         Ok(())
     }
 }
@@ -1523,10 +1523,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
 
         let manifest = self
             .client
-            .fetch_manifest(
-                &lease.artifact.manifest_url,
-                lease.artifact.manifest_sha256.as_deref(),
-            )
+            .fetch_manifest(artifact_id, lease.artifact.manifest_sha256.as_deref())
             .await?;
 
         let mut inputs = Vec::with_capacity(manifest.components.len());
@@ -2016,7 +2013,7 @@ mod tests {
 
     fn claim(cd_engine: Option<&str>) -> RipClaim {
         RipClaim {
-            rip_id: "r".to_owned(),
+            rip_id: RipJobId::generate(),
             outputs: Vec::new(),
             max_file_bytes: 1,
             decrypt: false,

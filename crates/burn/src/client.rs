@@ -26,7 +26,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tangible_domain::manifest::ArtifactManifest;
 use tangible_domain::{
-    ArtifactId, BurnAttemptId, ComponentId, SecretString, Sha256Digest, redacted,
+    ArtifactId, BurnAttemptId, ComponentId, RipJobId, SecretString, Sha256Digest, redacted,
 };
 use time::OffsetDateTime;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -211,7 +211,11 @@ impl std::fmt::Debug for RotatedCredential {
 pub struct LeasedArtifact {
     /// The artifact.
     pub artifact_id: String,
-    /// Path to fetch the manifest from.
+    /// Path to fetch the manifest from. Not followed: the worker fetches
+    /// the manifest of [`Self::artifact_id`] from its own server, since a
+    /// path pasted onto the server's address could name another host
+    /// (`@elsewhere/...`) and take the worker's credential there (security
+    /// review, 2026-11-12). Kept, as the server still sends it.
     pub manifest_url: String,
     /// Digest of the manifest as published.
     #[serde(default)]
@@ -419,8 +423,11 @@ pub struct RipCapabilityBody {
 /// A rip a worker has taken.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RipClaim {
-    /// The rip.
-    pub rip_id: String,
+    /// The rip. Typed, so a claim whose identifier is not one is refused as
+    /// it is read: the worker names a directory after it, and a server that
+    /// sent `..` or an absolute path would have had it emptied wherever that
+    /// led (security review, 2026-11-12).
+    pub rip_id: RipJobId,
     /// The only file names the server accepts for it.
     #[serde(default)]
     pub outputs: Vec<String>,
@@ -892,7 +899,7 @@ impl WorkerClient {
     /// [`ClientError::Transport`].
     pub async fn rip_events(
         &self,
-        rip_id: &str,
+        rip_id: RipJobId,
         events: &[RipEventBody],
     ) -> Result<RipStanding, ClientError> {
         let response = self
@@ -923,7 +930,7 @@ impl WorkerClient {
     /// for anything but a conflict, or [`ClientError::Transport`].
     pub async fn upload_rip_file(
         &self,
-        rip_id: &str,
+        rip_id: RipJobId,
         name: &str,
         path: &Path,
     ) -> Result<RipStanding, ClientError> {
@@ -965,7 +972,7 @@ impl WorkerClient {
     /// [`ClientError::Refused`] or [`ClientError::Transport`].
     pub async fn complete_rip(
         &self,
-        rip_id: &str,
+        rip_id: RipJobId,
         completion: &RipCompletion,
     ) -> Result<(), ClientError> {
         let response = self
@@ -1107,7 +1114,7 @@ impl WorkerClient {
         response.json().await.map_err(ClientError::Transport)
     }
 
-    /// Fetch and check a manifest.
+    /// Fetch and check an artifact's manifest.
     ///
     /// The digest is compared before the document is parsed, so a truncated
     /// or altered manifest is refused rather than half-understood.
@@ -1119,13 +1126,16 @@ impl WorkerClient {
     /// or [`ClientError::Refused`] / [`ClientError::Transport`].
     pub async fn fetch_manifest(
         &self,
-        manifest_url: &str,
+        artifact_id: ArtifactId,
         expected_sha256: Option<&str>,
     ) -> Result<ArtifactManifest, ClientError> {
         use sha2::Digest as _;
 
         let response = self
-            .authorised(self.http.get(self.url(manifest_url)))
+            .authorised(
+                self.http
+                    .get(self.url(&format!("/api/v1/artifacts/{artifact_id}/manifest"))),
+            )
             .send()
             .await
             .map_err(ClientError::Transport)?;
@@ -1594,6 +1604,21 @@ mod tests {
             detail: String::new(),
         };
         assert!(!busy.is_unauthenticated());
+    }
+
+    #[test]
+    fn a_rip_claim_whose_id_is_not_one_is_refused_as_it_is_read() {
+        let claim = |rip_id: &str| {
+            serde_json::from_value::<RipClaim>(serde_json::json!({
+                "rip_id": rip_id,
+                "max_file_bytes": 1,
+            }))
+        };
+        for hostile in ["..", "../state", "/etc", "r", ""] {
+            assert!(claim(hostile).is_err(), "{hostile:?}");
+        }
+        let id = RipJobId::generate();
+        assert_eq!(claim(&id.to_string()).unwrap().rip_id, id);
     }
 
     #[test]

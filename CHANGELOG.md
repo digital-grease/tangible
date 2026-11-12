@@ -66,6 +66,15 @@ Found by a security review of 0.2.0.
   whose record replaced the first's; it now asks again, with a pause up to
   a minute, until the server takes the report, and if the server refuses
   it, reconciles before taking more work.
+- A burn worker trusted two things in what the server sent. It named a
+  folder after a rip's identifier and emptied it first, so a server, or
+  anything between it and the worker over plain HTTP, sending `../` or an
+  absolute path could have the worker delete files outside its rips
+  folder, its credential included; a rip identifier that is not a UUID is
+  now refused. And it fetched a burn's manifest from a path the server
+  sent, pasted onto the server's address, so a path beginning `@` sent the
+  request, with the worker's credential, to another host; the worker now
+  fetches the manifest by the artifact's identifier from its own server.
 
 ## 0.2.0 (2026-11-12)
 
