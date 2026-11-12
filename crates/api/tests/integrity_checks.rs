@@ -561,10 +561,15 @@ async fn an_object_collected_while_a_scrub_reads_is_not_reported() {
     // first is a named pipe, so reading it waits until the test has
     // collected the second.
     let harness = harness().await;
-    let highest: String = sqlx::query_scalar("SELECT COALESCE(max(sha256), '') FROM cas_objects")
-        .fetch_one(&harness.pool)
-        .await
-        .unwrap();
+    forget_earlier_runs(&harness).await;
+    // The highest the scrub reads: a collected object's row is kept, and
+    // the scrub passes over it.
+    let highest: String = sqlx::query_scalar(
+        "SELECT COALESCE(max(sha256), '') FROM cas_objects WHERE removed_at IS NULL",
+    )
+    .fetch_one(&harness.pool)
+    .await
+    .unwrap();
     let (one, one_bytes) = bytes_sorting_after(&highest);
     let (two, two_bytes) = bytes_sorting_after(&highest);
     let ((first, first_bytes), (second, second_bytes)) = if one < two {
@@ -573,7 +578,7 @@ async fn an_object_collected_while_a_scrub_reads_is_not_reported() {
         ((two, two_bytes), (one, one_bytes))
     };
     let (kept, kept_paths) = harness
-        .import_these(&[("kept.bin", first_bytes.clone())])
+        .import_these(&[(SCRUB_KEPT, first_bytes.clone())])
         .await;
     let (deleted, deleted_paths) = harness.import_these(&[("deleted.bin", second_bytes)]).await;
     assert!(kept_paths[0].ends_with(&first) && deleted_paths[0].ends_with(&second));
@@ -625,6 +630,35 @@ async fn an_object_collected_while_a_scrub_reads_is_not_reported() {
         "the collected object is not a problem: {done}"
     );
     assert_ne!(harness.artifact(&kept).await["integrity_state"], "damaged");
+
+    // Gone again, so the next run's objects need not sort after this one's.
+    harness.delete_now(&kept).await;
+}
+
+/// What the test above names the artifact it keeps.
+const SCRUB_KEPT: &str = "kept-while-scrubbed.bin";
+
+/// Delete what earlier runs of the test above left: the artifact it kept,
+/// whose object sorts after nearly every other. Left, each run had to find
+/// bytes sorting after the last run's, by counting, and in a database many
+/// runs old that took hours. Until 2026-11-12 it was named `kept.bin` and
+/// left in place.
+async fn forget_earlier_runs(harness: &Harness) {
+    let leftovers: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT DISTINCT a.id FROM artifacts a
+         JOIN artifact_components c ON c.artifact_id = a.id
+         JOIN cas_objects o ON o.sha256 = c.sha256
+         WHERE a.deleted_at IS NULL AND a.deletion_requested_at IS NULL
+           AND o.removed_at IS NULL AND o.size_bytes = 1000
+           AND c.logical_path IN ('kept.bin', $1)",
+    )
+    .bind(SCRUB_KEPT)
+    .fetch_all(&harness.pool)
+    .await
+    .unwrap();
+    for artifact in leftovers {
+        harness.delete_now(&artifact.to_string()).await;
+    }
 }
 
 #[tokio::test]
