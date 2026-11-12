@@ -20,19 +20,25 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::str::FromStr;
+use tangible_burn::MediumInfo;
+use tangible_burn::runner::MEDIUM_INSPECTED;
+use tangible_db::drive_activity::{DriveActivityRecord, drive_activities};
 use tangible_db::erasures::{
     CancelOutcome, DriveRecord, ErasureRecord, ErasureResult, RequestOutcome, WorkerOutcome,
     cancel_erasure, claim_erasure, complete_erasure, get_drive, get_erasure, list_drives,
     list_erasures, request_erasure,
 };
-use tangible_domain::{DriveId, ErasureId, ErasureMode, ErasureState};
+use tangible_domain::{ArtifactId, DriveId, ErasureId, ErasureMode, ErasureState};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::auth::SignedIn;
 use crate::problem::{ErrorCode, Problem};
+use crate::routes::artifacts::DiscShapeView;
+use crate::routes::burns::MediumView;
 use crate::routes::workers::same_worker;
 use crate::state::ApiState;
 use crate::worker_auth::WorkerIdentity;
@@ -113,6 +119,102 @@ pub struct DriveView {
     /// Whether its worker can rip a CD with redumper, correcting the drive's
     /// read offset (ADR 0015). Its CD rips use it unless asked for cdrdao.
     pub can_rip_with_redumper: bool,
+    /// What it is doing now: the burn, rip or erasure open on it, or `null`
+    /// when there is none (docs/plans/ui-overhaul.md, S1). The event
+    /// stream's `burn.progress`, `rip.progress`, `burn_attempt.changed`,
+    /// `burn_job.changed`, `rip.changed` and `erasure.changed` say when to
+    /// read it again.
+    pub activity: Option<DriveActivityView>,
+}
+
+/// What a drive is doing now.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct DriveActivityView {
+    /// `burn`, `rip` or `erasure`.
+    pub kind: String,
+    /// The burn job (`/api/v1/burn-jobs/{id}`), the rip
+    /// (`/api/v1/rips/{id}`) or the erasure (`/api/v1/erasures/{id}`).
+    pub id: String,
+    /// Its state. For a burn, the job's (`leased` to `verifying`), which is
+    /// the one that says `waiting_for_media`; for a rip, `queued`, `reading`
+    /// or `uploading`; for an erasure, `queued` or `erasing`.
+    pub state: String,
+    /// For a burn, the title of the disc being burned.
+    pub title: Option<String>,
+    /// For a burn, which disc of its set.
+    pub disc_number: Option<i16>,
+    /// How far it has got, from 0 to 1, once the worker has said.
+    pub progress: Option<f32>,
+    /// The disc in the drive, once the worker has inspected it (a burn or a
+    /// rip).
+    pub medium: Option<MediumView>,
+    /// For a burn, the disc its artifact describes, as a library item has it,
+    /// so a drawing of the disc can show what will be written, to scale
+    /// against `medium.capacity_blocks`. `null` when the manifest cannot be
+    /// read.
+    pub disc_shape: Option<DiscShapeView>,
+    /// When it began, or was asked for if it has not begun.
+    pub started_at: String,
+}
+
+impl DriveActivityView {
+    /// The view of `record`, with the disc shape of the artifact a burn is
+    /// writing, read from its manifest.
+    async fn new(state: &ApiState, record: DriveActivityRecord) -> Self {
+        let disc_shape = match (record.artifact_id, state.manifests()) {
+            (Some(artifact), Some(manifests)) => {
+                match manifests.read(ArtifactId::from_uuid(artifact)).await {
+                    Ok(manifest) => Some(DiscShapeView::from(&manifest)),
+                    Err(error) => {
+                        tracing::warn!(artifact_id = %artifact, error = ?error,
+                            "could not read the manifest of an artifact being burned");
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+        Self {
+            disc_shape,
+            ..Self::from(record)
+        }
+    }
+}
+
+impl From<DriveActivityRecord> for DriveActivityView {
+    fn from(record: DriveActivityRecord) -> Self {
+        Self {
+            kind: record.kind.as_str().to_owned(),
+            id: record.id.to_string(),
+            state: record.state,
+            title: record.title,
+            disc_number: record.disc_number,
+            progress: record.progress,
+            // A report this build cannot read is left out rather than
+            // guessed at; the rest of the activity still stands.
+            medium: record
+                .medium
+                .and_then(|value| serde_json::from_value::<MediumInfo>(value).ok())
+                .map(MediumView::from),
+            disc_shape: None,
+            started_at: rfc3339(record.started_at),
+        }
+    }
+}
+
+/// Every open activity, by drive.
+async fn activities(state: &ApiState) -> Result<HashMap<DriveId, DriveActivityView>, Problem> {
+    let records = drive_activities(state.database().pool(), MEDIUM_INSPECTED)
+        .await
+        .map_err(|error| {
+            tracing::error!(error = ?error, "could not read what drives are doing");
+            unavailable("what the drives are doing could not be read")
+        })?;
+    let mut by_drive = HashMap::with_capacity(records.len());
+    for record in records {
+        by_drive.insert(record.drive_id, DriveActivityView::new(state, record).await);
+    }
+    Ok(by_drive)
 }
 
 impl DriveView {
@@ -147,6 +249,7 @@ impl From<DriveRecord> for DriveView {
             worker_name: drive.worker_name,
             worker_status: drive.worker_status,
             worker_last_seen_at: drive.worker_last_seen_at.map(rfc3339),
+            activity: None,
         }
     }
 }
@@ -317,10 +420,17 @@ pub async fn list_all_drives(State(state): State<ApiState>) -> Result<Json<Drive
             tracing::error!(error = ?error, "could not list drives");
             unavailable("drives could not be read")
         })?;
+    let mut activities = activities(&state).await?;
     Ok(Json(DriveList {
         items: drives
             .into_iter()
-            .map(|drive| DriveView::new(drive, state.decryption_allowed()))
+            .map(|drive| {
+                let activity = activities.remove(&drive.id);
+                DriveView {
+                    activity,
+                    ..DriveView::new(drive, state.decryption_allowed())
+                }
+            })
             .collect(),
     }))
 }
@@ -345,14 +455,18 @@ pub async fn get_one_drive(
     Path(drive_id): Path<String>,
 ) -> Result<Json<DriveView>, Problem> {
     let id = parse_drive(&drive_id)?;
-    get_drive(state.database().pool(), id)
+    let drive = get_drive(state.database().pool(), id)
         .await
         .map_err(|error| {
             tracing::error!(error = ?error, "could not read a drive");
             unavailable("the drive could not be read")
         })?
-        .map(|drive| Json(DriveView::new(drive, state.decryption_allowed())))
-        .ok_or_else(|| Problem::not_found("drive", &drive_id))
+        .ok_or_else(|| Problem::not_found("drive", &drive_id))?;
+    let activity = activities(&state).await?.remove(&id);
+    Ok(Json(DriveView {
+        activity,
+        ..DriveView::new(drive, state.decryption_allowed())
+    }))
 }
 
 // --- erasures, for people ----------------------------------------------------------

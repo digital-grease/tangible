@@ -22,8 +22,10 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tangible_db::library::{ArtifactFilter, filtered_artifact_ids};
 use tangible_domain::ArtifactId;
-use tangible_domain::enums::{ArtifactFormat, ArtifactOrigin, IntegrityState, ValidationState};
-use tangible_domain::manifest::{ArtifactManifest, CdReadRecord, DecryptionRecord};
+use tangible_domain::enums::{
+    ArtifactFormat, ArtifactOrigin, IntegrityState, MediaFamily, ValidationState,
+};
+use tangible_domain::manifest::{ArtifactManifest, CdReadRecord, DecryptionRecord, Topology};
 use time::OffsetDateTime;
 use utoipa::{IntoParams, ToSchema};
 
@@ -71,6 +73,79 @@ pub struct ArtifactSummary {
     /// Its deletion, once asked for (ADR 0020): pending until
     /// `delete_after`, or deleted, its bytes gone and this record kept.
     pub deletion: Option<ArtifactDeletionView>,
+    /// The disc it describes, as far as its manifest says, for a drawing of
+    /// it (docs/plans/ui-overhaul.md, S2).
+    pub disc_shape: DiscShapeView,
+}
+
+/// The disc an artifact describes, for a drawing of it: which family, how
+/// long, and its tracks. From the manifest alone; what it does not say is
+/// left out, never guessed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct DiscShapeView {
+    /// The media family the manifest names: `cd`, `dvd`, `bluray`,
+    /// `uhd_bluray`, `gd_rom`, `proprietary_optical` or `unknown`; `null`
+    /// when it names none.
+    pub media_family: Option<String>,
+    /// The disc's length in sectors, as the image describes it: an image's
+    /// blocks, the end of a CD's last track, or a directory tree's size in
+    /// 2048-byte sectors. `null` when the manifest cannot say, as for a CHD,
+    /// whose layout is inside its compressed data.
+    pub sector_count: Option<u64>,
+    /// For a disc described as tracks, each track in order; empty otherwise.
+    pub tracks: Vec<TrackShapeView>,
+}
+
+/// One track, as a drawing of the disc needs it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct TrackShapeView {
+    /// Its session, from 1.
+    pub session: u32,
+    /// Its length in sectors.
+    pub sector_count: u64,
+    /// Whether it holds audio.
+    pub is_audio: bool,
+}
+
+/// Bytes in a data sector, the unit a directory tree's size is counted in.
+const DATA_SECTOR_BYTES: u64 = 2048;
+
+impl From<&ArtifactManifest> for DiscShapeView {
+    fn from(manifest: &ArtifactManifest) -> Self {
+        Self::of(&manifest.topology, manifest.classification.media_family)
+    }
+}
+
+impl DiscShapeView {
+    /// The shape a topology and a media family describe.
+    fn of(topology: &Topology, media_family: Option<MediaFamily>) -> Self {
+        let (sector_count, tracks) = match topology {
+            Topology::SingleTrackBlockImage { block_count, .. } => (Some(*block_count), Vec::new()),
+            Topology::CdTracks { tracks, .. } => (
+                tracks
+                    .iter()
+                    .map(|track| track.start_lba.saturating_add(track.sector_count))
+                    .max(),
+                tracks
+                    .iter()
+                    .map(|track| TrackShapeView {
+                        session: track.session,
+                        sector_count: track.sector_count,
+                        is_audio: tangible_domain::cd::is_audio(&track.mode),
+                    })
+                    .collect(),
+            ),
+            Topology::DirectoryTree { logical_bytes, .. } => {
+                (Some(logical_bytes.div_ceil(DATA_SECTOR_BYTES)), Vec::new())
+            }
+            Topology::Unknown => (None, Vec::new()),
+        };
+        Self {
+            media_family: media_family.map(|family| family.to_string()),
+            sector_count,
+            tracks,
+        }
+    }
 }
 
 /// An artifact's deletion (ADR 0020).
@@ -136,6 +211,7 @@ impl From<&ArtifactManifest> for ArtifactSummary {
             integrity_checked_at: None,
             best_match: None,
             deletion: None,
+            disc_shape: DiscShapeView::from(manifest),
         }
     }
 }
@@ -556,6 +632,27 @@ pub struct ArtifactFilterQuery {
     /// `true` lists deleted artifacts only, the tombstones; otherwise they
     /// are left out (ADR 0020).
     pub deleted: Option<bool>,
+    /// Part of the name of one of its files, as received or as stored, in
+    /// any case: `vol2` finds `homebrew-comp-vol2.cue`. At most 200
+    /// characters; `%` and `_` match themselves. Blank is no filter.
+    pub name: Option<String>,
+}
+
+/// The longest name filter accepted, in characters.
+const MAX_NAME_FILTER: usize = 200;
+
+/// A name filter: trimmed, blank as none, bounded.
+fn name_filter(value: Option<&String>) -> Result<Option<&str>, Problem> {
+    let Some(name) = value.map(|raw| raw.trim()).filter(|name| !name.is_empty()) else {
+        return Ok(None);
+    };
+    if name.chars().count() > MAX_NAME_FILTER {
+        return Err(Problem::invalid_parameter(
+            "name",
+            "longer than 200 characters",
+        ));
+    }
+    Ok(Some(name))
 }
 
 /// A filter value, checked against what the server knows.
@@ -598,9 +695,9 @@ fn instant(value: Option<&String>, name: &'static str) -> Result<Option<OffsetDa
     path = "/api/v1/artifacts",
     tag = "library",
     description = "List artifacts in creation order, filtered by format, origin, \
-                   validation and integrity state, whether linked to a disc, and when \
-                   imported. Use `next_cursor` from the response to fetch the following \
-                   page, with the same filters.",
+                   validation and integrity state, whether linked to a disc, when \
+                   imported, and part of a file's name. Use `next_cursor` from the \
+                   response to fetch the following page, with the same filters.",
     params(PageQuery, ArtifactFilterQuery),
     responses(
         (status = 200, description = "A page of artifacts", body = ArtifactSummaryPage),
@@ -634,6 +731,7 @@ pub async fn list_artifacts(
         created_after: instant(filter.created_after.as_ref(), "created_after")?,
         created_before: instant(filter.created_before.as_ref(), "created_before")?,
         deleted: filter.deleted,
+        name: name_filter(filter.name.as_ref())?,
     };
 
     let ids: Vec<ArtifactId> = if catalogue_filter.is_empty() {
@@ -1139,6 +1237,93 @@ pub fn router() -> Router<ApiState> {
 #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use tangible_domain::ComponentId;
+    use tangible_domain::manifest::Track;
+
+    fn track(number: u32, session: u32, mode: &str, start_lba: u64, sector_count: u64) -> Track {
+        Track {
+            number,
+            session,
+            mode: mode.to_owned(),
+            component_id: ComponentId::generate(),
+            file_offset_bytes: 0,
+            start_lba,
+            sector_count,
+            pregap_sectors: 0,
+            indexes: vec![],
+            isrc: None,
+            sample_byte_order: None,
+            flags: vec![],
+            hashes: std::collections::BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn an_image_is_its_blocks_with_no_tracks() {
+        let shape = DiscShapeView::of(
+            &Topology::SingleTrackBlockImage {
+                block_size: 2048,
+                block_count: 359_844,
+                volume_labels: vec![],
+                filesystems: vec![],
+            },
+            Some(MediaFamily::Cd),
+        );
+        assert_eq!(shape.media_family.as_deref(), Some("cd"));
+        assert_eq!(shape.sector_count, Some(359_844));
+        assert!(shape.tracks.is_empty());
+    }
+
+    #[test]
+    fn a_disc_of_tracks_ends_where_its_last_track_does_and_says_which_are_audio() {
+        // A mixed-mode disc in two sessions: data, two audio tracks, then a
+        // second session's data after the lead-out gap.
+        let shape = DiscShapeView::of(
+            &Topology::CdTracks {
+                descriptor_component_id: ComponentId::generate(),
+                catalog: None,
+                session_count: 2,
+                tracks: vec![
+                    track(1, 1, "MODE1/2352", 0, 1000),
+                    track(2, 1, "AUDIO", 1150, 300),
+                    track(3, 1, "AUDIO", 1450, 250),
+                    track(4, 2, "MODE2/2352", 13_100, 400),
+                ],
+                subchannel: None,
+            },
+            None,
+        );
+        assert_eq!(shape.media_family, None, "not named, so not guessed");
+        assert_eq!(shape.sector_count, Some(13_500));
+        let audio: Vec<_> = shape.tracks.iter().map(|track| track.is_audio).collect();
+        assert_eq!(audio, [false, true, true, false]);
+        let sessions: Vec<_> = shape.tracks.iter().map(|track| track.session).collect();
+        assert_eq!(sessions, [1, 1, 1, 2]);
+        assert_eq!(shape.tracks[1].sector_count, 300);
+    }
+
+    #[test]
+    fn a_directory_tree_counts_whole_data_sectors() {
+        let shape = DiscShapeView::of(
+            &Topology::DirectoryTree {
+                root_role: "video_ts".to_owned(),
+                entry_count: 14,
+                logical_bytes: 2 * 2048 + 1,
+                required_paths: vec![],
+            },
+            Some(MediaFamily::Dvd),
+        );
+        assert_eq!(shape.media_family.as_deref(), Some("dvd"));
+        assert_eq!(shape.sector_count, Some(3), "a part sector is a whole one");
+    }
+
+    #[test]
+    fn an_unknown_structure_says_nothing_about_its_length() {
+        let shape = DiscShapeView::of(&Topology::Unknown, Some(MediaFamily::Cd));
+        assert_eq!(shape.media_family.as_deref(), Some("cd"));
+        assert_eq!(shape.sector_count, None);
+        assert!(shape.tracks.is_empty());
+    }
 
     #[test]
     fn no_range_header_means_the_whole_object() {

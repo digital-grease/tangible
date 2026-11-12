@@ -8,6 +8,18 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
+- What a drive is doing, in the drive views (`GET /api/v1/drives` and
+  `GET /api/v1/drives/{drive_id}`): `activity`, the open burn, rip or
+  erasure on it, with its state (a burn's job state, so waiting for a disc
+  shows), the burn's disc title and number, the latest progress, the disc
+  the worker inspected, and the burned artifact's shape; `null` when
+  nothing is open. For the web UI's drive bay
+  (docs/plans/ui-overhaul.md).
+- Library items carry `disc_shape`, the disc their manifest describes: its
+  media family, its length in sectors and its tracks (session, sectors,
+  audio or not), for drawing it. And the library can be searched by name:
+  `GET /api/v1/artifacts?name=` keeps artifacts one of whose files has a
+  name containing the text, in any case, as received or as stored.
 - Archives are unpacked on import (docs/plans/archives.md): when the one
   file an import holds is a ZIP, a 7z or a tar (plain, gzip or xz),
   recognised by its bytes, its files are imported in its place, so a

@@ -542,6 +542,48 @@ async fn a_withdrawn_rip_stops_its_worker_and_leaves_nothing_behind() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
+async fn a_drive_says_what_it_is_ripping_and_how_far() {
+    let harness = harness().await;
+    let worker = harness.worker(true).await;
+    let drive = format!("/api/v1/drives/{}", worker.drive);
+
+    let (status, body) = harness.request(&worker.drive).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let rip = body["id"].as_str().unwrap().to_owned();
+    let (_, queued) = harness.get(&drive).await;
+    assert_eq!(queued["activity"]["kind"], "rip");
+    assert_eq!(queued["activity"]["id"], rip.as_str());
+    assert_eq!(queued["activity"]["state"], "queued");
+    assert!(queued["activity"]["progress"].is_null(), "{queued}");
+
+    let (status, claim) = harness.claim(&worker).await;
+    assert_eq!(status, StatusCode::OK, "{claim}");
+    let (status, _) = harness.event(&worker, &rip, 1).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, reading) = harness.get(&drive).await;
+    assert_eq!(reading["activity"]["state"], "reading");
+    assert_eq!(reading["activity"]["progress"], 0.5);
+    assert!(
+        reading["activity"]["title"].is_null(),
+        "a rip has no title yet"
+    );
+
+    let (status, _) = harness
+        .send(
+            "POST",
+            &format!("/api/v1/rips/{rip}/cancel"),
+            &As::Person(&harness.operator),
+            Body::empty(),
+            &[],
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, after) = harness.get(&drive).await;
+    assert!(after["activity"].is_null(), "{after}");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn a_refused_rip_frees_the_drive() {
     let harness = harness().await;
     let worker = harness.worker(true).await;

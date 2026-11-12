@@ -1555,3 +1555,96 @@ async fn an_image_that_keeps_a_subchannel_is_not_burned_saying_what_to_do_instea
         "{body}"
     );
 }
+
+// --- what a drive is doing (docs/plans/ui-overhaul.md, S1) ----------------------
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_drive_says_what_it_is_burning_how_far_and_on_what() {
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let world = seed(&harness.pool).await;
+    let job = queue_claimable(&harness, &world).await;
+    let (worker_id, credential, drive) = worker(&harness).await;
+
+    let (status, idle) = harness.get(&format!("/api/v1/drives/{drive}")).await;
+    assert_eq!(status, StatusCode::OK, "{idle}");
+    assert!(
+        idle["activity"].is_null(),
+        "nothing is open on it yet: {idle}"
+    );
+
+    let (attempt, _lease) = claim(&harness, &worker_id, &credential, &drive, &job).await;
+    let medium = json!({
+        "profile": "CD-R",
+        "blank": true,
+        "writable": true,
+        "rewritable": false,
+        "capacity_blocks": 359_844,
+        "free_blocks": 359_844,
+        "block_size": 2048,
+        "manufacturer_id": null,
+        "sessions": 0,
+        "erasable": false,
+        "status_warnings": [],
+    });
+    let (status, body) = harness
+        .post_with(
+            &format!("/api/v1/burn-attempts/{attempt}/events"),
+            json!({ "events": [
+                {
+                    "sequence": 1,
+                    "event_type": "medium_inspected",
+                    "stage": "preflighting",
+                    "code": "MEDIUM_INSPECTED",
+                    "progress": null,
+                    "data": { "medium": medium },
+                    "worker_time": "2026-11-11T12:00:00Z",
+                },
+                {
+                    "sequence": 2,
+                    "event_type": "progress",
+                    "stage": "writing",
+                    "code": "WRITE_PROGRESS",
+                    "progress": 0.43,
+                    "data": {},
+                    "worker_time": "2026-11-11T12:01:00Z",
+                },
+            ]}),
+            Some(("authorization", &format!("Bearer {credential}"))),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (_, job_now) = harness.get(&format!("/api/v1/burn-jobs/{job}")).await;
+    let (status, one) = harness.get(&format!("/api/v1/drives/{drive}")).await;
+    assert_eq!(status, StatusCode::OK, "{one}");
+    let activity = &one["activity"];
+    assert_eq!(activity["kind"], "burn");
+    assert_eq!(activity["id"], job.as_str());
+    assert_eq!(
+        activity["state"], job_now["state"],
+        "the job's state, not the attempt's"
+    );
+    assert_eq!(activity["title"], "T");
+    assert_eq!(activity["disc_number"], 1);
+    let progress = activity["progress"].as_f64().expect("progress");
+    assert!((progress - 0.43).abs() < 1e-6, "{activity}");
+    assert_eq!(activity["medium"]["profile"], "CD-R");
+    assert_eq!(activity["medium"]["capacity_blocks"], 359_844);
+    // The seeded artifact has no manifest, so what it holds is not said
+    // rather than guessed.
+    assert!(activity["disc_shape"].is_null(), "{activity}");
+    assert!(activity["started_at"].as_str().is_some());
+
+    // Once the burn is cancelled, nothing is open on the drive.
+    sqlx::query(
+        "UPDATE burn_attempts SET state = 'canceled', ended_at = now() WHERE id = $1::uuid",
+    )
+    .bind(&attempt)
+    .execute(&harness.pool)
+    .await
+    .expect("end the attempt");
+    let (_, after) = harness.get(&format!("/api/v1/drives/{drive}")).await;
+    assert!(after["activity"].is_null(), "{after}");
+}

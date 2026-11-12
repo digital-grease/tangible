@@ -285,6 +285,50 @@ async fn an_administrator_asks_the_worker_erases_and_every_step_is_audited() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
+async fn a_drive_says_while_it_erases_and_not_after() {
+    let harness = harness().await;
+    let worker = harness.worker().await;
+    let drive = format!("/api/v1/drives/{}", worker.drive);
+
+    let (_, idle) = harness.admin("GET", &drive, None).await;
+    assert!(idle["activity"].is_null(), "{idle}");
+
+    let erasure = harness.request(&worker.drive).await;
+    let (_, queued) = harness.admin("GET", &drive, None).await;
+    assert_eq!(queued["activity"]["kind"], "erasure");
+    assert_eq!(queued["activity"]["id"], erasure.as_str());
+    assert_eq!(queued["activity"]["state"], "queued");
+    assert!(queued["activity"]["medium"].is_null());
+    assert!(queued["activity"]["disc_shape"].is_null());
+
+    let (status, _) = harness.claim(&worker).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, erasing) = harness.admin("GET", &drive, None).await;
+    assert_eq!(erasing["activity"]["state"], "erasing");
+    // The list says the same as the drive alone.
+    let (_, all) = harness.admin("GET", "/api/v1/drives", None).await;
+    let listed = all["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == worker.drive.as_str())
+        .expect("the drive is listed");
+    assert_eq!(listed["activity"], erasing["activity"]);
+
+    let (status, _) = harness
+        .complete(
+            &worker,
+            &erasure,
+            json!({ "outcome": "erased", "duration_seconds": 1 }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, after) = harness.admin("GET", &drive, None).await;
+    assert!(after["activity"].is_null(), "{after}");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn the_request_must_confirm_the_data_loss_and_name_a_known_mode_and_drive() {
     let harness = harness().await;
     let worker = harness.worker().await;

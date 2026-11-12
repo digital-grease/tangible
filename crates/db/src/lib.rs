@@ -16,6 +16,7 @@ pub mod dats;
 pub mod deletions;
 pub mod derivations;
 pub mod diagnostics;
+pub mod drive_activity;
 pub mod erasures;
 pub mod gc;
 pub mod identification;

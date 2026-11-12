@@ -16,7 +16,7 @@
           "library"
         ],
         "summary": "List artifacts, newest identifiers last.",
-        "description": "List artifacts in creation order, filtered by format, origin, validation and integrity state, whether linked to a disc, and when imported. Use `next_cursor` from the response to fetch the following page, with the same filters.",
+        "description": "List artifacts in creation order, filtered by format, origin, validation and integrity state, whether linked to a disc, when imported, and part of a file's name. Use `next_cursor` from the response to fetch the following page, with the same filters.",
         "operationId": "list_artifacts",
         "parameters": [
           {
@@ -136,6 +136,18 @@
             "schema": {
               "type": [
                 "boolean",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "description": "Part of the name of one of its files, as received or as stored, in\nany case: `vol2` finds `homebrew-comp-vol2.cue`. At most 200\ncharacters; `%` and `_` match themselves. Blank is no filter.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
                 "null"
               ]
             }
@@ -8045,7 +8057,8 @@
           "component_count",
           "total_bytes",
           "has_warnings",
-          "integrity_state"
+          "integrity_state",
+          "disc_shape"
         ],
         "properties": {
           "artifact_kind": {
@@ -8078,6 +8091,10 @@
                 "description": "Its deletion, once asked for (ADR 0020): pending until\n`delete_after`, or deleted, its bytes gone and this record kept."
               }
             ]
+          },
+          "disc_shape": {
+            "$ref": "#/components/schemas/DiscShapeView",
+            "description": "The disc it describes, as far as its manifest says, for a drawing of\nit (docs/plans/ui-overhaul.md, S2)."
           },
           "format": {
             "type": "string",
@@ -10331,6 +10348,38 @@
           }
         }
       },
+      "DiscShapeView": {
+        "type": "object",
+        "description": "The disc an artifact describes, for a drawing of it: which family, how\nlong, and its tracks. From the manifest alone; what it does not say is\nleft out, never guessed.",
+        "required": [
+          "tracks"
+        ],
+        "properties": {
+          "media_family": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The media family the manifest names: `cd`, `dvd`, `bluray`,\n`uhd_bluray`, `gd_rom`, `proprietary_optical` or `unknown`; `null`\nwhen it names none."
+          },
+          "sector_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The disc's length in sectors, as the image describes it: an image's\nblocks, the end of a CD's last track, or a directory tree's size in\n2048-byte sectors. `null` when the manifest cannot say, as for a CHD,\nwhose layout is inside its compressed data.",
+            "minimum": 0
+          },
+          "tracks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TrackShapeView"
+            },
+            "description": "For a disc described as tracks, each track in order; empty otherwise."
+          }
+        }
+      },
       "DiscView": {
         "type": "object",
         "description": "One disc.",
@@ -10432,6 +10481,79 @@
           }
         }
       },
+      "DriveActivityView": {
+        "type": "object",
+        "description": "What a drive is doing now.",
+        "required": [
+          "kind",
+          "id",
+          "state",
+          "started_at"
+        ],
+        "properties": {
+          "disc_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "For a burn, which disc of its set."
+          },
+          "disc_shape": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DiscShapeView",
+                "description": "For a burn, the disc its artifact describes, as a library item has it,\nso a drawing of the disc can show what will be written, to scale\nagainst `medium.capacity_blocks`. `null` when the manifest cannot be\nread."
+              }
+            ]
+          },
+          "id": {
+            "type": "string",
+            "description": "The burn job (`/api/v1/burn-jobs/{id}`), the rip\n(`/api/v1/rips/{id}`) or the erasure (`/api/v1/erasures/{id}`)."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`burn`, `rip` or `erasure`."
+          },
+          "medium": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MediumView",
+                "description": "The disc in the drive, once the worker has inspected it (a burn or a\nrip)."
+              }
+            ]
+          },
+          "progress": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "How far it has got, from 0 to 1, once the worker has said."
+          },
+          "started_at": {
+            "type": "string",
+            "description": "When it began, or was asked for if it has not begun."
+          },
+          "state": {
+            "type": "string",
+            "description": "Its state. For a burn, the job's (`leased` to `verifying`), which is\nthe one that says `waiting_for_media`; for a rip, `queued`, `reading`\nor `uploading`; for an erasure, `queued` or `erasing`."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For a burn, the title of the disc being burned."
+          }
+        }
+      },
       "DriveList": {
         "type": "object",
         "description": "Every drive.",
@@ -10526,6 +10648,17 @@
           "can_rip_with_redumper"
         ],
         "properties": {
+          "activity": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DriveActivityView",
+                "description": "What it is doing now: the burn, rip or erasure open on it, or `null`\nwhen there is none (docs/plans/ui-overhaul.md, S1). The event\nstream's `burn.progress`, `rip.progress`, `burn_attempt.changed`,\n`burn_job.changed`, `rip.changed` and `erasure.changed` say when to\nread it again."
+              }
+            ]
+          },
           "can_decrypt_rips": {
             "type": "boolean",
             "description": "Whether a rip on this drive may decrypt an encrypted disc: this\nserver allows decryption and the drive's worker can (ADR 0013)."
@@ -14291,6 +14424,33 @@
             "type": "integer",
             "format": "int64",
             "description": "Sectors from the track's first present sector.",
+            "minimum": 0
+          }
+        }
+      },
+      "TrackShapeView": {
+        "type": "object",
+        "description": "One track, as a drawing of the disc needs it.",
+        "required": [
+          "session",
+          "sector_count",
+          "is_audio"
+        ],
+        "properties": {
+          "is_audio": {
+            "type": "boolean",
+            "description": "Whether it holds audio."
+          },
+          "sector_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its length in sectors.",
+            "minimum": 0
+          },
+          "session": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its session, from 1.",
             "minimum": 0
           }
         }

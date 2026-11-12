@@ -32,6 +32,24 @@ pub struct ArtifactFilter<'a> {
     pub created_before: Option<OffsetDateTime>,
     /// Deleted artifacts only (`true`); otherwise none (ADR 0020).
     pub deleted: Option<bool>,
+    /// Part of the name of one of its files, as received or as stored, in
+    /// any case. Matched literally: `%` and `_` are not wildcards.
+    pub name: Option<&'a str>,
+}
+
+/// A name filter as a `LIKE` pattern matching it anywhere, with the
+/// pattern's own special characters escaped so they match themselves.
+fn contains_pattern(name: &str) -> String {
+    let mut pattern = String::with_capacity(name.len() + 2);
+    pattern.push('%');
+    for character in name.chars() {
+        if matches!(character, '\\' | '%' | '_') {
+            pattern.push('\\');
+        }
+        pattern.push(character);
+    }
+    pattern.push('%');
+    pattern
 }
 
 impl ArtifactFilter<'_> {
@@ -70,6 +88,11 @@ pub async fn filtered_artifact_ids(
            AND ($7::timestamptz IS NULL OR a.created_at >= $7)
            AND ($8::timestamptz IS NULL OR a.created_at < $8)
            AND (a.deleted_at IS NOT NULL) = $10
+           AND ($11::text IS NULL OR EXISTS (
+                 SELECT 1 FROM artifact_components c
+                 WHERE c.artifact_id = a.id
+                   AND (c.logical_path ILIKE $11 ESCAPE '\\'
+                        OR c.source_filename ILIKE $11 ESCAPE '\\')))
          ORDER BY a.id
          LIMIT $9",
     )
@@ -83,6 +106,7 @@ pub async fn filtered_artifact_ids(
     .bind(filter.created_before)
     .bind(limit)
     .bind(filter.deleted.unwrap_or(false))
+    .bind(filter.name.map(contains_pattern))
     .fetch_all(pool)
     .await
     .map_err(DbError::Query)
@@ -166,4 +190,19 @@ pub async fn deletions_of(
             },
         )
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::contains_pattern;
+
+    #[test]
+    fn a_name_matches_anywhere_and_only_literally() {
+        assert_eq!(contains_pattern("vol2"), "%vol2%");
+        // LIKE's own characters, and the escape itself, match only themselves.
+        assert_eq!(contains_pattern("100%_done"), "%100\\%\\_done%");
+        assert_eq!(contains_pattern("a\\b"), "%a\\\\b%");
+        // Any character is otherwise passed as it is.
+        assert_eq!(contains_pattern("Ré:v"), "%Ré:v%");
+    }
 }

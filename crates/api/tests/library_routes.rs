@@ -831,6 +831,88 @@ async fn the_library_is_filtered_by_format_origin_and_whether_linked() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
+async fn the_library_is_searched_by_part_of_a_file_name() {
+    let (_dir, router, started, iso, cue) = catalogued().await;
+    let since = format!("created_after={}", started.replace('+', "%2B"));
+    let named = |name: &str| {
+        let router = router.clone();
+        let uri = format!("/api/v1/artifacts?limit=500&{since}&name={name}");
+        async move { get(&router, &uri).await }
+    };
+
+    // Any case, any part, and any of its files: the CUE/BIN is found by its
+    // BIN as well as its CUE.
+    for name in ["GAME.CUE", "me.c", "game.bin"] {
+        let (status, page, _) = named(name).await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        let ids = listed(&page);
+        assert!(ids.contains(&cue) && !ids.contains(&iso), "{name}: {ids:?}");
+    }
+    let ids = listed(&named("disc.iso").await.1);
+    assert!(ids.contains(&iso) && !ids.contains(&cue), "{ids:?}");
+
+    // The pattern's own characters match only themselves.
+    for literal in ["%25", "_", "game%25", "g_me"] {
+        let ids = listed(&named(literal).await.1);
+        assert!(
+            !ids.contains(&iso) && !ids.contains(&cue),
+            "{literal}: {ids:?}"
+        );
+    }
+
+    // Blank is no filter; too long is refused.
+    let ids = listed(&named("%20%20").await.1);
+    assert!(ids.contains(&iso) && ids.contains(&cue), "{ids:?}");
+    let (status, problem, _) = named(&"a".repeat(201)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{problem}");
+    assert_eq!(problem["code"], "INVALID_PARAMETER");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_library_item_says_what_disc_it_describes() {
+    let (_dir, router, started, iso, cue) = catalogued().await;
+    let since = format!("created_after={}", started.replace('+', "%2B"));
+    let (status, page, _) = get(
+        &router,
+        &format!("/api/v1/artifacts?limit=500&{since}&origin=imported_original"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let item = |id: &str| {
+        page["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .find(|item| item["id"] == id)
+            .unwrap_or_else(|| panic!("{id} is listed"))
+            .clone()
+    };
+
+    // An ISO is one image: its blocks, and no tracks.
+    let shape = &item(&iso)["disc_shape"];
+    assert_eq!(shape["sector_count"], 20, "{shape}");
+    assert_eq!(shape["tracks"], serde_json::json!([]));
+    assert!(
+        shape.get("media_family").is_some(),
+        "named or null: {shape}"
+    );
+
+    // A CUE/BIN is its tracks: the end of the last one, and each in order.
+    let shape = &item(&cue)["disc_shape"];
+    assert_eq!(shape["sector_count"], 20, "{shape}");
+    assert_eq!(
+        shape["tracks"],
+        serde_json::json!([{ "session": 1, "sector_count": 20, "is_audio": false }])
+    );
+
+    // And one artifact by itself says the same.
+    let (_, detail, _) = get(&router, &format!("/api/v1/artifacts/{cue}")).await;
+    assert_eq!(detail["disc_shape"], *shape);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn an_artifact_unpacked_from_an_archive_says_what_it_came_in() {
     let archive = std::fs::read(format!(
         "{}/../../fixtures/images/archives/game.7z",

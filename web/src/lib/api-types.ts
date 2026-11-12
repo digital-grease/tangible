@@ -13,7 +13,7 @@ export interface paths {
         };
         /**
          * List artifacts, newest identifiers last.
-         * @description List artifacts in creation order, filtered by format, origin, validation and integrity state, whether linked to a disc, and when imported. Use `next_cursor` from the response to fetch the following page, with the same filters.
+         * @description List artifacts in creation order, filtered by format, origin, validation and integrity state, whether linked to a disc, when imported, and part of a file's name. Use `next_cursor` from the response to fetch the following page, with the same filters.
          */
         get: operations["list_artifacts"];
         put?: never;
@@ -2418,6 +2418,11 @@ export interface components {
             /** @description Number of files. */
             component_count: number;
             deletion?: null | components["schemas"]["ArtifactDeletionView"];
+            /**
+             * @description The disc it describes, as far as its manifest says, for a drawing of
+             *     it (docs/plans/ui-overhaul.md, S2).
+             */
+            disc_shape: components["schemas"]["DiscShapeView"];
             /** @description Detected container format. */
             format: string;
             /**
@@ -3443,6 +3448,29 @@ export interface components {
              */
             version: number;
         };
+        /**
+         * @description The disc an artifact describes, for a drawing of it: which family, how
+         *     long, and its tracks. From the manifest alone; what it does not say is
+         *     left out, never guessed.
+         */
+        DiscShapeView: {
+            /**
+             * @description The media family the manifest names: `cd`, `dvd`, `bluray`,
+             *     `uhd_bluray`, `gd_rom`, `proprietary_optical` or `unknown`; `null`
+             *     when it names none.
+             */
+            media_family?: string | null;
+            /**
+             * Format: int64
+             * @description The disc's length in sectors, as the image describes it: an image's
+             *     blocks, the end of a CD's last track, or a directory tree's size in
+             *     2048-byte sectors. `null` when the manifest cannot say, as for a CHD,
+             *     whose layout is inside its compressed data.
+             */
+            sector_count?: number | null;
+            /** @description For a disc described as tracks, each track in order; empty otherwise. */
+            tracks: components["schemas"]["TrackShapeView"][];
+        };
         /** @description One disc. */
         DiscView: {
             /**
@@ -3500,6 +3528,38 @@ export interface components {
             /** @description Its name. */
             name: string;
         };
+        /** @description What a drive is doing now. */
+        DriveActivityView: {
+            /**
+             * Format: int32
+             * @description For a burn, which disc of its set.
+             */
+            disc_number?: number | null;
+            disc_shape?: null | components["schemas"]["DiscShapeView"];
+            /**
+             * @description The burn job (`/api/v1/burn-jobs/{id}`), the rip
+             *     (`/api/v1/rips/{id}`) or the erasure (`/api/v1/erasures/{id}`).
+             */
+            id: string;
+            /** @description `burn`, `rip` or `erasure`. */
+            kind: string;
+            medium?: null | components["schemas"]["MediumView"];
+            /**
+             * Format: float
+             * @description How far it has got, from 0 to 1, once the worker has said.
+             */
+            progress?: number | null;
+            /** @description When it began, or was asked for if it has not begun. */
+            started_at: string;
+            /**
+             * @description Its state. For a burn, the job's (`leased` to `verifying`), which is
+             *     the one that says `waiting_for_media`; for a rip, `queued`, `reading`
+             *     or `uploading`; for an erasure, `queued` or `erasing`.
+             */
+            state: string;
+            /** @description For a burn, the title of the disc being burned. */
+            title?: string | null;
+        };
         /** @description Every drive. */
         DriveList: {
             /** @description By worker, then by drive. */
@@ -3543,6 +3603,7 @@ export interface components {
         };
         /** @description A drive, and the worker it belongs to. */
         DriveView: {
+            activity?: null | components["schemas"]["DriveActivityView"];
             /**
              * @description Whether a rip on this drive may decrypt an encrypted disc: this
              *     server allows decryption and the drive's worker can (ADR 0013).
@@ -5233,6 +5294,21 @@ export interface components {
              */
             relative_lba: number;
         };
+        /** @description One track, as a drawing of the disc needs it. */
+        TrackShapeView: {
+            /** @description Whether it holds audio. */
+            is_audio: boolean;
+            /**
+             * Format: int64
+             * @description Its length in sectors.
+             */
+            sector_count: number;
+            /**
+             * Format: int32
+             * @description Its session, from 1.
+             */
+            session: number;
+        };
         /** @description The check on one track of a disc described as tracks. */
         TrackVerificationReport: {
             /**
@@ -5568,6 +5644,12 @@ export interface operations {
                  *     are left out (ADR 0020).
                  */
                 deleted?: boolean | null;
+                /**
+                 * @description Part of the name of one of its files, as received or as stored, in
+                 *     any case: `vol2` finds `homebrew-comp-vol2.cue`. At most 200
+                 *     characters; `%` and `_` match themselves. Blank is no filter.
+                 */
+                name?: string | null;
             };
             header?: never;
             path?: never;
