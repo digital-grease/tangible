@@ -7,6 +7,7 @@
 // removes anything; the server cannot do either.
 
 import type { components } from './api-types';
+import type { Tone } from './components/ui/tone';
 import { formatBytes } from './library';
 import { apiCall, apiFetch, type Result } from './session';
 
@@ -112,6 +113,24 @@ export function checkStateLabel(check: Pick<IntegrityCheck, 'state' | 'problem_c
       return 'Withdrawn';
     default:
       return check.state;
+  }
+}
+
+/**
+ * How a check stands, as a tone beside its words: under way, done and
+ * clean, done with damage found or failed, or withdrawn.
+ */
+export function checkStateTone(check: Pick<IntegrityCheck, 'state' | 'problem_count'>): Tone {
+  switch (check.state) {
+    case 'queued':
+    case 'running':
+      return 'busy';
+    case 'complete':
+      return check.problem_count === 0 ? 'ok' : 'bad';
+    case 'failed':
+      return 'bad';
+    default:
+      return 'idle';
   }
 }
 

@@ -5,6 +5,7 @@ import { fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { forgetReportSettings } from '$lib/report';
 import { rememberSession } from '$lib/session';
+import { axeViolations } from '$lib/testing/axe';
 
 const { default: Page } = await import('./+page.svelte');
 
@@ -131,9 +132,16 @@ describe('DATs page', () => {
         return { status: 204, body: null };
       },
     });
-    render(Page);
+    const { container } = render(Page);
     await fireEvent.click(await screen.findByRole('button', { name: 'Remove Sony - PlayStation' }));
     expect(screen.getByText(/the matches it made are deleted/)).toBeTruthy();
+    // The keyboard is taken to the question.
+    await vi.waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole('heading', { name: 'Remove Sony - PlayStation?' }),
+      ),
+    );
+    expect(await axeViolations(container)).toEqual([]);
     expect(asked).not.toContain('DELETE /api/v1/dats/d1');
     await fireEvent.click(screen.getByRole('button', { name: 'Yes, remove Sony - PlayStation' }));
     expect(

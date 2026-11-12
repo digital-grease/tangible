@@ -217,7 +217,7 @@
           <StatusMark tone="bad" label={workers.problem.detail} />
         </div>
       {:else if workers.data.items.length === 0}
-        <EmptyState title="No workers yet" icon="worker">
+        <EmptyState inset level={3} title="No workers yet" icon="worker">
           <p>A burn worker needs an enrollment token on its first start.</p>
           {#snippet action()}
             <Button variant="primary" href="#enroll" icon="plus">Enroll one</Button>
@@ -397,7 +397,7 @@
           <StatusMark tone="bad" label={drives.problem.detail} />
         </div>
       {:else if drives.data.length === 0}
-        <EmptyState title="No drives yet" icon="disc">
+        <EmptyState inset level={3} title="No drives yet" icon="disc">
           <p>A burn worker reports its drive when it first starts.</p>
         </EmptyState>
       {:else}

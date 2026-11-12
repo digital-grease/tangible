@@ -4,6 +4,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { forgetReportSettings } from '$lib/report';
+import { axeViolations } from '$lib/testing/axe';
 import Page from './+page.svelte';
 
 afterEach(() => {
@@ -101,8 +102,9 @@ describe('Storage page', () => {
       ]),
       'POST /api/v1/integrity-checks': { status: 202, body: check({ id: 'c3', state: 'queued' }) },
     });
-    render(Page);
+    const { container } = render(Page);
     const table = await screen.findByRole('table', { name: 'Integrity checks, newest first' });
+    expect(await axeViolations(container)).toEqual([]);
     expect(within(table).getByRole('link', { name: 'One artifact' }).getAttribute('href')).toBe(
       '/library/a1',
     );
@@ -132,7 +134,7 @@ describe('Storage page', () => {
     render(Page);
     const scrub = await screen.findByRole('region', { name: 'Full scrub' });
     expect(await within(scrub).findByText(/5 of 10 files/)).toBeTruthy();
-    expect(within(scrub).getByRole('progressbar').getAttribute('value')).toBe('50');
+    expect(within(scrub).getByRole('progressbar').getAttribute('aria-valuenow')).toBe('50');
     await fireEvent.click(screen.getByRole('button', { name: 'Withdraw the scrub' }));
     expect(await screen.findByText(/Withdrawn\. What it had read is kept/)).toBeTruthy();
     expect(asked).toContain('POST /api/v1/integrity-checks/c1/cancel');
@@ -144,7 +146,7 @@ describe('Storage page', () => {
       [`GET ${CHECKS}`]: page([]),
       'GET /api/v1/storage/gc-plan?grace_days=0&limit=100': { status: 200, body: PLAN },
     });
-    render(Page);
+    const { container } = render(Page);
     expect(await screen.findByText('No integrity check has been asked for.')).toBeTruthy();
     // The plan walks the store, so it waits to be asked for.
     expect(asked.some((key) => key.includes('gc-plan'))).toBe(false);
@@ -159,6 +161,7 @@ describe('Storage page', () => {
     expect(within(table).getByText('ab'.repeat(32))).toBeTruthy();
     expect(within(table).getByText('Never catalogued')).toBeTruthy();
     expect(screen.getByText(/1 file \(4 B\) left by interrupted imports, 1 older/)).toBeTruthy();
+    expect(await axeViolations(container)).toEqual([]);
   });
 
   it('tells anyone else it is for administrators', async () => {

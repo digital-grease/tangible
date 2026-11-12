@@ -5,6 +5,7 @@ import {
   checkPercent,
   checkProgress,
   checkStateLabel,
+  checkStateTone,
   graceLabel,
   integrityLabel,
   integrityMark,
@@ -84,6 +85,11 @@ describe('integrity', () => {
       'Done: 2 problems',
     );
     expect(checkStateLabel(check({ state: 'canceled' }))).toBe('Withdrawn');
+    expect(checkStateTone(check({ state: 'running' }))).toBe('busy');
+    expect(checkStateTone(check({ state: 'complete' }))).toBe('ok');
+    expect(checkStateTone(check({ state: 'complete', problem_count: 2 }))).toBe('bad');
+    expect(checkStateTone(check({ state: 'failed' }))).toBe('bad');
+    expect(checkStateTone(check({ state: 'canceled' }))).toBe('idle');
     expect(checkProgress(check())).toBe('1 of 4 files (1.0 KiB of 4.0 KiB)');
     expect(checkProgress(check({ state: 'queued', objects_total: null, bytes_total: null }))).toBe(
       'Not started',

@@ -15,6 +15,7 @@ import {
   removesAfterImport,
   integrationRefusal,
   integrationStatusLabel,
+  integrationStatusTone,
   kindLabel,
   secretsLabel,
   testIntegration,
@@ -54,6 +55,11 @@ describe('integration labels', () => {
     expect(integrationStatusLabel({ status: 'ok', enabled: false })).toBe('Turned off');
     expect(integrationStatusLabel({ status: 'unconfigured', enabled: true })).toBe('Not tried yet');
     expect(integrationStatusLabel({ status: 'failing', enabled: true })).toBe('Failing');
+    expect(integrationStatusTone({ status: 'ok', enabled: true })).toBe('ok');
+    expect(integrationStatusTone({ status: 'ok', enabled: false })).toBe('idle');
+    expect(integrationStatusTone({ status: 'degraded', enabled: true })).toBe('warn');
+    expect(integrationStatusTone({ status: 'failing', enabled: true })).toBe('bad');
+    expect(integrationStatusTone({ status: 'unconfigured', enabled: true })).toBe('idle');
     expect(secretsLabel(qbittorrent())).toBe('Password set');
     expect(secretsLabel(qbittorrent({ secrets: [{ field: 'password', set: false }] }))).toBe(
       'Password not set',

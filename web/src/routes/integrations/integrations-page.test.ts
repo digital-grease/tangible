@@ -4,6 +4,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IntegrationView } from '$lib/integrations';
+import { axeViolations } from '$lib/testing/axe';
 
 const { default: IntegrationsPage } = await import('./+page.svelte');
 
@@ -195,7 +196,7 @@ describe('Integrations page', () => {
       'GET /api/v1/integrations': list([nas(), romm], false),
       'GET /api/v1/import-sources': sources,
     });
-    render(IntegrationsPage);
+    const { container } = render(IntegrationsPage);
     const row = (await screen.findByRole('rowheader', { name: 'NAS' })).closest('tr')!;
     expect(within(row).getByText('qBittorrent')).toBeTruthy();
     expect(within(row).getByText('Not tried yet')).toBeTruthy();
@@ -205,6 +206,7 @@ describe('Integrations page', () => {
     expect(within(managed).queryByRole('button')).toBeNull();
     expect(within(managed).getByText('TANGIBLE_ROMM_EXPORT_ROOT')).toBeTruthy();
     expect(screen.getByRole('note').textContent).toContain('TANGIBLE_SECRET_KEY_FILE');
+    expect(await axeViolations(container)).toEqual([]);
   });
 
   it('adds a qBittorrent and keeps no password in the page', async () => {
@@ -300,10 +302,15 @@ describe('Integrations page', () => {
       'GET /api/v1/import-sources': sources,
       'DELETE /api/v1/integrations/i1': { status: 204 },
     });
-    render(IntegrationsPage);
+    const { container } = render(IntegrationsPage);
     await fireEvent.click(await screen.findByRole('button', { name: 'Remove NAS' }));
     expect(asked.some((a) => a.method === 'DELETE')).toBe(false);
     expect(screen.getByText(/Nothing in the client or the library is touched/)).toBeTruthy();
+    // The keyboard is taken to the question.
+    await vi.waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Remove NAS?' })),
+    );
+    expect(await axeViolations(container)).toEqual([]);
     await fireEvent.click(screen.getByRole('button', { name: 'Yes, remove NAS' }));
     expect(await screen.findByText('Removed NAS.')).toBeTruthy();
     expect(asked.some((a) => a.method === 'DELETE')).toBe(true);

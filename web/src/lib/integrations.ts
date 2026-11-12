@@ -7,6 +7,7 @@
 // view says only whether one is set.
 
 import type { components } from './api-types';
+import type { Tone } from './components/ui/tone';
 import { apiCall, apiFetch, type Problem, type Result } from './session';
 
 export type IntegrationView = components['schemas']['IntegrationView'];
@@ -118,6 +119,24 @@ export function integrationStatusLabel(view: Pick<IntegrationView, 'status' | 'e
       return 'Not tried yet';
     default:
       return view.status;
+  }
+}
+
+/**
+ * A status as a tone, beside its words. One turned off, or not tried yet,
+ * is neither well nor ill.
+ */
+export function integrationStatusTone(view: Pick<IntegrationView, 'status' | 'enabled'>): Tone {
+  if (!view.enabled) return 'idle';
+  switch (view.status) {
+    case 'ok':
+      return 'ok';
+    case 'degraded':
+      return 'warn';
+    case 'failing':
+      return 'bad';
+    default:
+      return 'idle';
   }
 }
 

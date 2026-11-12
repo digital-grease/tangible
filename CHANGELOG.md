@@ -659,7 +659,9 @@ may change between minor versions, and the release notes say how.
   burn. Workers and drives shows each drive with its disc drawn and what
   it is doing now, and asks before a worker is revoked or a disc erased,
   taking the keyboard to the question. Accounts puts the list beside the
-  form that creates one.
+  form that creates one. Integrations, Storage and DATs follow, each state
+  as a mark; removing an integration or a DAT asks under the list instead
+  of inside the row.
 - The image is built on Debian 13 (trixie), moving from Debian 12
   (bookworm), now oldstable, and every tool in it moves too: chdman 0.251
   to 0.276, which makes DVD CHDs (a DVD's ISO gets one, made with

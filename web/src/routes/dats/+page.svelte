@@ -1,10 +1,20 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
-  // Preservation DATs (docs/plans/dat-matching.md): loading the Logiqx XML
-  // DATs an administrator has, seeing what each identifies, and removing
-  // one. Tangible never downloads a DAT, and a match renames nothing.
+  // Preservation DATs (docs/plans/dat-matching.md; UX.md 22): loading the
+  // Logiqx XML DATs an administrator has, seeing what each identifies, and
+  // removing one. Tangible never downloads a DAT, and a match renames
+  // nothing. In the new design (docs/plans/ui-overhaul.md, U8); removing asks
+  // first, under the list, and takes the keyboard to the question.
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import EmptyState from '$lib/components/ui/EmptyState.svelte';
+  import Field from '$lib/components/ui/Field.svelte';
+  import PageHeader from '$lib/components/ui/PageHeader.svelte';
+  import Panel from '$lib/components/ui/Panel.svelte';
+  import StatusMark from '$lib/components/ui/StatusMark.svelte';
+  import Table from '$lib/components/ui/Table.svelte';
+  import { when } from '$lib/overview';
   import {
     MAX_DAT_BYTES,
     datSummary,
@@ -17,7 +27,7 @@
   } from '$lib/identification';
   import { formatBytes } from '$lib/library';
   import { sessionRole, type Problem } from '$lib/session';
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
 
   type View =
     { kind: 'loading' } | { kind: 'ready'; items: Dat[] } | { kind: 'error'; problem: Problem };
@@ -33,6 +43,18 @@
   let done = $state<string | null>(null);
 
   const administrator = sessionRole() === 'administrator';
+
+  let removeHeading = $state<HTMLElement | null>(null);
+  const removing = $derived(
+    view.kind === 'ready' ? (view.items.find((dat) => dat.id === confirmingRemove) ?? null) : null,
+  );
+
+  async function startRemoving(dat: Dat) {
+    confirmingRemove = dat.id;
+    removeProblem = null;
+    await tick();
+    removeHeading?.focus();
+  }
 
   async function refresh() {
     const result = await loadDats();
@@ -78,7 +100,8 @@
     await refresh();
   }
 
-  function when(value: string): string {
+  /** The full date and time, for a time's tooltip. */
+  function full(value: string): string {
     const date = new Date(value);
     return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
   }
@@ -86,153 +109,235 @@
 
 <svelte:head><title>DATs — Tangible</title></svelte:head>
 
-<h1>DATs</h1>
+<PageHeader
+  title="DATs"
+  description="A DAT lists the known good dumps of a system's discs, by the hashes of their files and tracks. Load the Logiqx XML DATs you use, from Redump, No-Intro or wherever you trust, and every artifact in the library is matched against them: whether it is a known good dump, and of what. Tangible never downloads a DAT, and a match renames and changes nothing."
+/>
 
-<p>
-  A DAT lists the known good dumps of a system's discs, by the hashes of their files and tracks.
-  Load the Logiqx XML DATs you use, from Redump, No-Intro or wherever you trust, and every artifact
-  in the library is matched against them: whether it is a known good dump, and of what. Tangible
-  never downloads a DAT, and a match renames and changes nothing.
-</p>
-
-{#if administrator}
-  <section aria-labelledby="load-heading">
-    <h2 id="load-heading">Load a DAT</h2>
-    <form onsubmit={load}>
-      <p>
-        <label for="dat-file">Logiqx XML DAT</label><br />
-        <input
-          id="dat-file"
-          type="file"
-          accept=".dat,.xml,application/xml,text/xml"
-          aria-describedby="dat-file-help"
-          onchange={choose}
-        />
-        <br />
-        <small id="dat-file-help"
-          >Up to {formatBytes(MAX_DAT_BYTES)}, unzipped. A DAT with the name of one already loaded
-          replaces it, so loading a newer one updates the old.</small
+<div class="stack">
+  {#if administrator}
+    <Panel title="Load a DAT">
+      <form class="load" onsubmit={load}>
+        <Field
+          label="Logiqx XML DAT"
+          hint={`Up to ${formatBytes(MAX_DAT_BYTES)}, unzipped. A DAT with the name of one already loaded replaces it, so loading a newer one updates the old.`}
         >
-      </p>
-      <p>
-        <button type="submit" disabled={!chosen || loading}>
-          {loading ? 'Loading and matching…' : 'Load'}
-        </button>
-      </p>
-    </form>
-    <div aria-live="polite">
-      {#if outcome}
-        <p><strong>{loadOutcome(outcome)}</strong></p>
-        {#if outcome.warnings.length > 0}
-          <details>
-            <summary>What was left out</summary>
-            <ul>
-              {#each outcome.warnings as warning, index (index)}
-                <li>{warning}</li>
-              {/each}
-            </ul>
-            {#if outcome.warning_count > outcome.warnings.length}
-              <p>And {outcome.warning_count - outcome.warnings.length} more.</p>
-            {/if}
-          </details>
-        {/if}
-      {/if}
-      {#if done}<p>{done}</p>{/if}
-    </div>
-    {#if loadProblem}
-      <ErrorPanel problem={loadProblem} area="library" refusal />
-    {/if}
-  </section>
-{/if}
-
-<section aria-labelledby="loaded-heading" aria-live="polite" aria-busy={view.kind === 'loading'}>
-  <h2 id="loaded-heading">Loaded DATs</h2>
-  {#if view.kind === 'loading'}
-    <p>Loading DATs…</p>
-  {:else if view.kind === 'error'}
-    <ErrorPanel
-      problem={view.problem}
-      area="library"
-      endpoint="GET /api/v1/dats"
-      heading="DATs could not be loaded"
-      level={3}
-    />
-  {:else if view.items.length === 0}
-    <p>
-      No DATs loaded yet{#if administrator}; load one above{:else}; an administrator loads them{/if}.
-    </p>
-  {:else}
-    <table>
-      <caption class="visually-hidden">Loaded DATs</caption>
-      <thead>
-        <tr>
-          <th scope="col">Name</th>
-          <th scope="col">Version</th>
-          <th scope="col">Holds</th>
-          <th scope="col">Loaded</th>
-          {#if administrator}<th scope="col">Actions</th>{/if}
-        </tr>
-      </thead>
-      <tbody>
-        {#each view.items as dat (dat.id)}
-          <tr>
-            <th scope="row">
-              {dat.name}
-              {#if dat.description && dat.description !== dat.name}<br /><small
-                  >{dat.description}</small
-                >{/if}
-            </th>
-            <td>{dat.version ?? '—'}</td>
-            <td>{datSummary(dat)}</td>
-            <td>{when(dat.loaded_at)}<br /><small>by {dat.loaded_by}</small></td>
-            {#if administrator}
-              <td>
-                {#if confirmingRemove === dat.id}
-                  <p>
-                    <strong>Remove {dat.name}?</strong> Its games and the matches it made are deleted.
-                    Nothing in the library is touched, and loading it again restores them.
-                  </p>
-                  <button type="button" onclick={() => remove(dat)}>Yes, remove {dat.name}</button>
-                  <button type="button" onclick={() => (confirmingRemove = null)}>Keep it</button>
-                  {#if removeProblem}
-                    <ErrorPanel problem={removeProblem} area="library" refusal />
-                  {/if}
-                {:else}
-                  <button
-                    type="button"
-                    onclick={() => {
-                      confirmingRemove = dat.id;
-                      removeProblem = null;
-                    }}
-                    aria-label={`Remove ${dat.name}`}>Remove</button
-                  >
+          {#snippet children({ id, describedBy })}
+            <input
+              {id}
+              type="file"
+              accept=".dat,.xml,application/xml,text/xml"
+              aria-describedby={describedBy}
+              onchange={choose}
+            />
+          {/snippet}
+        </Field>
+        <div>
+          <Button type="submit" variant="primary" disabled={!chosen || loading}>
+            {loading ? 'Loading and matching…' : 'Load'}
+          </Button>
+        </div>
+      </form>
+      <div aria-live="polite">
+        {#if outcome}
+          <div class="outcome">
+            <StatusMark
+              tone={outcome.warning_count > 0 ? 'warn' : 'ok'}
+              label={loadOutcome(outcome)}
+            />
+            {#if outcome.warnings.length > 0}
+              <details>
+                <summary>What was left out</summary>
+                <ul>
+                  {#each outcome.warnings as warning, index (index)}
+                    <li>{warning}</li>
+                  {/each}
+                </ul>
+                {#if outcome.warning_count > outcome.warnings.length}
+                  <p>And {outcome.warning_count - outcome.warnings.length} more.</p>
                 {/if}
-              </td>
+              </details>
             {/if}
-          </tr>
-        {/each}
-      </tbody>
-    </table>
+          </div>
+        {/if}
+        {#if done}<p class="outcome"><StatusMark tone="ok" label={done} /></p>{/if}
+      </div>
+      {#if loadProblem}
+        <div class="refusal">
+          <ErrorPanel problem={loadProblem} area="library" refusal />
+        </div>
+      {/if}
+    </Panel>
   {/if}
-</section>
+
+  <div aria-live="polite" aria-busy={view.kind === 'loading'}>
+    <Panel
+      title="Loaded DATs"
+      aside={view.kind === 'ready' ? `${view.items.length}` : undefined}
+      flush
+    >
+      {#if view.kind === 'loading'}
+        <p class="padded quiet">Loading DATs…</p>
+      {:else if view.kind === 'error'}
+        <div class="padded">
+          <ErrorPanel
+            problem={view.problem}
+            area="library"
+            endpoint="GET /api/v1/dats"
+            heading="DATs could not be loaded"
+            level={3}
+          />
+        </div>
+      {:else if view.items.length === 0}
+        <EmptyState inset level={3} title="No DATs yet" icon="dat">
+          <p>
+            No DATs loaded yet{#if administrator}; load one above{:else}; an administrator loads
+              them{/if}.
+          </p>
+        </EmptyState>
+      {:else}
+        <Table caption="Loaded DATs">
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Version</th>
+              <th scope="col">Holds</th>
+              <th scope="col">Loaded</th>
+              {#if administrator}<th scope="col"><span class="visually-hidden">Actions</span></th
+                >{/if}
+            </tr>
+          </thead>
+          <tbody>
+            {#each view.items as dat (dat.id)}
+              <tr>
+                <th scope="row">
+                  <div class="cell">
+                    <span>{dat.name}</span>
+                    {#if dat.description && dat.description !== dat.name}
+                      <span class="small quiet">{dat.description}</span>
+                    {/if}
+                  </div>
+                </th>
+                <td
+                  >{#if dat.version}<code>{dat.version}</code>{:else}<span class="quiet"
+                      >None given</span
+                    >{/if}</td
+                >
+                <td>{datSummary(dat)}</td>
+                <td>
+                  <time datetime={dat.loaded_at} title={full(dat.loaded_at)}
+                    >{when(dat.loaded_at)}</time
+                  >
+                  <span class="quiet">by {dat.loaded_by}</span>
+                </td>
+                {#if administrator}
+                  <td>
+                    <div class="row-actions">
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        onclick={() => startRemoving(dat)}
+                        label={`Remove ${dat.name}`}>Remove</Button
+                      >
+                    </div>
+                  </td>
+                {/if}
+              </tr>
+            {/each}
+          </tbody>
+        </Table>
+      {/if}
+
+      {#if administrator && removing}
+        {@const dat = removing}
+        <div class="confirm" role="group" aria-labelledby="remove-heading">
+          <h3 id="remove-heading" tabindex="-1" bind:this={removeHeading}>Remove {dat.name}?</h3>
+          <p>
+            Its games and the matches it made are deleted. Nothing in the library is touched, and
+            loading it again restores them.
+          </p>
+          {#if removeProblem}
+            <ErrorPanel problem={removeProblem} area="library" refusal />
+          {/if}
+          <div class="buttons">
+            <Button variant="danger" onclick={() => remove(dat)}>Yes, remove {dat.name}</Button>
+            <Button onclick={() => (confirmingRemove = null)}>Keep it</Button>
+          </div>
+        </div>
+      {/if}
+    </Panel>
+  </div>
+</div>
 
 <style>
-  table {
-    border-collapse: collapse;
-    width: 100%;
+  .stack {
+    display: grid;
+    gap: var(--space-5);
   }
-  th,
-  td {
-    text-align: left;
-    padding: 0.5rem;
-    border-bottom: 1px solid currentColor;
-    vertical-align: top;
+  .quiet {
+    color: var(--text-muted);
   }
-  .visually-hidden {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
+  .small {
+    font-size: var(--text-xs);
+    font-weight: var(--weight-regular);
+  }
+  .padded {
+    margin: 0;
+    padding: var(--space-3) var(--space-4);
+  }
+  .cell {
+    display: grid;
+    gap: 0.125rem;
+  }
+  .row-actions {
+    display: flex;
+    justify-content: flex-end;
+  }
+  .load {
+    display: grid;
+    gap: var(--space-3);
+    justify-items: start;
+    max-width: 40rem;
+  }
+  .outcome {
+    display: grid;
+    gap: var(--space-2);
+    justify-items: start;
+    margin: var(--space-4) 0 0;
+  }
+  .outcome :global(.mark) {
+    font-weight: var(--weight-medium);
+  }
+  .outcome ul {
+    margin: var(--space-2) 0 0;
+    font-size: var(--text-sm);
+  }
+  summary {
+    cursor: pointer;
+    color: var(--text-muted);
+  }
+  .refusal {
+    margin-top: var(--space-4);
+  }
+  .confirm {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    border-top: 1px solid var(--line);
+    border-left: 4px solid var(--bad);
+    background: color-mix(in srgb, var(--bad) 6%, var(--surface));
+  }
+  .confirm h3 {
+    margin: 0;
+    font-size: var(--text-md);
+  }
+  .confirm p {
+    margin: 0;
+    max-width: 75ch;
+  }
+  .buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
   }
 </style>

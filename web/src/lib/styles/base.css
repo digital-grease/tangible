@@ -162,6 +162,22 @@ input[type='radio'] {
 input[type='file'] {
   max-width: 100%;
 }
+/* The file picker's own button, drawn as a secondary Button. */
+input[type='file']::file-selector-button {
+  margin-right: var(--space-3);
+  min-height: 2rem;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: var(--weight-strong);
+  cursor: pointer;
+}
+input[type='file']::file-selector-button:hover {
+  background: var(--surface-2);
+}
 input::placeholder,
 textarea::placeholder {
   color: var(--text-muted);
