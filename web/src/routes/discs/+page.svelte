@@ -2,9 +2,15 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import EmptyState from '$lib/components/ui/EmptyState.svelte';
+  import PageHeader from '$lib/components/ui/PageHeader.svelte';
+  import Panel from '$lib/components/ui/Panel.svelte';
+  import StatusMark from '$lib/components/ui/StatusMark.svelte';
+  import Table from '$lib/components/ui/Table.svelte';
   import { apiFetch } from '$lib/session';
   import { onMount } from 'svelte';
-  import { conditionLabel, conditionMark, loadDiscs, type PhysicalCopyPage } from '$lib/discs';
+  import { conditionLabel, conditionTone, loadDiscs, type PhysicalCopyPage } from '$lib/discs';
   import type { LoadState } from '$lib/library';
 
   let view = $state<LoadState<PhysicalCopyPage>>({ kind: 'loading' });
@@ -21,22 +27,22 @@
   );
 </script>
 
-<svelte:head><title>Discs — Tangible</title></svelte:head>
+<svelte:head><title>Physical copies — Tangible</title></svelte:head>
 
-<h1>Discs</h1>
-
-<p>
-  Every burn that consumed media produced a disc, including the burns that failed. A disc nobody
-  tracked is the one that gets shelved, found later, and trusted.
-</p>
+<PageHeader
+  title="Physical copies"
+  description="Every burn that consumed media produced a disc, including the burns that failed. A disc nobody tracked is the one that gets shelved, found later, and trusted."
+/>
 
 <div aria-live="polite" aria-busy={view.kind === 'loading'}>
   {#if attention.length > 0}
     <!-- The line on this page that needs somebody to go and do something. -->
     <section class="callout" aria-labelledby="attention-heading">
       <h2 id="attention-heading">
-        {attention.length}
-        {attention.length === 1 ? 'disc should be destroyed' : 'discs should be destroyed'}
+        <StatusMark
+          tone="bad"
+          label={`${attention.length} ${attention.length === 1 ? 'disc should be destroyed' : 'discs should be destroyed'}`}
+        />
       </h2>
       <p>
         These do not hold what was intended, or are no longer trusted to. Destroy them rather than
@@ -45,15 +51,15 @@
       <ul>
         {#each attention as copy (copy.id)}
           <li>
-            <a href={`/discs/${copy.id}`}>{copy.label ?? copy.id.slice(0, 8)}</a>
-            — {conditionLabel(copy.status)}
+            <a href={`/discs/${copy.id}`}>{copy.label ?? copy.id.slice(0, 8)}</a>:
+            {conditionLabel(copy.status)}
           </li>
         {/each}
       </ul>
     </section>
   {/if}
 
-  <p>
+  <div class="filter">
     <label for="filter">Condition</label>
     <select id="filter" bind:value={status} onchange={refresh}>
       <option value="">All</option>
@@ -64,97 +70,98 @@
       <option value="lost">Lost</option>
       <option value="destroyed">Destroyed</option>
     </select>
-  </p>
+  </div>
 
   {#if view.kind === 'loading'}
-    <p>Loading discs…</p>
+    <p class="quiet">Loading discs…</p>
   {:else if view.kind === 'empty'}
-    <section>
-      <h2>No discs yet</h2>
+    <EmptyState title="No discs yet" icon="disc">
       <p>A disc appears here the moment a burn starts consuming one.</p>
-      <p><a href="/burns">Burn queue</a></p>
-    </section>
+      {#snippet action()}<Button href="/burns" icon="burn">Burn queue</Button>{/snippet}
+    </EmptyState>
   {:else if view.kind === 'error'}
-    <section>
-      <ErrorPanel
-        problem={view.problem}
-        area="other"
-        endpoint="GET /api/v1/physical-copies"
-        heading="Could not load the disc inventory"
-      />
-    </section>
+    <ErrorPanel
+      problem={view.problem}
+      area="other"
+      endpoint="GET /api/v1/physical-copies"
+      heading="Could not load the disc inventory"
+    />
   {:else}
-    <table>
-      <caption class="visually-hidden">Discs, newest first</caption>
-      <thead>
-        <tr>
-          <th scope="col">Disc</th>
-          <th scope="col">Condition</th>
-          <th scope="col">Media</th>
-          <th scope="col">Where</th>
-          <th scope="col">Last checked</th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each view.data.items as copy (copy.id)}
+    <Panel title="Discs" aside={String(view.data.items.length)} flush>
+      <Table caption="Discs, newest first">
+        <thead>
           <tr>
-            <th scope="row">
-              <a href={`/discs/${copy.id}`}>{copy.label ?? copy.id.slice(0, 8)}</a>
-            </th>
-            <td>
-              <!-- A symbol carries the status alongside any styling, so it is
-                   never communicated by colour alone. -->
-              <span aria-hidden="true">{conditionMark(copy.status)}</span>
-              {conditionLabel(copy.status)}
-            </td>
-            <td>{copy.media_profile}</td>
-            <td>{copy.storage_location ?? '—'}</td>
-            <td>
-              {#if copy.last_checked_at}
-                {new Date(copy.last_checked_at).toLocaleDateString()}
-                <small>({copy.check_count})</small>
-              {:else}
-                Never
-              {/if}
-            </td>
+            <th scope="col">Disc</th>
+            <th scope="col">Condition</th>
+            <th scope="col">Media</th>
+            <th scope="col">Where</th>
+            <th scope="col">Last checked</th>
           </tr>
-        {/each}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {#each view.data.items as copy (copy.id)}
+            <tr>
+              <th scope="row">
+                <a href={`/discs/${copy.id}`}>{copy.label ?? copy.id.slice(0, 8)}</a>
+              </th>
+              <td>
+                <StatusMark
+                  tone={conditionTone(copy.status)}
+                  label={conditionLabel(copy.status)}
+                  pill
+                />
+              </td>
+              <td>{copy.media_profile}</td>
+              <td>{copy.storage_location ?? '·'}</td>
+              <td>
+                {#if copy.last_checked_at}
+                  <time datetime={copy.last_checked_at}
+                    >{new Date(copy.last_checked_at).toLocaleDateString()}</time
+                  >
+                  <span class="quiet">({copy.check_count})</span>
+                {:else}
+                  <span class="quiet">Never</span>
+                {/if}
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </Table>
+    </Panel>
   {/if}
 </div>
 
 <style>
-  table {
-    border-collapse: collapse;
-    width: 100%;
-  }
-  th,
-  td {
-    text-align: left;
-    padding: 0.5rem;
-    border-bottom: 1px solid currentColor;
-  }
   .callout {
-    border: 2px solid currentColor;
-    padding: 0.75rem 1rem;
-    margin-bottom: 1.5rem;
+    padding: var(--space-3) var(--space-4);
+    margin-bottom: var(--space-5);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--bad);
+    border-radius: var(--radius);
+  }
+  .callout h2 {
+    margin: 0 0 var(--space-2);
+    font-size: var(--text-md);
+  }
+  .callout p {
+    margin: 0 0 var(--space-2);
   }
   .callout ul {
-    margin: 0.5rem 0 0;
+    margin: 0;
     padding-left: 1.25rem;
   }
-  label {
-    font-weight: 600;
+  .filter {
+    display: flex;
+    gap: var(--space-2);
+    align-items: center;
+    margin-bottom: var(--space-4);
   }
-  select {
-    padding: 0.3rem;
+  .filter label {
+    color: var(--text-muted);
+    font-size: var(--text-sm);
   }
-  .visually-hidden {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
+  .quiet {
+    color: var(--text-muted);
   }
 </style>

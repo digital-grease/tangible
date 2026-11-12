@@ -649,7 +649,9 @@ may change between minor versions, and the release notes say how.
   artifact's disc drawn in its row and, to scale beside its tracks, on its
   Topology tab; search by part of a file's name; and the artifact's facts,
   components, topology, validation, lineage and burning in tabs under a
-  header that says what it is and offers what can be done with it.
+  header that says what it is and offers what can be done with it. So do
+  the Catalog, as three columns from title to disc set with the set's discs
+  below, and Physical copies, the discs to destroy first.
 - The image is built on Debian 13 (trixie), moving from Debian 12
   (bookworm), now oldstable, and every tool in it moves too: chdman 0.251
   to 0.276, which makes DVD CHDs (a DVD's ISO gets one, made with

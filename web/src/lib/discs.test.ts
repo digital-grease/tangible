@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  conditionTone,
   SETTABLE_CONDITIONS,
   conditionLabel,
   conditionMark,
@@ -228,5 +229,16 @@ describe('labels', () => {
   it('says what a check actually did', () => {
     expect(methodLabel('full_sector_readback')).toContain('whole disc');
     expect(methodLabel('tool_verify')).toContain('engine');
+  });
+});
+
+describe('a disc’s condition, as a tone', () => {
+  it('marks what to destroy as bad and what is unproven as a warning', () => {
+    expect(conditionTone('verified')).toBe('ok');
+    expect(conditionTone('produced_unverified')).toBe('warn');
+    expect(conditionTone('lost')).toBe('warn');
+    expect(conditionTone('verification_failed')).toBe('bad');
+    expect(conditionTone('degraded')).toBe('bad');
+    expect(conditionTone('destroyed')).toBe('idle');
   });
 });

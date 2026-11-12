@@ -2,6 +2,11 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   import CatalogEditor from '$lib/components/CatalogEditor.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import PageHeader from '$lib/components/ui/PageHeader.svelte';
+  import Panel from '$lib/components/ui/Panel.svelte';
+  import StatusMark from '$lib/components/ui/StatusMark.svelte';
+  import Table from '$lib/components/ui/Table.svelte';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import { apiFetch } from '$lib/session';
   import RommExport from '$lib/components/RommExport.svelte';
@@ -215,319 +220,394 @@
 
 <svelte:head><title>Catalog — Tangible</title></svelte:head>
 
-<h1>Catalog</h1>
-
-<p>
-  A disc is the thing this system is about. A title is the work, an edition is a particular release
-  of it, a set is what that release shipped as, and a disc is one physical thing in that set.
-</p>
+<PageHeader
+  title="Catalog"
+  description="A disc is the thing this system is about. A title is the work, an edition is a particular release of it, a set is what that release shipped as, and a disc is one physical thing in that set."
+/>
 
 {#if problem}
   <ErrorPanel {problem} area="catalog" refusal />
 {/if}
 
-<section aria-labelledby="titles-heading">
-  <h2 id="titles-heading">Titles</h2>
-
-  <form
-    onsubmit={(event) => {
-      event.preventDefault();
-      refreshTitles();
-    }}
-  >
-    <label for="search">Search</label>
-    <input id="search" bind:value={search} placeholder="Part of a name" />
-    <button type="submit">Search</button>
-  </form>
-
-  <div aria-live="polite" aria-busy={view.kind === 'loading'}>
-    {#if view.kind === 'loading'}
-      <p>Loading titles…</p>
-    {:else if view.kind === 'empty'}
-      <p>Nothing catalogued yet. Add the first title below.</p>
-    {:else if view.kind === 'error'}
-      <p>{view.problem.title}. {view.problem.detail}</p>
-    {:else}
-      <ul class="chain">
-        {#each view.data.items as title (title.id)}
-          <li>
-            <button
-              type="button"
-              class:selected={selectedTitle === title.id}
-              onclick={() => chooseTitle(title.id)}
-            >
-              {title.display_title}
-            </button>
-            <small>
-              {titleKindLabel(title.kind)}{title.release_year ? `, ${title.release_year}` : ''} —
-              {title.edition_count} edition{title.edition_count === 1 ? '' : 's'}
-            </small>
-          </li>
-        {/each}
-      </ul>
-      {#if selectedTitle && editing?.kind !== 'title'}
-        <button type="button" onclick={() => (editing = { kind: 'title', id: selectedTitle! })}>
-          Change this title…
-        </button>
-      {/if}
-      {#if editedTitle}
-        <CatalogEditor
-          kind="title"
-          item={editedTitle}
-          onsaved={saved}
-          oncancel={() => (editing = null)}
-        />
-      {/if}
-    {/if}
-  </div>
-
-  <form onsubmit={addTitle}>
-    <label for="new-title">New title</label>
-    <input id="new-title" bind:value={newTitle} placeholder="Example Film" />
-    <select bind:value={newTitleKind} aria-label="Kind of work">
-      <option value="unknown">Unspecified</option>
-      <option value="movie">Film</option>
-      <option value="television">Television</option>
-      <option value="game">Game</option>
-      <option value="software">Software</option>
-      <option value="operating_system">Operating system</option>
-      <option value="music">Music</option>
-      <option value="data_archive">Data archive</option>
-    </select>
-    <button type="submit" disabled={busy || !newTitle.trim()}>Add</button>
-  </form>
-</section>
-
-{#if selectedTitle}
-  <section aria-labelledby="editions-heading">
-    <h2 id="editions-heading">Editions</h2>
-    {#if editions.length === 0}
-      <p>No editions yet. A release of this title goes here.</p>
-    {:else}
-      <ul class="chain">
-        {#each editions as edition (edition.id)}
-          <li>
-            <button
-              type="button"
-              class:selected={selectedEdition === edition.id}
-              onclick={() => chooseEdition(edition.id)}
-            >
-              {edition.display_name}
-            </button>
-            <small>
-              {edition.region ?? 'Region unspecified'} — {edition.set_count} set{edition.set_count ===
-              1
-                ? ''
-                : 's'}
-            </small>
-          </li>
-        {/each}
-      </ul>
-      {#if selectedEdition && editing?.kind !== 'edition'}
-        <button type="button" onclick={() => (editing = { kind: 'edition', id: selectedEdition! })}>
-          Change this edition…
-        </button>
-      {/if}
-      {#if editedEdition}
-        <CatalogEditor
-          kind="edition"
-          item={editedEdition}
-          onsaved={saved}
-          oncancel={() => (editing = null)}
-        />
-      {/if}
-    {/if}
-
-    <form onsubmit={addEdition}>
-      <label for="new-edition">New edition</label>
-      <input id="new-edition" bind:value={newEdition} placeholder="Special Edition" />
-      <button type="submit" disabled={busy || !newEdition.trim()}>Add</button>
+<!-- The chain as columns, each choice opening the next. The chosen item is
+     a pressed button, so the choice is said, not only shown. -->
+<div class="columns">
+  <Panel title="Titles">
+    <form
+      class="search"
+      onsubmit={(event) => {
+        event.preventDefault();
+        refreshTitles();
+      }}
+    >
+      <label for="search" class="visually-hidden">Search</label>
+      <input id="search" type="search" bind:value={search} placeholder="Part of a name" />
+      <Button type="submit" size="sm">Search</Button>
     </form>
-  </section>
-{/if}
+
+    <div aria-live="polite" aria-busy={view.kind === 'loading'}>
+      {#if view.kind === 'loading'}
+        <p class="quiet">Loading titles…</p>
+      {:else if view.kind === 'empty'}
+        <p class="quiet">Nothing catalogued yet. Add the first title below.</p>
+      {:else if view.kind === 'error'}
+        <p>{view.problem.title}. {view.problem.detail}</p>
+      {:else}
+        <ul class="chain">
+          {#each view.data.items as title (title.id)}
+            <li>
+              <button
+                type="button"
+                aria-pressed={selectedTitle === title.id}
+                onclick={() => chooseTitle(title.id)}
+              >
+                <span class="name">{title.display_title}</span>
+                <span class="meta">
+                  {titleKindLabel(title.kind)}{title.release_year ? `, ${title.release_year}` : ''} ·
+                  {title.edition_count} edition{title.edition_count === 1 ? '' : 's'}
+                </span>
+              </button>
+            </li>
+          {/each}
+        </ul>
+        {#if selectedTitle && editing?.kind !== 'title'}
+          <Button
+            size="sm"
+            variant="quiet"
+            onclick={() => (editing = { kind: 'title', id: selectedTitle! })}
+          >
+            Change this title…
+          </Button>
+        {/if}
+        {#if editedTitle}
+          <CatalogEditor
+            kind="title"
+            item={editedTitle}
+            onsaved={saved}
+            oncancel={() => (editing = null)}
+          />
+        {/if}
+      {/if}
+    </div>
+
+    <form class="add" onsubmit={addTitle}>
+      <label for="new-title">New title</label>
+      <input id="new-title" bind:value={newTitle} placeholder="Example Film" />
+      <select bind:value={newTitleKind} aria-label="Kind of work">
+        <option value="unknown">Unspecified</option>
+        <option value="movie">Film</option>
+        <option value="television">Television</option>
+        <option value="game">Game</option>
+        <option value="software">Software</option>
+        <option value="operating_system">Operating system</option>
+        <option value="music">Music</option>
+        <option value="data_archive">Data archive</option>
+      </select>
+      <Button type="submit" size="sm" disabled={busy || !newTitle.trim()}>Add</Button>
+    </form>
+  </Panel>
+
+  <Panel title="Editions">
+    {#if !selectedTitle}
+      <p class="quiet">Choose a title to see its editions.</p>
+    {:else}
+      {#if editions.length === 0}
+        <p class="quiet">No editions yet. A release of this title goes here.</p>
+      {:else}
+        <ul class="chain">
+          {#each editions as edition (edition.id)}
+            <li>
+              <button
+                type="button"
+                aria-pressed={selectedEdition === edition.id}
+                onclick={() => chooseEdition(edition.id)}
+              >
+                <span class="name">{edition.display_name}</span>
+                <span class="meta">
+                  {edition.region ?? 'Region unspecified'} · {edition.set_count} set{edition.set_count ===
+                  1
+                    ? ''
+                    : 's'}
+                </span>
+              </button>
+            </li>
+          {/each}
+        </ul>
+        {#if selectedEdition && editing?.kind !== 'edition'}
+          <Button
+            size="sm"
+            variant="quiet"
+            onclick={() => (editing = { kind: 'edition', id: selectedEdition! })}
+          >
+            Change this edition…
+          </Button>
+        {/if}
+        {#if editedEdition}
+          <CatalogEditor
+            kind="edition"
+            item={editedEdition}
+            onsaved={saved}
+            oncancel={() => (editing = null)}
+          />
+        {/if}
+      {/if}
+
+      <form class="add" onsubmit={addEdition}>
+        <label for="new-edition">New edition</label>
+        <input id="new-edition" bind:value={newEdition} placeholder="Special Edition" />
+        <Button type="submit" size="sm" disabled={busy || !newEdition.trim()}>Add</Button>
+      </form>
+    {/if}
+  </Panel>
+
+  <Panel title="Disc sets">
+    {#if !selectedEdition}
+      <p class="quiet">Choose an edition to see what it shipped as.</p>
+    {:else}
+      {#if sets.length === 0}
+        <p class="quiet">No sets yet. What this edition shipped as goes here.</p>
+      {:else}
+        <ul class="chain">
+          {#each sets as set (set.id)}
+            <li>
+              <button
+                type="button"
+                aria-pressed={selectedSet === set.id}
+                onclick={() => chooseSet(set.id)}
+              >
+                <span class="name">{set.name}</span>
+                <span class="meta">
+                  {set.disc_count} of {set.disc_count_expected ?? '?'} discs catalogued
+                </span>
+              </button>
+              {#if !isComplete(set)}
+                <StatusMark tone="warn" label="Incomplete" />
+              {/if}
+            </li>
+          {/each}
+        </ul>
+        {#if selectedSet && editing?.kind !== 'set'}
+          <Button
+            size="sm"
+            variant="quiet"
+            onclick={() => (editing = { kind: 'set', id: selectedSet! })}
+          >
+            Change this set…
+          </Button>
+        {/if}
+        {#if editedSet}
+          <CatalogEditor
+            kind="set"
+            item={editedSet}
+            onsaved={saved}
+            oncancel={() => (editing = null)}
+          />
+        {/if}
+      {/if}
+
+      <form class="add" onsubmit={addSet}>
+        <label for="new-set">New set</label>
+        <input id="new-set" bind:value={newSet} placeholder="Two-disc set" />
+        <input
+          type="number"
+          bind:value={newSetCount}
+          min="1"
+          placeholder="Discs"
+          aria-label="How many discs it shipped with"
+        />
+        <Button type="submit" size="sm" disabled={busy || !newSet.trim()}>Add</Button>
+      </form>
+    {/if}
+  </Panel>
+</div>
 
 {#if selectedEdition}
-  <RommExport editionId={selectedEdition} />
-
-  <section aria-labelledby="sets-heading">
-    <h2 id="sets-heading">Disc sets</h2>
-    {#if sets.length === 0}
-      <p>No sets yet. What this edition shipped as goes here.</p>
-    {:else}
-      <ul class="chain">
-        {#each sets as set (set.id)}
-          <li>
-            <button
-              type="button"
-              class:selected={selectedSet === set.id}
-              onclick={() => chooseSet(set.id)}
-            >
-              {set.name}
-            </button>
-            <small>
-              {set.disc_count} of {set.disc_count_expected ?? '?'} discs catalogued
-              {#if !isComplete(set)}
-                — incomplete
-              {/if}
-            </small>
-          </li>
-        {/each}
-      </ul>
-      {#if selectedSet && editing?.kind !== 'set'}
-        <button type="button" onclick={() => (editing = { kind: 'set', id: selectedSet! })}>
-          Change this set…
-        </button>
-      {/if}
-      {#if editedSet}
-        <CatalogEditor
-          kind="set"
-          item={editedSet}
-          onsaved={saved}
-          oncancel={() => (editing = null)}
-        />
-      {/if}
-    {/if}
-
-    <form onsubmit={addSet}>
-      <label for="new-set">New set</label>
-      <input id="new-set" bind:value={newSet} placeholder="Two-disc set" />
-      <input
-        type="number"
-        bind:value={newSetCount}
-        min="1"
-        placeholder="Discs"
-        aria-label="How many discs it shipped with"
-      />
-      <button type="submit" disabled={busy || !newSet.trim()}>Add</button>
-    </form>
-  </section>
+  <div class="romm">
+    <RommExport editionId={selectedEdition} />
+  </div>
 {/if}
 
 {#if selectedSet}
-  <section aria-labelledby="discs-heading">
-    <h2 id="discs-heading">Discs</h2>
-    {#if discs.length === 0}
-      <p>No discs catalogued in this set yet.</p>
-    {:else}
-      <table>
-        <caption class="visually-hidden">Discs in this set</caption>
-        <thead>
-          <tr>
-            <th scope="col">Disc</th>
-            <th scope="col">Medium</th>
-            <th scope="col">Images</th>
-            <th scope="col">Copies made</th>
-            <th scope="col">Reproduction</th>
-            <th scope="col"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each discs as disc (disc.id)}
+  <div class="discs">
+    <Panel title="Discs" aside={String(discs.length)} flush>
+      {#if discs.length === 0}
+        <p class="quiet padded">No discs catalogued in this set yet.</p>
+      {:else}
+        <Table caption="Discs in this set">
+          <thead>
             <tr>
-              <th scope="row">{discName(disc)}</th>
-              <td>{mediaFamilyLabel(disc.media_family)}</td>
-              <td>{disc.artifact_count}</td>
-              <td>{disc.copy_count}</td>
-              <td>{compatibilityLabel(disc.compatibility_claim)}</td>
-              <td>
-                <a href={`/burns/new?disc=${disc.id}`}>Burn to this disc</a>
-                <button type="button" onclick={() => (editing = { kind: 'disc', id: disc.id })}>
-                  Change {discName(disc)}…
-                </button>
-              </td>
+              <th scope="col">Disc</th>
+              <th scope="col">Medium</th>
+              <th scope="col" class="num">Images</th>
+              <th scope="col" class="num">Copies made</th>
+              <th scope="col">Reproduction</th>
+              <th scope="col"><span class="visually-hidden">Actions</span></th>
             </tr>
-          {/each}
-        </tbody>
-      </table>
-      {#if editedDisc}
-        <CatalogEditor
-          kind="disc"
-          item={editedDisc}
-          onsaved={saved}
-          oncancel={() => (editing = null)}
-        />
+          </thead>
+          <tbody>
+            {#each discs as disc (disc.id)}
+              <tr>
+                <th scope="row">{discName(disc)}</th>
+                <td>{mediaFamilyLabel(disc.media_family)}</td>
+                <td class="num">{disc.artifact_count}</td>
+                <td class="num">{disc.copy_count}</td>
+                <td>{compatibilityLabel(disc.compatibility_claim)}</td>
+                <td class="actions">
+                  <Button size="sm" icon="burn" href={`/burns/new?disc=${disc.id}`}
+                    >Burn to this disc</Button
+                  >
+                  <Button
+                    size="sm"
+                    variant="quiet"
+                    onclick={() => (editing = { kind: 'disc', id: disc.id })}
+                  >
+                    Change {discName(disc)}…
+                  </Button>
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </Table>
       {/if}
-    {/if}
+      {#if editedDisc}
+        <div class="padded">
+          <CatalogEditor
+            kind="disc"
+            item={editedDisc}
+            onsaved={saved}
+            oncancel={() => (editing = null)}
+          />
+        </div>
+      {/if}
 
-    <form onsubmit={addDisc}>
-      <label for="new-disc-number">New disc</label>
-      <input
-        id="new-disc-number"
-        type="number"
-        bind:value={newDiscNumber}
-        min="1"
-        aria-label="Disc number"
-      />
-      <input bind:value={newDiscName} placeholder="Feature, Supplements…" aria-label="Disc name" />
-      <select bind:value={newDiscMedia} aria-label="Medium">
-        <option value="unknown">Unspecified</option>
-        <option value="cd">CD</option>
-        <option value="dvd">DVD</option>
-        <option value="bluray">Blu-ray</option>
-        <option value="uhd_bluray">UHD Blu-ray</option>
-        <option value="gd_rom">GD-ROM</option>
-      </select>
-      <button type="submit" disabled={busy}>Add</button>
-    </form>
-  </section>
+      <form class="add padded" onsubmit={addDisc}>
+        <label for="new-disc-number">New disc</label>
+        <input
+          id="new-disc-number"
+          type="number"
+          bind:value={newDiscNumber}
+          min="1"
+          aria-label="Disc number"
+        />
+        <input
+          bind:value={newDiscName}
+          placeholder="Feature, Supplements…"
+          aria-label="Disc name"
+        />
+        <select bind:value={newDiscMedia} aria-label="Medium">
+          <option value="unknown">Unspecified</option>
+          <option value="cd">CD</option>
+          <option value="dvd">DVD</option>
+          <option value="bluray">Blu-ray</option>
+          <option value="uhd_bluray">UHD Blu-ray</option>
+          <option value="gd_rom">GD-ROM</option>
+        </select>
+        <Button type="submit" size="sm" disabled={busy}>Add</Button>
+      </form>
+    </Panel>
+  </div>
 {/if}
 
 <style>
-  ul.chain {
-    list-style: none;
-    margin: 0 0 1rem;
-    padding: 0;
+  .columns {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-4);
+    align-items: start;
   }
-  ul.chain li {
-    padding: 0.25rem 0;
+  @media (max-width: 1099px) {
+    .columns {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
-  ul.chain button {
-    font: inherit;
-    padding: 0.25rem 0.5rem;
-    background: none;
-    border: 1px solid currentColor;
-  }
-  /* The selection is carried by more than styling: the button keeps its own
-     pressed state for assistive technology. */
-  ul.chain button.selected {
-    font-weight: 700;
-    text-decoration: underline;
-  }
-  table {
-    border-collapse: collapse;
-    width: 100%;
-  }
-  th,
-  td {
-    text-align: left;
-    padding: 0.5rem;
-    border-bottom: 1px solid currentColor;
-  }
-  form {
-    margin: 0.75rem 0;
+  .search,
+  .add {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.5rem;
+    gap: var(--space-2);
     align-items: center;
   }
-  label {
-    font-weight: 600;
+  .search {
+    margin-bottom: var(--space-3);
   }
-  input,
-  select {
-    padding: 0.35rem;
+  .search input,
+  .add input:not([type='number']) {
+    flex: 1 1 8rem;
+    min-width: 0;
   }
-  button[type='submit'] {
-    padding: 0.35rem 0.75rem;
+  .add input[type='number'] {
+    width: 5rem;
   }
-  .visually-hidden {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
+  .add {
+    margin-top: var(--space-3);
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--line-2);
   }
-  small {
-    margin-left: 0.5rem;
+  .add label {
+    width: 100%;
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+  }
+  ul.chain {
+    list-style: none;
+    margin: 0 0 var(--space-2);
+    padding: 0;
+    display: grid;
+    gap: 2px;
+  }
+  ul.chain li {
+    display: flex;
+    gap: var(--space-2);
+    align-items: center;
+  }
+  ul.chain button {
+    flex: 1;
+    display: grid;
+    justify-content: start;
+    justify-items: start;
+    gap: 0;
+    min-height: 0;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    background: none;
+    text-align: left;
+  }
+  ul.chain button:hover {
+    background: var(--surface-2);
+  }
+  /* aria-pressed is the truth; the background, bar and weight echo it. */
+  ul.chain button[aria-pressed='true'] {
+    background: var(--surface-2);
+    border-color: var(--line);
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+  ul.chain button[aria-pressed='true'] .name {
+    font-weight: var(--weight-strong);
+  }
+  .name {
+    font-weight: var(--weight-medium);
+  }
+  .meta {
+    font-size: var(--text-xs);
+    font-weight: var(--weight-regular);
+    color: var(--text-muted);
+  }
+  .actions {
+    display: flex;
+    gap: var(--space-2);
+    justify-content: flex-end;
+    white-space: nowrap;
+  }
+  .romm,
+  .discs {
+    margin-top: var(--space-5);
+  }
+  .padded {
+    padding: var(--space-3) var(--space-4);
+  }
+  .quiet {
+    color: var(--text-muted);
+    margin: 0;
   }
 </style>

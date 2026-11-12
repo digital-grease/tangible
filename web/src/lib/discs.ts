@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 digitalgrease
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import type { Tone } from './components/ui/tone';
 import type { components } from './api-types';
 import { apiFetch, transportProblem } from './session';
 import type { CommandResult } from './burns';
@@ -176,6 +177,22 @@ export function conditionMark(status: string): string {
       return '–';
     default:
       return '·';
+  }
+}
+
+/** A condition as a tone, for a status mark. */
+export function conditionTone(status: string): Tone {
+  switch (status) {
+    case 'verified':
+      return 'ok';
+    case 'produced_unverified':
+    case 'lost':
+      return 'warn';
+    case 'verification_failed':
+    case 'degraded':
+      return 'bad';
+    default:
+      return 'idle';
   }
 }
 

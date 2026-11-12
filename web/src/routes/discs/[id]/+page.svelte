@@ -2,12 +2,17 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import PageHeader from '$lib/components/ui/PageHeader.svelte';
+  import Panel from '$lib/components/ui/Panel.svelte';
+  import StatusMark from '$lib/components/ui/StatusMark.svelte';
+  import Table from '$lib/components/ui/Table.svelte';
   import { onMount } from 'svelte';
   import { page } from '$app/state';
   import {
     SETTABLE_CONDITIONS,
     conditionLabel,
-    conditionMark,
+    conditionTone,
     isEditable,
     loadDisc,
     markDestroyed,
@@ -108,12 +113,11 @@
   <title>{copy ? `${copy.label ?? 'Disc'} — Tangible` : 'Disc — Tangible'}</title>
 </svelte:head>
 
-<p><a href="/discs">← Discs</a></p>
-
 <div aria-busy={view.kind === 'loading'}>
   {#if view.kind === 'loading'}
-    <p>Loading disc…</p>
+    <p class="quiet">Loading disc…</p>
   {:else if view.kind === 'error'}
+    <p><a href="/discs">Physical copies</a></p>
     <ErrorPanel
       problem={view.problem}
       area="other"
@@ -122,227 +126,258 @@
       level={1}
     />
   {:else if copy}
-    <h1>{copy.label ?? `Disc ${copy.id.slice(0, 8)}`}</h1>
+    {@const name = copy.label ?? `Disc ${copy.id.slice(0, 8)}`}
+    <PageHeader
+      title={name}
+      crumbs={[{ label: 'Physical copies', href: '/discs' }, { label: name }]}
+    >
+      {#snippet badges()}
+        <span id="condition-heading">
+          <StatusMark tone={conditionTone(copy.status)} label={conditionLabel(copy.status)} />
+        </span>
+      {/snippet}
+    </PageHeader>
 
-    <section aria-labelledby="condition-heading" class="status">
-      <h2 id="condition-heading">
-        <span aria-hidden="true">{conditionMark(copy.status)}</span>
-        {conditionLabel(copy.status)}
-      </h2>
-      {#if copy.should_be_destroyed}
-        <p>
-          This disc does not hold what was intended, or is no longer trusted to. Destroy it rather
-          than returning it to a shelf: an untracked bad disc gets found later and believed.
-        </p>
-      {/if}
-      {#if copy.is_settled}
-        <p>This disc has been destroyed. Its record remains so the burn history stays true.</p>
-      {/if}
-    </section>
+    {#if copy.should_be_destroyed}
+      <p class="callout bad">
+        This disc does not hold what was intended, or is no longer trusted to. Destroy it rather
+        than returning it to a shelf: an untracked bad disc gets found later and believed.
+      </p>
+    {/if}
+    {#if copy.is_settled}
+      <p class="callout">
+        This disc has been destroyed. Its record remains so the burn history stays true.
+      </p>
+    {/if}
 
     {#if problem}
       <ErrorPanel {problem} area="other" refusal />
     {/if}
 
-    <section aria-labelledby="details-heading">
-      <h2 id="details-heading">How it was made</h2>
-      <dl>
-        <dt>Artifact</dt>
-        <dd><a href={`/library/${copy.artifact_id}`}><code>{copy.artifact_id}</code></a></dd>
-        <dt>Burn attempt</dt>
-        <dd><code>{copy.burn_attempt_id}</code></dd>
-        <dt>Medium</dt>
-        <dd>{copy.media_profile}{copy.manufacturer_id ? ` (${copy.manufacturer_id})` : ''}</dd>
-        <dt>Verification at burn</dt>
-        <dd>
-          {copy.verification_level.replace(/_/g, ' ')} — {copy.verification_result.replace(
-            /_/g,
-            ' ',
-          )}
-        </dd>
-        <dt>Burned</dt>
-        <dd>{new Date(copy.created_at).toLocaleString()}</dd>
-      </dl>
-      <p class="note">
-        How this disc was made is history and cannot be edited. What condition it is in, and where
-        it lives, can be.
-      </p>
-    </section>
+    <div class="columns">
+      <div class="stack">
+        <Panel title="How it was made">
+          <dl class="facts">
+            <div>
+              <dt>Artifact</dt>
+              <dd><a href={`/library/${copy.artifact_id}`}><code>{copy.artifact_id}</code></a></dd>
+            </div>
+            <div>
+              <dt>Burn attempt</dt>
+              <dd><code>{copy.burn_attempt_id}</code></dd>
+            </div>
+            <div>
+              <dt>Medium</dt>
+              <dd>
+                {copy.media_profile}{copy.manufacturer_id ? ` (${copy.manufacturer_id})` : ''}
+              </dd>
+            </div>
+            <div>
+              <dt>Verification at burn</dt>
+              <dd>
+                {copy.verification_level.replace(/_/g, ' ')}: {copy.verification_result.replace(
+                  /_/g,
+                  ' ',
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt>Burned</dt>
+              <dd>
+                <time datetime={copy.created_at}>{new Date(copy.created_at).toLocaleString()}</time>
+              </dd>
+            </div>
+          </dl>
+          <p class="quiet note">
+            How this disc was made is history and cannot be edited. What condition it is in, and
+            where it lives, can be.
+          </p>
+        </Panel>
 
-    {#if isEditable(copy)}
-      <section aria-labelledby="record-heading">
-        <h2 id="record-heading">Record what you know</h2>
-        <form onsubmit={save}>
-          <p>
-            <label for="label">Label</label><br />
-            <input id="label" bind:value={label} placeholder="Example Disc 1 of 2" />
-          </p>
-          <p>
-            <label for="location">Where it is kept</label><br />
-            <input id="location" bind:value={location} placeholder="Shelf B, sleeve 14" />
-          </p>
-          <p>
-            <label for="notes">Notes</label><br />
-            <textarea id="notes" bind:value={notes} rows="3"></textarea>
-          </p>
-          <p>
-            <label for="condition">Condition</label><br />
-            <select id="condition" bind:value={condition}>
-              <option value="">Leave as it is</option>
-              {#each SETTABLE_CONDITIONS as option (option)}
-                <option value={option}>{conditionLabel(option)}</option>
-              {/each}
-            </select>
-            <br />
-            <!-- The strongest claim in the system stays the most expensive one
-                 to make. -->
-            <small>
-              Verified is not in this list. It means a disc was read back and matched, so recording
-              a check is the only way to write it.
-            </small>
-          </p>
-          <button type="submit" disabled={busy}>Save</button>
-        </form>
-      </section>
+        <Panel title="Check history" aside={String(copy.checks.length)} flush>
+          {#if copy.checks.length === 0}
+            <p class="quiet padded">This disc has not been checked since it was burned.</p>
+          {:else}
+            <Table caption="Checks recorded for this disc">
+              <thead>
+                <tr>
+                  <th scope="col">When</th>
+                  <th scope="col">What was done</th>
+                  <th scope="col">Result</th>
+                  <th scope="col">Drive</th>
+                  <th scope="col">Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each copy.checks as entry (entry.id)}
+                  <tr>
+                    <th scope="row">
+                      <time datetime={entry.checked_at}
+                        >{new Date(entry.checked_at).toLocaleString()}</time
+                      >
+                    </th>
+                    <td>{methodLabel(entry.method)}</td>
+                    <td>{entry.result.replace(/_/g, ' ')}</td>
+                    <td>{entry.checked_with ?? '·'}</td>
+                    <td>{entry.notes ?? '·'}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </Table>
+          {/if}
+        </Panel>
+      </div>
 
-      <section aria-labelledby="check-heading">
-        <h2 id="check-heading">Record a check</h2>
-        <form onsubmit={check}>
-          <p>
-            <label for="method">What you did</label><br />
-            <select id="method" bind:value={checkMethod}>
-              <option value="full_sector_readback">Read the whole disc back</option>
-              <option value="filesystem_compare">Compared the filesystem</option>
-              <option value="tool_verify">Trusted the engine's own check</option>
-              <option value="track_hash_compare">Compared track hashes</option>
-            </select>
-          </p>
-          <p>
-            <label for="result">What you found</label><br />
-            <select id="result" bind:value={checkResult}>
-              <option value="passed">It matched</option>
-              <option value="failed">It did not match</option>
-              <option value="partial">Partly readable</option>
-              <option value="not_performed">Could not check</option>
-            </select>
-          </p>
-          <p>
-            <label for="drive">Drive used</label><br />
-            <input id="drive" bind:value={checkedWith} placeholder="PIONEER BDR-212" />
-          </p>
-          <p>
-            <label for="check-notes">Notes</label><br />
-            <input id="check-notes" bind:value={checkNotes} />
-          </p>
-          <button type="submit" disabled={busy}>Record this check</button>
-        </form>
-      </section>
+      {#if isEditable(copy)}
+        <div class="stack">
+          <Panel title="Record what you know">
+            <form class="form" onsubmit={save}>
+              <label for="label">Label</label>
+              <input id="label" bind:value={label} placeholder="Example Disc 1 of 2" />
+              <label for="location">Where it is kept</label>
+              <input id="location" bind:value={location} placeholder="Shelf B, sleeve 14" />
+              <label for="notes">Notes</label>
+              <textarea id="notes" bind:value={notes} rows="3"></textarea>
+              <label for="condition">Condition</label>
+              <select id="condition" bind:value={condition} aria-describedby="condition-hint">
+                <option value="">Leave as it is</option>
+                {#each SETTABLE_CONDITIONS as option (option)}
+                  <option value={option}>{conditionLabel(option)}</option>
+                {/each}
+              </select>
+              <!-- The strongest claim in the system stays the most expensive
+                   one to make. -->
+              <p class="hint" id="condition-hint">
+                Verified is not in this list. It means a disc was read back and matched, so
+                recording a check is the only way to write it.
+              </p>
+              <div><Button type="submit" variant="primary" disabled={busy}>Save</Button></div>
+            </form>
+          </Panel>
 
-      <section aria-labelledby="destroy-heading">
-        <h2 id="destroy-heading">Destroy</h2>
-        {#if confirmingDestroy}
-          <p>
-            <strong>This cannot be undone.</strong> The record stays so the burn history remains true,
-            but nothing further can be recorded against this disc.
-          </p>
-          <button type="button" onclick={destroy} disabled={busy}>
-            Yes, this disc has been destroyed
-          </button>
-          <button type="button" onclick={() => (confirmingDestroy = false)} disabled={busy}>
-            Keep it
-          </button>
-        {:else}
-          <button type="button" onclick={() => (confirmingDestroy = true)} disabled={busy}>
-            Mark this disc destroyed
-          </button>
-        {/if}
-      </section>
-    {/if}
+          <Panel title="Record a check">
+            <form class="form" onsubmit={check}>
+              <label for="method">What you did</label>
+              <select id="method" bind:value={checkMethod}>
+                <option value="full_sector_readback">Read the whole disc back</option>
+                <option value="filesystem_compare">Compared the filesystem</option>
+                <option value="tool_verify">Trusted the engine's own check</option>
+                <option value="track_hash_compare">Compared track hashes</option>
+              </select>
+              <label for="result">What you found</label>
+              <select id="result" bind:value={checkResult}>
+                <option value="passed">It matched</option>
+                <option value="failed">It did not match</option>
+                <option value="partial">Partly readable</option>
+                <option value="not_performed">Could not check</option>
+              </select>
+              <label for="drive">Drive used</label>
+              <input id="drive" bind:value={checkedWith} placeholder="PIONEER BDR-212" />
+              <label for="check-notes">Notes</label>
+              <input id="check-notes" bind:value={checkNotes} />
+              <div><Button type="submit" disabled={busy}>Record this check</Button></div>
+            </form>
+          </Panel>
 
-    <section aria-labelledby="history-heading">
-      <h2 id="history-heading">Check history</h2>
-      {#if copy.checks.length === 0}
-        <p>This disc has not been checked since it was burned.</p>
-      {:else}
-        <table>
-          <caption class="visually-hidden">Checks recorded for this disc</caption>
-          <thead>
-            <tr>
-              <th scope="col">When</th>
-              <th scope="col">What was done</th>
-              <th scope="col">Result</th>
-              <th scope="col">Drive</th>
-              <th scope="col">Notes</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each copy.checks as entry (entry.id)}
-              <tr>
-                <th scope="row">{new Date(entry.checked_at).toLocaleString()}</th>
-                <td>{methodLabel(entry.method)}</td>
-                <td>{entry.result.replace(/_/g, ' ')}</td>
-                <td>{entry.checked_with ?? '—'}</td>
-                <td>{entry.notes ?? '—'}</td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
+          <Panel title="Destroy">
+            {#if confirmingDestroy}
+              <p>
+                <strong>This cannot be undone.</strong> The record stays so the burn history remains true,
+                but nothing further can be recorded against this disc.
+              </p>
+              <div class="buttons">
+                <Button variant="danger" onclick={destroy} disabled={busy}>
+                  Yes, this disc has been destroyed
+                </Button>
+                <Button onclick={() => (confirmingDestroy = false)} disabled={busy}>Keep it</Button>
+              </div>
+            {:else}
+              <Button variant="danger" onclick={() => (confirmingDestroy = true)} disabled={busy}>
+                Mark this disc destroyed
+              </Button>
+            {/if}
+          </Panel>
+        </div>
       {/if}
-    </section>
+    </div>
   {/if}
 </div>
 
 <style>
-  dl {
+  .columns {
     display: grid;
-    grid-template-columns: max-content 1fr;
-    gap: 0.25rem 1rem;
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+    gap: var(--space-4);
+    align-items: start;
+  }
+  @media (max-width: 1099px) {
+    .columns {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+  .stack {
+    display: grid;
+    gap: var(--space-4);
+  }
+  .facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+    gap: var(--space-3) var(--space-5);
+    margin: 0;
   }
   dt {
-    font-weight: 600;
+    color: var(--text-muted);
+    font-size: var(--text-sm);
   }
   dd {
     margin: 0;
+    font-weight: var(--weight-medium);
+    overflow-wrap: anywhere;
   }
-  table {
-    border-collapse: collapse;
-    width: 100%;
+  .form {
+    display: grid;
+    gap: var(--space-1);
   }
-  table th,
-  table td {
-    text-align: left;
-    padding: 0.5rem;
-    border-bottom: 1px solid currentColor;
+  .form label {
+    margin-top: var(--space-2);
+    font-size: var(--text-sm);
   }
-  label {
-    font-weight: 600;
+  .form label:first-child {
+    margin-top: 0;
   }
-  input,
-  select,
-  textarea {
-    padding: 0.4rem;
-    min-width: min(28rem, 100%);
+  .form :global(button) {
+    margin-top: var(--space-3);
   }
-  button {
-    padding: 0.5rem 1rem;
-    margin-right: 0.5rem;
+  .hint {
+    margin: 0;
+    font-size: var(--text-sm);
+    color: var(--text-muted);
   }
-  .status {
-    border: 1px solid currentColor;
-    padding: 0.75rem 1rem;
+  .buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+  .callout {
+    padding: var(--space-3) var(--space-4);
+    margin: 0 0 var(--space-4);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--text-muted);
+    border-radius: var(--radius);
+    max-width: 75ch;
+  }
+  .callout.bad {
+    border-left-color: var(--bad);
   }
   .note {
-    font-size: 0.9em;
+    margin: var(--space-3) 0 0;
+    font-size: var(--text-sm);
   }
-  small {
-    display: inline-block;
-    max-width: 40rem;
+  .padded {
+    padding: var(--space-3) var(--space-4);
   }
-  .visually-hidden {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
+  .quiet {
+    color: var(--text-muted);
   }
 </style>
