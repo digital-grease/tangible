@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 digitalgrease
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import type { Tone } from './components/ui/tone';
 import type { components } from './api-types';
 import { apiCall, apiFetch, transportProblem, type Result } from './session';
 
@@ -182,6 +183,58 @@ export function validationMark(state: string): string {
       return '✕';
     default:
       return '·';
+  }
+}
+
+/** A validation state as a tone, for a status mark. */
+export function validationTone(state: string): Tone {
+  switch (state) {
+    case 'valid':
+      return 'ok';
+    case 'valid_with_warnings':
+      return 'warn';
+    case 'invalid':
+    case 'quarantined':
+      return 'bad';
+    default:
+      return 'idle';
+  }
+}
+
+/** What an integrity check found, in a word or two, for a table. */
+export function integrityShort(state: string): string {
+  switch (state) {
+    case 'intact':
+      return 'Intact';
+    case 'damaged':
+      return 'Damaged';
+    case 'unchecked':
+      return 'Not checked yet';
+    default:
+      return state;
+  }
+}
+
+/** What an integrity check found, as a tone. */
+export function integrityTone(state: string): Tone {
+  return state === 'intact' ? 'ok' : state === 'damaged' ? 'bad' : 'idle';
+}
+
+/** Where an artifact came from, in a word or two, for a list. */
+export function originLabel(origin: string): string {
+  switch (origin) {
+    case 'imported_original':
+      return 'Imported original';
+    case 'physical_dump':
+      return 'Ripped from a disc';
+    case 'derived':
+      return 'Made here from another';
+    case 'generated':
+      return 'Generated';
+    case 'external_reference':
+      return 'External reference';
+    default:
+      return origin;
   }
 }
 

@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 digitalgrease
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { axeViolations } from '$lib/testing/axe';
 
 const { default: LibraryPage } = await import('./+page.svelte');
 
@@ -108,5 +109,47 @@ describe('Library filters', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Show everything' }));
     expect(await screen.findByText('everything.cue')).toBeTruthy();
+  });
+
+  it('finds artifacts by part of a file name', async () => {
+    const asked = server({
+      '/api/v1/artifacts': [summary('everything')],
+      '/api/v1/artifacts?name=vol+2': [summary('homebrew-vol2')],
+    });
+    render(LibraryPage);
+    expect(await screen.findByText('everything.cue')).toBeTruthy();
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: '  vol 2 ' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Show' }));
+    expect(await screen.findByText('homebrew-vol2.cue')).toBeTruthy();
+    expect(asked).toContain('/api/v1/artifacts?name=vol+2');
+  });
+
+  it('draws each artifact’s disc and says its states in words', async () => {
+    server({
+      '/api/v1/artifacts': [
+        summary('mixed', {
+          origin: 'imported_original',
+          validation_state: 'valid_with_warnings',
+          integrity_state: 'damaged',
+          disc_shape: {
+            media_family: 'cd',
+            sector_count: 200_000,
+            tracks: [
+              { session: 1, sector_count: 100_000, is_audio: false },
+              { session: 1, sector_count: 100_000, is_audio: true },
+            ],
+          },
+        }),
+      ],
+    });
+    const { container } = render(LibraryPage);
+    const table = await screen.findByRole('table', { name: 'Artifacts in the library' });
+    const row = within(table).getAllByRole('row')[1]!;
+    expect(row.querySelector('svg.disc')).not.toBeNull();
+    expect(row.querySelectorAll('circle.ring')).toHaveLength(2);
+    expect(within(row).getByText('Imported original')).toBeTruthy();
+    expect(within(row).getByText('Structurally valid, with findings')).toBeTruthy();
+    expect(within(row).getByText('Damaged')).toBeTruthy();
+    expect(await axeViolations(container)).toEqual([]);
   });
 });

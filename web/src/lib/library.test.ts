@@ -13,6 +13,10 @@ import {
   filtersNothing,
   keepsSubchannel,
   libraryQuery,
+  integrityShort,
+  integrityTone,
+  originLabel,
+  validationTone,
   notBurnedAsItIs,
   loadArtifact,
   loadLibrary,
@@ -383,5 +387,24 @@ describe('archive formats', () => {
     expect(archiveLabel('zip')).toBe('ZIP');
     expect(archiveLabel('tar_xz')).toBe('xz-compressed tar');
     expect(archiveLabel('something')).toBe('something');
+  });
+});
+
+describe('library states, for status marks', () => {
+  it('gives validation and integrity a tone and short words', () => {
+    expect(validationTone('valid')).toBe('ok');
+    expect(validationTone('valid_with_warnings')).toBe('warn');
+    expect(validationTone('quarantined')).toBe('bad');
+    expect(validationTone('pending')).toBe('idle');
+    expect(integrityShort('damaged')).toBe('Damaged');
+    expect(integrityTone('damaged')).toBe('bad');
+    expect(integrityTone('intact')).toBe('ok');
+    expect(integrityTone('unchecked')).toBe('idle');
+  });
+
+  it('says where an artifact came from', () => {
+    expect(originLabel('imported_original')).toBe('Imported original');
+    expect(originLabel('physical_dump')).toBe('Ripped from a disc');
+    expect(originLabel('derived')).toBe('Made here from another');
   });
 });

@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 digitalgrease
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen, within } from '@testing-library/svelte';
+import { axeViolations } from '$lib/testing/axe';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { forgetReportSettings } from '$lib/report';
 import { rememberSession } from '$lib/session';
@@ -291,6 +292,9 @@ describe('Deleting an artifact', () => {
     render(ArtifactPage);
     expect(await screen.findByRole('heading', { name: 'Pending deletion' })).toBeTruthy();
     expect(screen.getByText(/asked for by admin/i)).toBeTruthy();
+    // Nothing offers to burn it, and the Burning tab says why.
+    expect(screen.queryByRole('link', { name: 'Create burn job' })).toBeNull();
+    await fireEvent.click(screen.getByRole('tab', { name: 'Burning' }));
     expect(screen.getByText(/Not burned while it is pending deletion/)).toBeTruthy();
     await fireEvent.click(screen.getByRole('button', { name: 'Keep VIDEO_TS' }));
     await vi.waitFor(() =>
@@ -323,6 +327,7 @@ describe('Deleting an artifact', () => {
     render(ArtifactPage);
     expect(await screen.findByRole('heading', { name: 'Deleted' })).toBeTruthy();
     expect(screen.getByText(/Its bytes are gone/)).toBeTruthy();
+    await fireEvent.click(screen.getByRole('tab', { name: /Components/ }));
     expect(screen.getByText('Removed')).toBeTruthy();
     expect(screen.queryByRole('link', { name: /Download VIDEO_TS\/VIDEO_TS.IFO/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /Verify/ })).toBeNull();
@@ -377,5 +382,50 @@ describe('An artifact unpacked from an archive', () => {
     render(ArtifactPage);
     expect(await screen.findByRole('heading', { name: 'Summary' })).toBeTruthy();
     expect(screen.queryByText('Unpacked from')).toBeNull();
+  });
+});
+
+describe('Artifact page, in tabs', () => {
+  it('heads the page with what it is, and lays its disc out to scale', async () => {
+    serve(
+      artifact({
+        origin: 'imported_original',
+        format: 'cue_bin',
+        disc_shape: {
+          media_family: 'cd',
+          sector_count: 200_000,
+          tracks: [
+            { session: 1, sector_count: 100_000, is_audio: false },
+            { session: 1, sector_count: 100_000, is_audio: true },
+          ],
+        },
+      }),
+    );
+    const { container } = render(ArtifactPage);
+    expect(await screen.findByText('Original, immutable')).toBeTruthy();
+    expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toBeTruthy();
+    const tabs = screen.getByRole('tablist', { name: 'About this artifact' });
+    expect(
+      within(tabs)
+        .getAllByRole('tab')
+        .map((tab) => tab.textContent?.replace(/\d+$/, '')),
+    ).toEqual(['Summary', 'Components', 'Topology', 'Validation', 'Lineage', 'Burning']);
+    expect(await axeViolations(container)).toEqual([]);
+
+    await fireEvent.click(screen.getByRole('tab', { name: 'Topology' }));
+    const panel = screen.getByRole('tabpanel');
+    expect(panel.querySelectorAll('circle.ring')).toHaveLength(2);
+    expect(within(panel).getByText(/CD, 200,000\s+sectors/)).toBeTruthy();
+    expect(await axeViolations(container)).toEqual([]);
+  });
+
+  it('offers to burn from the header and the Burning tab, saying nothing is promised', async () => {
+    serve(artifact({ origin: 'imported_original' }));
+    render(ArtifactPage);
+    const header = await screen.findByRole('link', { name: 'Create burn job' });
+    expect(header.getAttribute('href')).toBe('/burns/new?artifact=a1');
+    await fireEvent.click(screen.getByRole('tab', { name: 'Burning' }));
+    expect(screen.getByText('Target compatibility unknown')).toBeTruthy();
+    expect(screen.getAllByRole('link', { name: 'Create burn job' })).toHaveLength(2);
   });
 });

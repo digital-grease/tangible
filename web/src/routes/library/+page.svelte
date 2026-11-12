@@ -1,7 +1,19 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  // The library (UX.md 4; docs/plans/ui-overhaul.md, "Pages"): every
+  // artifact, newest identifiers last, filtered by the catalogue's filters
+  // and part of a file's name, each row with a drawing of the disc it
+  // describes (from its disc shape; a plain disc where that is not known).
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import Disc from '$lib/components/ui/Disc.svelte';
+  import EmptyState from '$lib/components/ui/EmptyState.svelte';
+  import Icon from '$lib/components/ui/Icon.svelte';
+  import PageHeader from '$lib/components/ui/PageHeader.svelte';
+  import Panel from '$lib/components/ui/Panel.svelte';
+  import StatusMark from '$lib/components/ui/StatusMark.svelte';
+  import Table from '$lib/components/ui/Table.svelte';
   import { bestMatchLabel } from '$lib/identification';
   import { apiFetch } from '$lib/session';
   import { onMount } from 'svelte';
@@ -10,9 +22,13 @@
     filtersNothing,
     formatBytes,
     formatLabel,
+    integrityShort,
+    integrityTone,
+    isOriginal,
     loadLibrary,
+    originLabel,
     validationLabel,
-    validationMark,
+    validationTone,
     type ArtifactSummaryPage,
     type LibraryFilter,
     type LoadState,
@@ -21,8 +37,9 @@
   let view = $state<LoadState<ArtifactSummaryPage>>({ kind: 'loading' });
   let loadingMore = $state(false);
 
-  // What the form says, and what the list shown was loaded with: "Show
+  // What the form says, and what the list shown was loaded with: "Load
   // more" keeps the latter, whatever has been changed in the form since.
+  let name = $state('');
   let format = $state('');
   let origin = $state('');
   let validation = $state('');
@@ -33,6 +50,7 @@
 
   function chosen(): LibraryFilter {
     return {
+      name,
       format,
       origin,
       validation_state: validation,
@@ -56,7 +74,7 @@
   }
 
   function clear() {
-    format = origin = validation = integrity = linked = '';
+    name = format = origin = validation = integrity = linked = '';
     deleted = false;
     void show({});
   }
@@ -84,9 +102,26 @@
 
 <svelte:head><title>Library — Tangible</title></svelte:head>
 
-<h1>Library</h1>
+<PageHeader title="Library" description="Every disc image Tangible keeps, as it arrived.">
+  {#snippet actions()}
+    <Button variant="primary" icon="import" href="/imports">Import</Button>
+  {/snippet}
+</PageHeader>
 
 <form class="filters" onsubmit={filter} aria-label="Filter the library">
+  <label class="name">
+    Name
+    <span class="search">
+      <Icon name="search" />
+      <input
+        type="search"
+        bind:value={name}
+        placeholder="Part of a file's name"
+        autocomplete="off"
+        spellcheck="false"
+      />
+    </span>
+  </label>
   <label>
     Format
     <select bind:value={format}>
@@ -138,98 +173,120 @@
       <option value="false">Not linked to any disc</option>
     </select>
   </label>
-  <label>
+  <label class="check">
     <input type="checkbox" bind:checked={deleted} />
     Only deleted artifacts
   </label>
-  <button type="submit">Show</button>
-  {#if !filtersNothing(shown)}
-    <button type="button" onclick={clear}>Show everything</button>
-  {/if}
+  <div class="buttons">
+    <Button type="submit" variant="primary">Show</Button>
+    {#if !filtersNothing(shown)}
+      <Button variant="quiet" onclick={clear}>Show everything</Button>
+    {/if}
+  </div>
 </form>
 
 <!-- One live region for the whole view, so view changes are announced once
      rather than per row. -->
 <div aria-live="polite" aria-busy={view.kind === 'loading'}>
   {#if view.kind === 'loading'}
-    <p>Loading artifacts…</p>
+    <p class="quiet">Loading artifacts…</p>
   {:else if view.kind === 'empty' && !filtersNothing(shown)}
-    <p>Nothing in the library matches these filters.</p>
+    <p class="quiet">Nothing in the library matches these filters.</p>
   {:else if view.kind === 'empty'}
-    <section>
-      <h2>No artifacts yet</h2>
+    <EmptyState title="No artifacts yet" icon="library">
       <p>Import an authorized disc image to create your first artifact.</p>
-      <p><a href="/imports">Import one</a></p>
-    </section>
+      {#snippet action()}
+        <Button variant="primary" href="/imports" icon="import">Import one</Button>
+      {/snippet}
+    </EmptyState>
   {:else if view.kind === 'error'}
-    <section>
-      <ErrorPanel
-        problem={view.problem}
-        area="library"
-        endpoint="GET /api/v1/artifacts"
-        heading="Could not load the library"
-      />
-    </section>
+    <ErrorPanel
+      problem={view.problem}
+      area="library"
+      endpoint="GET /api/v1/artifacts"
+      heading="Could not load the library"
+    />
   {:else}
-    <p>{view.data.items.length} artifact{view.data.items.length === 1 ? '' : 's'}.</p>
-
-    <table>
-      <caption class="visually-hidden">Artifacts in the library</caption>
-      <thead>
-        <tr>
-          <th scope="col">Name</th>
-          <th scope="col">Format</th>
-          <th scope="col">Size</th>
-          <th scope="col">Files</th>
-          <th scope="col">Validation</th>
-          <th scope="col">Identified as</th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each view.data.items as artifact (artifact.id)}
+    <Panel
+      title="Artifacts"
+      aside={`${view.data.items.length}${view.data.next_cursor ? '+' : ''} shown`}
+      flush
+    >
+      <Table caption="Artifacts in the library">
+        <thead>
           <tr>
-            <th scope="row">
-              <a href={`/library/${artifact.id}`}>
-                {artifact.source_filename ?? artifact.id}
-              </a>
-            </th>
-            <td>{formatLabel(artifact.format)}</td>
-            <td>{formatBytes(artifact.total_bytes)}</td>
-            <td>{artifact.component_count}</td>
-            <td>
-              <!-- A symbol carries the status alongside any styling, so it is
-                   never communicated by colour alone. -->
-              <span aria-hidden="true">{validationMark(artifact.validation_state)}</span>
-              {validationLabel(artifact.validation_state)}
-              {#if artifact.integrity_state === 'damaged'}
-                <!-- Damage found by an integrity check outranks how the
-                     bytes looked when they arrived, so it is said here. -->
-                <br /><strong><span aria-hidden="true">✕</span> Damaged</strong>
-              {/if}
-              {#if deletionLabel(artifact.deletion)}
-                <br /><strong>{deletionLabel(artifact.deletion)}</strong>
-              {/if}
-            </td>
-            <td>
-              {#if artifact.best_match}
-                <!-- The DAT is named in the title as well as the cell, so the
-                     column stays short. -->
-                <span title={`In ${artifact.best_match.dat_name}`}
-                  >{bestMatchLabel(artifact.best_match)}</span
-                >
-              {:else}
-                <span class="none">Not identified</span>
-              {/if}
-            </td>
+            <th scope="col">Artifact</th>
+            <th scope="col">Format</th>
+            <th scope="col" class="num">Size</th>
+            <th scope="col" class="num">Files</th>
+            <th scope="col">Validation</th>
+            <th scope="col">Stored bytes</th>
+            <th scope="col">Identified as</th>
           </tr>
-        {/each}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {#each view.data.items as artifact (artifact.id)}
+            <tr>
+              <th scope="row">
+                <div class="artifact">
+                  <Disc shape={artifact.disc_shape} size={28} hole="var(--surface)" />
+                  <div class="names">
+                    <a href={`/library/${artifact.id}`}>{artifact.source_filename ?? artifact.id}</a
+                    >
+                    <span class="origin">
+                      {#if isOriginal(artifact.origin)}<Icon name="lock" size={12} />{/if}
+                      {originLabel(artifact.origin)}
+                    </span>
+                  </div>
+                </div>
+              </th>
+              <td>{formatLabel(artifact.format)}</td>
+              <td class="num">{formatBytes(artifact.total_bytes)}</td>
+              <td class="num">{artifact.component_count}</td>
+              <td>
+                <StatusMark
+                  tone={validationTone(artifact.validation_state)}
+                  label={validationLabel(artifact.validation_state)}
+                  pill
+                />
+                {#if deletionLabel(artifact.deletion)}
+                  <div class="also">
+                    <StatusMark tone="warn" label={deletionLabel(artifact.deletion) ?? ''} />
+                  </div>
+                {/if}
+              </td>
+              <td>
+                <!-- Damage found by an integrity check outranks how the bytes
+                     looked when they arrived, so it has its own column. -->
+                <StatusMark
+                  tone={integrityTone(artifact.integrity_state)}
+                  label={integrityShort(artifact.integrity_state)}
+                  pill
+                />
+              </td>
+              <td>
+                {#if artifact.best_match}
+                  <!-- The DAT is named in the title as well as the cell, so the
+                       column stays short. -->
+                  <span title={`In ${artifact.best_match.dat_name}`}
+                    >{bestMatchLabel(artifact.best_match)}</span
+                  >
+                {:else}
+                  <span class="quiet">Not identified</span>
+                {/if}
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </Table>
+    </Panel>
 
     {#if view.data.next_cursor}
-      <button type="button" onclick={loadMore} disabled={loadingMore}>
-        {loadingMore ? 'Loading…' : 'Load more'}
-      </button>
+      <div class="more">
+        <Button onclick={loadMore} disabled={loadingMore}>
+          {loadingMore ? 'Loading…' : 'Load more'}
+        </Button>
+      </div>
     {/if}
   {/if}
 </div>
@@ -238,37 +295,93 @@
   .filters {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.5rem 1rem;
+    gap: var(--space-3) var(--space-4);
     align-items: end;
-    margin-bottom: 1rem;
+    margin-bottom: var(--space-5);
+    padding: var(--space-3) var(--space-4);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
   }
   .filters label {
+    display: grid;
+    gap: var(--space-1);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    color: var(--text-muted);
+  }
+  .filters select {
+    color: var(--text);
+  }
+  .name {
+    flex: 1 1 16rem;
+  }
+  .search {
     display: flex;
-    flex-direction: column;
-    font-weight: 600;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 0 var(--space-2);
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius);
+    color: var(--text-muted);
   }
-  table {
-    border-collapse: collapse;
-    width: 100%;
+  .search:focus-within {
+    outline: var(--focus-width) solid var(--accent);
+    outline-offset: var(--focus-offset);
   }
-  th,
-  td {
-    text-align: left;
-    padding: 0.5rem;
-    border-bottom: 1px solid currentColor;
+  .search input {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    padding-inline: 0;
+    background: none;
+    color: var(--text);
   }
-  .none {
-    opacity: 0.75;
+  .search input:focus-visible {
+    outline: none;
   }
-  .visually-hidden {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
+  .filters .check {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 2rem;
+    color: var(--text);
   }
-  button {
-    margin-top: 1rem;
-    padding: 0.5rem 1rem;
+  .buttons {
+    display: flex;
+    gap: var(--space-2);
+  }
+  .artifact {
+    display: flex;
+    gap: var(--space-3);
+    align-items: center;
+    min-width: 16rem;
+  }
+  .names {
+    display: grid;
+    min-width: 0;
+  }
+  .names a {
+    font-weight: var(--weight-strong);
+    overflow-wrap: anywhere;
+  }
+  .origin {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-regular);
+  }
+  .also {
+    margin-top: var(--space-1);
+    font-size: var(--text-xs);
+  }
+  .quiet {
+    color: var(--text-muted);
+  }
+  .more {
+    margin-top: var(--space-4);
   }
 </style>

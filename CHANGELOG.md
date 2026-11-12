@@ -645,7 +645,11 @@ may change between minor versions, and the release notes say how.
   that link to where their figures come from and mark what asks for
   somebody, the burns needing attention and the latest burns, a live panel
   of what has happened since the page opened, and the server's health in
-  one line that opens to its checks.
+  one line that opens to its checks. The Library and the artifact page follow: each
+  artifact's disc drawn in its row and, to scale beside its tracks, on its
+  Topology tab; search by part of a file's name; and the artifact's facts,
+  components, topology, validation, lineage and burning in tabs under a
+  header that says what it is and offers what can be done with it.
 - The image is built on Debian 13 (trixie), moving from Debian 12
   (bookworm), now oldstable, and every tool in it moves too: chdman 0.251
   to 0.276, which makes DVD CHDs (a DVD's ISO gets one, made with
