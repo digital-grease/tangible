@@ -26,10 +26,20 @@
 //! removable (`TANGIBLE_REMOVABLE_ROOTS`, ADR 0017), and then only
 //! [`WatchRoots::remove_matching`] deletes in it: the files of one download
 //! whose bytes the library holds, found by the same rules an import uses.
+//!
+//! Checking a path and then using it leaves a moment in which whatever writes
+//! the folder (a download client) can swap a link in, so the checks above say
+//! what to use and the use does not trust them (security review,
+//! 2026-11-12): a file is read, and a file or folder deleted, through the
+//! root opened as a directory and each name beneath it opened in turn
+//! without following a link ([`open_dir_beneath`]). A file is deleted only if
+//! the name still names the file that was hashed.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Component, Path, PathBuf};
 
+use rustix::fd::OwnedFd;
+use rustix::fs::{AtFlags, FileType, Mode, OFlags};
 use sha2::{Digest as _, Sha256};
 use tokio::fs;
 use tokio::io::AsyncReadExt as _;
@@ -288,6 +298,40 @@ impl WatchRoots {
         Ok(resolved)
     }
 
+    /// Copy the regular file at `relative` beneath a root to `destination`,
+    /// reading it through the root opened as a directory and each name
+    /// beneath it opened in turn without following a link, so a link
+    /// swapped in since the file was found is refused rather than copied.
+    /// Returns the bytes copied.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::resolve`]: [`WatchRootError::UnsafePath`] for a link
+    /// anywhere on the way, [`WatchRootError::NotAFile`] for anything but a
+    /// regular file at the end, [`WatchRootError::Unreadable`] for a file
+    /// that cannot be read or a destination that cannot be written.
+    pub async fn copy_file(
+        &self,
+        path_id: &str,
+        relative: &str,
+        destination: &Path,
+    ) -> Result<u64, WatchRootError> {
+        check_relative(relative)?;
+        let root = self.canonical_root(path_id).await?;
+        let relative = relative.to_owned();
+        let destination = destination.to_path_buf();
+        blocking(move || {
+            let (parent, name) = split_parent(&relative);
+            let dir = open_dir_beneath(&root, parent)?;
+            let (file, _) = open_file_at(&dir, name)?;
+            let mut file = std::fs::File::from(file);
+            let mut out =
+                std::fs::File::create(&destination).map_err(|_| WatchRootError::Unreadable)?;
+            std::io::copy(&mut file, &mut out).map_err(|_| WatchRootError::Unreadable)
+        })
+        .await
+    }
+
     /// Resolve a relative path that may name a file or a directory.
     ///
     /// A directory is walked, and every file in it is resolved by
@@ -430,56 +474,49 @@ impl WatchRoots {
         }
         let source = self.resolve_source(path_id, relative).await?;
         let root = self.canonical_root(path_id).await?;
-        let (files, directory) = match source {
-            WatchedSource::File(path) => (vec![(String::new(), path)], None),
-            WatchedSource::Directory { files } => {
-                let directory = self.resolve_directory(path_id, relative).await?;
-                (files, Some(directory))
-            }
+        let relative = relative.trim_end_matches('/');
+        // Each file by its path beneath the root, which is what is opened:
+        // the resolved paths say what was found, not what is there now.
+        let (files, directory): (Vec<String>, Option<&str>) = match source {
+            WatchedSource::File(_) => (vec![relative.to_owned()], None),
+            WatchedSource::Directory { files } => (
+                files
+                    .iter()
+                    .map(|(inside, _)| format!("{relative}/{inside}"))
+                    .collect(),
+                Some(relative),
+            ),
         };
         let mut removed = Removed::default();
-        for (_, path) in &files {
-            // Looked at again: the walk was a moment ago.
-            let metadata = fs::symlink_metadata(path)
-                .await
-                .map_err(|_| WatchRootError::Unreadable)?;
-            if !metadata.file_type().is_file() {
-                removed.files_kept += 1;
-                continue;
-            }
-            let (digest, length) = hash_file(path)
-                .await
-                .map_err(|_| WatchRootError::Unreadable)?;
-            if library.contains(&(digest, length)) {
-                fs::remove_file(path)
-                    .await
-                    .map_err(|_| WatchRootError::Unreadable)?;
-                removed.files_removed += 1;
-                removed.bytes_removed += length;
-            } else {
-                removed.files_kept += 1;
+        for file in &files {
+            match remove_if_held(&root, file, library).await? {
+                Some(length) => {
+                    removed.files_removed += 1;
+                    removed.bytes_removed += length;
+                }
+                None => removed.files_kept += 1,
             }
         }
         if let Some(directory) = directory {
             // Deepest first, so a folder emptied by its children goes too.
             // One that is not empty stays: removing a directory never
             // removes what is in it.
-            let mut folders: BTreeSet<PathBuf> = BTreeSet::new();
-            for (inside, _) in &files {
-                let mut parent = Path::new(inside).parent();
-                while let Some(folder) = parent.filter(|p| !p.as_os_str().is_empty()) {
-                    folders.insert(directory.join(folder));
-                    parent = folder.parent();
+            let mut folders: BTreeSet<String> = BTreeSet::new();
+            for file in &files {
+                let mut parent = file.rsplit_once('/').map(|(parent, _)| parent);
+                while let Some(folder) = parent.filter(|folder| folder.len() > directory.len()) {
+                    folders.insert(folder.to_owned());
+                    parent = folder.rsplit_once('/').map(|(parent, _)| parent);
                 }
             }
-            let mut folders: Vec<PathBuf> = folders.into_iter().collect();
-            folders.sort_by_key(|folder| std::cmp::Reverse(folder.components().count()));
+            let mut folders: Vec<String> = folders.into_iter().collect();
+            folders.sort_by_key(|folder| std::cmp::Reverse(folder.matches('/').count()));
             for folder in folders {
-                let _ = fs::remove_dir(&folder).await;
+                let _ = remove_dir_beneath(&root, &folder).await;
             }
-            prune_up(&root, &directory).await;
+            prune_up(&root, directory).await;
         } else if removed.files_removed == 1
-            && let Some(parent) = files.first().and_then(|(_, path)| path.parent())
+            && let Some((parent, _)) = relative.rsplit_once('/')
         {
             prune_up(&root, parent).await;
         }
@@ -498,55 +535,152 @@ impl WatchRoots {
             .await
             .map_err(|_| WatchRootError::Unreadable)
     }
+}
 
-    /// The real path of a directory beneath a root, checked to be inside it
-    /// and not itself a link, and never the root itself.
-    async fn resolve_directory(
-        &self,
-        path_id: &str,
-        relative: &str,
-    ) -> Result<PathBuf, WatchRootError> {
-        check_relative(relative)?;
-        let root = self.canonical_root(path_id).await?;
-        let candidate = root.join(relative);
-        let metadata = fs::symlink_metadata(&candidate)
-            .await
-            .map_err(|_| WatchRootError::Unreadable)?;
-        if metadata.file_type().is_symlink() {
-            return Err(WatchRootError::UnsafePath {
-                reason: "symbolic links are not followed",
-            });
-        }
-        let resolved = fs::canonicalize(&candidate)
-            .await
-            .map_err(|_| WatchRootError::Unreadable)?;
-        if resolved == root || !resolved.starts_with(&root) {
-            return Err(WatchRootError::UnsafePath {
-                reason: "it resolves outside the watched root",
-            });
-        }
-        Ok(resolved)
+/// Run `work`, which makes blocking calls, off the async threads.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, WatchRootError> + Send + 'static,
+) -> Result<T, WatchRootError> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|_| WatchRootError::Unreadable)?
+}
+
+/// `relative` as its folder, if any, and its last name.
+fn split_parent(relative: &str) -> (Option<&str>, &str) {
+    match relative.rsplit_once('/') {
+        Some((parent, name)) => (Some(parent), name),
+        None => (None, relative),
     }
 }
 
-/// Remove `folder` and each folder above it that is left empty, stopping at
-/// the first that is not, and never removing `root` or anything outside it.
-async fn prune_up(root: &Path, folder: &Path) {
-    let mut here = Some(folder);
-    while let Some(folder) = here {
-        if folder == root || !folder.starts_with(root) {
+fn opened(error: rustix::io::Errno) -> WatchRootError {
+    // A link where a name was opened without following one.
+    if error == rustix::io::Errno::LOOP || error == rustix::io::Errno::NOTDIR {
+        WatchRootError::UnsafePath {
+            reason: "symbolic links are not followed",
+        }
+    } else if error == rustix::io::Errno::NOENT {
+        WatchRootError::NotFound
+    } else {
+        WatchRootError::Unreadable
+    }
+}
+
+/// The folder `relative` beneath `root`, opened: the root itself, then each
+/// name in turn beneath the one before, none followed if it is a link. The
+/// names were checked by [`check_relative`], so none is `..`, and nothing
+/// opened this way can be outside the root, whatever is swapped in.
+fn open_dir_beneath(root: &Path, relative: Option<&str>) -> Result<OwnedFd, WatchRootError> {
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
+    let mut dir = rustix::fs::open(root, flags, Mode::empty()).map_err(opened)?;
+    for name in relative
+        .into_iter()
+        .flat_map(|relative| relative.split('/'))
+    {
+        if name.is_empty() {
+            continue;
+        }
+        dir = rustix::fs::openat(&dir, name, flags | OFlags::NOFOLLOW, Mode::empty())
+            .map_err(opened)?;
+    }
+    Ok(dir)
+}
+
+/// The regular file `name` in the open folder `dir`, not followed if it is a
+/// link, and what it is (its device and inode).
+fn open_file_at(dir: &OwnedFd, name: &str) -> Result<(OwnedFd, rustix::fs::Stat), WatchRootError> {
+    let file = rustix::fs::openat(
+        dir,
+        name,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(opened)?;
+    let stat = rustix::fs::fstat(&file).map_err(|_| WatchRootError::Unreadable)?;
+    if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
+        return Err(WatchRootError::NotAFile);
+    }
+    Ok((file, stat))
+}
+
+/// Delete the file at `relative` beneath `root` if its bytes are the
+/// library's, answering its length; `None` when it is kept: not a regular
+/// file, bytes the library lacks, or no longer the file that was hashed.
+///
+/// The file is hashed through a descriptor opened beneath the root, and the
+/// name is removed from its folder, held open, only while it still names
+/// that file. Nothing but an entry in that folder, inside the root, can be
+/// removed.
+async fn remove_if_held(
+    root: &Path,
+    relative: &str,
+    library: &HashSet<(String, u64)>,
+) -> Result<Option<u64>, WatchRootError> {
+    let root = root.to_path_buf();
+    let path = relative.to_owned();
+    let found = blocking(move || {
+        let (parent, name) = split_parent(&path);
+        let dir = open_dir_beneath(&root, parent)?;
+        match open_file_at(&dir, name) {
+            Ok((file, stat)) => Ok(Some((dir, name.to_owned(), file, stat))),
+            Err(WatchRootError::NotAFile | WatchRootError::UnsafePath { .. }) => Ok(None),
+            Err(error) => Err(error),
+        }
+    })
+    .await?;
+    let Some((dir, name, file, stat)) = found else {
+        return Ok(None);
+    };
+    let (digest, length) = hash_file(fs::File::from_std(std::fs::File::from(file)))
+        .await
+        .map_err(|_| WatchRootError::Unreadable)?;
+    if !library.contains(&(digest, length)) {
+        return Ok(None);
+    }
+    blocking(move || {
+        // Still that file under that name, or kept: whatever was put in its
+        // place was not what was hashed.
+        let now = rustix::fs::statat(&dir, name.as_str(), AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(|_| WatchRootError::Unreadable)?;
+        if now.st_dev != stat.st_dev || now.st_ino != stat.st_ino {
+            return Ok(None);
+        }
+        rustix::fs::unlinkat(&dir, name.as_str(), AtFlags::empty())
+            .map_err(|_| WatchRootError::Unreadable)?;
+        Ok(Some(length))
+    })
+    .await
+}
+
+/// Remove the folder at `relative` beneath `root` if it is empty, through
+/// its parent opened beneath the root. Whether it was removed.
+async fn remove_dir_beneath(root: &Path, relative: &str) -> bool {
+    let root = root.to_path_buf();
+    let relative = relative.to_owned();
+    blocking(move || {
+        let (parent, name) = split_parent(&relative);
+        let dir = open_dir_beneath(&root, parent)?;
+        rustix::fs::unlinkat(&dir, name, AtFlags::REMOVEDIR).map_err(|_| WatchRootError::Unreadable)
+    })
+    .await
+    .is_ok()
+}
+
+/// Remove the folder at `relative` and each folder above it that is left
+/// empty, stopping at the first that is not, and never removing the root.
+async fn prune_up(root: &Path, relative: &str) {
+    let mut here = Some(relative);
+    while let Some(folder) = here.filter(|folder| !folder.is_empty()) {
+        if !remove_dir_beneath(root, folder).await {
             return;
         }
-        if fs::remove_dir(folder).await.is_err() {
-            return;
-        }
-        here = folder.parent();
+        here = folder.rsplit_once('/').map(|(parent, _)| parent);
     }
 }
 
 /// A file's SHA-256, lowercase hex, and its length, read in 1 MiB pieces.
-async fn hash_file(path: &Path) -> std::io::Result<(String, u64)> {
-    let mut file = fs::File::open(path).await?;
+async fn hash_file(mut file: fs::File) -> std::io::Result<(String, u64)> {
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; 1 << 20];
     let mut length = 0_u64;
@@ -946,6 +1080,89 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(removed.files_removed, 0);
+    }
+
+    #[tokio::test]
+    async fn a_folder_swapped_for_a_link_after_a_file_was_found_is_not_copied_through() {
+        // Found by the 2026-11-12 security review: a file was found and
+        // checked, then copied by its path, so a folder on that path swapped
+        // for a link in between (a download client writes the folder) had
+        // the import copy whatever the link reached.
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path().join("root");
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(root.join("dl")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(root.join("dl/disc.bin"), b"downloaded").unwrap();
+        std::fs::write(outside.join("disc.bin"), b"the server's secret").unwrap();
+        let roots = roots(&root);
+        let staged = dir.path().join("staged.bin");
+
+        assert!(matches!(
+            roots.resolve_source("incoming", "dl/disc.bin").await,
+            Ok(WatchedSource::File(_))
+        ));
+        std::fs::rename(root.join("dl"), root.join("dl-was")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("dl")).unwrap();
+        assert!(matches!(
+            roots.copy_file("incoming", "dl/disc.bin", &staged).await,
+            Err(WatchRootError::UnsafePath { .. })
+        ));
+        assert!(!staged.exists() || std::fs::read(&staged).unwrap() != b"the server's secret");
+
+        // The file itself swapped for one: refused too. And a real file is
+        // copied whole.
+        std::fs::remove_file(root.join("dl")).unwrap();
+        std::fs::rename(root.join("dl-was"), root.join("dl")).unwrap();
+        std::fs::remove_file(root.join("dl/disc.bin")).unwrap();
+        std::os::unix::fs::symlink(outside.join("disc.bin"), root.join("dl/disc.bin")).unwrap();
+        assert!(matches!(
+            roots.copy_file("incoming", "dl/disc.bin", &staged).await,
+            Err(WatchRootError::UnsafePath { .. })
+        ));
+        std::fs::remove_file(root.join("dl/disc.bin")).unwrap();
+        std::fs::write(root.join("dl/disc.bin"), b"downloaded").unwrap();
+        assert_eq!(
+            roots.copy_file("incoming", "dl/disc.bin", &staged).await,
+            Ok(10)
+        );
+        assert_eq!(std::fs::read(&staged).unwrap(), b"downloaded");
+    }
+
+    #[tokio::test]
+    async fn a_folder_swapped_for_a_link_after_a_download_was_found_loses_nothing_outside() {
+        // The same, for removing a download whose bytes the library holds:
+        // it was hashed and deleted by its path, and a folder on the path
+        // swapped for a link reached a library object of the same bytes, or
+        // an empty folder, outside the root.
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path().join("root");
+        let outside = dir.path().join("library");
+        std::fs::create_dir_all(root.join("dl/sub")).unwrap();
+        std::fs::create_dir_all(outside.join("sub")).unwrap();
+        std::fs::write(root.join("dl/disc.bin"), b"iso").unwrap();
+        std::fs::write(outside.join("disc.bin"), b"iso").unwrap();
+        let held = library(&[b"iso"]);
+        let root = std::fs::canonicalize(&root).unwrap();
+
+        std::fs::rename(root.join("dl"), root.join("dl-was")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("dl")).unwrap();
+        assert!(remove_if_held(&root, "dl/disc.bin", &held).await.is_err());
+        assert!(!remove_dir_beneath(&root, "dl/sub").await);
+        prune_up(&root, "dl/sub").await;
+        assert_eq!(std::fs::read(outside.join("disc.bin")).unwrap(), b"iso");
+        assert!(outside.join("sub").is_dir());
+
+        // Put back, the download goes as it should, and its folders.
+        std::fs::remove_file(root.join("dl")).unwrap();
+        std::fs::rename(root.join("dl-was"), root.join("dl")).unwrap();
+        assert_eq!(
+            remove_if_held(&root, "dl/disc.bin", &held).await,
+            Ok(Some(3))
+        );
+        prune_up(&root, "dl/sub").await;
+        assert!(!root.join("dl").exists());
+        assert!(root.is_dir());
     }
 
     #[tokio::test]

@@ -86,6 +86,16 @@ Found by a security review of 0.2.0.
   would have chdman open anything else, or that has a line it could split,
   is refused with `DERIVATION_SHEET_REFUSED`. The imported sheet is left
   as it is.
+- A watched folder's files were checked, then used by their paths, so
+  whatever writes the folder, such as a download client, could swap a
+  folder on the path for a link in between: an import then copied a file
+  from anywhere the server could read, its secret key included, into the
+  library, and removing a download's source after import could delete a
+  library object, or an empty folder, outside the watched folder. Files
+  are now read, and files and folders deleted, through the watched folder
+  opened as a directory and each name beneath it opened in turn without
+  following a link, and a file is deleted only while its name still names
+  the file that was hashed.
 
 ## 0.2.0 (2026-11-12)
 

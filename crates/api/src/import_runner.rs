@@ -624,7 +624,10 @@ impl ImportRunner {
         // A file is staged under its own name, flat. A directory's files keep
         // their paths within it, so a sheet that names `tracks/01.bin` finds
         // it. Every logical path is validated before anything is written.
-        let files: Vec<(String, std::path::PathBuf)> = match source {
+        // Each is then read by its path beneath the root, opened a name at a
+        // time without following a link: what was found a moment ago is not
+        // trusted to be what is there now.
+        let files: Vec<(String, String)> = match source {
             tangible_storage::WatchedSource::File(path) => {
                 let name = path
                     .file_name()
@@ -635,9 +638,18 @@ impl ImportRunner {
                         false,
                     ))?
                     .to_owned();
-                vec![(name, path)]
+                vec![(name, relative.to_owned())]
             }
-            tangible_storage::WatchedSource::Directory { files } => files,
+            tangible_storage::WatchedSource::Directory { files } => {
+                let relative = relative.trim_end_matches('/');
+                files
+                    .into_iter()
+                    .map(|(inside, _)| {
+                        let beneath = format!("{relative}/{inside}");
+                        (inside, beneath)
+                    })
+                    .collect()
+            }
         };
 
         let area = self
@@ -646,7 +658,7 @@ impl ImportRunner {
             .await
             .map_err(|error| ("IMPORT_STAGING_FAILED", error.to_string(), true))?;
         let mut copied = 0_u64;
-        for (name, path) in &files {
+        for (name, beneath) in &files {
             let logical = LogicalPath::parse(name).map_err(|error| {
                 (
                     "IMPORT_SOURCE_UNUSABLE",
@@ -659,9 +671,16 @@ impl ImportRunner {
                 .await
                 .map_err(|error| ("IMPORT_STAGING_FAILED", error.to_string(), true))?;
             copied = copied.saturating_add(
-                tokio::fs::copy(path, &destination)
+                self.settings
+                    .roots
+                    .copy_file(path_id, beneath, &destination)
                     .await
-                    .map_err(|error| ("IMPORT_COPY_FAILED", error.to_string(), true))?,
+                    .map_err(|error| match error {
+                        tangible_storage::WatchRootError::Unreadable => {
+                            ("IMPORT_COPY_FAILED", error.to_string(), true)
+                        }
+                        refused => ("IMPORT_SOURCE_UNUSABLE", refused.to_string(), false),
+                    })?,
             );
         }
 
