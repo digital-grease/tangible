@@ -4,7 +4,20 @@ Notable changes to Tangible, newest first. Versions follow semantic
 versioning; during 0.x the API, the manifest schema and the database schema
 may change between minor versions, and the release notes say how.
 
-## Unreleased
+## 0.2.1 (2026-11-12)
+
+A security release: a review of 0.2.0 found the faults under "Security",
+and this release fixes them. Upgrade if you import archives, export to
+RomM, use watched folders, make CHDs or run burn workers.
+
+### Upgrading from 0.2.0
+
+The usual upgrade, as deploy/README.md ("Upgrading") says: take a backup,
+change the image to this release's digest, pull, migrate, start. The one
+migration, 0034, only adds a column. Upgrade every burn worker as well,
+since some of the fixes are in the worker; a 0.2.0 worker still works with
+a 0.2.1 server, without them. If you built the decryption image, build it
+again from this release.
 
 ### Fixed
 
@@ -15,8 +28,6 @@ may change between minor versions, and the release notes say how.
   pixels it is a drawer, as before.
 
 ### Security
-
-Found by a security review of 0.2.0.
 
 - The RomM export could be made to delete files outside RomM's folder,
   library originals included. Each exported game's folder holds a marker

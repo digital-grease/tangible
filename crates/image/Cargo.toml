@@ -30,7 +30,7 @@ zip = { version = "9.3.0", default-features = false, features = ["deflate-flate2
 # (docs/plans/chd-images.md); already in the tree for preservation hashes.
 sha1 = "0.10.7"
 sha2 = "0.11.0"
-tangible-domain = { version = "0.2.0", path = "../domain" }
+tangible-domain = { version = "0.2.1", path = "../domain" }
 thiserror = "2.0.19"
 tokio = { version = "1.53.1", features = ["fs", "io-util", "process", "time", "macros"] }
 tracing = "0.1.44"
