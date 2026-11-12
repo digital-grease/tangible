@@ -440,6 +440,36 @@ fn seven_zip_u64(value: u64) -> Vec<u8> {
     bytes
 }
 
+/// CRC-32 (IEEE), as 7z checksums its headers.
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = !0_u32;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
+/// A 7z of nothing but `header`, its start header checksummed as 7-Zip
+/// writes it.
+fn seven_zip_file(header: &[u8]) -> Vec<u8> {
+    let mut start = Vec::new();
+    start.extend_from_slice(&0_u64.to_le_bytes());
+    start.extend_from_slice(&(header.len() as u64).to_le_bytes());
+    start.extend_from_slice(&crc32(header).to_le_bytes());
+    let mut file = vec![0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0x00, 0x04];
+    file.extend_from_slice(&crc32(&start).to_le_bytes());
+    file.extend_from_slice(&start);
+    file.extend_from_slice(header);
+    file
+}
+
 /// A 7z whose encoded header names one LZMA folder with `dictionary` and
 /// decodes to `unpacked` bytes.
 fn seven_zip_with_header(dictionary: u32, unpacked: u64) -> Vec<u8> {
@@ -451,12 +481,76 @@ fn seven_zip_with_header(dictionary: u32, unpacked: u64) -> Vec<u8> {
     header.push(0x0C);
     header.extend_from_slice(&seven_zip_u64(unpacked));
     header.push(0x00);
-    let mut file = vec![0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0x00, 0x04, 0, 0, 0, 0];
-    file.extend_from_slice(&0_u64.to_le_bytes());
-    file.extend_from_slice(&(header.len() as u64).to_le_bytes());
-    file.extend_from_slice(&[0, 0, 0, 0]);
-    file.extend_from_slice(&header);
-    file
+    seven_zip_file(&header)
+}
+
+fn unpack_seven_zip(bytes: &[u8]) -> ArchiveError {
+    let dir = TempDir::new().unwrap();
+    let archive = dir.path().join("crafted.7z");
+    std::fs::write(&archive, bytes).unwrap();
+    let out = TempDir::new().unwrap();
+    unpack(&archive, ArchiveKind::SevenZip, out.path(), &limits()).unwrap_err()
+}
+
+#[test]
+fn a_7z_header_declaring_millions_of_files_is_refused_before_it_is_read() {
+    // Found by the 2026-11-12 security review. The 7z reader makes room for
+    // every file a header declares, over 100 bytes each, bounded only by the
+    // header's length: a plain header of 5 MiB declaring five million files
+    // would take over 500 MB, and one of 64 MiB about 7 GiB.
+    let mut header = vec![0x01, 0x05];
+    header.extend_from_slice(&seven_zip_u64(5_000_000));
+    header.resize(5 << 20, 0);
+    let error = unpack_seven_zip(&seven_zip_file(&header));
+    assert!(matches!(error, ArchiveError::Index("header")), "{error}");
+
+    // Encoded, the same: a header that would decode past the cap.
+    let error = unpack_seven_zip(&seven_zip_with_header(1 << 16, 5 << 20));
+    assert!(matches!(error, ArchiveError::Index("header")), "{error}");
+}
+
+#[test]
+fn a_7z_with_as_many_entries_as_an_import_allows_unpacks() {
+    // Made by 7-Zip: a folder and 9,999 files whose paths are 180
+    // characters long. Its header decodes to 3.6 MiB, so the cap on a 7z's
+    // header, which stops one declaring millions of files, must leave room
+    // for it.
+    let (dir, out) = unpacked("many.7z").unwrap();
+    assert_eq!(out.files.len(), 9_999);
+    assert_eq!(out.expanded_bytes, 9_999);
+    let (first, length) = &out.files[0];
+    assert_eq!(first.as_str().len(), 180);
+    assert_eq!(*length, 1);
+    assert_eq!(
+        std::fs::read(dir.path().join(first.as_str())).unwrap(),
+        b"x"
+    );
+}
+
+#[test]
+fn a_7z_without_its_start_header_is_refused_before_the_reader_guesses_one() {
+    // A zero checksum and nothing after it sends the 7z reader looking
+    // through the file's last megabyte for a header, which it then decodes
+    // with no limit; Tangible could not check that header first.
+    let mut file = vec![0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0x00, 0x04];
+    file.extend_from_slice(&[0; 24]);
+    file.extend_from_slice(&[0x17, 0x06, 0x00, 0x01, 0x09, 0x0A, 0x00]);
+    let error = unpack_seven_zip(&file);
+    assert!(
+        matches!(&error, ArchiveError::Corrupt(text) if text.contains("start header")),
+        "{error}"
+    );
+
+    // And one whose start header does not match its checksum: the reader
+    // would refuse it too, and Tangible must not read a different header
+    // from the one the reader would.
+    let mut file = seven_zip_with_header(1 << 16, 4096);
+    file[12] ^= 0x01;
+    let error = unpack_seven_zip(&file);
+    assert!(
+        matches!(&error, ArchiveError::Corrupt(text) if text.contains("start header")),
+        "{error}"
+    );
 }
 
 #[test]

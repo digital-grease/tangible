@@ -39,6 +39,23 @@ def run(*args, cwd):
     subprocess.run(list(args), cwd=cwd, check=True, stdout=subprocess.DEVNULL)
 
 
+def many_7z(here):
+    """As many entries as an import allows, a folder and 9,999 files, each
+    path 180 characters long: a 7z header decoding to over 3 MiB, from
+    an honest archive."""
+    with tempfile.TemporaryDirectory() as scratch:
+        os.makedirs(os.path.join(scratch, "Many"))
+        title = "An ordinary long title for one of many files " * 5
+        for i in range(1, 10_000):
+            name = f"{i:04} {title}"[: 180 - len("Many/") - len(".bin")] + ".bin"
+            path = os.path.join(scratch, "Many", name)
+            with open(path, "wb") as f:
+                f.write(b"x")
+            os.utime(path, (1_700_000_000, 1_700_000_000))
+        os.utime(os.path.join(scratch, "Many"), (1_700_000_000, 1_700_000_000))
+        run("7z", "a", "-bd", "-m0=lzma2", "-mx=5", os.path.join(here, "many.7z"), "Many", cwd=scratch)
+
+
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
     with tempfile.TemporaryDirectory() as scratch:
@@ -67,6 +84,8 @@ def main():
         tarred("w", "game.tar")
         tarred("w:gz", "game.tar.gz")
         tarred("w:xz", "game.tar.xz")
+
+    many_7z(here)
 
     # Names and kinds the tools above would refuse to write, written by hand.
     with zipfile.ZipFile(os.path.join(here, "escape.zip"), "w") as archive:

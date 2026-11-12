@@ -8,6 +8,9 @@ publish = false
 
 [dependencies]
 async-trait = "0.1.91"
+# A 7z start header's checksum, checked as the 7z reader checks it, so the
+# header checked first is the one it reads; the same crate it uses.
+crc32fast = "1.5.4"
 hex = "0.4.3"
 # Reads Logiqx XML DATs (docs/plans/dat-matching.md H2). No features: no
 # serde, no encodings but UTF-8, and it expands no entity but XML's own.

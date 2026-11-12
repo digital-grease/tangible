@@ -227,6 +227,19 @@ const USTAR_OFFSET: usize = 257;
 /// need about 11 MB.
 const MAX_INDEX_BYTES: u64 = 64 << 20;
 
+/// The largest 7z header, as stored or as an encoded one decodes.
+///
+/// The 7z reader makes room for every file a header declares, over 100
+/// bytes each, bounded only by the header's own length (one file a byte),
+/// before any entry reaches Tangible's count: a 64 MiB header could declare
+/// tens of millions and take gigabytes (security review, 2026-11-12). 4 MiB
+/// bounds that under 500 MB, below the 1 GiB dictionary an import's 7z may
+/// already ask for. It still fits the most entries an import allows, 10,000,
+/// with paths of 180 characters (`fixtures/images/archives/many.7z`, whose
+/// header decodes to 3.6 MiB); about 200 is the edge, since p7zip stores a
+/// name in UTF-16. A disc's few files take a few hundred bytes.
+const MAX_SEVEN_ZIP_HEADER_BYTES: u64 = 4 << 20;
+
 /// The largest tar extension header (a GNU long name or link, a PAX record):
 /// the tar reader holds each whole in memory.
 const MAX_TAR_EXTENSION_BYTES: u64 = 1 << 20;
@@ -665,8 +678,9 @@ impl<'a> HeaderCursor<'a> {
 
 /// What a 7z's encoded header will decode to, and the dictionaries its own
 /// coders ask for, read from the bytes before the reader decodes it whole
-/// into memory. A plain header is read as it is, so its size on disk bounds
-/// it.
+/// into memory. A plain header is read as it is; its size on disk is capped
+/// as a decoded one's is, at [`MAX_SEVEN_ZIP_HEADER_BYTES`], since the files
+/// it declares are made room for before any is counted.
 fn seven_zip_index_fits(
     file: &mut fs::File,
     length: u64,
@@ -674,9 +688,25 @@ fn seven_zip_index_fits(
 ) -> Result<(), ArchiveError> {
     let mut start = [0_u8; 32];
     read_at(file, 0, &mut start)?;
+    // The start header says where the header is. The reader checks it
+    // against its checksum, and with a zero checksum and nothing in it goes
+    // looking through the file's end for a header, which it then decodes
+    // with no limit. Tangible must read the very header the reader will, so
+    // both are refused here rather than left to the reader.
+    let stored = u32::from_le_bytes([start[8], start[9], start[10], start[11]]);
+    if stored == 0 && start[12..32].iter().all(|byte| *byte == 0) {
+        return Err(ArchiveError::Corrupt(
+            "its start header is missing".to_owned(),
+        ));
+    }
+    if crc32fast::hash(&start[12..32]) != stored {
+        return Err(ArchiveError::Corrupt(
+            "its start header does not match its checksum".to_owned(),
+        ));
+    }
     let offset = le_u64(&start, 12);
     let size = le_u64(&start, 20);
-    if size > MAX_INDEX_BYTES {
+    if size > MAX_SEVEN_ZIP_HEADER_BYTES {
         return Err(ArchiveError::Index("header"));
     }
     let at = 32_u64
@@ -742,7 +772,7 @@ fn seven_zip_unpack_info(
         return Err(header_unreadable());
     }
     for _ in 0..outputs {
-        if cursor.number()? > MAX_INDEX_BYTES {
+        if cursor.number()? > MAX_SEVEN_ZIP_HEADER_BYTES {
             return Err(ArchiveError::Index("header"));
         }
     }

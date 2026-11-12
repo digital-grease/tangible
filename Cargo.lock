@@ -2711,6 +2711,7 @@ name = "tangible-image"
 version = "0.2.0"
 dependencies = [
  "async-trait",
+ "crc32fast",
  "flate2",
  "hex",
  "lzma-rust2",

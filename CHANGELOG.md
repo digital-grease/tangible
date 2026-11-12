@@ -35,6 +35,14 @@ Found by a security review of 0.2.0.
   whole, however large. The guard now follows PAX sizes as the reader does.
   The same fix lets a tar holding a file over 8 GiB, whose size only a PAX
   record can give, be imported: before, it was refused as damaged.
+- A crafted 7z could run the server out of memory. The 7z reader makes room
+  for every file a header declares before Tangible counts them, and a header
+  of up to 64 MiB was let through, enough to declare tens of millions; a 7z
+  whose start header was zeroed skipped the check altogether, and the
+  reader went looking for a header of its own. A 7z's header is now capped
+  at 4 MiB, as stored or as decoded, which still fits an import's 10,000
+  entries with paths of 180 characters, and a 7z with a missing start
+  header, or one that does not match its checksum, is refused as damaged.
 
 ## 0.2.0 (2026-11-12)
 
