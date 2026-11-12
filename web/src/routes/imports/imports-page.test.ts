@@ -4,6 +4,7 @@
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { forgetReportSettings } from '$lib/report';
+import { TOPICS } from '$lib/events';
 
 const { default: ImportsPage } = await import('./+page.svelte');
 
@@ -405,7 +406,8 @@ describe('Imports page, live', () => {
     });
     render(ImportsPage);
     expect(await screen.findByText('disc.iso')).toBeTruthy();
-    await vi.waitFor(() => expect(opened).toEqual(['/api/v1/events?topics=imports']));
+    // The tab's one stream, for every topic (docs/plans/ui-overhaul.md, decision 6).
+    await vi.waitFor(() => expect(opened).toEqual([`/api/v1/events?topics=${TOPICS.join(',')}`]));
     const before = asked.filter((request) => request.url === '/api/v1/imports').length;
 
     for (const listener of listeners.get('import.changed') ?? []) {

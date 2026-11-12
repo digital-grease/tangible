@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { eventData, names, watch, type EventSourceLike } from './events';
+import { SharedStream, TOPICS, eventData, names, watch, type EventSourceLike } from './events';
 
 /** A stand-in stream that a test sends events through. */
 class FakeSource implements EventSourceLike {
@@ -102,5 +102,79 @@ describe('event data', () => {
     expect(names(event, 'j', 'burn_job_id')).toBe(true);
     expect(names(event, 'a', 'burn_job_id')).toBe(false);
     expect(names({ type: 'rip.changed', data: { id: 'r' } }, 'r')).toBe(true);
+  });
+});
+
+describe('one stream for the tab', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('opens once for every topic, however many watch, and closes when the last stops', async () => {
+    const opened: FakeSource[] = [];
+    const stream = new SharedStream((url) => {
+      const source = new FakeSource(url);
+      opened.push(source);
+      return source;
+    });
+    const burns = vi.fn();
+    const imports = vi.fn();
+    const stopBurns = watch(['burns'], burns, { stream });
+    const stopImports = watch(['imports'], imports, { stream });
+
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.url).toBe(`/api/v1/events?topics=${TOPICS.join(',')}`);
+
+    // Each watcher hears only its own topics.
+    opened[0]?.send('burn.progress', { burn_job_id: 'j1', progress: 0.5 });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(burns).toHaveBeenCalledTimes(1);
+    expect(imports).not.toHaveBeenCalled();
+
+    // A reset reaches everyone.
+    opened[0]?.send('stream.reset', { reason: 'fell behind' });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(burns).toHaveBeenCalledTimes(2);
+    expect(imports).toHaveBeenCalledTimes(1);
+
+    stopBurns();
+    expect(opened[0]?.closed).toBe(false);
+    expect(stream.isOpen).toBe(true);
+    stopImports();
+    expect(opened[0]?.closed).toBe(true);
+    expect(stream.isOpen).toBe(false);
+
+    // Watching again opens a new stream.
+    const stop = watch(['rips'], vi.fn(), { stream });
+    expect(opened).toHaveLength(2);
+    stop();
+  });
+
+  it("keeps a watcher's filter on the shared stream", async () => {
+    let source: FakeSource | undefined;
+    const stream = new SharedStream((url) => (source = new FakeSource(url)));
+    const refresh = vi.fn();
+    watch(['burns'], refresh, {
+      stream,
+      relevant: (event) => names(event, 'j1', 'burn_job_id'),
+    });
+    source?.send('burn_job.changed', { id: 'j2', state: 'queued' });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(refresh).not.toHaveBeenCalled();
+    source?.send('burn_job.changed', { id: 'j1', state: 'queued' });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('polls at the old rate where the browser has no stream', async () => {
+    const stream = new SharedStream(null);
+    const refresh = vi.fn();
+    watch(['burns'], refresh, { stream, fallbackMs: 3_000 });
+    expect(stream.isOpen).toBe(false);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(refresh).toHaveBeenCalledWith('timer');
   });
 });
