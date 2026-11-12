@@ -33,6 +33,10 @@ export const ICONS = {
   'chevron-right': 'm9 6 6 6-6 6',
   close: 'M6 6l12 12M18 6 6 18',
   menu: 'M4 7h16M4 12h16M4 17h16',
+  'sidebar-collapse':
+    'M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1 -1 1h-16a1 1 0 0 1 -1 -1v-14a1 1 0 0 1 1 -1zM9 4v16M16 9l-3 3 3 3',
+  'sidebar-expand':
+    'M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1 -1 1h-16a1 1 0 0 1 -1 -1v-14a1 1 0 0 1 1 -1zM9 4v16M13 9l3 3-3 3',
   check: 'm5 12.5 4.5 4.5L19 7',
   alert: 'M12 4 2.8 19.5h18.4zM12 10v4.5M12 17.2h.01',
   info: 'M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0M12 11v5M12 8h.01',

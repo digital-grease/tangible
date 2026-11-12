@@ -4,6 +4,16 @@ Notable changes to Tangible, newest first. Versions follow semantic
 versioning; during 0.x the API, the manifest schema and the database schema
 may change between minor versions, and the release notes say how.
 
+## Unreleased
+
+### Fixed
+
+- Between 900 and 1199 pixels wide the web UI's sidebar showed its icons
+  only, with no way to see the pages' names but hovering over each. A
+  button at its foot now expands it, and collapses it again, at any width
+  from 900 pixels up; the choice is remembered in the browser. Below 900
+  pixels it is a drawer, as before.
+
 ## 0.2.0 (2026-11-12)
 
 Tangible reads discs as well as writing them, fetches what it imports, and

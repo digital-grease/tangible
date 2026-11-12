@@ -93,6 +93,28 @@ describe('the shell', () => {
     expect(document.activeElement).toBe(menu);
   });
 
+  it('expands the icons-only sidebar when asked, and remembers it', async () => {
+    const stored = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => void stored.set(key, value),
+    });
+    // jsdom's window is 1024 pixels wide: icons only, left alone.
+    expect(window.innerWidth).toBe(1024);
+    const { container } = shell('viewer');
+    const app = container.querySelector('.app');
+    expect(app?.classList.contains('compact')).toBe(true);
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Expand the sidebar' }));
+    expect(app?.classList.contains('compact')).toBe(false);
+    expect(stored.get('tangible.sidebar')).toBe('full');
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Collapse the sidebar' }));
+    expect(app?.classList.contains('compact')).toBe(true);
+    expect(stored.get('tangible.sidebar')).toBe('compact');
+    expect(await axeViolations(container)).toEqual([]);
+  });
+
   it('offers the three ways to start something new', async () => {
     shell('operator');
     await fireEvent.click(screen.getByRole('button', { name: 'New' }));

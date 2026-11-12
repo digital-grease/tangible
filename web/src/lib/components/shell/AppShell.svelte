@@ -7,7 +7,9 @@
   // bay, and the page.
   //
   // Below 1200 pixels the sidebar keeps its icons only, each still named for
-  // a screen reader; below 900 it becomes a drawer behind a menu button.
+  // a screen reader, unless expanded; above, it can be collapsed to icons
+  // (lib/sidebar.ts, remembered in the browser). Below 900 it becomes a
+  // drawer behind a menu button.
   import { onMount, type Snippet } from 'svelte';
   import Icon from '$lib/components/ui/Icon.svelte';
   import Menu from '$lib/components/ui/Menu.svelte';
@@ -15,6 +17,13 @@
   import { watch } from '$lib/events';
   import { countLabel, counts, isCurrent, navFor, whereAmI, type CountKey } from '$lib/nav';
   import { roleLabel, type SessionView } from '$lib/session';
+  import {
+    loadSidebar,
+    saveSidebar,
+    sidebarCompact,
+    toggledSidebar,
+    type SidebarChoice,
+  } from '$lib/sidebar';
   import { LICENSE_NAME, SOURCE_URL } from '$lib/source';
   import { THEME_CHOICES, isThemeChoice, themeLabel, type ThemeChoice } from '$lib/theme';
   import CommandBar from './CommandBar.svelte';
@@ -43,6 +52,14 @@
 
   let figures = $state<Record<CountKey, number> | null>(null);
   let drawerOpen = $state(false);
+  let sidebarChoice = $state<SidebarChoice>(loadSidebar());
+  let width = $state(0);
+  const compact = $derived(sidebarCompact(sidebarChoice, width));
+
+  function toggleSidebar() {
+    sidebarChoice = toggledSidebar(compact);
+    saveSidebar(sidebarChoice);
+  }
   let menuButton = $state<HTMLButtonElement | null>(null);
 
   const newItems = [
@@ -80,9 +97,9 @@
   }
 </script>
 
-<svelte:window {onkeydown} />
+<svelte:window {onkeydown} bind:innerWidth={width} />
 
-<div class="app" class:drawer-open={drawerOpen}>
+<div class="app" class:compact class:drawer-open={drawerOpen}>
   <aside class="sidebar" id="sidebar">
     <a class="mark" href="/" aria-label="Tangible, overview">
       <Wordmark hole="var(--surface)" />
@@ -158,6 +175,17 @@
       <a class="icon-button source-icon" href={SOURCE_URL} rel="noreferrer" title="Source code">
         <Icon name="source" label="Source code, {LICENSE_NAME}" />
       </a>
+      <!-- Labels or icons only, at any width that is not a drawer. Named
+           for what pressing it does. -->
+      <button
+        type="button"
+        class="icon-button sidebar-toggle"
+        onclick={toggleSidebar}
+        title={compact ? 'Expand the sidebar' : 'Collapse the sidebar'}
+      >
+        <Icon name={compact ? 'sidebar-expand' : 'sidebar-collapse'} />
+        <span class="label">{compact ? 'Expand the sidebar' : 'Collapse the sidebar'}</span>
+      </button>
     </div>
   </aside>
 
@@ -376,57 +404,55 @@
     width: 100%;
   }
 
-  /* --- icons only --------------------------------------------------------- */
-  @media (max-width: 1199px) {
-    .app {
-      grid-template-columns: 4rem minmax(0, 1fr);
-    }
-    .sidebar {
-      align-items: center;
-      padding-inline: var(--space-1);
-    }
-    .mark {
-      --wordmark-name: none;
-    }
-    .sidebar .label {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      overflow: hidden;
-      clip: rect(0 0 0 0);
-      white-space: nowrap;
-    }
-    .group-label {
-      display: none;
-    }
-    nav {
-      gap: var(--space-2);
-      width: 100%;
-    }
-    .item {
-      justify-content: center;
-      position: relative;
-    }
-    .count {
-      position: absolute;
-      top: 0;
-      right: 0.125rem;
-      min-width: 1rem;
-      padding: 0 0.25rem;
-      font-size: 0.625rem;
-    }
-    .account {
-      justify-items: center;
-      padding-inline: 0;
-      width: 100%;
-    }
-    .theme {
-      display: none;
-    }
-    .theme-step,
-    .source-icon {
-      display: inline-flex;
-    }
+  /* --- icons only (lib/sidebar.ts decides when) --------------------------- */
+  .app.compact {
+    grid-template-columns: 4rem minmax(0, 1fr);
+  }
+  .compact .sidebar {
+    align-items: center;
+    padding-inline: var(--space-1);
+  }
+  .compact .mark {
+    --wordmark-name: none;
+  }
+  .compact .sidebar .label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .compact .group-label {
+    display: none;
+  }
+  .compact nav {
+    gap: var(--space-2);
+    width: 100%;
+  }
+  .compact .item {
+    justify-content: center;
+    position: relative;
+  }
+  .compact .count {
+    position: absolute;
+    top: 0;
+    right: 0.125rem;
+    min-width: 1rem;
+    padding: 0 0.25rem;
+    font-size: 0.625rem;
+  }
+  .compact .account {
+    justify-items: center;
+    padding-inline: 0;
+    width: 100%;
+  }
+  .compact .theme {
+    display: none;
+  }
+  .compact .theme-step,
+  .compact .source-icon {
+    display: inline-flex;
   }
 
   /* --- drawer ------------------------------------------------------------- */
@@ -452,38 +478,6 @@
       transform: none;
       visibility: visible;
     }
-    .mark {
-      --wordmark-name: inline;
-    }
-    .sidebar .label {
-      position: static;
-      width: auto;
-      height: auto;
-      overflow: visible;
-      clip: auto;
-      white-space: normal;
-    }
-    .group-label {
-      display: block;
-    }
-    .item {
-      justify-content: flex-start;
-    }
-    .count {
-      position: static;
-      margin-left: auto;
-    }
-    .account {
-      justify-items: stretch;
-      padding-inline: var(--space-2);
-    }
-    .theme {
-      display: grid;
-    }
-    .theme-step,
-    .source-icon {
-      display: none;
-    }
     .scrim {
       position: fixed;
       inset: 0;
@@ -497,6 +491,9 @@
     }
     .menu-button {
       display: inline-flex;
+    }
+    .sidebar-toggle {
+      display: none;
     }
     .topbar,
     main {
