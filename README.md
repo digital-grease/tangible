@@ -1,5 +1,11 @@
 # Tangible
 
+[![CI](https://img.shields.io/github/actions/workflow/status/digital-grease/tangible/ci.yml?branch=main&logo=github&label=CI)](https://github.com/digital-grease/tangible/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/digital-grease/tangible?logo=github&label=release)](https://github.com/digital-grease/tangible/releases/latest)
+[![License: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](https://github.com/digital-grease/tangible/blob/main/LICENSE)
+[![Runs on Linux + Docker Compose](https://img.shields.io/badge/runs%20on-Linux%20%2B%20Docker%20Compose-2496ED?logo=docker&logoColor=white)](https://github.com/digital-grease/tangible/blob/main/deploy/README.md)
+[![GitHub Issues](https://img.shields.io/github/issues/digital-grease/tangible)](https://github.com/digital-grease/tangible/issues)
+
 <a href="https://www.buymeacoffee.com/digitalgrease"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-red.png" alt="Buy Me A Coffee" height="60" width="217"></a>
 
 > A self-hosted disc-image preservation, management, and burning platform.
