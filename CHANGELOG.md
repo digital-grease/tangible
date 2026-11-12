@@ -43,6 +43,12 @@ Found by a security review of 0.2.0.
   at 4 MiB, as stored or as decoded, which still fits an import's 10,000
   entries with paths of 180 characters, and a 7z with a missing start
   header, or one that does not match its checksum, is refused as damaged.
+- An import that stopped the server, such as one running it out of memory,
+  was taken up again on every start, so it stopped the server every time.
+  An import the server stops during three times now fails for good with
+  `IMPORT_INTERRUPTED`, and the queue moves on; retrying it runs it again.
+  A retry's delay, or a wait for a download client, does not count. The
+  database gains a column for the count (migration 0034, additive).
 
 ## 0.2.0 (2026-11-12)
 

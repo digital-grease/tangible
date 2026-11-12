@@ -2612,6 +2612,20 @@ pub async fn list_import_jobs(
     rows.iter().map(import_job_from_row).collect()
 }
 
+/// How many interrupted runs an import is allowed before it is failed for
+/// good, rather than taken up again (see [`claim_next_import_job`]).
+pub const MAX_INTERRUPTED_IMPORT_RUNS: i32 = 3;
+
+/// The code an import fails with once its runs have been interrupted
+/// [`MAX_INTERRUPTED_IMPORT_RUNS`] times.
+pub const IMPORT_INTERRUPTED: &str = "IMPORT_INTERRUPTED";
+
+/// The lease owners that hold an import back with no process behind them:
+/// a retryable failure's delay ([`fail_import_job`]) and a source not yet
+/// ready ([`wait_for_import_source`]). Their lease lapsing is the wait
+/// ending, not a run interrupted.
+const IMPORT_WAIT_OWNERS: &str = "('retry-backoff', 'waiting-for-source')";
+
 /// Take the next import that is waiting to be worked on.
 ///
 /// The same claim discipline as burn jobs: `FOR UPDATE SKIP LOCKED` so two
@@ -2622,6 +2636,14 @@ pub async fn list_import_jobs(
 /// of the lease: an import interrupted by a restart resumes from its
 /// checkpoint instead of waiting for somebody to notice.
 ///
+/// But an import can be what stopped the server, such as an archive that
+/// runs it out of memory, and taking it up again on every start would stop
+/// it on every start (security review, 2026-11-12). So a claim that takes
+/// over a lapsed lease a runner held counts an interrupted run, and the
+/// [`MAX_INTERRUPTED_IMPORT_RUNS`]th is not claimed: the import fails for
+/// good with [`IMPORT_INTERRUPTED`], and the claim goes on to the next one.
+/// A retry ([`retry_import_job`]) starts the count again.
+///
 /// # Errors
 ///
 /// [`DbError::Query`] on a database failure.
@@ -2631,39 +2653,86 @@ pub async fn claim_next_import_job(
     lease_duration_seconds: i64,
 ) -> Result<Option<ImportJobRecord>, DbError> {
     let mut tx = pool.begin().await.map_err(DbError::Query)?;
+    let mut given_up = Vec::new();
 
-    // Every state that is still going, not merely the ones that have not
-    // started. A job that reached hashing and whose lease then lapsed is a
-    // process that died mid-import, and picking it up again from its
-    // checkpoint is exactly what the lease exists to allow.
-    let row = sqlx::query(
-        "SELECT id FROM import_jobs
-         WHERE state IN ('requested', 'acquiring', 'staged', 'hashing', 'inspecting',
-                         'registering', 'failed_retryable')
-           AND (lease_expires_at IS NULL OR lease_expires_at < now())
-         ORDER BY created_at
-         FOR UPDATE SKIP LOCKED
-         LIMIT 1",
-    )
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(DbError::Query)?;
+    let claimed = loop {
+        // Every state that is still going, not merely the ones that have not
+        // started. A job that reached hashing and whose lease then lapsed is a
+        // process that died mid-import, and picking it up again from its
+        // checkpoint is exactly what the lease exists to allow.
+        let row = sqlx::query(&format!(
+            "SELECT id, interrupted_runs,
+                    lease_owner IS NOT NULL
+                        AND lease_owner NOT IN {IMPORT_WAIT_OWNERS} AS interrupted
+             FROM import_jobs
+             WHERE state IN ('requested', 'acquiring', 'staged', 'hashing', 'inspecting',
+                             'registering', 'failed_retryable')
+               AND (lease_expires_at IS NULL OR lease_expires_at < now())
+             ORDER BY created_at
+             FOR UPDATE SKIP LOCKED
+             LIMIT 1"
+        ))
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(DbError::Query)?;
 
-    let Some(row) = row else {
-        tx.rollback().await.map_err(DbError::Query)?;
+        let Some(row) = row else {
+            break None;
+        };
+        let id: uuid::Uuid = row.try_get("id").map_err(DbError::Query)?;
+        let interrupted: bool = row.try_get("interrupted").map_err(DbError::Query)?;
+        let runs: i32 = row.try_get("interrupted_runs").map_err(DbError::Query)?;
+        let runs = if interrupted {
+            runs.saturating_add(1)
+        } else {
+            runs
+        };
+
+        if runs < MAX_INTERRUPTED_IMPORT_RUNS {
+            break Some((id, runs));
+        }
+        // Failed in the same transaction, so the next look past it cannot
+        // see it as claimable.
+        sqlx::query(
+            "UPDATE import_jobs
+             SET state = 'failed_terminal', error_code = $2, error_detail = $3,
+                 interrupted_runs = $4, completed_at = now(),
+                 lease_owner = NULL, lease_expires_at = NULL
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(IMPORT_INTERRUPTED)
+        .bind(format!(
+            "The server stopped {runs} times while running this import, so it was not \
+             started again: an import that stops the server, such as an archive that runs \
+             it out of memory, would stop it on every start. The server's log from those \
+             times says what happened. Retry the import once the cause is dealt with."
+        ))
+        .bind(runs)
+        .execute(&mut *tx)
+        .await
+        .map_err(DbError::Query)?;
+        given_up.push(id);
+    };
+
+    // Committed even when nothing is claimed, so the imports given up on
+    // stay given up on.
+    let Some((id, runs)) = claimed else {
+        tx.commit().await.map_err(DbError::Query)?;
+        warn_given_up(&given_up);
         return Ok(None);
     };
-    let id: uuid::Uuid = row.try_get("id").map_err(DbError::Query)?;
-
     sqlx::query(
         "UPDATE import_jobs
          SET lease_owner = $2,
-             lease_expires_at = now() + ($3::int * interval '1 second')
+             lease_expires_at = now() + ($3::int * interval '1 second'),
+             interrupted_runs = $4
          WHERE id = $1",
     )
     .bind(id)
     .bind(lease_owner)
     .bind(lease_seconds(lease_duration_seconds))
+    .bind(runs)
     .execute(&mut *tx)
     .await
     .map_err(DbError::Query)?;
@@ -2677,7 +2746,18 @@ pub async fn claim_next_import_job(
     .map_err(DbError::Query)?;
 
     tx.commit().await.map_err(DbError::Query)?;
+    warn_given_up(&given_up);
     import_job_from_row(&row).map(Some)
+}
+
+fn warn_given_up(imports: &[uuid::Uuid]) {
+    for id in imports {
+        tracing::warn!(
+            import_id = %id,
+            interrupted_runs = MAX_INTERRUPTED_IMPORT_RUNS,
+            "an import whose runs were interrupted {MAX_INTERRUPTED_IMPORT_RUNS} times was failed rather than run again"
+        );
+    }
 }
 
 /// Record how far an import has got, and hold the lease a little longer.
@@ -2953,7 +3033,9 @@ pub async fn cancel_import_job(
 /// Put a failed or cancelled import back in the queue.
 ///
 /// The checkpoint is left exactly as it is, so the retry re-enters at the
-/// stage the pipeline recorded rather than starting the transfer again.
+/// stage the pipeline recorded rather than starting the transfer again. The
+/// count of interrupted runs starts again: a person asking is the decision
+/// [`claim_next_import_job`] would not take alone.
 ///
 /// # Errors
 ///
@@ -3001,7 +3083,7 @@ pub async fn retry_import_job(
         "UPDATE import_jobs
          SET state = coalesce(resume_stage, 'requested'),
              error_code = NULL, error_detail = NULL, completed_at = NULL,
-             lease_owner = NULL, lease_expires_at = NULL
+             lease_owner = NULL, lease_expires_at = NULL, interrupted_runs = 0
          WHERE id = $1",
     )
     .bind(id.as_uuid())
