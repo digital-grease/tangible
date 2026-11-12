@@ -1355,7 +1355,7 @@ version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1c46f3fcd2e888afdb01a07efc071cb21300e07c68d32c3e8b01b5c8cb1fcaa"
 dependencies = [
- "sha2 0.11.0",
+ "sha2 0.11.1",
 ]
 
 [[package]]
@@ -2051,7 +2051,7 @@ dependencies = [
  "hmac 0.13.0",
  "jiff",
  "percent-encoding",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "url",
  "zeroize",
 ]
@@ -2217,9 +2217,9 @@ dependencies = [
 
 [[package]]
 name = "sha2"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
+checksum = "47d7069beb7d6ac7b9acd1039986e73443f24234f41074da099d6f994ac9ad19"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
@@ -2614,7 +2614,7 @@ dependencies = [
  "rusty-s3",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "sqlx",
  "subtle",
  "tangible-burn",
@@ -2670,7 +2670,7 @@ dependencies = [
  "rustix",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "tangible-domain",
  "tempfile",
  "thiserror",
@@ -2700,7 +2700,7 @@ dependencies = [
  "hex",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "thiserror",
  "time",
  "uuid",
@@ -2718,7 +2718,7 @@ dependencies = [
  "serde",
  "sevenz-rust2",
  "sha1",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "tangible-domain",
  "tar",
  "tempfile",
@@ -2742,7 +2742,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "tangible-domain",
  "tangible-image",
  "tempfile",
@@ -2762,7 +2762,7 @@ dependencies = [
  "rustix",
  "serde_json",
  "sha1",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "tangible-domain",
  "tempfile",
  "thiserror",
