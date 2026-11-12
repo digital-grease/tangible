@@ -1,8 +1,14 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  // Setting up (docs/plans/ui-overhaul.md, U8): the first account, the
+  // administrator, on a server with none; closed once it exists. The layout
+  // puts this in the way-in card.
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
+  import Button from '$lib/components/ui/Button.svelte';
+  import Field from '$lib/components/ui/Field.svelte';
+  import StatusMark from '$lib/components/ui/StatusMark.svelte';
   import { completeSetup, loadSetupStatus, MIN_PASSWORD_CHARS, type Problem } from '$lib/session';
 
   type View =
@@ -59,84 +65,129 @@
 
 <h1>Set up Tangible</h1>
 
-<section aria-live="polite" aria-busy={view.kind === 'loading'}>
+<div aria-live="polite" aria-busy={view.kind === 'loading'}>
   {#if view.kind === 'loading'}
-    <p>Checking whether this server is set up…</p>
+    <p class="quiet">Checking whether this server is set up…</p>
   {:else if view.kind === 'error'}
-    <div role="alert">
+    <div role="alert" class="problem-box">
       <h2>{view.problem.title}</h2>
       <p>{view.problem.detail}</p>
     </div>
   {:else if view.kind === 'done'}
-    <h2>Already set up</h2>
+    <h2 class="state"><StatusMark tone="warn" label="Already set up" /></h2>
     <p>
       This server already has an administrator, so setup is closed. If that was not you, stop the
       server and find out who it was before going further.
     </p>
-    <p><a href="/login">Sign in</a></p>
+    <Button variant="primary" href="/login">Sign in</Button>
   {:else}
-    <p>
+    <p class="lede">
       This server has no accounts yet. The account you create now is its administrator: it can
       create other accounts, enroll burn workers, and do everything else. Setup closes as soon as it
       exists.
     </p>
 
-    <form onsubmit={submit}>
-      <p>
-        <label for="username">Username</label><br />
-        <input
-          id="username"
-          name="username"
-          autocomplete="username"
-          autocapitalize="none"
-          spellcheck="false"
-          bind:value={username}
-          required
-          aria-describedby="username-hint"
-        />
-        <br />
-        <small id="username-hint"
-          >Letters, digits, dots, dashes and underscores. Not case sensitive.</small
-        >
-      </p>
-      <p>
-        <label for="password">Password</label><br />
-        <input
-          id="password"
-          name="password"
-          type="password"
-          autocomplete="new-password"
-          minlength={MIN_PASSWORD_CHARS}
-          bind:value={password}
-          required
-          aria-describedby="password-hint"
-        />
-        <br />
-        <small id="password-hint"
-          >At least {MIN_PASSWORD_CHARS} characters. A passphrase is fine.</small
-        >
-      </p>
-      <p>
-        <label for="confirm">Password again</label><br />
-        <input
-          id="confirm"
-          name="confirm"
-          type="password"
-          autocomplete="new-password"
-          bind:value={confirm}
-          required
-        />
-      </p>
+    <form class="form" onsubmit={submit}>
+      <Field
+        label="Username"
+        hint="Letters, digits, dots, dashes and underscores. Not case sensitive."
+      >
+        {#snippet children({ id, describedBy })}
+          <input
+            {id}
+            name="username"
+            autocomplete="username"
+            autocapitalize="none"
+            spellcheck="false"
+            bind:value={username}
+            required
+            aria-describedby={describedBy}
+          />
+        {/snippet}
+      </Field>
+      <Field
+        label="Password"
+        hint={`At least ${MIN_PASSWORD_CHARS} characters. A passphrase is fine.`}
+      >
+        {#snippet children({ id, describedBy })}
+          <input
+            {id}
+            name="password"
+            type="password"
+            autocomplete="new-password"
+            minlength={MIN_PASSWORD_CHARS}
+            bind:value={password}
+            required
+            aria-describedby={describedBy}
+          />
+        {/snippet}
+      </Field>
+      <Field label="Password again">
+        {#snippet children({ id })}
+          <input
+            {id}
+            name="confirm"
+            type="password"
+            autocomplete="new-password"
+            bind:value={confirm}
+            required
+          />
+        {/snippet}
+      </Field>
 
-      <div role="alert">
-        {#if refusal}
-          <p><strong>Not set up.</strong> {refusal}</p>
-        {/if}
+      <!-- The refusal takes room only when there is one. -->
+      <div class="submit">
+        <div role="alert">
+          {#if refusal}
+            <p class="problem"><strong>Not set up.</strong> {refusal}</p>
+          {/if}
+        </div>
+        <Button type="submit" variant="primary" disabled={submitting}>
+          {submitting ? 'Creating…' : 'Create the administrator'}
+        </Button>
       </div>
-
-      <button type="submit" disabled={submitting}>
-        {submitting ? 'Creating…' : 'Create the administrator'}
-      </button>
     </form>
   {/if}
-</section>
+</div>
+
+<style>
+  .quiet {
+    color: var(--text-muted);
+  }
+  .lede {
+    margin: 0 0 var(--space-5);
+  }
+  .form {
+    display: grid;
+    gap: var(--space-4);
+  }
+  .form input {
+    width: 100%;
+  }
+  .form :global(.btn) {
+    width: 100%;
+  }
+  .problem {
+    margin: 0 0 var(--space-3);
+    color: var(--bad);
+  }
+  .submit {
+    display: grid;
+  }
+  .state {
+    margin: 0 0 var(--space-2);
+    font-size: var(--text-md);
+  }
+  .problem-box {
+    padding: var(--space-3) var(--space-4);
+    border-left: 4px solid var(--bad);
+    background: color-mix(in srgb, var(--bad) 6%, var(--surface));
+  }
+  .problem-box h2 {
+    margin: 0 0 var(--space-1);
+    font-size: var(--text-md);
+  }
+  .problem-box p {
+    margin: 0;
+  }
+</style>

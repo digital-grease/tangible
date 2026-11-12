@@ -3,6 +3,7 @@
 // @vitest-environment jsdom
 import { render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { axeViolations } from '$lib/testing/axe';
 
 let search = '';
 vi.mock('$app/state', () => ({
@@ -40,10 +41,11 @@ describe('Sign-in page', () => {
   it('offers the identity provider, coming back to where it was asked', async () => {
     search = '?next=%2Flibrary';
     offered({ enabled: true, display_name: 'VoidAuth', password_sign_in: 'all' });
-    render(LoginPage);
+    const { container } = render(LoginPage);
     const link = await screen.findByRole('link', { name: 'Sign in with VoidAuth' });
     expect(link.getAttribute('href')).toBe('/api/v1/session/oidc/start?return_to=%2Flibrary');
     expect(screen.getByLabelText('Password')).toBeTruthy();
+    expect(await axeViolations(container)).toEqual([]);
   });
 
   it('offers only passwords when no provider is set up', async () => {

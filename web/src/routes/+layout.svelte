@@ -10,6 +10,8 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import AppShell from '$lib/components/shell/AppShell.svelte';
+  import Wordmark from '$lib/components/shell/Wordmark.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
   import {
     loadSession,
     loadSetupStatus,
@@ -104,11 +106,7 @@
 
 <a class="skip" href="#main">Skip to content</a>
 
-{#if gate.kind === 'public'}
-  <main id="main">
-    {@render children()}
-  </main>
-{:else if gate.kind === 'signed-in'}
+{#if gate.kind === 'signed-in'}
   <AppShell
     session={gate.session}
     pathname={page.url.pathname}
@@ -118,28 +116,36 @@
   >
     {@render children()}
   </AppShell>
-{:else if gate.kind === 'unreachable'}
-  <main id="main">
-    <h1>Tangible</h1>
-    <div role="alert">
-      <h2>Could not check your session</h2>
-      <p>{gate.detail}</p>
-      <button type="button" onclick={check}>Try again</button>
-    </div>
-  </main>
 {:else}
-  <main id="main" aria-busy="true">
-    <p aria-live="polite">Checking your session…</p>
-  </main>
-{/if}
-
-<!-- On every page, signed in or not: users of a network service are owed
-     the means to get its source (AGPL section 13). Signed in, the shell's
-     sidebar carries it. -->
-{#if gate.kind !== 'signed-in'}
-  <footer>
-    <a href={SOURCE_URL} rel="noreferrer">Source code</a>, free software under {LICENSE_NAME}
-  </footer>
+  <!-- The way in (docs/plans/ui-overhaul.md, U8): the mark, one card, and
+       the source link under it, centred on the page. -->
+  <div class="door">
+    <div class="brand"><Wordmark size={28} /></div>
+    {#if gate.kind === 'public'}
+      <main id="main" class="card" class:wide={page.url.pathname === '/setup'}>
+        {@render children()}
+      </main>
+    {:else if gate.kind === 'unreachable'}
+      <main id="main" class="card">
+        <h1>Tangible</h1>
+        <div role="alert" class="unreachable">
+          <h2>Could not check your session</h2>
+          <p>{gate.detail}</p>
+          <Button variant="primary" onclick={check}>Try again</Button>
+        </div>
+      </main>
+    {:else}
+      <main id="main" class="card" aria-busy="true">
+        <p aria-live="polite" class="checking">Checking your session…</p>
+      </main>
+    {/if}
+    <!-- On every page, signed in or not: users of a network service are owed
+         the means to get its source (AGPL section 13). Signed in, the shell's
+         sidebar carries it. -->
+    <footer>
+      <a href={SOURCE_URL} rel="noreferrer">Source code</a>, free software under {LICENSE_NAME}
+    </footer>
+  </div>
 {/if}
 
 <style>
@@ -153,17 +159,43 @@
     display: inline-block;
     padding: 0.5rem;
   }
-  main {
-    max-width: 60rem;
-    margin: 0 auto;
-    padding: 1.5rem 1rem;
+  .door {
+    display: grid;
+    justify-items: center;
+    align-content: center;
+    gap: var(--space-5);
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding: var(--space-6) var(--space-4);
+  }
+  .card {
+    width: 100%;
+    max-width: 26rem;
+    padding: var(--space-6);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-2);
+  }
+  .card.wide {
+    max-width: 32rem;
+  }
+  .card :global(h1) {
+    margin: 0 0 var(--space-4);
+    font-size: var(--text-xl);
+  }
+  .unreachable h2 {
+    margin: 0 0 var(--space-2);
+    font-size: var(--text-md);
+  }
+  .checking {
+    margin: 0;
+    color: var(--text-muted);
   }
   footer {
-    max-width: 60rem;
-    margin: 0 auto;
-    padding: 1rem;
     font-size: var(--text-sm);
     color: var(--text-muted);
+    text-align: center;
   }
   .skip:focus {
     z-index: 50;

@@ -662,7 +662,9 @@ may change between minor versions, and the release notes say how.
   form that creates one. Integrations, Storage and DATs follow, each state
   as a mark; removing an integration or a DAT asks under the list instead
   of inside the row. So do the Audit log, filtered in one bar, and
-  Diagnostics, whose sections' columns line up down the page.
+  Diagnostics, whose sections' columns line up down the page. Signing in
+  and setting up are a card centred under Tangible's mark, the identity
+  provider's button first when one is set up.
 - The image is built on Debian 13 (trixie), moving from Debian 12
   (bookworm), now oldstable, and every tool in it moves too: chdman 0.251
   to 0.276, which makes DVD CHDs (a DVD's ISO gets one, made with
