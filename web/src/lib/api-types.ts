@@ -361,7 +361,7 @@ export interface paths {
         put?: never;
         /**
          * Submit worker events.
-         * @description Submit worker events. Idempotent by sequence: resubmitting a batch already held changes nothing.
+         * @description Submit worker events. Idempotent by sequence: resubmitting a batch already held changes nothing. Only the attempt's own worker may.
          */
         post: operations["submit_events"];
         delete?: never;
@@ -6421,6 +6421,15 @@ export interface operations {
             };
             /** @description Malformed batch */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not this worker's attempt */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

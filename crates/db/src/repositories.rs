@@ -372,8 +372,15 @@ pub struct ReportedStage {
 /// may be adopted. Both happen in one transaction: an event saying a write has
 /// begun and a record saying the job has not are the same lie told twice.
 ///
+/// Only `worker_id`'s own attempt takes its events. Any enrolled worker
+/// could otherwise write another's history, or move another's attempt on
+/// with a reported stage (security review, 2026-11-12). The lease token is
+/// not asked for, because a worker whose lease lapsed mid-write still
+/// sends what it recorded.
+///
 /// Returns the highest contiguous sequence held for the attempt, which is what
-/// the worker prunes against.
+/// the worker prunes against, or `None` when the attempt is not this
+/// worker's, or does not exist: nothing is recorded.
 ///
 /// # Errors
 ///
@@ -381,11 +388,26 @@ pub struct ReportedStage {
 /// state is not one this build understands.
 pub async fn record_events(
     pool: &PgPool,
+    worker_id: WorkerId,
     attempt_id: BurnAttemptId,
     events: &[IncomingEvent],
     reported: Option<ReportedStage>,
-) -> Result<i64, DbError> {
+) -> Result<Option<i64>, DbError> {
     let mut tx = pool.begin().await.map_err(DbError::Query)?;
+
+    // An attempt's worker never changes, so no lock is needed to trust this.
+    let yours: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM burn_attempts WHERE id = $1 AND worker_id = $2)",
+    )
+    .bind(attempt_id.as_uuid())
+    .bind(worker_id.as_uuid())
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
+    if !yours {
+        tx.rollback().await.map_err(DbError::Query)?;
+        return Ok(None);
+    }
 
     for event in events {
         sqlx::query(
@@ -414,7 +436,7 @@ pub async fn record_events(
 
     let highest = highest_contiguous_sequence(&mut tx, attempt_id).await?;
     tx.commit().await.map_err(DbError::Query)?;
-    Ok(highest)
+    Ok(Some(highest))
 }
 
 /// Move a job and its attempt to match what a worker reports.

@@ -1255,24 +1255,27 @@ const MAX_EVENT_BATCH: usize = 512;
 ///
 /// # Errors
 ///
-/// `INVALID_PARAMETER` for a malformed attempt, timestamp, or oversized batch.
+/// `INVALID_PARAMETER` for a malformed attempt, timestamp, or oversized
+/// batch; `NOT_FOUND` for an attempt that is not this worker's.
 #[utoipa::path(
     post,
     path = "/api/v1/burn-attempts/{attempt_id}/events",
     tag = "workers",
     description = "Submit worker events. Idempotent by sequence: resubmitting \
-                   a batch already held changes nothing.",
+                   a batch already held changes nothing. Only the attempt's own \
+                   worker may.",
     params(("attempt_id" = String, Path, description = "Attempt identifier")),
     request_body = EventBatch,
     responses(
         (status = 200, description = "Accepted", body = EventAck),
         (status = 400, description = "Malformed batch", body = Problem),
+        (status = 404, description = "Not this worker's attempt", body = Problem),
     ),
     security(("worker_credential" = [])),
 )]
 pub async fn submit_events(
     State(state): State<ApiState>,
-    _identity: WorkerIdentity,
+    identity: WorkerIdentity,
     Path(attempt_id): Path<String>,
     Json(batch): Json<EventBatch>,
 ) -> Result<Json<EventAck>, Problem> {
@@ -1320,12 +1323,19 @@ pub async fn submit_events(
         });
     }
 
-    let through = record_events(state.database().pool(), attempt_id, &events, reported)
-        .await
-        .map_err(|error| {
-            tracing::error!(error = ?error, "recording events failed");
-            unavailable("the events could not be recorded")
-        })?;
+    let through = record_events(
+        state.database().pool(),
+        identity.worker_id,
+        attempt_id,
+        &events,
+        reported,
+    )
+    .await
+    .map_err(|error| {
+        tracing::error!(error = ?error, "recording events failed");
+        unavailable("the events could not be recorded")
+    })?
+    .ok_or_else(|| Problem::not_found("attempt", &attempt_id.to_string()))?;
 
     Ok(Json(EventAck {
         accepted_through_sequence: through,

@@ -1294,7 +1294,7 @@
           "workers"
         ],
         "summary": "Submit worker events.",
-        "description": "Submit worker events. Idempotent by sequence: resubmitting a batch already held changes nothing.",
+        "description": "Submit worker events. Idempotent by sequence: resubmitting a batch already held changes nothing. Only the attempt's own worker may.",
         "operationId": "submit_events",
         "parameters": [
           {
@@ -1330,6 +1330,16 @@
           },
           "400": {
             "description": "Malformed batch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not this worker's attempt",
             "content": {
               "application/json": {
                 "schema": {

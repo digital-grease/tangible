@@ -49,6 +49,11 @@ Found by a security review of 0.2.0.
   `IMPORT_INTERRUPTED`, and the queue moves on; retrying it runs it again.
   A retry's delay, or a wait for a download client, does not count. The
   database gains a column for the count (migration 0034, additive).
+- Any enrolled burn worker could send events for another worker's burn
+  attempt: add to or bury its history, or report an attempt that had not
+  begun writing as writing, which then needed an operator to settle. Only
+  the attempt's own worker may now; any other gets `404 NOT_FOUND`, as
+  does an attempt that does not exist, which before was a server error.
 
 ## 0.2.0 (2026-11-12)
 

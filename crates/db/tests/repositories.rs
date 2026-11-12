@@ -12,12 +12,14 @@
 
 use sqlx::{Executor as _, PgPool};
 use tangible_db::repositories::{
-    ClaimOutcome, EnrollmentOutcome, IncomingEvent, NewBurnJob, authenticate_worker,
+    ClaimOutcome, EnrollmentOutcome, IncomingEvent, NewBurnJob, ReportedStage, authenticate_worker,
     cancel_burn_job, claim_next_burn_job, consume_enrollment, create_burn_job, record_events,
     record_heartbeat, renew_lease, set_attempt_state,
 };
 use tangible_db::{Database, DbConfig};
-use tangible_domain::{BurnAttemptId, BurnJobId, BurnJobState, DriveId, WorkerId};
+use tangible_domain::{
+    BurnAttemptId, BurnAttemptState, BurnJobId, BurnJobState, DriveId, WorkerId,
+};
 use time::OffsetDateTime;
 
 /// Serialises every test that touches the claimable queue.
@@ -441,24 +443,33 @@ fn event(sequence: i64) -> IncomingEvent {
     }
 }
 
-async fn attempt_with_events(pool: &PgPool) -> BurnAttemptId {
+async fn attempt_with_events(pool: &PgPool) -> (WorkerId, BurnAttemptId) {
     let _queue = exclusive_queue().await;
     drain_queue(pool).await;
     let world = seed(pool).await;
     queue_job(pool, &world).await;
-    claim(pool, &world).await.expect("a job").attempt_id
+    (
+        world.worker,
+        claim(pool, &world).await.expect("a job").attempt_id,
+    )
 }
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
 async fn events_are_recorded_and_acknowledged() {
     let pool = pool().await;
-    let attempt = attempt_with_events(&pool).await;
+    let (worker, attempt) = attempt_with_events(&pool).await;
 
-    let through = record_events(&pool, attempt, &[event(1), event(2), event(3)], None)
-        .await
-        .expect("record");
-    assert_eq!(through, 3);
+    let through = record_events(
+        &pool,
+        worker,
+        attempt,
+        &[event(1), event(2), event(3)],
+        None,
+    )
+    .await
+    .expect("record");
+    assert_eq!(through, Some(3));
 }
 
 #[tokio::test]
@@ -467,20 +478,20 @@ async fn resubmitting_a_batch_is_idempotent() {
     // What lets a worker resend everything unacknowledged after an outage
     // without knowing which of them arrived.
     let pool = pool().await;
-    let attempt = attempt_with_events(&pool).await;
+    let (worker, attempt) = attempt_with_events(&pool).await;
 
     let batch = [event(1), event(2), event(3)];
     assert_eq!(
-        record_events(&pool, attempt, &batch, None)
+        record_events(&pool, worker, attempt, &batch, None)
             .await
             .expect("first"),
-        3
+        Some(3)
     );
     assert_eq!(
-        record_events(&pool, attempt, &batch, None)
+        record_events(&pool, worker, attempt, &batch, None)
             .await
             .expect("second"),
-        3,
+        Some(3),
         "a replay changes nothing"
     );
 
@@ -498,33 +509,94 @@ async fn acknowledgement_stops_at_a_gap() {
     // Acknowledging the maximum would tell the worker to discard events the
     // server does not have. Contiguous is the only safe answer.
     let pool = pool().await;
-    let attempt = attempt_with_events(&pool).await;
+    let (worker, attempt) = attempt_with_events(&pool).await;
 
-    let through = record_events(&pool, attempt, &[event(1), event(2), event(5)], None)
-        .await
-        .expect("record");
-    assert_eq!(through, 2, "3 and 4 are missing, so 5 is not acknowledged");
+    let through = record_events(
+        &pool,
+        worker,
+        attempt,
+        &[event(1), event(2), event(5)],
+        None,
+    )
+    .await
+    .expect("record");
+    assert_eq!(
+        through,
+        Some(2),
+        "3 and 4 are missing, so 5 is not acknowledged"
+    );
 
-    let through = record_events(&pool, attempt, &[event(3), event(4)], None)
+    let through = record_events(&pool, worker, attempt, &[event(3), event(4)], None)
         .await
         .expect("fill the gap");
-    assert_eq!(through, 5, "the gap closed, so everything is acknowledged");
+    assert_eq!(
+        through,
+        Some(5),
+        "the gap closed, so everything is acknowledged"
+    );
 }
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
 async fn an_empty_batch_reports_what_is_already_held() {
     let pool = pool().await;
-    let attempt = attempt_with_events(&pool).await;
-    record_events(&pool, attempt, &[event(1)], None)
+    let (worker, attempt) = attempt_with_events(&pool).await;
+    record_events(&pool, worker, attempt, &[event(1)], None)
         .await
         .expect("record");
 
     assert_eq!(
-        record_events(&pool, attempt, &[], None)
+        record_events(&pool, worker, attempt, &[], None)
             .await
             .expect("empty"),
-        1
+        Some(1)
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn another_workers_attempt_takes_no_events() {
+    // Found by the 2026-11-12 security review: any enrolled worker could
+    // write another's history, or move another's attempt into writing.
+    let pool = pool().await;
+    let (_, attempt) = attempt_with_events(&pool).await;
+    let other = seed(&pool).await.worker;
+    let state = || async {
+        sqlx::query_scalar::<_, String>(
+            "SELECT a.state || '/' || j.state FROM burn_attempts a
+             JOIN burn_jobs j ON j.id = a.burn_job_id WHERE a.id = $1",
+        )
+        .bind(attempt.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .expect("read the attempt")
+    };
+    let before = state().await;
+
+    let writing = ReportedStage {
+        job: BurnJobState::Writing,
+        attempt: BurnAttemptState::Writing,
+    };
+    assert_eq!(
+        record_events(&pool, other, attempt, &[event(1)], Some(writing))
+            .await
+            .expect("record"),
+        None
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM burn_events WHERE attempt_id = $1")
+        .bind(attempt.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+    assert_eq!(count, 0, "nothing was recorded");
+    assert_eq!(state().await, before, "nothing was moved");
+
+    // Nor one that does not exist, which before failed on a foreign key.
+    assert_eq!(
+        record_events(&pool, other, BurnAttemptId::generate(), &[event(1)], None)
+            .await
+            .expect("record"),
+        None
     );
 }
 

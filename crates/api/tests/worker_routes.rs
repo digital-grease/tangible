@@ -848,6 +848,59 @@ async fn acknowledgement_stops_at_a_gap() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
+async fn a_worker_cannot_send_events_for_another_workers_attempt() {
+    // Found by the 2026-11-12 security review: the route took any enrolled
+    // worker's events for any attempt, which could forge or bury another
+    // worker's burn history, or report its attempt into writing.
+    let _queue = exclusive_queue().await;
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let attempt = claimed_attempt(&harness).await;
+    let (_, intruder) = enroll(&harness).await;
+    let path = format!("/api/v1/burn-attempts/{}/events", attempt.id);
+
+    let (status, body) = harness
+        .post(
+            &path,
+            Some(&intruder),
+            serde_json::json!({ "events": [event(1, "stage_changed", "writing")] }),
+        )
+        .await;
+    // Not-found, as for the other routes: worker B learns nothing of A's.
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["code"], "NOT_FOUND");
+    let stored: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM burn_events WHERE attempt_id = $1::uuid")
+            .bind(&attempt.id)
+            .fetch_one(&harness.pool)
+            .await
+            .expect("count events");
+    assert_eq!(stored, 0);
+
+    // The attempt's own worker still can.
+    let (status, ack) = harness
+        .post(
+            &path,
+            Some(&attempt.credential),
+            serde_json::json!({ "events": [event(1, "progress", "write")] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+    assert_eq!(ack["accepted_through_sequence"], 1);
+
+    // And an attempt nobody has is not-found too, not a server error.
+    let (status, _) = harness
+        .post(
+            &format!("/api/v1/burn-attempts/{}/events", uuid::Uuid::now_v7()),
+            Some(&intruder),
+            serde_json::json!({ "events": [event(1, "progress", "write")] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn an_oversized_batch_is_refused() {
     let harness = harness().await;
     let (_, credential) = enroll(&harness).await;
