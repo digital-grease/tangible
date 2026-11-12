@@ -65,7 +65,7 @@ jobs:
     # The Debian the image is built on (deploy/Dockerfile's build stage), so
     # these are the xorriso, cdrdao and chdman versions that ship: the
     # runner's own Ubuntu has a chdman too old to make DVD CHDs.
-    container: rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3
+    container: rust:1.98-trixie@sha256:a8a5f0a1e5fe7dfe1d352591e4a1c7dd2c08fd70475cae872cf3458ba0df0546
     env:
       TANGIBLE_XORRISO_TESTS: "1"
       TANGIBLE_CDRDAO_TESTS: "1"
