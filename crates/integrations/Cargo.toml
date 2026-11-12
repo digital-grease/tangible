@@ -21,6 +21,10 @@ jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_
 # The outbound client (ADR 0016): the same reqwest the worker already uses,
 # with rustls, and its own resolver.
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls"] }
+# Opens the RomM export's marker without following a link (O_NOFOLLOW), and
+# checks what was opened, since RomM can write in that folder. The same
+# version the storage crate uses.
+rustix = { version = "1.1.4", default-features = false, features = ["std", "fs"] }
 # Signs S3 requests (SigV4) for an S3-compatible import (ADR 0016, owner's
 # choice 2026-10-24); the requests themselves go through the outbound client.
 # Only the signing: no XML or serde features.

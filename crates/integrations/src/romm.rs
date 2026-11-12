@@ -492,12 +492,67 @@ fn io(operation: &'static str) -> impl FnOnce(std::io::Error) -> ApplyError {
     move |source| ApplyError::Io { operation, source }
 }
 
-/// Read a folder's marker, if it has a well-formed one.
+/// The largest marker read. Tangible's own list a game's few files; this is
+/// far past any of them, and keeps a planted one from filling memory.
+const MAX_MARKER_BYTES: u64 = 1 << 20;
+
+/// Whether a marker's file name is one Tangible could have written: a single
+/// plain name in the folder itself.
+///
+/// The marker lives where RomM, and anything that can write RomM's folder,
+/// can rewrite it, and its names are what Tangible deletes. A name with a
+/// separator, a leading dot (`.` and `..` among them), a control character
+/// or over 255 bytes is none Tangible writes (see [`safe_name`]), and one
+/// would reach outside the folder: an absolute path, or `../`, replaces or
+/// escapes the folder it is joined to. 255 bytes is the filesystem's own
+/// limit; Tangible's names are [`MAX_NAME_BYTES`] plus a disc number and an
+/// extension.
+fn plain_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 255
+        && !name.starts_with('.')
+        && !name
+            .chars()
+            .any(|character| character == '/' || character == '\\' || character.is_control())
+}
+
+/// Read a folder's marker, if it has a well-formed one Tangible could have
+/// written.
+///
+/// Opened without following a link and checked as opened: a regular file
+/// of at most [`MAX_MARKER_BYTES`]. Not a link to elsewhere, a device that
+/// never ends or a pipe that never answers. A marker naming anything but
+/// plain names in the folder is refused whole, so the folder counts as one
+/// Tangible did not make and nothing in it is touched.
 fn read_marker(folder: &Path) -> Option<Marker> {
-    let bytes = std::fs::read(folder.join(MARKER)).ok()?;
+    use rustix::fs::{FileType, Mode, OFlags};
+    use std::io::Read as _;
+
+    let fd = rustix::fs::open(
+        folder.join(MARKER),
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .ok()?;
+    let stat = rustix::fs::fstat(&fd).ok()?;
+    if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
+        || u64::try_from(stat.st_size).map_or(true, |size| size > MAX_MARKER_BYTES)
+    {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::from(fd)
+        .take(MAX_MARKER_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > MAX_MARKER_BYTES {
+        return None;
+    }
     serde_json::from_slice::<Marker>(&bytes)
         .ok()
-        .filter(|marker| marker.schema == MARKER_SCHEMA)
+        .filter(|marker| {
+            marker.schema == MARKER_SCHEMA && marker.files.iter().all(|file| plain_name(&file.name))
+        })
 }
 
 /// The names in a folder that are not the marker and not listed in it.
@@ -584,7 +639,20 @@ fn set_read_only(path: &Path) -> Result<(), ApplyError> {
 /// folder if that leaves it empty.
 fn remove_listed(folder: &Path, marker: &Marker) -> Result<(), ApplyError> {
     for file in &marker.files {
-        match std::fs::remove_file(folder.join(&file.name)) {
+        // Every name is a plain one ([`read_marker`] refuses others), so it
+        // stays in the folder. Only a regular file is Tangible's: anything
+        // else under a listed name is left, and keeps the folder.
+        if !plain_name(&file.name) {
+            continue;
+        }
+        let path = folder.join(&file.name);
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_file() => {}
+            Ok(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(io("inspect an exported file")(error)),
+        }
+        match std::fs::remove_file(&path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(io("remove an exported file")(error)),
@@ -978,6 +1046,110 @@ mod tests {
         let err = remove(&root, &plan.relative_folder(), "edition-1").unwrap_err();
         assert!(matches!(err, ApplyError::ForeignFiles { ref files, .. } if files == "save.srm"));
         assert_eq!(std::fs::read(folder.join("save.srm")).unwrap(), b"mine");
+    }
+
+    /// Rewrite a managed folder's marker as whoever can write RomM's folder
+    /// could: same edition, but naming `victim` among its files.
+    fn forge_marker(folder: &Path, victim: &str) {
+        let mut marker: Marker =
+            serde_json::from_slice(&std::fs::read(folder.join(MARKER)).unwrap()).unwrap();
+        marker.files.push(MarkedFile {
+            name: victim.to_owned(),
+            sha256: "0".repeat(64),
+            length: 1,
+        });
+        std::fs::write(folder.join(MARKER), serde_json::to_vec(&marker).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_forged_marker_cannot_delete_outside_its_folder() {
+        // The marker sits where RomM can write. Whatever it names, only
+        // plain names in the folder itself are Tangible's to delete; a
+        // marker naming anything else is not one Tangible wrote.
+        for victim_name in ["absolute", "relative"] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("roms");
+            std::fs::create_dir(&root).unwrap();
+            let library = dir.path().join("library");
+            std::fs::create_dir(&library).unwrap();
+            let victim = library.join("original.bin");
+            std::fs::write(&victim, b"the only copy").unwrap();
+
+            let first = plan(&request(vec![cue_disc(dir.path(), "a")])).unwrap();
+            apply(&root, &first, None).unwrap();
+            let folder = root.join(first.relative_folder());
+            let named = if victim_name == "absolute" {
+                victim.to_string_lossy().into_owned()
+            } else {
+                "../../../library/original.bin".to_owned()
+            };
+            forge_marker(&folder, &named);
+
+            assert!(matches!(
+                remove(&root, &first.relative_folder(), "edition-1"),
+                Err(ApplyError::Unmanaged { .. })
+            ));
+            assert_eq!(std::fs::read(&victim).unwrap(), b"the only copy");
+
+            // Re-exporting does not take the forged list for the old one,
+            // whether in the same folder with new contents or in a renamed
+            // folder that replaces it.
+            let changed = plan(&request(vec![cue_disc(dir.path(), "b")])).unwrap();
+            let _ = apply(&root, &changed, None);
+            assert_eq!(std::fs::read(&victim).unwrap(), b"the only copy");
+            let mut renamed = request(vec![cue_disc(dir.path(), "c")]);
+            renamed.title = "Another Name".to_owned();
+            let renamed = plan(&renamed).unwrap();
+            let _ = apply(&root, &renamed, Some(&first.relative_folder()));
+            assert_eq!(std::fs::read(&victim).unwrap(), b"the only copy");
+        }
+    }
+
+    #[test]
+    fn a_game_with_the_longest_name_is_still_tangibles_to_remove() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("roms");
+        std::fs::create_dir(&root).unwrap();
+        let mut long = request(vec![cue_disc(dir.path(), "a"), cue_disc(dir.path(), "b")]);
+        long.title = "A".repeat(400);
+        let long = plan(&long).unwrap();
+        assert!(
+            long.files
+                .iter()
+                .any(|file| file.name.len() > MAX_NAME_BYTES)
+        );
+        apply(&root, &long, None).unwrap();
+        remove(&root, &long.relative_folder(), "edition-1").unwrap();
+        assert!(!root.join(long.relative_folder()).exists());
+    }
+
+    #[test]
+    fn a_marker_that_is_a_link_or_too_large_is_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("roms");
+        std::fs::create_dir(&root).unwrap();
+        let plan = plan(&request(vec![cue_disc(dir.path(), "a")])).unwrap();
+        apply(&root, &plan, None).unwrap();
+        let folder = root.join(plan.relative_folder());
+
+        // A marker replaced by a link to one elsewhere.
+        let elsewhere = dir.path().join("marker.json");
+        std::fs::rename(folder.join(MARKER), &elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, folder.join(MARKER)).unwrap();
+        assert!(matches!(
+            remove(&root, &plan.relative_folder(), "edition-1"),
+            Err(ApplyError::Unmanaged { .. })
+        ));
+
+        // A marker far larger than any Tangible writes.
+        std::fs::remove_file(folder.join(MARKER)).unwrap();
+        let mut huge = std::fs::read(&elsewhere).unwrap();
+        huge.extend(std::iter::repeat_n(b' ', 2 << 20));
+        std::fs::write(folder.join(MARKER), huge).unwrap();
+        assert!(matches!(
+            remove(&root, &plan.relative_folder(), "edition-1"),
+            Err(ApplyError::Unmanaged { .. })
+        ));
     }
 
     #[test]

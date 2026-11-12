@@ -1632,6 +1632,7 @@ dependencies = [
  "hex",
  "jsonwebtoken",
  "reqwest",
+ "rustix",
  "rusty-s3",
  "serde",
  "serde_json",

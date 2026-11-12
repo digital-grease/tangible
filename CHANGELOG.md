@@ -14,6 +14,21 @@ may change between minor versions, and the release notes say how.
   from 900 pixels up; the choice is remembered in the browser. Below 900
   pixels it is a drawer, as before.
 
+### Security
+
+Found by a security review of 0.2.0.
+
+- The RomM export could be made to delete files outside RomM's folder,
+  library originals included. Each exported game's folder holds a marker
+  listing the files Tangible wrote, and re-exporting or taking the game out
+  deleted what the marker named; the marker sits where RomM can write, and
+  its names were not checked, so an absolute path or `../` reached anything
+  the server could delete. A marker is now taken as Tangible's only if every
+  name is a plain file name in that folder; otherwise the folder counts as
+  one Tangible did not make and nothing in it is touched. The marker is read
+  without following a link, only as a regular file of at most 1 MiB, and
+  only regular files are deleted.
+
 ## 0.2.0 (2026-11-12)
 
 Tangible reads discs as well as writing them, fetches what it imports, and
