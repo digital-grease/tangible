@@ -1,16 +1,34 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
-  import { onDestroy, onMount } from 'svelte';
+  // Workers and drives (UX.md 11; docs/plans/ui-overhaul.md, "Pages"): every
+  // enrolled burn worker with what can be done to it, every drive a worker
+  // reports with what it is doing now and a drawing of the disc in it, the
+  // recent erasures, and a form that issues an enrollment token. Revoking a
+  // worker and erasing a disc each ask first, in words that say what happens.
+  import Button from '$lib/components/ui/Button.svelte';
+  import Disc from '$lib/components/ui/Disc.svelte';
+  import EmptyState from '$lib/components/ui/EmptyState.svelte';
+  import Field from '$lib/components/ui/Field.svelte';
+  import PageHeader from '$lib/components/ui/PageHeader.svelte';
+  import Panel from '$lib/components/ui/Panel.svelte';
+  import StatusMark from '$lib/components/ui/StatusMark.svelte';
+  import Table from '$lib/components/ui/Table.svelte';
+  import { bayEntry } from '$lib/drivebay';
+  import { watch } from '$lib/events';
+  import { when } from '$lib/overview';
+  import type { Problem } from '$lib/session';
   import {
     anyOpen,
     cancelErasure,
     changeWorker,
-    credentialLabel,
-    ENROLLMENT_MINUTES,
     connectionLabel,
+    credentialLabel,
+    credentialTone,
     driveModel,
+    ENROLLMENT_MINUTES,
     erasureStateLabel,
+    erasureStateTone,
     issueEnrollment,
     loadDrives,
     loadErasures,
@@ -18,6 +36,7 @@
     requestErasure,
     workerActions,
     workerStatusLabel,
+    workerStatusTone,
     type DriveView,
     type ErasureMode,
     type ErasureView,
@@ -25,20 +44,20 @@
     type WorkerAction,
     type WorkerView,
   } from '$lib/workers';
-  import type { Problem } from '$lib/session';
-  import { watch } from '$lib/events';
+  import { onDestroy, onMount, tick } from 'svelte';
 
   type Load<T> =
     { kind: 'loading' } | { kind: 'ready'; data: T } | { kind: 'error'; problem: Problem };
 
   let workers = $state<Load<{ items: WorkerView[]; more: boolean }>>({ kind: 'loading' });
   let drives = $state<Load<DriveView[]>>({ kind: 'loading' });
+  let erasures = $state<Load<ErasureView[]>>({ kind: 'loading' });
 
   // A change asked of a worker, and the one being confirmed before a revoke.
   let changing = $state<string | null>(null);
   let revoking = $state<WorkerView | null>(null);
   let workerProblem = $state<Problem | null>(null);
-  let erasures = $state<Load<ErasureView[]>>({ kind: 'loading' });
+  let revokeHeading = $state<HTMLElement | null>(null);
 
   // The erase form, for one drive at a time.
   let erasingDrive = $state<DriveView | null>(null);
@@ -46,6 +65,7 @@
   let eraseConfirmed = $state(false);
   let eraseProblem = $state<Problem | null>(null);
   let eraseSubmitting = $state(false);
+  let eraseHeading = $state<HTMLElement | null>(null);
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   let stopWatching: (() => void) | undefined;
@@ -106,11 +126,21 @@
     await refresh();
   }
 
-  function startErase(drive: DriveView) {
+  // A confirmation opens below its table; the keyboard is taken to it, so
+  // what it asks is read before anything else is reached.
+  async function startRevoke(worker: WorkerView) {
+    revoking = worker;
+    await tick();
+    revokeHeading?.focus();
+  }
+
+  async function startErase(drive: DriveView) {
     erasingDrive = drive;
     eraseMode = 'quick';
     eraseConfirmed = false;
     eraseProblem = null;
+    await tick();
+    eraseHeading?.focus();
   }
 
   async function erase(event: SubmitEvent) {
@@ -136,8 +166,9 @@
     await refresh();
   }
 
-  function when(value: string | null | undefined): string {
-    return value ? new Date(value).toLocaleString() : '';
+  /** The full date and time, for a time's tooltip. */
+  function full(value: string): string {
+    return new Date(value).toLocaleString();
   }
 
   let minutes = $state<number>(ENROLLMENT_MINUTES.default);
@@ -161,334 +192,634 @@
   }
 </script>
 
-<svelte:head><title>Workers — Tangible</title></svelte:head>
+<svelte:head><title>Workers and drives — Tangible</title></svelte:head>
 
-<h1>Workers</h1>
+<PageHeader
+  title="Workers and drives"
+  description="The burn workers enrolled here, the drives they report, and the discs they have erased."
+>
+  {#snippet actions()}
+    <Button icon="plus" href="#enroll">Enroll a worker</Button>
+  {/snippet}
+</PageHeader>
 
-<section aria-labelledby="workers-heading" aria-busy={workers.kind === 'loading'}>
-  <h2 id="workers-heading">Workers</h2>
-  {#if workers.kind === 'loading'}
-    <p>Loading workers…</p>
-  {:else if workers.kind === 'error'}
-    <div role="alert"><p>{workers.problem.detail}</p></div>
-  {:else if workers.data.items.length === 0}
-    <p>No workers yet. Enroll one below.</p>
-  {:else}
-    <table>
-      <caption>Every enrolled worker, oldest first</caption>
-      <thead>
-        <tr>
-          <th scope="col">Worker</th>
-          <th scope="col">Status</th>
-          <th scope="col">Version</th>
-          <th scope="col">Last seen</th>
-          <th scope="col">Credential</th>
-          <th scope="col">Drives</th>
-          <th scope="col"><span class="visually-hidden">Actions</span></th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each workers.data.items as worker (worker.id)}
-          <tr>
-            <th scope="row">{worker.name}</th>
-            <td>
-              {workerStatusLabel(worker.status)}
-              {#if worker.revoked_at}<br /><small>since {when(worker.revoked_at)}</small>{/if}
-            </td>
-            <td>{worker.software_version}</td>
-            <td>{when(worker.last_seen_at) || 'Never'}</td>
-            <td>{credentialLabel(worker)}</td>
-            <td>{worker.drives.map((drive) => drive.name).join(', ') || 'None'}</td>
-            <td>
-              {#each workerActions(worker.status, worker.credential_rotation_requested_at != null) as action (action)}
-                {#if action === 'revoke'}
-                  <button type="button" onclick={() => (revoking = worker)}>
-                    Revoke {worker.name}…
-                  </button>
-                {:else}
-                  <button
-                    type="button"
-                    disabled={changing === worker.id}
-                    onclick={() => change(worker, action)}
-                  >
-                    {action === 'drain'
-                      ? `Drain ${worker.name}`
-                      : action === 'enable'
-                        ? `Enable ${worker.name}`
-                        : `Rotate ${worker.name}'s credential`}
-                  </button>
-                {/if}
-              {/each}
-            </td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
-    {#if workers.data.more}
-      <p><small>Showing the first 200 workers.</small></p>
-    {/if}
-    <p>
-      <small
-        >Draining a worker lets it finish what it holds and gives it nothing new, for maintenance.
-        Enabling it undoes that. Rotating its credential has the worker swap it for a new one
-        between jobs; the old one works until then, so nothing is interrupted. If the credential may
-        be known to somebody else, revoke the worker instead.</small
-      >
-    </p>
-  {/if}
-
-  <div role="alert">
-    {#if workerProblem}
-      <p>
-        <strong>Not changed.</strong>
-        {workerProblem.code === 'FORBIDDEN'
-          ? 'Only an administrator can change workers.'
-          : workerProblem.detail}
-      </p>
-    {/if}
-  </div>
-
-  {#if revoking}
-    {@const worker = revoking}
-    <form
-      class="danger"
-      aria-labelledby="revoke-heading"
-      onsubmit={(event) => {
-        event.preventDefault();
-        void change(worker, 'revoke');
-      }}
+<div class="stack">
+  <div aria-busy={workers.kind === 'loading'}>
+    <Panel
+      title="Workers"
+      aside={workers.kind === 'ready' ? `${workers.data.items.length}` : undefined}
+      flush
     >
-      <h3 id="revoke-heading">Revoke {worker.name}</h3>
-      <p>
-        <strong>Its credential is refused from its next request, for good.</strong> It can no longer take
-        work, renew a lease or report. A burn it is writing is not interrupted by the server; its lease
-        lapses as a lost worker's does. To use the machine again, issue a new enrollment token and enroll
-        it under a new name.
-      </p>
-      <button type="submit" disabled={changing === worker.id}>
-        {changing === worker.id ? 'Revoking…' : `Revoke ${worker.name}`}
-      </button>
-      <button type="button" onclick={() => (revoking = null)}>Keep {worker.name}</button>
-    </form>
-  {/if}
-</section>
-
-<section aria-labelledby="drives-heading" aria-busy={drives.kind === 'loading'}>
-  <h2 id="drives-heading">Drives</h2>
-  {#if drives.kind === 'loading'}
-    <p>Loading drives…</p>
-  {:else if drives.kind === 'error'}
-    <div role="alert"><p>{drives.problem.detail}</p></div>
-  {:else if drives.data.length === 0}
-    <p>No drives yet. A burn worker reports its drive when it first starts.</p>
-  {:else}
-    <table>
-      <caption>Every drive a worker has reported</caption>
-      <thead>
-        <tr>
-          <th scope="col">Drive</th>
-          <th scope="col">Worker</th>
-          <th scope="col">Model</th>
-          <th scope="col">Connection</th>
-          <th scope="col">Worker last seen</th>
-          <th scope="col"><span class="visually-hidden">Actions</span></th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each drives.data as drive (drive.id)}
-          <tr>
-            <th scope="row">{drive.name} <small>({drive.device})</small></th>
-            <td>{drive.worker_name} <small>({drive.worker_status})</small></td>
-            <td>{driveModel(drive)}</td>
-            <td>{connectionLabel(drive.connection)}</td>
-            <td>{when(drive.worker_last_seen_at) || 'Never'}</td>
-            <td>
-              <button type="button" onclick={() => startErase(drive)}>
-                Erase the disc in {drive.name}…
-              </button>
-            </td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
-  {/if}
-
-  {#if erasingDrive}
-    <form class="danger" onsubmit={erase} aria-labelledby="erase-heading">
-      <h3 id="erase-heading">Erase the disc in {erasingDrive.name}</h3>
-      <p>
-        <strong>This destroys everything on the disc in that drive.</strong> It cannot be undone. Only
-        a rewritable disc (CD-RW, DVD-RW, DVD+RW, BD-RE) is erased; the worker looks first and leaves
-        a blank or write-once disc alone, and says so.
-      </p>
-      <fieldset>
-        <legend>How thoroughly</legend>
-        <label>
-          <input type="radio" name="mode" value="quick" bind:group={eraseMode} />
-          Quick: only what makes the disc writable again. Fast on a CD-RW; some drives take half an hour
-          on a DVD-RW whichever you choose
-        </label>
-        <br />
-        <label>
-          <input type="radio" name="mode" value="full" bind:group={eraseMode} />
-          Full: writes over the whole disc, which can take an hour
-        </label>
-      </fieldset>
-      <p>
-        <label>
-          <input type="checkbox" bind:checked={eraseConfirmed} />
-          I understand everything on the disc in {erasingDrive.name} will be destroyed
-        </label>
-      </p>
-      <div role="alert">
-        {#if eraseProblem}
+      {#if workers.kind === 'loading'}
+        <p class="padded quiet">Loading workers…</p>
+      {:else if workers.kind === 'error'}
+        <div class="padded" role="alert">
+          <StatusMark tone="bad" label={workers.problem.detail} />
+        </div>
+      {:else if workers.data.items.length === 0}
+        <EmptyState title="No workers yet" icon="worker">
+          <p>A burn worker needs an enrollment token on its first start.</p>
+          {#snippet action()}
+            <Button variant="primary" href="#enroll" icon="plus">Enroll one</Button>
+          {/snippet}
+        </EmptyState>
+      {:else}
+        <Table caption="Every enrolled worker, oldest first">
+          <thead>
+            <tr>
+              <th scope="col">Worker</th>
+              <th scope="col">Status</th>
+              <th scope="col">Version</th>
+              <th scope="col">Last seen</th>
+              <th scope="col">Credential</th>
+              <th scope="col">Drives</th>
+              <th scope="col"><span class="visually-hidden">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each workers.data.items as worker (worker.id)}
+              {@const actions = workerActions(
+                worker.status,
+                worker.credential_rotation_requested_at != null,
+              )}
+              {@const credentialMark = credentialTone(worker)}
+              <tr>
+                <th scope="row">{worker.name}</th>
+                <td>
+                  <div class="cell">
+                    <StatusMark
+                      tone={workerStatusTone(worker.status)}
+                      label={workerStatusLabel(worker.status)}
+                    />
+                    {#if worker.revoked_at}
+                      <span class="small quiet">
+                        since <time datetime={worker.revoked_at}>{full(worker.revoked_at)}</time>
+                      </span>
+                    {/if}
+                  </div>
+                </td>
+                <td><code>{worker.software_version}</code></td>
+                <td>
+                  {#if worker.last_seen_at}
+                    <time datetime={worker.last_seen_at} title={full(worker.last_seen_at)}
+                      >{when(worker.last_seen_at)}</time
+                    >
+                  {:else}
+                    <span class="quiet">Never</span>
+                  {/if}
+                </td>
+                <td>
+                  <div class="inline">
+                    {#if credentialMark}
+                      <StatusMark tone={credentialMark} label={credentialLabel(worker)} />
+                    {:else}
+                      <span>{credentialLabel(worker)}</span>
+                    {/if}
+                    {#if actions.includes('rotate-credential')}
+                      <Button
+                        size="sm"
+                        variant="quiet"
+                        icon="refresh"
+                        label={`Rotate ${worker.name}'s credential`}
+                        disabled={changing === worker.id}
+                        onclick={() => change(worker, 'rotate-credential')}>Rotate</Button
+                      >
+                    {/if}
+                  </div>
+                </td>
+                <td>
+                  {#if worker.drives.length === 0}
+                    <span class="quiet">None</span>
+                  {:else}
+                    <ul class="chips">
+                      {#each worker.drives as drive (drive.id)}
+                        <li>{drive.name}</li>
+                      {/each}
+                    </ul>
+                  {/if}
+                </td>
+                <td>
+                  <div class="row-actions">
+                    {#if actions.includes('drain')}
+                      <Button
+                        size="sm"
+                        label={`Drain ${worker.name}`}
+                        disabled={changing === worker.id}
+                        onclick={() => change(worker, 'drain')}>Drain</Button
+                      >
+                    {/if}
+                    {#if actions.includes('enable')}
+                      <Button
+                        size="sm"
+                        label={`Enable ${worker.name}`}
+                        disabled={changing === worker.id}
+                        onclick={() => change(worker, 'enable')}>Enable</Button
+                      >
+                    {/if}
+                    {#if actions.includes('revoke')}
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        label={`Revoke ${worker.name}…`}
+                        onclick={() => startRevoke(worker)}>Revoke…</Button
+                      >
+                    {/if}
+                  </div>
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </Table>
+        <div class="padded footnote">
+          {#if workers.data.more}
+            <p>Showing the first 200 workers.</p>
+          {/if}
           <p>
-            <strong>Not erased.</strong>
-            {eraseProblem.code === 'FORBIDDEN'
-              ? 'Only an administrator can erase discs.'
-              : eraseProblem.detail}
+            Draining a worker lets it finish what it holds and gives it nothing new, for
+            maintenance. Enabling it undoes that. Rotating its credential has the worker swap it for
+            a new one between jobs; the old one works until then, so nothing is interrupted. If the
+            credential may be known to somebody else, revoke the worker instead.
+          </p>
+        </div>
+      {/if}
+
+      <div role="alert">
+        {#if workerProblem}
+          <p class="padded problem">
+            <strong>Not changed.</strong>
+            {workerProblem.code === 'FORBIDDEN'
+              ? 'Only an administrator can change workers.'
+              : workerProblem.detail}
           </p>
         {/if}
       </div>
-      <button type="submit" disabled={!eraseConfirmed || eraseSubmitting}>
-        {eraseSubmitting ? 'Asking…' : `Erase the disc in ${erasingDrive.name}`}
-      </button>
-      <button type="button" onclick={() => (erasingDrive = null)}>Keep the disc</button>
-    </form>
-  {/if}
-</section>
 
-<section aria-labelledby="erasures-heading">
-  <h2 id="erasures-heading">Recent erasures</h2>
-  <div aria-live="polite">
-    {#if erasures.kind === 'loading'}
-      <p>Loading erasures…</p>
-    {:else if erasures.kind === 'error'}
-      <p>{erasures.problem.detail}</p>
-    {:else if erasures.data.length === 0}
-      <p>No disc has been erased.</p>
-    {:else}
-      <table>
-        <caption>Newest first</caption>
-        <thead>
-          <tr>
-            <th scope="col">Asked for</th>
-            <th scope="col">Drive</th>
-            <th scope="col">How</th>
-            <th scope="col">State</th>
-            <th scope="col">What was found</th>
-            <th scope="col"><span class="visually-hidden">Actions</span></th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each erasures.data as erasure (erasure.id)}
-            <tr>
-              <td>{when(erasure.created_at)} by {erasure.requested_by}</td>
-              <td>{erasure.drive_name}</td>
-              <td>{erasure.mode === 'full' ? 'Full' : 'Quick'}</td>
-              <td>
-                {erasureStateLabel(erasure.state)}
-                {#if erasure.error_detail}<br /><small>{erasure.error_detail}</small>{/if}
-              </td>
-              <td>
-                {#if erasure.medium_before}
-                  {erasure.medium_before.profile}, {erasure.medium_before.blank
-                    ? 'blank'
-                    : `${erasure.medium_before.sessions} session(s)`}
-                {/if}
-              </td>
-              <td>
-                {#if erasure.state === 'queued'}
-                  <button type="button" onclick={() => withdraw(erasure)}>Withdraw</button>
-                {/if}
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    {/if}
+      {#if revoking}
+        {@const worker = revoking}
+        <form
+          class="confirm"
+          aria-labelledby="revoke-heading"
+          onsubmit={(event) => {
+            event.preventDefault();
+            void change(worker, 'revoke');
+          }}
+        >
+          <h3 id="revoke-heading" tabindex="-1" bind:this={revokeHeading}>
+            Revoke {worker.name}
+          </h3>
+          <p>
+            <strong>Its credential is refused from its next request, for good.</strong> It can no longer
+            take work, renew a lease or report. A burn it is writing is not interrupted by the server;
+            its lease lapses as a lost worker's does. To use the machine again, issue a new enrollment
+            token and enroll it under a new name.
+          </p>
+          <div class="buttons">
+            <Button type="submit" variant="danger" disabled={changing === worker.id}>
+              {changing === worker.id ? 'Revoking…' : `Revoke ${worker.name}`}
+            </Button>
+            <Button onclick={() => (revoking = null)}>Keep {worker.name}</Button>
+          </div>
+        </form>
+      {/if}
+    </Panel>
   </div>
-</section>
 
-<section aria-labelledby="enroll-heading">
-  <h2 id="enroll-heading">Enroll a burn worker</h2>
-  <p>
-    A new worker needs a one-use enrollment token on its first start. It exchanges the token for a
-    credential of its own, kept on the worker's volume, and the token is spent.
-  </p>
+  <div aria-busy={drives.kind === 'loading'}>
+    <Panel
+      title="Drives"
+      aside={drives.kind === 'ready' ? `${drives.data.length}` : undefined}
+      flush
+    >
+      {#if drives.kind === 'loading'}
+        <p class="padded quiet">Loading drives…</p>
+      {:else if drives.kind === 'error'}
+        <div class="padded" role="alert">
+          <StatusMark tone="bad" label={drives.problem.detail} />
+        </div>
+      {:else if drives.data.length === 0}
+        <EmptyState title="No drives yet" icon="disc">
+          <p>A burn worker reports its drive when it first starts.</p>
+        </EmptyState>
+      {:else}
+        <Table caption="Every drive a worker has reported">
+          <thead>
+            <tr>
+              <th scope="col">Drive</th>
+              <th scope="col">Now</th>
+              <th scope="col">Worker</th>
+              <th scope="col">Model</th>
+              <th scope="col">Connection</th>
+              <th scope="col">Worker last seen</th>
+              <th scope="col"><span class="visually-hidden">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each drives.data as drive (drive.id)}
+              {@const entry = bayEntry(drive)}
+              <tr>
+                <th scope="row">
+                  <div class="drive">
+                    <Disc
+                      mode={entry.disc.mode}
+                      shape={entry.disc.shape}
+                      family={entry.disc.family}
+                      capacity={entry.disc.capacity}
+                      progress={entry.disc.progress}
+                      size={28}
+                      hole="var(--surface)"
+                    />
+                    <div class="names">
+                      <span>{drive.name}</span>
+                      <code class="device">{drive.device}</code>
+                    </div>
+                  </div>
+                </th>
+                <td>
+                  <div class="cell">
+                    <StatusMark tone={entry.tone} label={entry.state} />
+                    {#if entry.title}
+                      {#if entry.href}
+                        <a class="small" href={entry.href}>{entry.title}</a>
+                      {:else}
+                        <span class="small">{entry.title}</span>
+                      {/if}
+                    {/if}
+                  </div>
+                </td>
+                <td>
+                  <div class="cell">
+                    <span>{drive.worker_name}</span>
+                    <span class="small quiet">{workerStatusLabel(drive.worker_status)}</span>
+                  </div>
+                </td>
+                <td>{driveModel(drive)}</td>
+                <td>{connectionLabel(drive.connection)}</td>
+                <td>
+                  {#if drive.worker_last_seen_at}
+                    <time
+                      datetime={drive.worker_last_seen_at}
+                      title={full(drive.worker_last_seen_at)}
+                      >{when(drive.worker_last_seen_at)}</time
+                    >
+                  {:else}
+                    <span class="quiet">Never</span>
+                  {/if}
+                </td>
+                <td>
+                  <div class="row-actions">
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      label={`Erase the disc in ${drive.name}…`}
+                      onclick={() => startErase(drive)}>Erase…</Button
+                    >
+                  </div>
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </Table>
+      {/if}
 
-  <form onsubmit={issue}>
-    <p>
-      <label for="minutes">Valid for (minutes)</label><br />
-      <input
-        id="minutes"
-        name="minutes"
-        type="number"
-        min={ENROLLMENT_MINUTES.min}
-        max={ENROLLMENT_MINUTES.max}
-        bind:value={minutes}
-        required
-      />
-      <br />
-      <small>Long enough to paste it into the worker's settings and start it.</small>
-    </p>
+      {#if erasingDrive}
+        <form class="confirm" onsubmit={erase} aria-labelledby="erase-heading">
+          <h3 id="erase-heading" tabindex="-1" bind:this={eraseHeading}>
+            Erase the disc in {erasingDrive.name}
+          </h3>
+          <p>
+            <strong>This destroys everything on the disc in that drive.</strong> It cannot be undone.
+            Only a rewritable disc (CD-RW, DVD-RW, DVD+RW, BD-RE) is erased; the worker looks first and
+            leaves a blank or write-once disc alone, and says so.
+          </p>
+          <fieldset>
+            <legend>How thoroughly</legend>
+            <label class="choice">
+              <input type="radio" name="mode" value="quick" bind:group={eraseMode} />
+              <span>
+                <strong>Quick:</strong> only what makes the disc writable again. Fast on a CD-RW; some
+                drives take half an hour on a DVD-RW whichever you choose
+              </span>
+            </label>
+            <label class="choice">
+              <input type="radio" name="mode" value="full" bind:group={eraseMode} />
+              <span><strong>Full:</strong> writes over the whole disc, which can take an hour</span>
+            </label>
+          </fieldset>
+          <label class="choice">
+            <input type="checkbox" bind:checked={eraseConfirmed} />
+            <span>I understand everything on the disc in {erasingDrive.name} will be destroyed</span
+            >
+          </label>
+          <div role="alert">
+            {#if eraseProblem}
+              <p class="problem">
+                <strong>Not erased.</strong>
+                {eraseProblem.code === 'FORBIDDEN'
+                  ? 'Only an administrator can erase discs.'
+                  : eraseProblem.detail}
+              </p>
+            {/if}
+          </div>
+          <div class="buttons">
+            <Button type="submit" variant="danger" disabled={!eraseConfirmed || eraseSubmitting}>
+              {eraseSubmitting ? 'Asking…' : `Erase the disc in ${erasingDrive.name}`}
+            </Button>
+            <Button onclick={() => (erasingDrive = null)}>Keep the disc</Button>
+          </div>
+        </form>
+      {/if}
+    </Panel>
+  </div>
 
-    <div role="alert">
-      {#if problem}
-        <p>
-          <strong>Not issued.</strong>
-          {problem.code === 'FORBIDDEN'
-            ? 'Only an administrator can enroll workers.'
-            : problem.detail}
-        </p>
+  <Panel title="Recent erasures" flush>
+    <div aria-live="polite">
+      {#if erasures.kind === 'loading'}
+        <p class="padded quiet">Loading erasures…</p>
+      {:else if erasures.kind === 'error'}
+        <div class="padded"><StatusMark tone="bad" label={erasures.problem.detail} /></div>
+      {:else if erasures.data.length === 0}
+        <p class="padded quiet">No disc has been erased.</p>
+      {:else}
+        <Table caption="Recent erasures, newest first">
+          <thead>
+            <tr>
+              <th scope="col">Asked for</th>
+              <th scope="col">Drive</th>
+              <th scope="col">How</th>
+              <th scope="col">State</th>
+              <th scope="col">What was found</th>
+              <th scope="col"><span class="visually-hidden">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each erasures.data as erasure (erasure.id)}
+              <tr>
+                <td>
+                  <time datetime={erasure.created_at} title={full(erasure.created_at)}
+                    >{when(erasure.created_at)}</time
+                  >
+                  <span class="quiet">by {erasure.requested_by}</span>
+                </td>
+                <td>{erasure.drive_name}</td>
+                <td>{erasure.mode === 'full' ? 'Full' : 'Quick'}</td>
+                <td>
+                  <div class="cell">
+                    <StatusMark
+                      tone={erasureStateTone(erasure.state)}
+                      label={erasureStateLabel(erasure.state)}
+                    />
+                    {#if erasure.error_detail}
+                      <span class="small quiet">{erasure.error_detail}</span>
+                    {/if}
+                  </div>
+                </td>
+                <td>
+                  {#if erasure.medium_before}
+                    {erasure.medium_before.profile}, {erasure.medium_before.blank
+                      ? 'blank'
+                      : `${erasure.medium_before.sessions} session(s)`}
+                  {/if}
+                </td>
+                <td>
+                  {#if erasure.state === 'queued'}
+                    <div class="row-actions">
+                      <Button
+                        size="sm"
+                        variant="quiet"
+                        label={`Withdraw the erasure in ${erasure.drive_name}`}
+                        onclick={() => withdraw(erasure)}>Withdraw</Button
+                      >
+                    </div>
+                  {/if}
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </Table>
       {/if}
     </div>
+  </Panel>
 
-    <button type="submit" disabled={submitting}>
-      {submitting ? 'Issuing…' : 'Issue an enrollment token'}
-    </button>
-  </form>
+  <div id="enroll">
+    <Panel title="Enroll a burn worker">
+      <p class="lede">
+        A new worker needs a one-use enrollment token on its first start. It exchanges the token for
+        a credential of its own, kept on the worker's volume, and the token is spent.
+      </p>
 
-  {#if issued}
-    <div aria-live="polite" class="issued">
-      <h3>Enrollment token</h3>
-      <p>
-        Shown this once. The server keeps only its hash, so if it is lost, issue another. It lapses
-        at {new Date(issued.expires_at).toLocaleString()}.
-      </p>
-      <p>
-        <label for="token">Token</label><br />
-        <input id="token" readonly value={issued.enrollment_token} size="80" />
-      </p>
-      <p>
-        Set it as <code>TANGIBLE_ENROLLMENT_TOKEN</code> in the worker's environment, start the worker,
-        then remove the setting again.
-      </p>
-    </div>
-  {/if}
-</section>
+      <form class="enroll" onsubmit={issue}>
+        <Field
+          label="Valid for (minutes)"
+          hint="Long enough to paste it into the worker's settings and start it."
+          required
+        >
+          {#snippet children({ id, describedBy })}
+            <input
+              {id}
+              name="minutes"
+              type="number"
+              min={ENROLLMENT_MINUTES.min}
+              max={ENROLLMENT_MINUTES.max}
+              bind:value={minutes}
+              aria-describedby={describedBy}
+              required
+            />
+          {/snippet}
+        </Field>
+        <div>
+          <Button type="submit" variant="primary" disabled={submitting}>
+            {submitting ? 'Issuing…' : 'Issue an enrollment token'}
+          </Button>
+        </div>
+      </form>
+
+      <div role="alert">
+        {#if problem}
+          <p class="problem">
+            <strong>Not issued.</strong>
+            {problem.code === 'FORBIDDEN'
+              ? 'Only an administrator can enroll workers.'
+              : problem.detail}
+          </p>
+        {/if}
+      </div>
+
+      {#if issued}
+        <div aria-live="polite" class="issued">
+          <h3>Enrollment token</h3>
+          <p>
+            Shown this once. The server keeps only its hash, so if it is lost, issue another. It
+            lapses at <time datetime={issued.expires_at}>{full(issued.expires_at)}</time>.
+          </p>
+          <Field label="Token">
+            {#snippet children({ id })}
+              <input
+                {id}
+                class="token"
+                readonly
+                value={issued?.enrollment_token ?? ''}
+                spellcheck="false"
+                onfocus={(event) => event.currentTarget.select()}
+              />
+            {/snippet}
+          </Field>
+          <p>
+            Set it as <code>TANGIBLE_ENROLLMENT_TOKEN</code> in the worker's environment, start the worker,
+            then remove the setting again.
+          </p>
+        </div>
+      {/if}
+    </Panel>
+  </div>
+</div>
 
 <style>
-  .danger {
-    border: 3px solid currentColor;
-    padding: 0 1rem 1rem;
-    margin-top: 1rem;
+  .stack {
+    display: grid;
+    gap: var(--space-5);
   }
-  .visually-hidden {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
+  .padded {
+    padding: var(--space-3) var(--space-4);
+  }
+  .quiet {
+    color: var(--text-muted);
+  }
+  .small {
+    font-size: var(--text-xs);
+  }
+  .cell {
+    display: grid;
+    gap: 0.125rem;
+    justify-items: start;
+  }
+  .inline {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .row-actions {
+    display: flex;
+    gap: var(--space-2);
+    justify-content: flex-end;
     white-space: nowrap;
   }
-  .issued {
-    border: 2px solid currentColor;
-    padding: 0 1rem;
-    margin-top: 1rem;
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
   }
-  #token {
-    font-family: ui-monospace, monospace;
-    max-width: 100%;
+  .chips li {
+    padding: 0 var(--space-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface-2);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+  }
+  .drive {
+    display: flex;
+    gap: var(--space-3);
+    align-items: center;
+  }
+  .names {
+    display: grid;
+  }
+  .device {
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-regular);
+  }
+  .footnote {
+    border-top: 1px solid var(--line-2);
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+  }
+  .footnote p {
+    margin: 0;
+    max-width: 90ch;
+  }
+  .footnote p + p {
+    margin-top: var(--space-2);
+  }
+  .problem {
+    margin: 0;
+    color: var(--bad);
+  }
+  .confirm {
+    display: grid;
+    gap: var(--space-3);
+    margin: 0;
+    padding: var(--space-4);
+    border-top: 1px solid var(--line);
+    border-left: 4px solid var(--bad);
+    background: color-mix(in srgb, var(--bad) 6%, var(--surface));
+  }
+  .confirm h3 {
+    margin: 0;
+    font-size: var(--text-md);
+  }
+  .confirm p {
+    margin: 0;
+    max-width: 75ch;
+  }
+  .confirm fieldset {
+    display: grid;
+    gap: var(--space-2);
+    margin: 0;
+    padding: var(--space-2) var(--space-3) var(--space-3);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    max-width: 75ch;
+  }
+  .confirm legend {
+    padding: 0 var(--space-1);
+    font-weight: var(--weight-strong);
+  }
+  .choice {
+    display: flex;
+    gap: var(--space-2);
+    align-items: baseline;
+    cursor: pointer;
+  }
+  .buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+  .lede {
+    margin: 0 0 var(--space-4);
+    max-width: 75ch;
+  }
+  .enroll {
+    display: grid;
+    gap: var(--space-3);
+    justify-items: start;
+  }
+  .enroll input {
+    width: 8rem;
+  }
+  .issued {
+    margin-top: var(--space-4);
+    padding: var(--space-4);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--accent);
+    border-radius: var(--radius);
+    background: var(--surface-2);
+  }
+  .issued h3 {
+    margin: 0 0 var(--space-2);
+    font-size: var(--text-md);
+  }
+  .issued p {
+    max-width: 75ch;
+  }
+  .token {
+    width: 100%;
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
   }
 </style>

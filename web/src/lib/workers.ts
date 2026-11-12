@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import type { components } from './api-types';
+import type { Tone } from './components/ui/tone';
 import { apiCall, apiFetch, type Result } from './session';
 
 export type IssuedEnrollment = components['schemas']['IssuedEnrollment'];
@@ -62,6 +63,26 @@ export function workerStatusLabel(status: string): string {
 }
 
 /**
+ * A worker's status as a tone, beside its words: taking work is fine; not
+ * heard from, or draining and so taking nothing new, wants a look; one this
+ * server cannot work with is a problem. A revoked worker is retired, not
+ * failing, and a pending one has only not started yet.
+ */
+export function workerStatusTone(status: string): Tone {
+  switch (status) {
+    case 'online':
+      return 'ok';
+    case 'offline':
+    case 'draining':
+      return 'warn';
+    case 'incompatible':
+      return 'bad';
+    default:
+      return 'idle';
+  }
+}
+
+/**
  * What can be done to a worker in this status, as the server allows.
  *
  * Rotation is not offered while one is already asked for, nor to an
@@ -106,6 +127,23 @@ export function credentialLabel(
   );
   if (!Number.isFinite(days) || days < 1) return 'Issued today';
   return days === 1 ? 'Issued yesterday' : `Issued ${days} days ago`;
+}
+
+/**
+ * A credential's tone, where it has one worth showing: a rotation due wants
+ * a look, one asked for is under way, and a revoked worker's is refused.
+ * `null` for an ordinary credential, whose age is said in plain words.
+ */
+export function credentialTone(
+  worker: Pick<
+    WorkerView,
+    'status' | 'credential_rotation_requested_at' | 'credential_rotation_due'
+  >,
+): Tone | null {
+  if (worker.status === 'revoked') return 'idle';
+  if (worker.credential_rotation_requested_at) return 'busy';
+  if (worker.credential_rotation_due) return 'warn';
+  return null;
 }
 
 export type DriveView = components['schemas']['DriveView'];
@@ -172,6 +210,27 @@ export function erasureStateLabel(state: string): string {
       return 'Withdrawn';
     default:
       return state;
+  }
+}
+
+/**
+ * An erasure's state as a tone, beside its words. A refusal is a warning,
+ * not a failure: the worker looked and found a disc that cannot be erased,
+ * such as a write-once one, and left it alone.
+ */
+export function erasureStateTone(state: string): Tone {
+  switch (state) {
+    case 'erased':
+    case 'already_blank':
+      return 'ok';
+    case 'refused':
+      return 'warn';
+    case 'failed':
+      return 'bad';
+    case 'canceled':
+      return 'idle';
+    default:
+      return 'busy';
   }
 }
 

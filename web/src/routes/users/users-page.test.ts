@@ -3,6 +3,7 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { axeViolations } from '$lib/testing/axe';
 
 const { default: UsersPage } = await import('./+page.svelte');
 
@@ -61,6 +62,37 @@ describe('Accounts page', () => {
     expect(screen.getByRole('rowheader', { name: 'user1' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Show more accounts' })).toBeNull();
     expect(asked).toContain('/api/v1/users?cursor=c2');
+  });
+
+  it('passes the accessibility checks, the list and the form both shown', async () => {
+    server({
+      '/api/v1/users': { status: 200, body: { items: [user(1), user(2)], next_cursor: null } },
+    });
+    const { container } = render(UsersPage);
+    await screen.findByRole('rowheader', { name: 'user1' });
+    expect(screen.getByRole('region', { name: 'Create an account' })).toBeTruthy();
+    expect(screen.getByLabelText(/^Password/)).toBeTruthy();
+    expect(await axeViolations(container)).toEqual([]);
+  });
+
+  it('tells anybody but an administrator that the page is not theirs', async () => {
+    server({
+      '/api/v1/users': {
+        status: 403,
+        body: {
+          type: 'about:blank',
+          title: 'Forbidden',
+          status: 403,
+          code: 'FORBIDDEN',
+          detail: 'the operator role does not allow manage_users',
+        },
+      },
+    });
+    render(UsersPage);
+    expect(
+      await screen.findByText('Only an administrator can see or create accounts.'),
+    ).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Create an account' })).toBeNull();
   });
 
   it('offers no more when everything fits on one page', async () => {

@@ -7,12 +7,15 @@ import {
   cancelErasure,
   changeWorker,
   credentialLabel,
+  credentialTone,
   loadWorkers,
   workerActions,
   workerStatusLabel,
+  workerStatusTone,
   connectionLabel,
   driveModel,
   erasureStateLabel,
+  erasureStateTone,
   issueEnrollment,
   requestErasure,
   type ErasureView,
@@ -123,6 +126,16 @@ describe('erasing a disc', () => {
     }
   });
 
+  it('gives every state a tone, a refusal a warning rather than a failure', () => {
+    expect(erasureStateTone('erased')).toBe('ok');
+    expect(erasureStateTone('already_blank')).toBe('ok');
+    expect(erasureStateTone('refused')).toBe('warn');
+    expect(erasureStateTone('failed')).toBe('bad');
+    expect(erasureStateTone('canceled')).toBe('idle');
+    expect(erasureStateTone('queued')).toBe('busy');
+    expect(erasureStateTone('erasing')).toBe('busy');
+  });
+
   it('keeps checking only while something is still going', () => {
     const erasure = (is_open: boolean) => ({ is_open }) as ErasureView;
     expect(anyOpen([erasure(false), erasure(true)])).toBe(true);
@@ -188,6 +201,15 @@ describe('managing workers', () => {
     expect(workerActions('revoked')).toEqual([]);
   });
 
+  it('gives each status a tone, a revoked worker retired rather than failing', () => {
+    expect(workerStatusTone('online')).toBe('ok');
+    expect(workerStatusTone('offline')).toBe('warn');
+    expect(workerStatusTone('draining')).toBe('warn');
+    expect(workerStatusTone('incompatible')).toBe('bad');
+    expect(workerStatusTone('pending')).toBe('idle');
+    expect(workerStatusTone('revoked')).toBe('idle');
+  });
+
   it('does not offer a rotation already asked for', () => {
     expect(workerActions('online', true)).toEqual(['drain', 'revoke']);
     expect(workerActions('draining', true)).toEqual(['enable', 'revoke']);
@@ -224,5 +246,14 @@ describe('a worker credential in words', () => {
 
   it("calls a revoked worker's credential refused", () => {
     expect(credentialLabel({ ...base, status: 'revoked' }, now)).toBe('Refused');
+  });
+
+  it('marks only a credential with something to say', () => {
+    expect(credentialTone(base)).toBeNull();
+    expect(credentialTone({ ...base, credential_rotation_due: true })).toBe('warn');
+    expect(
+      credentialTone({ ...base, credential_rotation_requested_at: '2026-11-02T10:00:00Z' }),
+    ).toBe('busy');
+    expect(credentialTone({ ...base, status: 'revoked' })).toBe('idle');
   });
 });

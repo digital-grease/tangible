@@ -21,7 +21,12 @@ import type { StreamEvent } from './events';
 import { importStateLabel } from './imports';
 import { formatBytes } from './library';
 import { ripStateLabel, ripStateTone } from './rips';
-import { erasureStateLabel, workerStatusLabel } from './workers';
+import {
+  erasureStateLabel,
+  erasureStateTone,
+  workerStatusLabel,
+  workerStatusTone,
+} from './workers';
 
 export interface Tile {
   key: string;
@@ -179,12 +184,7 @@ export function eventLine(
       return {
         topic: 'Erasure',
         words: `An erasure: ${erasureStateLabel(state)}`,
-        tone:
-          state === 'erased' || state === 'already_blank'
-            ? 'ok'
-            : state === 'failed' || state === 'refused'
-              ? 'bad'
-              : 'busy',
+        tone: erasureStateTone(state),
         href: null,
       };
     case 'worker.changed': {
@@ -192,7 +192,7 @@ export function eventLine(
       return {
         topic: 'Worker',
         words: `A worker: ${workerStatusLabel(status)}`,
-        tone: status === 'online' ? 'ok' : status === 'pending' ? 'idle' : 'warn',
+        tone: workerStatusTone(status),
         href: '/workers',
       };
     }

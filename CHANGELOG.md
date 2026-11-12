@@ -656,7 +656,10 @@ may change between minor versions, and the release notes say how.
   state as a mark with its progress. Rips and a rip
   follow. So do the burn queue, a burn's page, which draws
   its disc being written outward as the worker reports, and creating a
-  burn.
+  burn. Workers and drives shows each drive with its disc drawn and what
+  it is doing now, and asks before a worker is revoked or a disc erased,
+  taking the keyboard to the question. Accounts puts the list beside the
+  form that creates one.
 - The image is built on Debian 13 (trixie), moving from Debian 12
   (bookworm), now oldstable, and every tool in it moves too: chdman 0.251
   to 0.276, which makes DVD CHDs (a DVD's ISO gets one, made with

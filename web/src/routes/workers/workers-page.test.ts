@@ -3,6 +3,7 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { axeViolations } from '$lib/testing/axe';
 
 const { default: WorkersPage } = await import('./+page.svelte');
 
@@ -61,7 +62,120 @@ function page(status: string, extra: Record<string, Reply> = {}) {
   });
 }
 
+function drive(activity: unknown = null) {
+  return {
+    id: 'd1',
+    name: 'sr0',
+    device: '/dev/sr0',
+    worker_id: 'w1',
+    worker_name: 'bench',
+    worker_status: 'online',
+    worker_last_seen_at: '2026-10-28T12:00:00Z',
+    vendor: 'PIONEER',
+    model: 'BDR-212',
+    firmware: '1.10',
+    connection: 'sata',
+    activity,
+  };
+}
+
 describe('Workers page', () => {
+  it('passes the accessibility checks with workers, drives and erasures shown', async () => {
+    server({
+      'GET /api/v1/workers?limit=200': {
+        status: 200,
+        body: { items: [worker('online')], next_cursor: null },
+      },
+      'GET /api/v1/drives': { status: 200, body: { items: [drive()] } },
+      'GET /api/v1/erasures?limit=20': {
+        status: 200,
+        body: {
+          items: [
+            {
+              id: 'e1',
+              drive_id: 'd1',
+              drive_name: 'sr0',
+              mode: 'quick',
+              state: 'refused',
+              is_open: false,
+              requested_by: 'admin',
+              created_at: '2026-10-28T12:00:00Z',
+              error_detail: 'The disc is write-once.',
+              medium_before: { profile: 'CD-R', blank: false, sessions: 1 },
+            },
+          ],
+        },
+      },
+    });
+    const { container } = render(WorkersPage);
+    await screen.findByRole('rowheader', { name: 'bench' });
+    await screen.findByText('Not erased');
+    expect(await axeViolations(container)).toEqual([]);
+  });
+
+  it('shows what a drive is doing, linked to it', async () => {
+    server({
+      'GET /api/v1/workers?limit=200': {
+        status: 200,
+        body: { items: [worker('online')], next_cursor: null },
+      },
+      'GET /api/v1/drives': {
+        status: 200,
+        body: {
+          items: [
+            drive({
+              kind: 'burn',
+              id: 'j1',
+              state: 'writing',
+              title: 'Homebrew compilation',
+              disc_number: 1,
+              progress: 0.4,
+              medium: null,
+              disc_shape: null,
+              started_at: '2026-10-28T12:00:00Z',
+            }),
+          ],
+        },
+      },
+      'GET /api/v1/erasures?limit=20': { status: 200, body: { items: [] } },
+    });
+    render(WorkersPage);
+    const link = await screen.findByRole('link', { name: 'Homebrew compilation, disc 1' });
+    expect(link.getAttribute('href')).toBe('/burns/j1');
+    expect(screen.getByText('PIONEER BDR-212, firmware 1.10')).toBeTruthy();
+  });
+
+  it('erases only once the loss is understood, taking the keyboard to the question', async () => {
+    const asked = server({
+      'GET /api/v1/workers?limit=200': {
+        status: 200,
+        body: { items: [worker('online')], next_cursor: null },
+      },
+      'GET /api/v1/drives': { status: 200, body: { items: [drive()] } },
+      'GET /api/v1/erasures?limit=20': { status: 200, body: { items: [] } },
+      'POST /api/v1/drives/d1/erasures': {
+        status: 202,
+        body: { id: 'e2', state: 'queued', is_open: true },
+      },
+    });
+    const { container } = render(WorkersPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Erase the disc in sr0…' }));
+    const heading = screen.getByRole('heading', { name: 'Erase the disc in sr0' });
+    await vi.waitFor(() => expect(document.activeElement).toBe(heading));
+    const submit = screen.getByRole('button', { name: 'Erase the disc in sr0' });
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    expect(await axeViolations(container)).toEqual([]);
+
+    await fireEvent.click(
+      screen.getByRole('checkbox', {
+        name: 'I understand everything on the disc in sr0 will be destroyed',
+      }),
+    );
+    expect((submit as HTMLButtonElement).disabled).toBe(false);
+    await fireEvent.click(submit);
+    await vi.waitFor(() => expect(asked).toContain('POST /api/v1/drives/d1/erasures'));
+  });
+
   it('lists workers in words and drains one when asked', async () => {
     const asked = page('online', {
       'POST /api/v1/workers/w1/drain': { status: 200, body: worker('draining') },
@@ -90,6 +204,9 @@ describe('Workers page', () => {
     render(WorkersPage);
     await fireEvent.click(await screen.findByRole('button', { name: 'Revoke bench…' }));
     expect(screen.getByText(/refused from its next request, for good/)).toBeTruthy();
+    await vi.waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Revoke bench' })),
+    );
     expect(asked).not.toContain('POST /api/v1/workers/w1/revoke');
     await fireEvent.click(screen.getByRole('button', { name: 'Keep bench' }));
     expect(screen.queryByText(/refused from its next request/)).toBeNull();
