@@ -5,6 +5,7 @@
   // issue will contain, already scrubbed, and says what was replaced. Nothing
   // is sent from here: "Open the issue form" opens a prefilled form in a new
   // tab, which the operator can still edit or discard.
+  import Button from './ui/Button.svelte';
   import {
     copyText,
     issueHost,
@@ -85,7 +86,7 @@
     Nothing has been sent. This is everything the issue will contain. Read it, then open the issue
     form; you can still change or discard it there.
   </p>
-  <p>
+  <p class="quiet">
     {removedSummary(draft.removed)}
     {#if draft.truncated}
       The text was very long and was cut short.
@@ -97,7 +98,7 @@
       <dt>{field.label}</dt>
       <dd>
         {#if !field.value}
-          <em>Left for you to fill in.</em>
+          <em class="quiet">Left for you to fill in.</em>
         {:else if field.id === draft.longField || field.value.includes('\n')}
           <textarea readonly rows="8" aria-label={field.label} value={field.value}></textarea>
         {:else}
@@ -115,25 +116,25 @@
   {/if}
 
   <div class="actions">
-    <button type="button" onclick={openIssue} aria-describedby="report-opens">
+    <Button variant="primary" icon="external" onclick={openIssue} aria-describedby="report-opens">
       Open the issue form on {host}
-    </button>
+    </Button>
     <span id="report-opens" class="hint">Opens in a new tab</span>
-    <button type="button" onclick={copyReport}>Copy report</button>
-    <button type="button" onclick={() => (showText = !showText)} aria-expanded={showText}>
+    <Button onclick={copyReport}>Copy report</Button>
+    <Button variant="quiet" onclick={() => (showText = !showText)} aria-expanded={showText}>
       {showText ? 'Hide text' : 'Show as text'}
-    </button>
-    <button type="button" onclick={() => (open = false)}>Close</button>
+    </Button>
+    <Button onclick={() => (open = false)}>Close</Button>
   </div>
 
   {#if showText}
-    <label>
+    <label class="markdown">
       The report as Markdown
       <textarea readonly rows="12" value={markdown}></textarea>
     </label>
   {/if}
 
-  <p role="status" aria-live="polite">{status}</p>
+  <p role="status" aria-live="polite" class="status">{status}</p>
 </dialog>
 
 <style>
@@ -141,41 +142,58 @@
     max-width: 50rem;
     width: calc(100% - 2rem);
     max-height: calc(100% - 2rem);
-    padding: 1.25rem;
+    padding: var(--space-5);
   }
-  dialog::backdrop {
-    background: rgb(0 0 0 / 0.4);
+  h2 {
+    margin: 0 0 var(--space-3);
+    font-size: var(--text-lg);
+  }
+  p {
+    max-width: 75ch;
   }
   dl {
     display: grid;
     grid-template-columns: minmax(8rem, max-content) 1fr;
-    gap: 0.5rem 1rem;
+    gap: var(--space-2) var(--space-4);
+    margin: 0 0 var(--space-4);
+    padding: var(--space-3) var(--space-4);
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
   }
   dt {
-    font-weight: 600;
+    color: var(--text-muted);
+    font-size: var(--text-sm);
   }
   dd {
     margin: 0;
     min-width: 0;
+    overflow-wrap: anywhere;
   }
   .actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.5rem;
+    gap: var(--space-2);
     align-items: center;
   }
   .hint {
-    font-size: 0.875rem;
+    font-size: var(--text-sm);
+    color: var(--text-muted);
     margin-right: auto;
   }
-  label {
-    display: block;
-    margin-top: 1rem;
+  .markdown {
+    display: grid;
+    gap: var(--space-1);
+    margin-top: var(--space-4);
   }
   textarea {
     display: block;
     width: 100%;
-    font-family: monospace;
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+  }
+  .status {
+    margin: var(--space-2) 0 0;
   }
   @media (max-width: 30rem) {
     dl {

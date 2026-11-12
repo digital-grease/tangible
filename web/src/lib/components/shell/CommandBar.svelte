@@ -222,9 +222,6 @@
     background: var(--surface);
     color: var(--text);
   }
-  .palette::backdrop {
-    background: rgb(5 8 12 / 0.45);
-  }
   .query {
     display: flex;
     align-items: center;

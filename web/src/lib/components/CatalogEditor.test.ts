@@ -3,6 +3,7 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { axeViolations } from '$lib/testing/axe';
 
 const { default: CatalogEditor } = await import('./CatalogEditor.svelte');
 
@@ -50,7 +51,13 @@ describe('CatalogEditor', () => {
   it('saves only what changed, as read', async () => {
     const sent = server(200, { ...disc, region: 'B', version: 3 });
     const onsaved = vi.fn();
-    render(CatalogEditor, { kind: 'disc', item: disc, onsaved, oncancel: vi.fn() });
+    const { container } = render(CatalogEditor, {
+      kind: 'disc',
+      item: disc,
+      onsaved,
+      oncancel: vi.fn(),
+    });
+    expect(await axeViolations(container)).toEqual([]);
     await fireEvent.input(screen.getByLabelText('Region'), { target: { value: 'B' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Save this disc' }));
     await vi.waitFor(() => expect(onsaved).toHaveBeenCalled());

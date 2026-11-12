@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  import Button from './ui/Button.svelte';
   import {
     changedFields,
     editDisc,
@@ -169,7 +170,7 @@
 
   <div role="alert">
     {#if problem}
-      <p>
+      <p class="problem">
         <strong>Not saved.</strong>
         {#if isStale(problem)}
           Somebody changed this {what} since it was shown here, so nothing was saved over their change.
@@ -183,26 +184,51 @@
     {/if}
   </div>
 
-  <button type="submit" disabled={saving}>{saving ? 'Saving…' : `Save this ${what}`}</button>
-  <button type="button" onclick={oncancel}>Close</button>
+  <div class="buttons">
+    <Button type="submit" variant="primary" disabled={saving}
+      >{saving ? 'Saving…' : `Save this ${what}`}</Button
+    >
+    <Button onclick={oncancel}>Close</Button>
+  </div>
 </form>
 
 <style>
   .editor {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.5rem 1rem;
+    gap: var(--space-3) var(--space-4);
     align-items: end;
-    border: 2px solid currentColor;
-    padding: 0.75rem;
-    margin: 0.5rem 0 1rem;
+    margin: var(--space-2) 0 var(--space-4);
+    padding: var(--space-3) var(--space-4);
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--accent);
+    border-radius: var(--radius);
   }
   label {
-    display: flex;
-    flex-direction: column;
-    font-weight: 600;
+    display: grid;
+    gap: var(--space-1);
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+  }
+  label :global(input),
+  label :global(select) {
+    color: var(--text);
+    font-size: var(--text-base);
   }
   [role='alert'] {
     flex-basis: 100%;
+  }
+  [role='alert']:empty {
+    display: none;
+  }
+  .problem {
+    margin: 0;
+    color: var(--bad);
+  }
+  .buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
   }
 </style>

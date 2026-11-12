@@ -1,18 +1,25 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
-  import { onDestroy } from 'svelte';
   // An edition's RomM export: its platform, the switch, how the export
   // stands, and, once RomM's API is connected, what RomM made of it, with a
   // link to the game's page there, and how the last scan of its platform
-  // went.
+  // went. A panel of its own under the catalog's columns.
+  import { onDestroy } from 'svelte';
+  import Button from './ui/Button.svelte';
+  import Checkbox from './ui/Checkbox.svelte';
+  import Field from './ui/Field.svelte';
+  import Panel from './ui/Panel.svelte';
+  import StatusMark from './ui/StatusMark.svelte';
   import {
     inRommLabel,
+    inRommTone,
     loadEditionRomm,
     loadRommSettings,
     platformOptionLabel,
     rommApiInUse,
     rommStateLabel,
+    rommStateTone,
     saveEditionRomm,
     scanLabel,
     type EditionRomm,
@@ -93,81 +100,116 @@
   }
 </script>
 
-<section aria-labelledby="romm-heading">
-  <h3 id="romm-heading">RomM</h3>
+<Panel title="RomM">
   {#if settings && !settings.configured}
-    <p>Configure an export root before creating game exports.</p>
+    <p class="quiet">Configure an export root before creating game exports.</p>
   {/if}
-  <form onsubmit={save}>
-    <p>
-      <label for="romm-platform">Platform</label><br />
-      <select id="romm-platform" bind:value={platform}>
-        <option value="">Not set</option>
-        {#each settings?.platforms ?? [] as option (option.slug)}
-          <option value={option.slug}>{platformOptionLabel(option)}</option>
-        {/each}
-      </select>
-    </p>
-    <p>
-      <label>
-        <input
-          type="checkbox"
-          bind:checked={exportToRomm}
-          disabled={!platform || (settings !== null && !settings.configured)}
-        />
-        Show this game in RomM
-      </label>
-      <br />
-      <small
-        >Its discs are placed in RomM's library as one game, kept in step as discs are added, and
-        taken out again if you switch this off. Only files Tangible wrote are ever changed.</small
-      >
-    </p>
+  <form class="form" onsubmit={save}>
+    <Field label="Platform">
+      {#snippet children({ id })}
+        <select {id} bind:value={platform}>
+          <option value="">Not set</option>
+          {#each settings?.platforms ?? [] as option (option.slug)}
+            <option value={option.slug}>{platformOptionLabel(option)}</option>
+          {/each}
+        </select>
+      {/snippet}
+    </Field>
+    <Checkbox
+      label="Show this game in RomM"
+      hint="Its discs are placed in RomM's library as one game, kept in step as discs are added, and taken out again if you switch this off. Only files Tangible wrote are ever changed."
+      bind:checked={exportToRomm}
+      disabled={!platform || (settings !== null && !settings.configured)}
+    />
     <div role="alert">
-      {#if problem}<p><strong>Not saved.</strong> {problem.detail}</p>{/if}
+      {#if problem}<p class="problem"><strong>Not saved.</strong> {problem.detail}</p>{/if}
     </div>
-    <button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+    <div>
+      <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
+    </div>
   </form>
   {#if settings?.platforms.some((option) => option.slug === platform && option.known_to_romm === false)}
-    <p role="note">
+    <p role="note" class="note">
       The connected RomM does not know this platform, so it would not recognise the folder.
     </p>
   {/if}
   {#if romm}
-    <div aria-live="polite">
+    <div aria-live="polite" class="status">
       <p>
-        <strong>{rommStateLabel(romm)}</strong>
+        <StatusMark tone={rommStateTone(romm)} label={rommStateLabel(romm)} />
         {#if romm.folder && romm.state === 'current'}
-          as <code>{romm.folder}</code>, {romm.file_count} file{romm.file_count === 1 ? '' : 's'}
+          <span
+            >as <code>{romm.folder}</code>, {romm.file_count} file{romm.file_count === 1
+              ? ''
+              : 's'}</span
+          >
         {/if}
-        {#if romm.detail}<br />{romm.detail}{/if}
+        {#if romm.detail}<span class="detail">{romm.detail}</span>{/if}
       </p>
       {#if rommApiInUse(settings)}
         {@const seen = inRommLabel(romm)}
         {#if seen && romm.in_romm}
           <p>
-            <strong>{seen}</strong>
+            <StatusMark tone={inRommTone(romm)} label={seen} />
             {#if romm.in_romm.url && romm.in_romm.state !== 'unseen'}
               <a href={romm.in_romm.url} target="_blank" rel="noopener noreferrer"
                 >Open it in RomM</a
               >
             {/if}
-            {#if romm.in_romm.detail}<br />{romm.in_romm.detail}{/if}
-            <br /><small>Asked {when(romm.in_romm.checked_at)}</small>
+            {#if romm.in_romm.detail}<span class="detail">{romm.in_romm.detail}</span>{/if}
+            <span class="detail">Asked {when(romm.in_romm.checked_at)}</span>
           </p>
         {/if}
         {#if romm.scan_owed && romm.export}
           <p>Waiting for RomM to scan its platform's folder.</p>
         {/if}
         {#if romm.last_scan}
-          <p>
-            <small
-              >Last scan of {romm.last_scan.platforms.join(', ')}: {scanLabel(romm.last_scan)},
-              asked {when(romm.last_scan.requested_at)}</small
-            >
+          <p class="detail">
+            Last scan of {romm.last_scan.platforms.join(', ')}: {scanLabel(romm.last_scan)}, asked {when(
+              romm.last_scan.requested_at,
+            )}
           </p>
         {/if}
       {/if}
     </div>
   {/if}
-</section>
+</Panel>
+
+<style>
+  .form {
+    display: grid;
+    gap: var(--space-3);
+    justify-items: start;
+    max-width: 40rem;
+  }
+  .problem {
+    margin: 0;
+    color: var(--bad);
+  }
+  .note {
+    margin: var(--space-3) 0 0;
+    color: var(--warn);
+  }
+  .status {
+    display: grid;
+    gap: var(--space-2);
+    margin-top: var(--space-4);
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--line-2);
+  }
+  .status p {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-2);
+    align-items: baseline;
+    margin: 0;
+  }
+  .detail {
+    flex-basis: 100%;
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+  }
+  p.detail {
+    display: block;
+  }
+</style>

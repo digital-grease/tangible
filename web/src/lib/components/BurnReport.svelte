@@ -15,6 +15,8 @@
   } from '$lib/report';
   import type { Problem } from '$lib/session';
   import ErrorPanel from './ErrorPanel.svelte';
+  import Button from './ui/Button.svelte';
+  import Panel from './ui/Panel.svelte';
   import ReportPreview from './ReportPreview.svelte';
 
   let {
@@ -49,36 +51,37 @@
 </script>
 
 {#if settings?.enabled && settings.issues_url}
-  <section aria-labelledby="report-heading-{attempt.id}" class="report">
-    <h2 id="report-heading-{attempt.id}">Tell the developers</h2>
-    <p>
+  <Panel title="Tell the developers">
+    <p class="lede">
       Tangible can fill in an issue for attempt {attempt.attempt_number}. It removes paths, file
       names, serial numbers and addresses, and shows you everything before anything leaves this
       page.
     </p>
     <div class="buttons">
       {#if options.problem}
-        <button type="button" onclick={() => prepare('problem')} disabled={preparing !== null}>
+        <Button onclick={() => prepare('problem')} disabled={preparing !== null}>
           {preparing === 'problem' ? 'Preparing…' : 'Report a problem with this burn…'}
-        </button>
+        </Button>
       {/if}
       {#if options.worked}
-        <button type="button" onclick={() => prepare('worked')} disabled={preparing !== null}>
+        <Button onclick={() => prepare('worked')} disabled={preparing !== null}>
           {preparing === 'worked' ? 'Preparing…' : 'Report this drive and disc as working…'}
-        </button>
+        </Button>
       {/if}
     </div>
     {#if problem}
-      <ErrorPanel
-        {problem}
-        area="other"
-        endpoint="GET /api/v1/burn-attempts/{'{id}'}/report"
-        heading="The report could not be prepared"
-        level={3}
-        refusal
-      />
+      <div class="refusal">
+        <ErrorPanel
+          {problem}
+          area="other"
+          endpoint="GET /api/v1/burn-attempts/{'{id}'}/report"
+          heading="The report could not be prepared"
+          level={3}
+          refusal
+        />
+      </div>
     {/if}
-  </section>
+  </Panel>
 
   {#if draft}
     <ReportPreview {draft} issuesUrl={settings.issues_url} {heading} bind:open />
@@ -86,17 +89,16 @@
 {/if}
 
 <style>
-  .report {
-    border-top: 1px solid currentColor;
-    margin-top: 1.5rem;
-    padding-top: 0.5rem;
+  .lede {
+    margin: 0 0 var(--space-3);
+    max-width: 75ch;
   }
   .buttons {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.5rem;
+    gap: var(--space-2);
   }
-  button {
-    padding: 0.5rem 1rem;
+  .refusal {
+    margin-top: var(--space-3);
   }
 </style>

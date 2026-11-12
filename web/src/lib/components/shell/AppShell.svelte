@@ -19,6 +19,7 @@
   import { THEME_CHOICES, isThemeChoice, themeLabel, type ThemeChoice } from '$lib/theme';
   import CommandBar from './CommandBar.svelte';
   import DriveBay from './DriveBay.svelte';
+  import Wordmark from './Wordmark.svelte';
 
   let {
     session,
@@ -84,12 +85,7 @@
 <div class="app" class:drawer-open={drawerOpen}>
   <aside class="sidebar" id="sidebar">
     <a class="mark" href="/" aria-label="Tangible, overview">
-      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-        <circle cx="12" cy="12" r="10.5" class="mark-disc" />
-        <circle cx="12" cy="12" r="6.5" class="mark-band" />
-        <circle cx="12" cy="12" r="2" class="mark-hole" />
-      </svg>
-      <span class="label wordmark">TANGIBLE</span>
+      <Wordmark hole="var(--surface)" />
     </a>
 
     <nav aria-label="Primary">
@@ -229,23 +225,6 @@
     padding: var(--space-1) var(--space-2) var(--space-2);
     color: var(--text);
     text-decoration: none;
-  }
-  .wordmark {
-    font-family: var(--font-mono);
-    font-weight: 700;
-    font-size: var(--text-sm);
-    letter-spacing: 0.18em;
-  }
-  .mark-disc {
-    fill: var(--cd);
-  }
-  .mark-band {
-    fill: none;
-    stroke: color-mix(in srgb, var(--cd) 55%, #23252c);
-    stroke-width: 3.5;
-  }
-  .mark-hole {
-    fill: var(--surface);
   }
   nav {
     display: grid;
@@ -406,6 +385,9 @@
       align-items: center;
       padding-inline: var(--space-1);
     }
+    .mark {
+      --wordmark-name: none;
+    }
     .sidebar .label {
       position: absolute;
       width: 1px;
@@ -469,6 +451,9 @@
     .drawer-open .sidebar {
       transform: none;
       visibility: visible;
+    }
+    .mark {
+      --wordmark-name: inline;
     }
     .sidebar .label {
       position: static;

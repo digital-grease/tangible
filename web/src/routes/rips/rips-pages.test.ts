@@ -148,10 +148,11 @@ describe('Rips page, on a drive that can decrypt', () => {
 
   it('asks first, and rips without decryption unless the box is ticked', async () => {
     const asked = decryptingServer();
-    render(RipsPage);
+    const { container } = render(RipsPage);
     await fireEvent.click(await screen.findByRole('button', { name: 'Rip the disc in sr0' }));
     expect(await screen.findByRole('heading', { name: 'Rip the disc in sr0' })).toBeTruthy();
     expect(screen.getByText(/is yours to determine/)).toBeTruthy();
+    expect(await axeViolations(container)).toEqual([]);
     // The choice of original appears only once decryption is asked for.
     expect(screen.queryByRole('group', { name: 'What to keep' })).toBeNull();
     await fireEvent.click(screen.getByRole('button', { name: 'Start ripping' }));

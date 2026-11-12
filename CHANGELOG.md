@@ -653,10 +653,10 @@ may change between minor versions, and the release notes say how.
   integrity, identification, derivatives and deletion each say their state
   with a mark, and deleting asks in place. So do
   the Catalog, as three columns from title to disc set with the set's discs
-  below, and Physical copies, the discs to destroy first. Imports puts
+  below and an edition's RomM export in a panel of its own, and Physical copies, the discs to destroy first. Imports puts
   each source in its own panel above the queue, which shows each import's
   state as a mark with its progress. Rips and a rip
-  follow. So do the burn queue, a burn's page, which draws
+  follow, with the dialog that starts a rip. So do the burn queue, a burn's page, which draws
   its disc being written outward as the worker reports, and creating a
   burn. Workers and drives shows each drive with its disc drawn and what
   it is doing now, and asks before a worker is revoked or a disc erased,

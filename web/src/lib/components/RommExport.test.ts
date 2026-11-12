@@ -4,6 +4,7 @@
 import { render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { EditionRomm, RommSettings } from '$lib/romm';
+import { axeViolations } from '$lib/testing/axe';
 
 const { default: RommExport } = await import('./RommExport.svelte');
 
@@ -78,8 +79,9 @@ const edition = (overrides: Partial<EditionRomm> = {}): EditionRomm => ({
 describe('the RomM section', () => {
   it('says RomM has the game, links to its page, and how the last scan went', async () => {
     server(settings(), edition());
-    render(RommExport, { editionId: 'e1' });
+    const { container } = render(RommExport, { editionId: 'e1' });
     expect(await screen.findByText('RomM has it')).toBeTruthy();
+    expect(await axeViolations(container)).toEqual([]);
     const link = screen.getByRole('link', { name: 'Open it in RomM' });
     expect(link.getAttribute('href')).toBe('https://romm.example.net/rom/41');
     expect(link.getAttribute('rel')).toBe('noopener noreferrer');

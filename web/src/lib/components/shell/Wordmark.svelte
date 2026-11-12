@@ -1,9 +1,10 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
-  // Tangible's mark and name, as the shell's sidebar draws them, for the
-  // pages outside the shell: signing in and setting up. The drawing is
-  // decorative; the name is the words.
+  // Tangible's mark and name: the shell's sidebar, and the pages outside the
+  // shell (signing in, setting up). The drawing is decorative; the name is
+  // the words. A container hides the name by setting `--wordmark-name:
+  // none`, as the sidebar does when it shows icons only.
   let {
     size = 22,
     hole = 'var(--bg)',
@@ -32,6 +33,7 @@
     color: var(--text);
   }
   .name {
+    display: var(--wordmark-name, inline);
     font-family: var(--font-mono);
     font-weight: 700;
     font-size: var(--text-sm);

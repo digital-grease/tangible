@@ -7,6 +7,8 @@ import {
   platformOptionLabel,
   rommApiInUse,
   rommStateLabel,
+  rommStateTone,
+  inRommTone,
   saveEditionRomm,
   scanLabel,
   type EditionRomm,
@@ -39,6 +41,24 @@ describe('RomM export status', () => {
     expect(rommStateLabel(romm({ state: 'blocked' }))).toBe('Not exported');
     expect(rommStateLabel(romm({ state: 'failed' }))).toBe('Export failed');
     expect(rommStateLabel(romm({ state: 'removed', export: false }))).toBe('Not in RomM');
+  });
+
+  it('gives each state a tone beside its words', () => {
+    expect(rommStateTone(romm({ export: false }))).toBe('idle');
+    expect(rommStateTone(romm({}))).toBe('busy');
+    expect(rommStateTone(romm({ state: 'current' }))).toBe('ok');
+    expect(rommStateTone(romm({ state: 'current', export: false }))).toBe('busy');
+    expect(rommStateTone(romm({ state: 'blocked' }))).toBe('warn');
+    expect(rommStateTone(romm({ state: 'failed' }))).toBe('bad');
+  });
+
+  it('gives what RomM says a tone, a game taken out and missing being as expected', () => {
+    const link = (state: string) => ({ state }) as EditionRomm['in_romm'];
+    expect(inRommTone(romm({ state: 'current', in_romm: link('linked') }))).toBe('ok');
+    expect(inRommTone(romm({ state: 'removed', in_romm: link('linked') }))).toBe('warn');
+    expect(inRommTone(romm({ state: 'removed', in_romm: link('missing') }))).toBe('ok');
+    expect(inRommTone(romm({ state: 'current', in_romm: link('missing') }))).toBe('warn');
+    expect(inRommTone(romm({ state: 'current', in_romm: link('unseen') }))).toBe('idle');
   });
 
   it('saves the platform and the switch together', async () => {

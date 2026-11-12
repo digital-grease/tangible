@@ -6,6 +6,8 @@
   // Decryption is off unless the box is ticked; ticking it shows the choice
   // of original. A CD is read with redumper unless cdrdao is chosen. The
   // server decides whether the rip may go ahead; this only asks.
+  import Button from './ui/Button.svelte';
+  import Callout from './ui/Callout.svelte';
   import { ripOptions, type CdEngineChoice, type KeepChoice, type RipRequest } from '$lib/rips';
   import type { DriveView } from '$lib/workers';
 
@@ -88,11 +90,13 @@
         <input type="checkbox" bind:checked={decrypt} aria-describedby="rip-dialog-notice" />
         Decrypt an encrypted disc
       </label>
-      <p id="rip-dialog-notice" class="notice">
-        Whether ripping an encrypted disc is lawful where you are is yours to determine. Decryption
-        uses only the libraries built into this worker's image. No key is kept, logged or sent
-        anywhere. A disc that turns out not to be encrypted is ripped as it is.
-      </p>
+      <Callout tone="warn">
+        <p id="rip-dialog-notice">
+          Whether ripping an encrypted disc is lawful where you are is yours to determine.
+          Decryption uses only the libraries built into this worker's image. No key is kept, logged
+          or sent anywhere. A disc that turns out not to be encrypted is ripped as it is.
+        </p>
+      </Callout>
 
       {#if decrypt}
         <fieldset>
@@ -118,8 +122,10 @@
     {/if}
 
     <div class="actions">
-      <button type="submit" disabled={asking}>{asking ? 'Asking…' : 'Start ripping'}</button>
-      <button type="button" onclick={() => (open = false)}>Cancel</button>
+      <Button type="submit" variant="primary" icon="rip" disabled={asking}
+        >{asking ? 'Asking…' : 'Start ripping'}</Button
+      >
+      <Button onclick={() => (open = false)}>Cancel</Button>
     </div>
   </form>
 </dialog>
@@ -129,34 +135,42 @@
     max-width: 40rem;
     width: calc(100% - 2rem);
     max-height: calc(100% - 2rem);
-    padding: 1.25rem;
+    padding: var(--space-5);
   }
-  dialog::backdrop {
-    background: rgb(0 0 0 / 0.4);
+  h2 {
+    margin: 0 0 var(--space-3);
+    font-size: var(--text-lg);
+  }
+  form > p {
+    max-width: 75ch;
   }
   .choice {
     display: flex;
-    gap: 0.5rem;
+    gap: var(--space-2);
     align-items: baseline;
-    margin-top: 0.75rem;
-  }
-  .notice {
-    border: 1px solid currentColor;
-    padding: 0.5rem 0.75rem;
+    margin-top: var(--space-3);
+    font-weight: var(--weight-medium);
+    cursor: pointer;
   }
   .hint {
-    margin: 0.25rem 0 0 1.75rem;
-    font-size: 0.9em;
+    margin: var(--space-1) 0 0 1.5rem;
+    font-size: var(--text-sm);
+    color: var(--text-muted);
   }
   fieldset {
-    margin-top: 1rem;
+    margin: var(--space-4) 0 0;
+    padding: var(--space-1) var(--space-4) var(--space-4);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+  }
+  legend {
+    padding: 0 var(--space-1);
+    font-weight: var(--weight-strong);
   }
   .actions {
     display: flex;
-    gap: 0.75rem;
-    margin-top: 1.25rem;
-  }
-  button {
-    padding: 0.5rem 1rem;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-top: var(--space-5);
   }
 </style>

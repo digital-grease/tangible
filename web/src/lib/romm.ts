@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import type { components } from './api-types';
+import type { Tone } from './components/ui/tone';
 import { apiCall, apiFetch, type Result } from './session';
 
 export type RommSettings = components['schemas']['RommSettings'];
@@ -59,6 +60,40 @@ export function rommStateLabel(romm: EditionRomm): string {
  * What RomM made of an edition's export, in words, once RomM's API has
  * looked it up; `null` before then.
  */
+/**
+ * Where an export stands, as a tone beside rommStateLabel's words: in RomM
+ * is fine, a failure a problem, a game the exporter will not write a
+ * warning, and anything on its way under way.
+ */
+export function rommStateTone(romm: EditionRomm): Tone {
+  if (!romm.export && (!romm.state || romm.state === 'removed')) return 'idle';
+  switch (romm.state) {
+    case 'current':
+      return romm.export ? 'ok' : 'busy';
+    case 'failed':
+      return 'bad';
+    case 'blocked':
+      return 'warn';
+    default:
+      return 'busy';
+  }
+}
+
+/** What RomM says of a game, as a tone beside inRommLabel's words. */
+export function inRommTone(romm: EditionRomm): Tone {
+  const takenOut = romm.state === 'removed';
+  switch (romm.in_romm?.state) {
+    case 'linked':
+      return takenOut ? 'warn' : 'ok';
+    case 'missing':
+      return takenOut ? 'ok' : 'warn';
+    case 'differs':
+      return 'warn';
+    default:
+      return 'idle';
+  }
+}
+
 export function inRommLabel(romm: EditionRomm): string | null {
   const link = romm.in_romm;
   if (!link) return null;
