@@ -6,6 +6,7 @@
   // UX.md 5's order. Its deletion, when asked for, comes first, because
   // everything below reads differently; otherwise it is the last thing on
   // the page.
+  import { shortDigest } from '$lib/ids';
   import Deletion from '$lib/components/Deletion.svelte';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import FormatReport from '$lib/components/FormatReport.svelte';
@@ -207,7 +208,7 @@
                     {from.files}
                     {from.files === 1 ? 'file' : 'files'}. The archive itself is not kept.
                     <br /><small
-                      >SHA-256 <code title={from.sha256}>{from.sha256.slice(0, 12)}…</code></small
+                      >SHA-256 <code title={from.sha256}>{shortDigest(from.sha256)}</code></small
                     >
                     {#each from.notes as note (note)}
                       <br /><small>{note}</small>
@@ -323,7 +324,7 @@
                     <td>{component.role.replace(/_/g, ' ')}</td>
                     <td class="num">{formatBytes(component.length_bytes)}</td>
                     <td>
-                      <code title={component.sha256}>{component.sha256.slice(0, 12)}…</code>
+                      <code title={component.sha256}>{shortDigest(component.sha256)}</code>
                     </td>
                     <td>
                       {#if deleted}

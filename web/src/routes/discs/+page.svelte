@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  import { shortId } from '$lib/ids';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import EmptyState from '$lib/components/ui/EmptyState.svelte';
@@ -51,7 +52,7 @@
       <ul>
         {#each attention as copy (copy.id)}
           <li>
-            <a href={`/discs/${copy.id}`}>{copy.label ?? copy.id.slice(0, 8)}</a>:
+            <a href={`/discs/${copy.id}`}>{copy.label ?? shortId(copy.id)}</a>:
             {conditionLabel(copy.status)}
           </li>
         {/each}
@@ -102,7 +103,7 @@
           {#each view.data.items as copy (copy.id)}
             <tr>
               <th scope="row">
-                <a href={`/discs/${copy.id}`}>{copy.label ?? copy.id.slice(0, 8)}</a>
+                <a href={`/discs/${copy.id}`}>{copy.label ?? shortId(copy.id)}</a>
               </th>
               <td>
                 <StatusMark

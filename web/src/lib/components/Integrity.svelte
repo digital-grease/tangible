@@ -4,6 +4,7 @@
   // An artifact's integrity: what the last check of all its stored files
   // found, and "Verify now", which reads them back against their digests
   // and follows the check to its end. Nothing found is repaired.
+  import { shortDigest } from '$lib/ids';
   import { onDestroy } from 'svelte';
   import {
     FOLLOW_EVERY_MS,
@@ -133,7 +134,7 @@
           {#each check.problems as problem, index (index)}
             <li>
               {problemKindLabel(problem.kind)}{#if problem.sha256}:
-                <code title={problem.sha256}>{problem.sha256.slice(0, 12)}…</code>{/if}
+                <code title={problem.sha256}>{shortDigest(problem.sha256)}</code>{/if}
               <br /><small>{problem.detail}</small>
             </li>
           {/each}

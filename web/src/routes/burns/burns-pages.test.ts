@@ -116,6 +116,23 @@ describe('Burn queue', () => {
     expect(await axeViolations(container)).toEqual([]);
   });
 
+  it('tells apart two burns queued in the same minute', async () => {
+    // UUIDv7s made a second apart: their first eight characters are the
+    // same timestamp bits, which once named both "Burn 0193a5b2".
+    const first = '0193a5b2-7c10-7d4e-8f21-3a9b4c5d6e7f';
+    const second = '0193a5b2-7fe0-7a11-9b02-cc0de1f2a3b4';
+    server({
+      '/api/v1/burn-jobs': {
+        status: 200,
+        body: { items: [job({ id: first }), job({ id: second })], next_cursor: null },
+      },
+    });
+    render(QueuePage);
+    const table = await screen.findByRole('table', { name: 'Burn jobs, newest first' });
+    expect(within(table).getByText('4c5d6e7f').getAttribute('title')).toBe(first);
+    expect(within(table).getByText('e1f2a3b4').getAttribute('title')).toBe(second);
+  });
+
   it('says how to start when there are none', async () => {
     server({ '/api/v1/burn-jobs': { status: 200, body: { items: [], next_cursor: null } } });
     render(QueuePage);

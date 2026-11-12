@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  import { shortId } from '$lib/ids';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import Disc from '$lib/components/ui/Disc.svelte';
@@ -159,7 +160,7 @@
 </script>
 
 <svelte:head>
-  <title>{job ? `Burn ${job.id.slice(0, 8)} — Tangible` : 'Burn — Tangible'}</title>
+  <title>{job ? `Burn ${shortId(job.id)} — Tangible` : 'Burn — Tangible'}</title>
 </svelte:head>
 
 <div aria-busy={view.kind === 'loading'}>
@@ -178,8 +179,8 @@
     {@const drawing = burnDrawing(job)}
     {@const percent = job.progress ? progressPercent(job.progress.fraction) : null}
     <PageHeader
-      title={`Burn ${job.id.slice(0, 8)}`}
-      crumbs={[{ label: 'Burn queue', href: '/burns' }, { label: job.id.slice(0, 8) }]}
+      title={`Burn ${shortId(job.id)}`}
+      crumbs={[{ label: 'Burn queue', href: '/burns' }, { label: shortId(job.id) }]}
     />
 
     <!-- The live region is this section alone. Progress changes every few
@@ -376,6 +377,10 @@
 
         <Panel title="Details">
           <dl class="facts">
+            <div>
+              <dt>Identifier</dt>
+              <dd><code>{job.id}</code></dd>
+            </div>
             <div>
               <dt>Artifact</dt>
               <dd><a href={`/library/${job.artifact_id}`}><code>{job.artifact_id}</code></a></dd>

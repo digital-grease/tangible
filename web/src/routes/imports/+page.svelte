@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  import { shortId } from '$lib/ids';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
@@ -512,7 +513,7 @@
             {#each view.data.items as job (job.id)}
               {@const fraction = transferFraction(job)}
               <tr>
-                <th scope="row">{job.source_filename ?? job.id.slice(0, 8)}</th>
+                <th scope="row">{job.source_filename ?? shortId(job.id)}</th>
                 <td>
                   <span>{sourceLabel(job.source_kind)}</span>
                   {#if (job.source_kind === 'http_url' || job.source_kind === 's3_object' || clientOfSource(job.source_kind)) && job.source_reference}

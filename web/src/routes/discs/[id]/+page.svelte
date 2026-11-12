@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  import { shortId } from '$lib/ids';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
@@ -126,7 +127,7 @@
       level={1}
     />
   {:else if copy}
-    {@const name = copy.label ?? `Disc ${copy.id.slice(0, 8)}`}
+    {@const name = copy.label ?? `Disc ${shortId(copy.id)}`}
     <PageHeader
       title={name}
       crumbs={[{ label: 'Physical copies', href: '/discs' }, { label: name }]}

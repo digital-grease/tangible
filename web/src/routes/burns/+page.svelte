@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  import { shortId } from '$lib/ids';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import EmptyState from '$lib/components/ui/EmptyState.svelte';
@@ -114,7 +115,7 @@
         <ul>
           {#each waiting as job (job.id)}
             <li>
-              <a href={`/burns/${job.id}`}>Insert a disc for burn {job.id.slice(0, 8)}</a>
+              <a href={`/burns/${job.id}`}>Insert a disc for burn {shortId(job.id)}</a>
               {#if job.requested_media_profile}
                 <span class="quiet">: {job.requested_media_profile}</span>
               {/if}
@@ -143,7 +144,8 @@
           {#each view.data.items as job (job.id)}
             {@const percent = job.progress ? progressPercent(job.progress.fraction) : null}
             <tr>
-              <th scope="row"><a href={`/burns/${job.id}`}><code>{job.id.slice(0, 8)}</code></a></th
+              <th scope="row"
+                ><a href={`/burns/${job.id}`}><code title={job.id}>{shortId(job.id)}</code></a></th
               >
               <td>
                 <StatusMark tone={jobStateTone(job.state)} label={jobStateLabel(job.state)} pill />
@@ -159,7 +161,7 @@
                     {#if percent !== null}
                       <Progress
                         value={percent / 100}
-                        label={`Burn ${job.id.slice(0, 8)}: ${stageLabel(job.progress.stage)}`}
+                        label={`Burn ${shortId(job.id)}: ${stageLabel(job.progress.stage)}`}
                         tone="laser"
                       />
                     {/if}

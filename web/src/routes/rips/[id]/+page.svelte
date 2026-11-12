@@ -4,6 +4,7 @@
   // One rip: what the drive held, how far reading has got, what the worker
   // said, and where the result went. Withdrawing is offered while the disc
   // is being read or sent; reading changes nothing on it.
+  import { shortDigest } from '$lib/ids';
   import { onDestroy, onMount } from 'svelte';
   import { names, watch } from '$lib/events';
   import { page } from '$app/state';
@@ -254,7 +255,7 @@
                 <tr>
                   <th scope="row"><code>{file.name}</code></th>
                   <td class="num">{formatBytes(file.bytes)}</td>
-                  <td><code title={file.sha256}>{file.sha256.slice(0, 12)}…</code></td>
+                  <td><code title={file.sha256}>{shortDigest(file.sha256)}</code></td>
                 </tr>
               {/each}
             </tbody>

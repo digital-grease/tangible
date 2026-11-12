@@ -705,6 +705,11 @@ may change between minor versions, and the release notes say how.
 
 ### Fixed
 
+- Burns and discs without a label were named in the web UI by the first
+  eight characters of their identifier, which in a UUIDv7 are the time it
+  was made: two burns queued within a minute or so had the same name. They
+  are named by the identifier's last eight characters now, which are
+  random, and a burn's page lists its whole identifier.
 - The web UI's smallest font files were built into its stylesheet as
   `data:` URIs, which its Content Security Policy refuses, so the
   characters they cover fell back to a system font. Assets are never
