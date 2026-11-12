@@ -247,6 +247,11 @@ time {
   font-variant-numeric: tabular-nums;
 }
 
+/* Words that matter less than those around them: a hint, "Never", a count. */
+.quiet {
+  color: var(--text-muted);
+}
+
 /* Shown to screen readers only. */
 .visually-hidden {
   position: absolute;

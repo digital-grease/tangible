@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  import Callout from '$lib/components/ui/Callout.svelte';
   import { shortId } from '$lib/ids';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import Button from '$lib/components/ui/Button.svelte';
@@ -38,13 +39,11 @@
 <div aria-live="polite" aria-busy={view.kind === 'loading'}>
   {#if attention.length > 0}
     <!-- The line on this page that needs somebody to go and do something. -->
-    <section class="callout" aria-labelledby="attention-heading">
-      <h2 id="attention-heading">
-        <StatusMark
-          tone="bad"
-          label={`${attention.length} ${attention.length === 1 ? 'disc should be destroyed' : 'discs should be destroyed'}`}
-        />
-      </h2>
+    <Callout
+      tone="bad"
+      marked
+      title={`${attention.length} ${attention.length === 1 ? 'disc should be destroyed' : 'discs should be destroyed'}`}
+    >
       <p>
         These do not hold what was intended, or are no longer trusted to. Destroy them rather than
         returning them to a shelf.
@@ -57,7 +56,7 @@
           </li>
         {/each}
       </ul>
-    </section>
+    </Callout>
   {/if}
 
   <div class="filter">
@@ -133,25 +132,6 @@
 </div>
 
 <style>
-  .callout {
-    padding: var(--space-3) var(--space-4);
-    margin-bottom: var(--space-5);
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-left: 4px solid var(--bad);
-    border-radius: var(--radius);
-  }
-  .callout h2 {
-    margin: 0 0 var(--space-2);
-    font-size: var(--text-md);
-  }
-  .callout p {
-    margin: 0 0 var(--space-2);
-  }
-  .callout ul {
-    margin: 0;
-    padding-left: 1.25rem;
-  }
   .filter {
     display: flex;
     gap: var(--space-2);
@@ -161,8 +141,5 @@
   .filter label {
     color: var(--text-muted);
     font-size: var(--text-sm);
-  }
-  .quiet {
-    color: var(--text-muted);
   }
 </style>

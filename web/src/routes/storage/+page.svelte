@@ -6,6 +6,7 @@
   // collection plan. Nothing on this page repairs or removes a stored file;
   // the server cannot do either. In the new design (docs/plans/ui-overhaul.md,
   // U8): a panel for the scrub, one for the checks, one for the plan.
+  import Callout from '$lib/components/ui/Callout.svelte';
   import { onDestroy, onMount } from 'svelte';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import Button from '$lib/components/ui/Button.svelte';
@@ -340,13 +341,13 @@
       {#if plan}
         <div class="plan">
           {#if !plan.certain}
-            <div class="callout warn">
+            <Callout tone="warn">
               <StatusMark tone="warn" label="Uncertain." />
               <p>
                 {plan.manifests_unreadable} manifest(s) and {plan.checkpoints_unreadable} import checkpoint(s)
                 could not be read, and any of them may name a file listed here. The server log says which.
               </p>
-            </div>
+            </Callout>
           {/if}
           <dl class="facts">
             <dt>Stored</dt>
@@ -425,9 +426,6 @@
   .status.shown {
     margin-bottom: var(--space-4);
   }
-  .quiet {
-    color: var(--text-muted);
-  }
   .small {
     font-size: var(--text-xs);
   }
@@ -501,17 +499,6 @@
     display: grid;
     gap: var(--space-4);
     margin-top: var(--space-4);
-  }
-  .callout {
-    padding: var(--space-3) var(--space-4);
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-left: 4px solid var(--warn);
-    border-radius: var(--radius);
-    max-width: 75ch;
-  }
-  .callout p {
-    margin: var(--space-1) 0 0;
   }
   .facts {
     display: grid;

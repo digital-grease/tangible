@@ -363,7 +363,4 @@
   .small {
     font-size: var(--text-sm);
   }
-  .quiet {
-    color: var(--text-muted);
-  }
 </style>

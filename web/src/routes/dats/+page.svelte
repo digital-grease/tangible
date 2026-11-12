@@ -6,6 +6,7 @@
   // removing one. Tangible never downloads a DAT, and a match renames
   // nothing. In the new design (docs/plans/ui-overhaul.md, U8); removing asks
   // first, under the list, and takes the keyboard to the question.
+  import Confirm from '$lib/components/ui/Confirm.svelte';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import EmptyState from '$lib/components/ui/EmptyState.svelte';
@@ -27,7 +28,7 @@
   } from '$lib/identification';
   import { formatBytes } from '$lib/library';
   import { sessionRole, type Problem } from '$lib/session';
-  import { onMount, tick } from 'svelte';
+  import { onMount } from 'svelte';
 
   type View =
     { kind: 'loading' } | { kind: 'ready'; items: Dat[] } | { kind: 'error'; problem: Problem };
@@ -44,16 +45,13 @@
 
   const administrator = sessionRole() === 'administrator';
 
-  let removeHeading = $state<HTMLElement | null>(null);
   const removing = $derived(
     view.kind === 'ready' ? (view.items.find((dat) => dat.id === confirmingRemove) ?? null) : null,
   );
 
-  async function startRemoving(dat: Dat) {
+  function startRemoving(dat: Dat) {
     confirmingRemove = dat.id;
     removeProblem = null;
-    await tick();
-    removeHeading?.focus();
   }
 
   async function refresh() {
@@ -250,20 +248,22 @@
 
       {#if administrator && removing}
         {@const dat = removing}
-        <div class="confirm" role="group" aria-labelledby="remove-heading">
-          <h3 id="remove-heading" tabindex="-1" bind:this={removeHeading}>Remove {dat.name}?</h3>
-          <p>
-            Its games and the matches it made are deleted. Nothing in the library is touched, and
-            loading it again restores them.
-          </p>
-          {#if removeProblem}
-            <ErrorPanel problem={removeProblem} area="library" refusal />
-          {/if}
-          <div class="buttons">
-            <Button variant="danger" onclick={() => remove(dat)}>Yes, remove {dat.name}</Button>
-            <Button onclick={() => (confirmingRemove = null)}>Keep it</Button>
-          </div>
-        </div>
+        {#key dat.id}
+          <Confirm title={`Remove ${dat.name}?`}>
+            <p>
+              Its games and the matches it made are deleted. Nothing in the library is touched, and
+              loading it again restores them.
+            </p>
+            {#if removeProblem}
+              <ErrorPanel problem={removeProblem} area="library" refusal />
+            {/if}
+
+            {#snippet actions()}
+              <Button variant="danger" onclick={() => remove(dat)}>Yes, remove {dat.name}</Button>
+              <Button onclick={() => (confirmingRemove = null)}>Keep it</Button>
+            {/snippet}
+          </Confirm>
+        {/key}
       {/if}
     </Panel>
   </div>
@@ -273,9 +273,6 @@
   .stack {
     display: grid;
     gap: var(--space-5);
-  }
-  .quiet {
-    color: var(--text-muted);
   }
   .small {
     font-size: var(--text-xs);
@@ -318,26 +315,5 @@
   }
   .refusal {
     margin-top: var(--space-4);
-  }
-  .confirm {
-    display: grid;
-    gap: var(--space-3);
-    padding: var(--space-4);
-    border-top: 1px solid var(--line);
-    border-left: 4px solid var(--bad);
-    background: color-mix(in srgb, var(--bad) 6%, var(--surface));
-  }
-  .confirm h3 {
-    margin: 0;
-    font-size: var(--text-md);
-  }
-  .confirm p {
-    margin: 0;
-    max-width: 75ch;
-  }
-  .buttons {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
   }
 </style>

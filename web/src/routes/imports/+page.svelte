@@ -661,7 +661,4 @@
   .padded {
     padding: var(--space-3) var(--space-4);
   }
-  .quiet {
-    color: var(--text-muted);
-  }
 </style>

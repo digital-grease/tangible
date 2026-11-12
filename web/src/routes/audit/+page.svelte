@@ -242,9 +242,6 @@
   .submit {
     padding-top: calc(var(--text-sm) * 1.5 + var(--space-1));
   }
-  .quiet {
-    color: var(--text-muted);
-  }
   .padded {
     margin: 0;
     padding: var(--space-3) var(--space-4);

@@ -6,6 +6,7 @@
   // reports with what it is doing now and a drawing of the disc in it, the
   // recent erasures, and a form that issues an enrollment token. Revoking a
   // worker and erasing a disc each ask first, in words that say what happens.
+  import Confirm from '$lib/components/ui/Confirm.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import Disc from '$lib/components/ui/Disc.svelte';
   import EmptyState from '$lib/components/ui/EmptyState.svelte';
@@ -44,7 +45,7 @@
     type WorkerAction,
     type WorkerView,
   } from '$lib/workers';
-  import { onDestroy, onMount, tick } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
 
   type Load<T> =
     { kind: 'loading' } | { kind: 'ready'; data: T } | { kind: 'error'; problem: Problem };
@@ -57,7 +58,6 @@
   let changing = $state<string | null>(null);
   let revoking = $state<WorkerView | null>(null);
   let workerProblem = $state<Problem | null>(null);
-  let revokeHeading = $state<HTMLElement | null>(null);
 
   // The erase form, for one drive at a time.
   let erasingDrive = $state<DriveView | null>(null);
@@ -65,7 +65,6 @@
   let eraseConfirmed = $state(false);
   let eraseProblem = $state<Problem | null>(null);
   let eraseSubmitting = $state(false);
-  let eraseHeading = $state<HTMLElement | null>(null);
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   let stopWatching: (() => void) | undefined;
@@ -126,21 +125,17 @@
     await refresh();
   }
 
-  // A confirmation opens below its table; the keyboard is taken to it, so
-  // what it asks is read before anything else is reached.
-  async function startRevoke(worker: WorkerView) {
+  // A confirmation opens below its table and takes the keyboard to its
+  // question (Confirm.svelte).
+  function startRevoke(worker: WorkerView) {
     revoking = worker;
-    await tick();
-    revokeHeading?.focus();
   }
 
-  async function startErase(drive: DriveView) {
+  function startErase(drive: DriveView) {
     erasingDrive = drive;
     eraseMode = 'quick';
     eraseConfirmed = false;
     eraseProblem = null;
-    await tick();
-    eraseHeading?.focus();
   }
 
   async function erase(event: SubmitEvent) {
@@ -356,30 +351,28 @@
 
       {#if revoking}
         {@const worker = revoking}
-        <form
-          class="confirm"
-          aria-labelledby="revoke-heading"
-          onsubmit={(event) => {
-            event.preventDefault();
-            void change(worker, 'revoke');
-          }}
-        >
-          <h3 id="revoke-heading" tabindex="-1" bind:this={revokeHeading}>
-            Revoke {worker.name}
-          </h3>
-          <p>
-            <strong>Its credential is refused from its next request, for good.</strong> It can no longer
-            take work, renew a lease or report. A burn it is writing is not interrupted by the server;
-            its lease lapses as a lost worker's does. To use the machine again, issue a new enrollment
-            token and enroll it under a new name.
-          </p>
-          <div class="buttons">
-            <Button type="submit" variant="danger" disabled={changing === worker.id}>
-              {changing === worker.id ? 'Revoking…' : `Revoke ${worker.name}`}
-            </Button>
-            <Button onclick={() => (revoking = null)}>Keep {worker.name}</Button>
-          </div>
-        </form>
+        {#key worker.id}
+          <Confirm
+            title={`Revoke ${worker.name}`}
+            onsubmit={(event) => {
+              event.preventDefault();
+              void change(worker, 'revoke');
+            }}
+          >
+            <p>
+              <strong>Its credential is refused from its next request, for good.</strong> It can no longer
+              take work, renew a lease or report. A burn it is writing is not interrupted by the server;
+              its lease lapses as a lost worker's does. To use the machine again, issue a new enrollment
+              token and enroll it under a new name.
+            </p>
+            {#snippet actions()}
+              <Button type="submit" variant="danger" disabled={changing === worker.id}>
+                {changing === worker.id ? 'Revoking…' : `Revoke ${worker.name}`}
+              </Button>
+              <Button onclick={() => (revoking = null)}>Keep {worker.name}</Button>
+            {/snippet}
+          </Confirm>
+        {/key}
       {/if}
     </Panel>
   </div>
@@ -482,51 +475,52 @@
       {/if}
 
       {#if erasingDrive}
-        <form class="confirm" onsubmit={erase} aria-labelledby="erase-heading">
-          <h3 id="erase-heading" tabindex="-1" bind:this={eraseHeading}>
-            Erase the disc in {erasingDrive.name}
-          </h3>
-          <p>
-            <strong>This destroys everything on the disc in that drive.</strong> It cannot be undone.
-            Only a rewritable disc (CD-RW, DVD-RW, DVD+RW, BD-RE) is erased; the worker looks first and
-            leaves a blank or write-once disc alone, and says so.
-          </p>
-          <fieldset>
-            <legend>How thoroughly</legend>
+        {@const drive = erasingDrive}
+        {#key drive.id}
+          <Confirm title={`Erase the disc in ${drive.name}`} onsubmit={erase}>
+            <p>
+              <strong>This destroys everything on the disc in that drive.</strong> It cannot be undone.
+              Only a rewritable disc (CD-RW, DVD-RW, DVD+RW, BD-RE) is erased; the worker looks first
+              and leaves a blank or write-once disc alone, and says so.
+            </p>
+            <fieldset>
+              <legend>How thoroughly</legend>
+              <label class="choice">
+                <input type="radio" name="mode" value="quick" bind:group={eraseMode} />
+                <span>
+                  <strong>Quick:</strong> only what makes the disc writable again. Fast on a CD-RW; some
+                  drives take half an hour on a DVD-RW whichever you choose
+                </span>
+              </label>
+              <label class="choice">
+                <input type="radio" name="mode" value="full" bind:group={eraseMode} />
+                <span
+                  ><strong>Full:</strong> writes over the whole disc, which can take an hour</span
+                >
+              </label>
+            </fieldset>
             <label class="choice">
-              <input type="radio" name="mode" value="quick" bind:group={eraseMode} />
-              <span>
-                <strong>Quick:</strong> only what makes the disc writable again. Fast on a CD-RW; some
-                drives take half an hour on a DVD-RW whichever you choose
-              </span>
+              <input type="checkbox" bind:checked={eraseConfirmed} />
+              <span>I understand everything on the disc in {drive.name} will be destroyed</span>
             </label>
-            <label class="choice">
-              <input type="radio" name="mode" value="full" bind:group={eraseMode} />
-              <span><strong>Full:</strong> writes over the whole disc, which can take an hour</span>
-            </label>
-          </fieldset>
-          <label class="choice">
-            <input type="checkbox" bind:checked={eraseConfirmed} />
-            <span>I understand everything on the disc in {erasingDrive.name} will be destroyed</span
-            >
-          </label>
-          <div role="alert">
-            {#if eraseProblem}
-              <p class="problem">
-                <strong>Not erased.</strong>
-                {eraseProblem.code === 'FORBIDDEN'
-                  ? 'Only an administrator can erase discs.'
-                  : eraseProblem.detail}
-              </p>
-            {/if}
-          </div>
-          <div class="buttons">
-            <Button type="submit" variant="danger" disabled={!eraseConfirmed || eraseSubmitting}>
-              {eraseSubmitting ? 'Asking…' : `Erase the disc in ${erasingDrive.name}`}
-            </Button>
-            <Button onclick={() => (erasingDrive = null)}>Keep the disc</Button>
-          </div>
-        </form>
+            <div role="alert">
+              {#if eraseProblem}
+                <p class="problem">
+                  <strong>Not erased.</strong>
+                  {eraseProblem.code === 'FORBIDDEN'
+                    ? 'Only an administrator can erase discs.'
+                    : eraseProblem.detail}
+                </p>
+              {/if}
+            </div>
+            {#snippet actions()}
+              <Button type="submit" variant="danger" disabled={!eraseConfirmed || eraseSubmitting}>
+                {eraseSubmitting ? 'Asking…' : `Erase the disc in ${drive.name}`}
+              </Button>
+              <Button onclick={() => (erasingDrive = null)}>Keep the disc</Button>
+            {/snippet}
+          </Confirm>
+        {/key}
       {/if}
     </Panel>
   </div>
@@ -681,9 +675,6 @@
   .padded {
     padding: var(--space-3) var(--space-4);
   }
-  .quiet {
-    color: var(--text-muted);
-  }
   .small {
     font-size: var(--text-xs);
   }
@@ -749,46 +740,11 @@
     margin: 0;
     color: var(--bad);
   }
-  .confirm {
-    display: grid;
-    gap: var(--space-3);
-    margin: 0;
-    padding: var(--space-4);
-    border-top: 1px solid var(--line);
-    border-left: 4px solid var(--bad);
-    background: color-mix(in srgb, var(--bad) 6%, var(--surface));
-  }
-  .confirm h3 {
-    margin: 0;
-    font-size: var(--text-md);
-  }
-  .confirm p {
-    margin: 0;
-    max-width: 75ch;
-  }
-  .confirm fieldset {
-    display: grid;
-    gap: var(--space-2);
-    margin: 0;
-    padding: var(--space-2) var(--space-3) var(--space-3);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    max-width: 75ch;
-  }
-  .confirm legend {
-    padding: 0 var(--space-1);
-    font-weight: var(--weight-strong);
-  }
   .choice {
     display: flex;
     gap: var(--space-2);
     align-items: baseline;
     cursor: pointer;
-  }
-  .buttons {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
   }
   .lede {
     margin: 0 0 var(--space-4);

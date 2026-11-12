@@ -6,6 +6,7 @@
   // UX.md 5's order. Its deletion, when asked for, comes first, because
   // everything below reads differently; otherwise it is the last thing on
   // the page.
+  import Callout from '$lib/components/ui/Callout.svelte';
   import { shortDigest } from '$lib/ids';
   import Deletion from '$lib/components/Deletion.svelte';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
@@ -221,11 +222,13 @@
             <!-- Every imported original is immutable, and saying so is the
                  point of the tool rather than an implementation note. -->
             {#if isOriginal(artifact.origin) && !deleted}
-              <p class="callout">
-                <strong>Immutable original.</strong>
-                These bytes are never rewritten, repaired or recompressed. Conversions create separate
-                derivatives that record what produced them.
-              </p>
+              <Callout
+                ><p>
+                  <strong>Immutable original.</strong>
+                  These bytes are never rewritten, repaired or recompressed. Conversions create separate
+                  derivatives that record what produced them.
+                </p></Callout
+              >
             {/if}
           </section>
 
@@ -247,10 +250,12 @@
               <h2 id="ripped-heading">Ripped from a disc</h2>
               {#if ripped.decrypted_at_acquisition}
                 <!-- Said plainly: these bytes are not what is on the disc. -->
-                <p class="callout warn">
-                  <strong>Decrypted when ripped.</strong>
-                  This is not a faithful copy of the disc, and it will not match a preservation database.
-                </p>
+                <Callout tone="warn"
+                  ><p>
+                    <strong>Decrypted when ripped.</strong>
+                    This is not a faithful copy of the disc, and it will not match a preservation database.
+                  </p></Callout
+                >
               {/if}
               <dl class="facts">
                 <div>
@@ -444,14 +449,18 @@
                 particular player, console or drive.
               </p>
               {#if pending}
-                <p role="note" class="callout warn">
-                  <strong>Not burned while it is pending deletion.</strong> Keep it to burn it.
-                </p>
+                <Callout tone="warn" role="note"
+                  ><p>
+                    <strong>Not burned while it is pending deletion.</strong> Keep it to burn it.
+                  </p></Callout
+                >
               {:else if refusal}
-                <p role="note" class="callout warn">
-                  <strong>Not burned as it is.</strong>
-                  {refusal}
-                </p>
+                <Callout tone="warn" role="note"
+                  ><p>
+                    <strong>Not burned as it is.</strong>
+                    {refusal}
+                  </p></Callout
+                >
               {:else}
                 <p>
                   <Button variant="primary" icon="burn" href={`/burns/new?artifact=${artifact.id}`}
@@ -513,17 +522,6 @@
     font-size: var(--text-md);
     margin-top: 0;
   }
-  .callout {
-    padding: var(--space-3) var(--space-4);
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-left: 4px solid var(--accent);
-    border-radius: var(--radius);
-    max-width: 75ch;
-  }
-  .callout.warn {
-    border-left-color: var(--warn);
-  }
   .topology {
     display: flex;
     flex-wrap: wrap;
@@ -561,9 +559,6 @@
   .details {
     display: grid;
     gap: 0.125rem;
-  }
-  .quiet {
-    color: var(--text-muted);
   }
   .danger {
     margin-top: var(--space-8);

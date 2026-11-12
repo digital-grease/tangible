@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  import Callout from '$lib/components/ui/Callout.svelte';
   import { shortId } from '$lib/ids';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import Button from '$lib/components/ui/Button.svelte';
@@ -103,15 +104,13 @@
     {#if waiting.length > 0}
       <!-- The one thing on this page that needs a person to get up and do
            something. It goes first, and says which job. -->
-      <section class="callout" aria-labelledby="waiting-heading">
-        <h2 id="waiting-heading">
-          <StatusMark
-            tone="warn"
-            label={waiting.length === 1
-              ? 'A burn is waiting for a disc'
-              : 'Burns are waiting for a disc'}
-          />
-        </h2>
+      <Callout
+        tone="warn"
+        marked
+        title={waiting.length === 1
+          ? 'A burn is waiting for a disc'
+          : 'Burns are waiting for a disc'}
+      >
         <ul>
           {#each waiting as job (job.id)}
             <li>
@@ -122,7 +121,7 @@
             </li>
           {/each}
         </ul>
-      </section>
+      </Callout>
     {/if}
 
     <Panel
@@ -197,22 +196,6 @@
 </div>
 
 <style>
-  .callout {
-    padding: var(--space-3) var(--space-4);
-    margin-bottom: var(--space-4);
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-left: 4px solid var(--warn);
-    border-radius: var(--radius);
-  }
-  .callout h2 {
-    margin: 0 0 var(--space-2);
-    font-size: var(--text-md);
-  }
-  .callout ul {
-    margin: 0;
-    padding-left: 1.25rem;
-  }
   .stage {
     display: grid;
     gap: var(--space-1);
@@ -220,8 +203,5 @@
   }
   .more {
     margin-top: var(--space-4);
-  }
-  .quiet {
-    color: var(--text-muted);
   }
 </style>

@@ -222,9 +222,6 @@
     max-width: 85ch;
     color: var(--text-muted);
   }
-  .quiet {
-    color: var(--text-muted);
-  }
   .stack {
     display: grid;
     gap: var(--space-5);

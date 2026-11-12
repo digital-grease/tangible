@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  import Callout from '$lib/components/ui/Callout.svelte';
   import { shortId } from '$lib/ids';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import Button from '$lib/components/ui/Button.svelte';
@@ -140,15 +141,19 @@
     </PageHeader>
 
     {#if copy.should_be_destroyed}
-      <p class="callout bad">
-        This disc does not hold what was intended, or is no longer trusted to. Destroy it rather
-        than returning it to a shelf: an untracked bad disc gets found later and believed.
-      </p>
+      <Callout tone="bad"
+        ><p>
+          This disc does not hold what was intended, or is no longer trusted to. Destroy it rather
+          than returning it to a shelf: an untracked bad disc gets found later and believed.
+        </p></Callout
+      >
     {/if}
     {#if copy.is_settled}
-      <p class="callout">
-        This disc has been destroyed. Its record remains so the burn history stays true.
-      </p>
+      <Callout
+        ><p>
+          This disc has been destroyed. Its record remains so the burn history stays true.
+        </p></Callout
+      >
     {/if}
 
     {#if problem}
@@ -359,26 +364,11 @@
     flex-wrap: wrap;
     gap: var(--space-2);
   }
-  .callout {
-    padding: var(--space-3) var(--space-4);
-    margin: 0 0 var(--space-4);
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-left: 4px solid var(--text-muted);
-    border-radius: var(--radius);
-    max-width: 75ch;
-  }
-  .callout.bad {
-    border-left-color: var(--bad);
-  }
   .note {
     margin: var(--space-3) 0 0;
     font-size: var(--text-sm);
   }
   .padded {
     padding: var(--space-3) var(--space-4);
-  }
-  .quiet {
-    color: var(--text-muted);
   }
 </style>

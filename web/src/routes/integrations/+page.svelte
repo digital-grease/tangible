@@ -8,6 +8,8 @@
   // setting. Laid out in the new design (docs/plans/ui-overhaul.md, U8): the
   // list in one panel, the form in another; removing asks first, under the
   // list, and takes the keyboard to the question.
+  import Confirm from '$lib/components/ui/Confirm.svelte';
+  import Callout from '$lib/components/ui/Callout.svelte';
   import { onMount, tick } from 'svelte';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import Button from '$lib/components/ui/Button.svelte';
@@ -102,18 +104,15 @@
   /** Removing is a second, deliberate action. */
   let confirmingRemove = $state<string | null>(null);
   let removeProblem = $state<Problem | null>(null);
-  let removeHeading = $state<HTMLElement | null>(null);
   const removing = $derived(
     view.kind === 'ready'
       ? (view.items.find((item) => item.id === confirmingRemove) ?? null)
       : null,
   );
 
-  async function startRemoving(item: IntegrationView) {
+  function startRemoving(item: IntegrationView) {
     confirmingRemove = item.id;
     removeProblem = null;
-    await tick();
-    removeHeading?.focus();
   }
 
   /** The form, to take the keyboard there when an integration is to be edited. */
@@ -255,14 +254,14 @@
       />
     {:else}
       {#if !view.keyLoaded}
-        <div role="note" class="callout warn">
+        <Callout tone="warn" role="note">
           <StatusMark tone="warn" label="No secret key." />
           <p>
             This server cannot store a password or API key until an administrator sets
             <code>TANGIBLE_SECRET_KEY_FILE</code> and restarts it (deploy/README.md, "Integration secrets").
             Integrations can still be added without one.
           </p>
-        </div>
+        </Callout>
       {/if}
       <Panel title="Configured" aside={`${view.items.length}`} flush>
         {#if view.items.length === 0}
@@ -349,21 +348,24 @@
 
         {#if removing}
           {@const item = removing}
-          <div class="confirm" role="group" aria-labelledby="remove-heading">
-            <h3 id="remove-heading" tabindex="-1" bind:this={removeHeading}>
-              Remove {item.name}?
-            </h3>
-            <p>
-              Its settings and secret are deleted. Nothing in the client or the library is touched.
-            </p>
-            {#if removeProblem}
-              <ErrorPanel problem={removeProblem} area="import" refusal />
-            {/if}
-            <div class="buttons">
-              <Button variant="danger" onclick={() => remove(item)}>Yes, remove {item.name}</Button>
-              <Button onclick={() => (confirmingRemove = null)}>Keep it</Button>
-            </div>
-          </div>
+          {#key item.id}
+            <Confirm title={`Remove ${item.name}?`}>
+              <p>
+                Its settings and secret are deleted. Nothing in the client or the library is
+                touched.
+              </p>
+              {#if removeProblem}
+                <ErrorPanel problem={removeProblem} area="import" refusal />
+              {/if}
+
+              {#snippet actions()}
+                <Button variant="danger" onclick={() => remove(item)}
+                  >Yes, remove {item.name}</Button
+                >
+                <Button onclick={() => (confirmingRemove = null)}>Keep it</Button>
+              {/snippet}
+            </Confirm>
+          {/key}
         {/if}
       </Panel>
     {/if}
@@ -372,7 +374,7 @@
   <div aria-live="polite" class="results">
     {#if done}<p class="done"><StatusMark tone="ok" label={done} /></p>{/if}
     {#if tested}
-      <div class="callout" class:bad={!tested.ok}>
+      <Callout tone={tested.ok ? 'info' : 'bad'}>
         <p class="outcome">
           <StatusMark
             tone={tested.ok ? 'ok' : 'bad'}
@@ -393,7 +395,7 @@
             {/each}
           </ul>
         {/if}
-      </div>
+      </Callout>
     {/if}
   </div>
 
@@ -406,11 +408,13 @@
       </header>
       <div class="body">
         {#if wording.downloads && roots !== null && roots.length === 0}
-          <p role="note" class="callout warn">
-            No watched roots are configured. Tangible reads a client's finished downloads from a
-            folder mounted into its container and listed in <code>TANGIBLE_WATCH_ROOTS</code>; add
-            one first.
-          </p>
+          <Callout tone="warn" role="note"
+            ><p>
+              No watched roots are configured. Tangible reads a client's finished downloads from a
+              folder mounted into its container and listed in <code>TANGIBLE_WATCH_ROOTS</code>; add
+              one first.
+            </p></Callout
+          >
         {/if}
         <form class="client" onsubmit={submit}>
           {#if !editing}
@@ -557,12 +561,14 @@
               hint="A quick scan of each platform folder the export wrote, renamed or took out (RomM 5.4 or later). Off, scanning is left to RomM's own schedule."
               bind:checked={form.scanAfterExport}
             />
-            <p role="note" class="callout">
-              Make the client token in RomM (Settings, then Client API Tokens) with exactly the
-              scopes
-              <code>platforms.read</code>, <code>roms.read</code> and <code>tasks.run</code>, then
-              Test it here.
-            </p>
+            <Callout role="note"
+              ><p>
+                Make the client token in RomM (Settings, then Client API Tokens) with exactly the
+                scopes
+                <code>platforms.read</code>, <code>roms.read</code> and <code>tasks.run</code>, then
+                Test it here.
+              </p></Callout
+            >
           {:else}
             <Field
               label="Category"
@@ -683,9 +689,6 @@
   }
   /* The page is spaced by margins, not a grid's gap, so the results region
      takes no room while it is empty. */
-  .quiet {
-    color: var(--text-muted);
-  }
   .small {
     font-size: var(--text-xs);
   }
@@ -700,25 +703,7 @@
     justify-content: flex-end;
     white-space: nowrap;
   }
-  .callout {
-    margin: 0 0 var(--space-4);
-    padding: var(--space-3) var(--space-4);
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-left: 4px solid var(--accent);
-    border-radius: var(--radius);
-    max-width: 75ch;
-  }
-  .callout.warn {
-    border-left-color: var(--warn);
-  }
-  .callout.bad {
-    border-left-color: var(--bad);
-  }
-  .callout p {
-    margin: var(--space-1) 0 0;
-  }
-  .results .callout {
+  .results :global(.callout) {
     margin: var(--space-4) 0 0;
   }
   .done {
@@ -743,21 +728,6 @@
     flex-wrap: wrap;
     gap: var(--space-2);
     align-items: baseline;
-  }
-  .confirm {
-    display: grid;
-    gap: var(--space-3);
-    padding: var(--space-4);
-    border-top: 1px solid var(--line);
-    border-left: 4px solid var(--bad);
-    background: color-mix(in srgb, var(--bad) 6%, var(--surface));
-  }
-  .confirm h3 {
-    margin: 0;
-    font-size: var(--text-md);
-  }
-  .confirm p {
-    margin: 0;
   }
   .buttons {
     display: flex;

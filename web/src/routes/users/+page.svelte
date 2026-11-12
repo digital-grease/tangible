@@ -264,9 +264,6 @@
       grid-template-columns: minmax(0, 2fr) minmax(20rem, 1fr);
     }
   }
-  .quiet {
-    color: var(--text-muted);
-  }
   .more {
     display: flex;
     flex-wrap: wrap;

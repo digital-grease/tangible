@@ -151,9 +151,6 @@
 </div>
 
 <style>
-  .quiet {
-    color: var(--text-muted);
-  }
   .lede {
     margin: 0 0 var(--space-5);
   }

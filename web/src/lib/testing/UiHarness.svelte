@@ -11,6 +11,8 @@
     | 'header'
     | 'empty'
     | 'disc'
+    | 'callout'
+    | 'confirm'
     | 'all';
 </script>
 
@@ -20,7 +22,9 @@
   // over). Imported by tests only, so it is never bundled.
   import Badge from '$lib/components/ui/Badge.svelte';
   import Button from '$lib/components/ui/Button.svelte';
+  import Callout from '$lib/components/ui/Callout.svelte';
   import Checkbox from '$lib/components/ui/Checkbox.svelte';
+  import Confirm from '$lib/components/ui/Confirm.svelte';
   import Disc from '$lib/components/ui/Disc.svelte';
   import EmptyState from '$lib/components/ui/EmptyState.svelte';
   import Field from '$lib/components/ui/Field.svelte';
@@ -42,6 +46,10 @@
     fieldError?: string | null;
     onselect?: (what: string) => void;
   } = $props();
+
+  /** The confirmation's state, for its test. */
+  let confirming = $state(false);
+  let understood = $state(false);
 
   let name = $state('');
   let format = $state('');
@@ -189,6 +197,36 @@
     <Disc shape={mixedMode} size={24} />
     <Disc shape={dvd} size={24} />
   </div>
+{/if}
+
+{#if show === 'callout' || show === 'all'}
+  <Callout tone="warn" title="A burn is waiting for a disc" marked>
+    <p>Insert a blank disc in the drive it names.</p>
+  </Callout>
+  <Callout role="note"><p>Nothing is written until a worker claims it.</p></Callout>
+{/if}
+
+{#if show === 'confirm' || show === 'all'}
+  <Button variant="danger" onclick={() => (confirming = true)}>Erase the disc in sr0…</Button>
+  {#if confirming}
+    <Confirm
+      title="Erase the disc in sr0"
+      onsubmit={(event) => {
+        event.preventDefault();
+        onselect?.('erase');
+      }}
+    >
+      <p><strong>This destroys everything on the disc in that drive.</strong></p>
+      <Checkbox
+        label="I understand everything on the disc will be destroyed"
+        bind:checked={understood}
+      />
+      {#snippet actions()}
+        <Button type="submit" variant="danger" disabled={!understood}>Erase the disc in sr0</Button>
+        <Button onclick={() => (confirming = false)}>Keep the disc</Button>
+      {/snippet}
+    </Confirm>
+  {/if}
 {/if}
 
 {#if show === 'all'}

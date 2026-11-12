@@ -378,9 +378,6 @@
     margin-top: var(--space-1);
     font-size: var(--text-xs);
   }
-  .quiet {
-    color: var(--text-muted);
-  }
   .more {
     margin-top: var(--space-4);
   }
