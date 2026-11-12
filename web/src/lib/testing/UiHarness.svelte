@@ -2,7 +2,16 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts" module>
   export type Case =
-    'field' | 'select' | 'checkbox' | 'tabs' | 'menu' | 'panel' | 'header' | 'empty' | 'all';
+    | 'field'
+    | 'select'
+    | 'checkbox'
+    | 'tabs'
+    | 'menu'
+    | 'panel'
+    | 'header'
+    | 'empty'
+    | 'disc'
+    | 'all';
 </script>
 
 <script lang="ts">
@@ -12,6 +21,7 @@
   import Badge from '$lib/components/ui/Badge.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import Checkbox from '$lib/components/ui/Checkbox.svelte';
+  import Disc from '$lib/components/ui/Disc.svelte';
   import EmptyState from '$lib/components/ui/EmptyState.svelte';
   import Field from '$lib/components/ui/Field.svelte';
   import Menu from '$lib/components/ui/Menu.svelte';
@@ -48,6 +58,25 @@
     { id: 'components', label: 'Components', count: 9 },
     { id: 'topology', label: 'Topology' },
   ];
+  const audioCd = {
+    media_family: 'cd',
+    sector_count: 318_000,
+    tracks: Array.from({ length: 12 }, () => ({
+      session: 1,
+      sector_count: 26_500,
+      is_audio: true,
+    })),
+  };
+  const mixedMode = {
+    media_family: 'cd',
+    sector_count: 260_000,
+    tracks: [
+      { session: 1, sector_count: 110_000, is_audio: false },
+      ...Array.from({ length: 7 }, () => ({ session: 1, sector_count: 21_000, is_audio: true })),
+    ],
+  };
+  const dvd = { media_family: 'dvd', sector_count: 2_050_000, tracks: [] };
+  const iso = { media_family: 'cd', sector_count: 300_000, tracks: [] };
   const items = [
     { label: 'Import', href: '/imports', icon: 'import' as const },
     { label: 'Rip a disc', href: '/rips', icon: 'rip' as const },
@@ -149,6 +178,19 @@
   </EmptyState>
 {/if}
 
+{#if show === 'disc' || show === 'all'}
+  <div class="discs" data-testid="discs">
+    <Disc shape={audioCd} size={120} />
+    <Disc shape={mixedMode} size={120} />
+    <Disc shape={dvd} size={120} />
+    <Disc mode="burn" shape={iso} capacity={359_844} progress={0.43} size={120} />
+    <Disc mode="rip" family="dvd" progress={0.5} size={120} />
+    <Disc mode="empty" size={120} />
+    <Disc shape={mixedMode} size={24} />
+    <Disc shape={dvd} size={24} />
+  </div>
+{/if}
+
 {#if show === 'all'}
   <p>
     <StatusMark tone="ok" label="Structurally valid" />
@@ -165,3 +207,12 @@
     <Button disabled>Disabled</Button>
   </p>
 {/if}
+
+<style>
+  .discs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: center;
+  }
+</style>

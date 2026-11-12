@@ -628,7 +628,10 @@ may change between minor versions, and the release notes say how.
   themselves, status marks (a shape and words for every state, never
   colour alone), badges, progress bars, panels, page headers, tabs, a
   menu and empty states, each checked with axe-core in its tests. Error
-  panels take the new look.
+  panels take the new look. And a drawing of a disc from its own data, to
+  scale: an artifact's tracks (audio tracks set apart as on a pressed CD),
+  a burn's written area growing outward toward the image's extent, a
+  rip's read area, an empty tray.
 - The image is built on Debian 13 (trixie), moving from Debian 12
   (bookworm), now oldstable, and every tool in it moves too: chdman 0.251
   to 0.276, which makes DVD CHDs (a DVD's ISO gets one, made with
