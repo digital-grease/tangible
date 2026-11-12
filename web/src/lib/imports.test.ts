@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  importStateTone,
   canCancel,
   canRetry,
   cancelImport,
@@ -505,5 +506,16 @@ describe('torrents for a download client', () => {
     const result = await sendTorrent('a/b', { magnet: 'magnet:?xt=x' }, fetcher);
     expect(result.kind).toBe('ready');
     expect(seen).toEqual(['POST /api/v1/integrations/a%2Fb/jobs {"magnet":"magnet:?xt=x"}']);
+  });
+});
+
+describe('an import’s state, as a tone', () => {
+  it('marks done, failed, retryable, withdrawn and under way', () => {
+    expect(importStateTone('complete')).toBe('ok');
+    expect(importStateTone('failed_terminal')).toBe('bad');
+    expect(importStateTone('quarantined')).toBe('bad');
+    expect(importStateTone('failed_retryable')).toBe('warn');
+    expect(importStateTone('canceled')).toBe('idle');
+    expect(importStateTone('hashing')).toBe('busy');
   });
 });

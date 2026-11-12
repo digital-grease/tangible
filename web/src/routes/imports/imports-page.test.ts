@@ -5,6 +5,7 @@ import { fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { forgetReportSettings } from '$lib/report';
 import { TOPICS } from '$lib/events';
+import { axeViolations } from '$lib/testing/axe';
 
 const { default: ImportsPage } = await import('./+page.svelte');
 
@@ -418,5 +419,18 @@ describe('Imports page, live', () => {
     await vi.waitFor(() =>
       expect(asked.filter((request) => request.url === '/api/v1/imports').length).toBe(before + 1),
     );
+  });
+});
+
+describe('Imports page, for assistive technology', () => {
+  it('has nothing axe objects to, with a download under way', async () => {
+    server({
+      '/api/v1/import-sources': sources(true),
+      '/api/v1/imports': { status: 200, body: { items: [DOWNLOADING] } },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    const { container } = render(ImportsPage);
+    expect(await screen.findByText('disc.iso')).toBeTruthy();
+    expect(await axeViolations(container)).toEqual([]);
   });
 });

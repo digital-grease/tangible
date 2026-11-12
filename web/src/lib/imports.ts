@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 digitalgrease
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import type { Tone } from './components/ui/tone';
 import type { components } from './api-types';
 import { apiFetch, transportProblem } from './session';
 import type { CommandResult } from './burns';
@@ -568,6 +569,23 @@ export function importStateMark(state: string): string {
       return '–';
     default:
       return '·';
+  }
+}
+
+/** An import's state as a tone, for a status mark. */
+export function importStateTone(state: string): Tone {
+  switch (state) {
+    case 'complete':
+      return 'ok';
+    case 'failed_terminal':
+    case 'quarantined':
+      return 'bad';
+    case 'failed_retryable':
+      return 'warn';
+    case 'canceled':
+      return 'idle';
+    default:
+      return 'busy';
   }
 }
 

@@ -391,12 +391,14 @@
                       <td><code>{msf(track.start_lba)}</code></td>
                       <td><code>{msf(track.sector_count)}</code></td>
                       <td>{track.pregap_sectors > 0 ? msf(track.pregap_sectors) : 'None'}</td>
-                      <td class="details">
-                        {#if trackDetails(track)}<span>{trackDetails(track)}</span>{/if}
-                        {#if track.indexes.length > 1 + (track.pregap_sectors > 0 ? 1 : 0)}
-                          <small>{track.indexes.length} index points</small>
-                        {/if}
-                        <small>from <code>{track.component_path}</code></small>
+                      <td>
+                        <div class="details">
+                          {#if trackDetails(track)}<span>{trackDetails(track)}</span>{/if}
+                          {#if track.indexes.length > 1 + (track.pregap_sectors > 0 ? 1 : 0)}
+                            <small>{track.indexes.length} index points</small>
+                          {/if}
+                          <small>from <code>{track.component_path}</code></small>
+                        </div>
                       </td>
                     </tr>
                   {/each}

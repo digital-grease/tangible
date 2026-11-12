@@ -2,6 +2,12 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import PageHeader from '$lib/components/ui/PageHeader.svelte';
+  import Panel from '$lib/components/ui/Panel.svelte';
+  import Progress from '$lib/components/ui/Progress.svelte';
+  import StatusMark from '$lib/components/ui/StatusMark.svelte';
+  import Table from '$lib/components/ui/Table.svelte';
   import { onDestroy, onMount } from 'svelte';
   import { watch } from '$lib/events';
   import {
@@ -14,7 +20,7 @@
     importFromWatchedRoot,
     importStateLabel,
     sourceRemovalLabel,
-    importStateMark,
+    importStateTone,
     loadImportSources,
     loadImports,
     retryImport,
@@ -248,96 +254,93 @@
 
 <svelte:head><title>Imports — Tangible</title></svelte:head>
 
-<h1>Imports</h1>
-
-<p>
-  Importing preserves what you give it. The bytes are stored exactly as received, hashed, and
-  described; nothing is repaired, recompressed or renamed.
-</p>
+<PageHeader
+  title="Imports"
+  description="Importing preserves what you give it. The bytes are stored exactly as received, hashed, and described; nothing is repaired, recompressed or renamed."
+/>
 
 {#if problem}
   <ErrorPanel {problem} area="import" refusal />
 {/if}
 
-<section aria-labelledby="upload-heading">
-  <h2 id="upload-heading">Upload a file</h2>
-  <form onsubmit={upload}>
-    <p>
-      <label for="file">Disc image</label><br />
+<!-- Where an import can come from, each its own panel; those this server is
+     not set up for say how to set them up rather than showing a form. -->
+<div class="sources">
+  <Panel title="Upload a file">
+    <form class="form" onsubmit={upload}>
+      <label for="file">Disc image</label>
       <input id="file" type="file" bind:files />
-    </p>
-    {#if sources}
-      <p>
-        <small
-          >This server accepts uploads up to {formatBytes(sources.max_upload_bytes)}. Files over {formatBytes(
+      {#if sources}
+        <p class="hint">
+          This server accepts uploads up to {formatBytes(sources.max_upload_bytes)}. Files over {formatBytes(
             PARTS_ABOVE_BYTES,
           )} are sent in parts: if the connection drops or the page is closed, choose the same file again
-          and the upload carries on from where it stopped.</small
-        >
-      </p>
-    {/if}
-    {#if uploaded}
-      <p aria-live="polite">
-        <progress max={uploaded.total} value={uploaded.sent} aria-label="Upload progress"
-        ></progress>
-        Sent {formatBytes(uploaded.sent)} of {formatBytes(uploaded.total)}
-      </p>
-    {/if}
-    <button type="submit" disabled={busy || !files?.length}>
-      {busy ? 'Working…' : 'Upload and import'}
-    </button>
-  </form>
-</section>
+          and the upload carries on from where it stopped.
+        </p>
+      {/if}
+      {#if uploaded}
+        <div class="sent" aria-live="polite">
+          <Progress value={uploaded.sent / Math.max(1, uploaded.total)} label="Upload progress" />
+          <span class="num">Sent {formatBytes(uploaded.sent)} of {formatBytes(uploaded.total)}</span
+          >
+        </div>
+      {/if}
+      <div>
+        <Button type="submit" variant="primary" icon="import" disabled={busy || !files?.length}>
+          {busy ? 'Working…' : 'Upload and import'}
+        </Button>
+      </div>
+    </form>
+  </Panel>
 
-<section aria-labelledby="watched-heading">
-  <h2 id="watched-heading">Import from a watched folder</h2>
-  {#if !sources || sources.watch_roots.length === 0}
-    <!-- Configuration, not a failure: an operator who has not set any roots
-         should be told how, not shown a broken form. -->
-    <p>
-      No watched folders are configured. An administrator can add them with
-      <code>TANGIBLE_WATCH_ROOTS</code>, as <code>id=/path,id=/path</code>.
-    </p>
-  {:else}
-    <form onsubmit={importWatched}>
-      <p>
-        <label for="root">Folder</label><br />
+  <Panel title="Import from a watched folder">
+    {#if !sources || sources.watch_roots.length === 0}
+      <!-- Configuration, not a failure: an operator who has not set any roots
+           should be told how, not shown a broken form. -->
+      <p class="quiet">
+        No watched folders are configured. An administrator can add them with
+        <code>TANGIBLE_WATCH_ROOTS</code>, as <code>id=/path,id=/path</code>.
+      </p>
+    {:else}
+      <form class="form" onsubmit={importWatched}>
+        <label for="root">Folder</label>
         <select id="root" bind:value={pathId}>
           {#each sources.watch_roots as root (root)}
             <option value={root}>{root}</option>
           {/each}
         </select>
-      </p>
-      <p>
-        <label for="relative">Path within the folder</label><br />
-        <input id="relative" bind:value={relativePath} placeholder="Example Disc" />
-        <br />
+        <label for="relative">Path within the folder</label>
+        <input
+          id="relative"
+          bind:value={relativePath}
+          placeholder="Example Disc"
+          aria-describedby="relative-hint"
+        />
         <!-- The server never accepts a host path, and saying so here means an
              operator does not try one. -->
-        <small
-          >Relative to the folder above: a file, or a folder holding one disc, such as a CUE or TOC
+        <p class="hint" id="relative-hint">
+          Relative to the folder above: a file, or a folder holding one disc, such as a CUE or TOC
           sheet and the files it names, which become one artifact. Everything is copied; your
-          originals are left alone.</small
-        >
-      </p>
-      <button type="submit" disabled={busy || relativePath.trim() === ''}>
-        {busy ? 'Working…' : 'Import'}
-      </button>
-    </form>
-  {/if}
-</section>
+          originals are left alone.
+        </p>
+        <div>
+          <Button type="submit" disabled={busy || relativePath.trim() === ''}>
+            {busy ? 'Working…' : 'Import'}
+          </Button>
+        </div>
+      </form>
+    {/if}
+  </Panel>
 
-<section aria-labelledby="url-heading">
-  <h2 id="url-heading">Import from a URL</h2>
-  {#if !sources?.url_imports}
-    <p>
-      Importing from a URL is turned off on this server. An administrator can turn it on with
-      <code>TANGIBLE_URL_IMPORTS=true</code>.
-    </p>
-  {:else}
-    <form onsubmit={importUrl}>
-      <p>
-        <label for="url">Address of the file</label><br />
+  <Panel title="Import from a URL">
+    {#if !sources?.url_imports}
+      <p class="quiet">
+        Importing from a URL is turned off on this server. An administrator can turn it on with
+        <code>TANGIBLE_URL_IMPORTS=true</code>.
+      </p>
+    {:else}
+      <form class="form" onsubmit={importUrl}>
+        <label for="url">Address of the file</label>
         <input
           id="url"
           type="url"
@@ -346,40 +349,43 @@
           aria-describedby="url-hint"
           required
         />
-        <br />
-        <small id="url-hint"
-          >The server fetches it {sources.url_imports_allow_http
+        <p class="hint" id="url-hint">
+          The server fetches it {sources.url_imports_allow_http
             ? 'over https or http'
             : 'over https'}, from public addresses unless an administrator allowed more, and picks
           up where it left off if the connection drops. It is recorded without anything after a
-          <code>?</code>, which is where signed links keep their secret.</small
-        >
-      </p>
-      <p>
-        <label for="sha256">SHA-256, if you know it</label><br />
-        <input id="sha256" bind:value={sha256} spellcheck="false" autocomplete="off" />
-        <br />
-        <small>Checked after the download; a file that does not match is not imported.</small>
-      </p>
-      <button type="submit" disabled={busy || url.trim() === ''}>
-        {busy ? 'Working…' : 'Fetch and import'}
-      </button>
-    </form>
-  {/if}
-</section>
+          <code>?</code>, which is where signed links keep their secret.
+        </p>
+        <label for="sha256">SHA-256, if you know it</label>
+        <input
+          id="sha256"
+          bind:value={sha256}
+          spellcheck="false"
+          autocomplete="off"
+          aria-describedby="sha256-hint"
+        />
+        <p class="hint" id="sha256-hint">
+          Checked after the download; a file that does not match is not imported.
+        </p>
+        <div>
+          <Button type="submit" disabled={busy || url.trim() === ''}>
+            {busy ? 'Working…' : 'Fetch and import'}
+          </Button>
+        </div>
+      </form>
+    {/if}
+  </Panel>
 
-<section aria-labelledby="s3-heading">
-  <h2 id="s3-heading">Import from S3</h2>
-  {#if s3Sources.length === 0}
-    <p>
-      No S3-compatible storage is set up. An administrator can add it on the
-      <a href="/integrations">Integrations</a> page, with the buckets you may import from.
-    </p>
-  {:else}
-    <form onsubmit={importS3}>
-      {#if s3Sources.length > 1}
-        <p>
-          <label for="s3-source">Storage</label><br />
+  <Panel title="Import from S3">
+    {#if s3Sources.length === 0}
+      <p class="quiet">
+        No S3-compatible storage is set up. An administrator can add it on the
+        <a href="/integrations">Integrations</a> page, with the buckets you may import from.
+      </p>
+    {:else}
+      <form class="form" onsubmit={importS3}>
+        {#if s3Sources.length > 1}
+          <label for="s3-source">Storage</label>
           <select
             id="s3-source"
             value={s3SourceId}
@@ -389,18 +395,14 @@
               <option value={source.id}>{source.name}</option>
             {/each}
           </select>
-        </p>
-      {/if}
-      <p>
-        <label for="s3-bucket">Bucket</label><br />
+        {/if}
+        <label for="s3-bucket">Bucket</label>
         <select id="s3-bucket" bind:value={s3Bucket}>
           {#each chosenS3?.buckets ?? [] as bucket (bucket)}
             <option value={bucket}>{bucket}</option>
           {/each}
         </select>
-      </p>
-      <p>
-        <label for="s3-key">Object key</label><br />
+        <label for="s3-key">Object key</label>
         <input
           id="s3-key"
           bind:value={s3Key}
@@ -410,66 +412,54 @@
           aria-describedby="s3-key-hint"
           required
         />
-        <br />
-        <small id="s3-key-hint"
-          >The object's full name in the bucket. The server looks at it first, and the import is
-          pinned to the version and size it has now.</small
-        >
-      </p>
-      <p>
-        <label for="s3-sha256">SHA-256, if you know it</label><br />
+        <p class="hint" id="s3-key-hint">
+          The object's full name in the bucket. The server looks at it first, and the import is
+          pinned to the version and size it has now.
+        </p>
+        <label for="s3-sha256">SHA-256, if you know it</label>
         <input id="s3-sha256" bind:value={s3Sha256} spellcheck="false" autocomplete="off" />
-      </p>
-      <button type="submit" disabled={busy || s3Key.trim() === '' || s3Bucket === ''}>
-        {busy ? 'Working…' : 'Import from S3'}
-      </button>
-    </form>
-  {/if}
-</section>
+        <div>
+          <Button type="submit" disabled={busy || s3Key.trim() === '' || s3Bucket === ''}>
+            {busy ? 'Working…' : 'Import from S3'}
+          </Button>
+        </div>
+      </form>
+    {/if}
+  </Panel>
 
-<section aria-labelledby="torrent-heading">
-  <h2 id="torrent-heading">Send to a download client</h2>
-  {#if clients.length === 0}
-    <p>
-      No download client is set up. An administrator can add qBittorrent, SABnzbd or NZBGet on the
-      <a href="/integrations">Integrations</a> page.
-    </p>
-  {:else}
-    <form onsubmit={sendToClient}>
-      <p>
-        <small
-          >For a torrent or an NZB you already have. It is added to the client's Tangible category
-          and imported here when it finishes; seeding, cleaning up and anything else stay the
-          client's business. Tangible never searches for anything.</small
-        >
+  <Panel title="Send to a download client">
+    {#if clients.length === 0}
+      <p class="quiet">
+        No download client is set up. An administrator can add qBittorrent, SABnzbd or NZBGet on the
+        <a href="/integrations">Integrations</a> page.
       </p>
-      {#if clients.length > 1}
-        <p>
-          <label for="client">Client</label><br />
+    {:else}
+      <form class="form" onsubmit={sendToClient}>
+        <p class="hint">
+          For a torrent or an NZB you already have. It is added to the client's Tangible category
+          and imported here when it finishes; seeding, cleaning up and anything else stay the
+          client's business. Tangible never searches for anything.
+        </p>
+        {#if clients.length > 1}
+          <label for="client">Client</label>
           <select id="client" bind:value={clientId}>
             {#each clients as client (client.id)}
               <option value={client.id}>{client.name}</option>
             {/each}
           </select>
-        </p>
-      {/if}
-      {#if takesNzb}
-        <p>
-          <label for="nzb-file">.nzb file</label><br />
+        {/if}
+        {#if takesNzb}
+          <label for="nzb-file">.nzb file</label>
           <input id="nzb-file" type="file" accept=".nzb,application/x-nzb" bind:files={nzbFiles} />
-        </p>
-      {:else}
-        <p>
-          <label for="torrent-file">.torrent file</label><br />
+        {:else}
+          <label for="torrent-file">.torrent file</label>
           <input
             id="torrent-file"
             type="file"
             accept=".torrent,application/x-bittorrent"
             bind:files={torrentFiles}
           />
-        </p>
-        <p>
-          <label for="magnet">or a magnet link</label><br />
+          <label for="magnet">or a magnet link</label>
           <input
             id="magnet"
             bind:value={magnet}
@@ -478,165 +468,199 @@
             autocomplete="off"
             disabled={!!torrentFiles?.length}
           />
-        </p>
-      {/if}
-      <div role="alert">
-        {#if torrentRefusal}<p>{torrentRefusal}</p>{/if}
-      </div>
-      <div aria-live="polite">
-        {#if handedOver}<p>{handedOver}</p>{/if}
-      </div>
-      <button type="submit" disabled={busy || nothingChosen}>
-        {busy ? 'Working…' : `Send to ${chosenClient?.name ?? 'the client'}`}
-      </button>
-    </form>
-  {/if}
-</section>
-
-<section aria-labelledby="queue-heading">
-  <h2 id="queue-heading">Recent imports</h2>
-
-  <div aria-live="polite" aria-busy={view.kind === 'loading'}>
-    {#if view.kind === 'loading'}
-      <p>Loading imports…</p>
-    {:else if view.kind === 'empty'}
-      <p>Nothing has been imported yet.</p>
-    {:else if view.kind === 'error'}
-      <ErrorPanel problem={view.problem} area="import" endpoint="GET /api/v1/imports" />
-    {:else}
-      <table>
-        <caption class="visually-hidden">Imports, newest first</caption>
-        <thead>
-          <tr>
-            <th scope="col">File</th>
-            <th scope="col">Source</th>
-            <th scope="col">State</th>
-            <th scope="col">Size</th>
-            <th scope="col">Result</th>
-            <th scope="col">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each view.data.items as job (job.id)}
-            <tr>
-              <th scope="row">{job.source_filename ?? job.id.slice(0, 8)}</th>
-              <td>
-                {sourceLabel(job.source_kind)}
-                {#if (job.source_kind === 'http_url' || job.source_kind === 's3_object' || clientOfSource(job.source_kind)) && job.source_reference}
-                  <br /><small class="reference">{job.source_reference}</small>
-                {/if}
-              </td>
-              <td>
-                <!-- A symbol carries the status alongside any styling, so it
-                     is never communicated by colour alone. -->
-                <span aria-hidden="true">{importStateMark(job.state)}</span>
-                {importStateLabel(job.state, job.source_kind, job.error_code)}
-                {#if transferFraction(job) !== null}
-                  <progress max="100" value={(transferFraction(job) ?? 0) * 100}></progress>
-                {/if}
-                {#if job.error_code}
-                  <br /><small><code>{job.error_code}</code></small>
-                {/if}
-              </td>
-              <td>{formatBytes(job.bytes_received || (job.bytes_expected ?? 0))}</td>
-              <td>
-                {#if job.artifact_id}
-                  <a href={`/library/${job.artifact_id}`}>Open in library</a>
-                {:else if job.error_detail}
-                  {job.error_detail}
-                {:else}
-                  —
-                {/if}
-                {#if sourceRemovalLabel(job)}
-                  {@const removal = sourceRemovalLabel(job)}
-                  <p class="removal">
-                    <small
-                      ><strong>{removal?.headline}.</strong>
-                      {#if removal?.detail}{removal.detail}.{/if}</small
-                    >
-                  </p>
-                {/if}
-                {#if job.warnings.length > 0}
-                  <details>
-                    <summary
-                      >{job.warnings.length} finding{job.warnings.length === 1 ? '' : 's'}</summary
-                    >
-                    <ul>
-                      {#each job.warnings as warning, index (index)}
-                        <li>{warning}</li>
-                      {/each}
-                    </ul>
-                    {#if job.artifact_id && reportsOn}
-                      <!-- The artifact's page offers a format report when
-                           reports are on; the row does not know the format. -->
-                      <a href={`/library/${job.artifact_id}#format-report-heading`}
-                        >Ask about these findings</a
-                      >
-                    {/if}
-                  </details>
-                {/if}
-              </td>
-              <td>
-                {#if canCancel(job)}
-                  <button type="button" onclick={() => cancel(job.id)} disabled={busy}>
-                    Cancel
-                  </button>
-                {/if}
-                {#if canRetry(job)}
-                  <button type="button" onclick={() => retry(job.id)} disabled={busy}>
-                    {job.resumes_from ? `Retry from ${job.resumes_from}` : 'Retry'}
-                  </button>
-                {/if}
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
+        {/if}
+        <div role="alert">
+          {#if torrentRefusal}<p class="refused">{torrentRefusal}</p>{/if}
+        </div>
+        <div aria-live="polite">
+          {#if handedOver}<p>{handedOver}</p>{/if}
+        </div>
+        <div>
+          <Button type="submit" disabled={busy || nothingChosen}>
+            {busy ? 'Working…' : `Send to ${chosenClient?.name ?? 'the client'}`}
+          </Button>
+        </div>
+      </form>
     {/if}
-  </div>
-</section>
+  </Panel>
+</div>
+
+<div class="queue">
+  <Panel title="Recent imports" flush>
+    <div aria-live="polite" aria-busy={view.kind === 'loading'}>
+      {#if view.kind === 'loading'}
+        <p class="quiet padded">Loading imports…</p>
+      {:else if view.kind === 'empty'}
+        <p class="quiet padded">Nothing has been imported yet.</p>
+      {:else if view.kind === 'error'}
+        <div class="padded">
+          <ErrorPanel problem={view.problem} area="import" endpoint="GET /api/v1/imports" />
+        </div>
+      {:else}
+        <Table caption="Imports, newest first">
+          <thead>
+            <tr>
+              <th scope="col">File</th>
+              <th scope="col">Source</th>
+              <th scope="col">State</th>
+              <th scope="col" class="num">Size</th>
+              <th scope="col">Result</th>
+              <th scope="col"><span class="visually-hidden">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each view.data.items as job (job.id)}
+              {@const fraction = transferFraction(job)}
+              <tr>
+                <th scope="row">{job.source_filename ?? job.id.slice(0, 8)}</th>
+                <td>
+                  <span>{sourceLabel(job.source_kind)}</span>
+                  {#if (job.source_kind === 'http_url' || job.source_kind === 's3_object' || clientOfSource(job.source_kind)) && job.source_reference}
+                    <small class="reference">{job.source_reference}</small>
+                  {/if}
+                </td>
+                <td>
+                  <div class="stack">
+                    <StatusMark
+                      tone={importStateTone(job.state)}
+                      label={importStateLabel(job.state, job.source_kind, job.error_code)}
+                      pill
+                    />
+                    {#if fraction !== null}
+                      <Progress
+                        value={fraction}
+                        label="Transfer of {job.source_filename ?? 'the file'}"
+                      />
+                    {/if}
+                    {#if job.error_code}
+                      <small><code>{job.error_code}</code></small>
+                    {/if}
+                  </div>
+                </td>
+                <td class="num">{formatBytes(job.bytes_received || (job.bytes_expected ?? 0))}</td>
+                <td>
+                  <div class="stack">
+                    {#if job.artifact_id}
+                      <a href={`/library/${job.artifact_id}`}>Open in library</a>
+                    {:else if job.error_detail}
+                      <span>{job.error_detail}</span>
+                    {:else}
+                      <span class="quiet">·</span>
+                    {/if}
+                    {#if sourceRemovalLabel(job)}
+                      {@const removal = sourceRemovalLabel(job)}
+                      <p class="removal">
+                        <small
+                          ><strong>{removal?.headline}.</strong>
+                          {#if removal?.detail}{removal.detail}.{/if}</small
+                        >
+                      </p>
+                    {/if}
+                    {#if job.warnings.length > 0}
+                      <details>
+                        <summary
+                          >{job.warnings.length} finding{job.warnings.length === 1
+                            ? ''
+                            : 's'}</summary
+                        >
+                        <ul>
+                          {#each job.warnings as warning, index (index)}
+                            <li>{warning}</li>
+                          {/each}
+                        </ul>
+                        {#if job.artifact_id && reportsOn}
+                          <!-- The artifact's page offers a format report when
+                             reports are on; the row does not know the format. -->
+                          <a href={`/library/${job.artifact_id}#validation`}
+                            >Ask about these findings</a
+                          >
+                        {/if}
+                      </details>
+                    {/if}
+                  </div>
+                </td>
+                <td class="actions">
+                  {#if canCancel(job)}
+                    <Button size="sm" onclick={() => cancel(job.id)} disabled={busy}>Cancel</Button>
+                  {/if}
+                  {#if canRetry(job)}
+                    <Button size="sm" onclick={() => retry(job.id)} disabled={busy}>
+                      {job.resumes_from ? `Retry from ${job.resumes_from}` : 'Retry'}
+                    </Button>
+                  {/if}
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </Table>
+      {/if}
+    </div>
+  </Panel>
+</div>
 
 <style>
-  table {
-    border-collapse: collapse;
-    width: 100%;
+  .sources {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(22rem, 1fr));
+    gap: var(--space-4);
+    align-items: start;
   }
-  th,
-  td {
-    text-align: left;
-    padding: 0.5rem;
-    border-bottom: 1px solid currentColor;
-    vertical-align: top;
+  .form {
+    display: grid;
+    gap: var(--space-1);
   }
-  label {
-    font-weight: 600;
+  .form label {
+    margin-top: var(--space-2);
+    font-size: var(--text-sm);
   }
-  input:not([type]),
-  input[type='url'],
-  select {
-    padding: 0.4rem;
-    min-width: min(28rem, 100%);
+  .form label:first-child {
+    margin-top: 0;
   }
-  button {
-    padding: 0.4rem 0.8rem;
-    margin-right: 0.25rem;
+  .form > div:last-child {
+    margin-top: var(--space-3);
   }
-  .visually-hidden {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
+  .hint {
+    margin: 0;
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+    max-width: 60ch;
   }
-  small {
-    display: inline-block;
-    max-width: 40rem;
+  .sent {
+    display: grid;
+    gap: var(--space-1);
+    margin-top: var(--space-2);
+    font-size: var(--text-sm);
   }
-  progress {
-    display: block;
+  .refused {
+    color: var(--bad);
+    font-weight: var(--weight-medium);
+  }
+  .queue {
+    margin-top: var(--space-5);
+  }
+  .stack {
+    display: grid;
+    gap: var(--space-1);
+    justify-items: start;
+  }
+  .stack :global(.progress) {
     width: 8rem;
   }
   .reference {
+    display: block;
+    color: var(--text-muted);
     overflow-wrap: anywhere;
+  }
+  .removal {
+    margin: 0;
+  }
+  .actions {
+    white-space: nowrap;
+  }
+  .padded {
+    padding: var(--space-3) var(--space-4);
+  }
+  .quiet {
+    color: var(--text-muted);
   }
 </style>
