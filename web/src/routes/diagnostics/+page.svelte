@@ -4,16 +4,27 @@
   // The deployment's state as a checklist, for administrators: the same
   // report `tangible doctor --report` prints. It carries no paths, library
   // file names, or worker and drive names, so it can be copied into an issue
-  // as it is; "Report a problem" prepares it as one, for review.
+  // as it is; "Report a problem" prepares it as one, for review. In the new
+  // design (docs/plans/ui-overhaul.md, U8): the overall state and the
+  // actions in one panel, then a panel per section, each check's status a
+  // mark.
   import { onMount } from 'svelte';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import ReportPreview from '$lib/components/ReportPreview.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import EmptyState from '$lib/components/ui/EmptyState.svelte';
+  import PageHeader from '$lib/components/ui/PageHeader.svelte';
+  import Panel from '$lib/components/ui/Panel.svelte';
+  import StatusMark from '$lib/components/ui/StatusMark.svelte';
+  import Table from '$lib/components/ui/Table.svelte';
+  import { when } from '$lib/overview';
   import {
     downloadName,
     loadDiagnostics,
     loadDiagnosticsReport,
     statusCounts,
     statusLabel,
+    statusTone,
     type DiagnosticsView,
   } from '$lib/diagnostics';
   import {
@@ -92,7 +103,8 @@
     open = true;
   }
 
-  function when(value: string): string {
+  /** The full date and time, for a time's tooltip. */
+  function full(value: string): string {
     const date = new Date(value);
     return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
   }
@@ -100,20 +112,24 @@
 
 <svelte:head><title>Diagnostics — Tangible</title></svelte:head>
 
-<h1>Diagnostics</h1>
+<PageHeader
+  title="Diagnostics"
+  description="The state of this deployment as a checklist: the database, storage, tools, workers and drives, recent failures and the settings that matter for support."
+/>
 
-<p>
-  The state of this deployment as a checklist: the database, storage, tools, workers and drives,
-  recent failures and the settings that matter for support. It names no paths, library file names,
-  workers or drives, so it can be shared as it is. The same report is printed by
-  <code>docker compose run --rm server doctor --report</code>, which works when this page does not.
+<p class="lede">
+  It names no paths, library file names, workers or drives, so it can be shared as it is. The same
+  report is printed by <code>docker compose run --rm server doctor --report</code>, which works when
+  this page does not.
 </p>
 
-<section aria-live="polite" aria-busy={view.kind === 'loading' || refreshing}>
+<div aria-live="polite" aria-busy={view.kind === 'loading' || refreshing}>
   {#if view.kind === 'loading'}
-    <p>Collecting diagnostics…</p>
+    <p class="quiet">Collecting diagnostics…</p>
   {:else if view.kind === 'forbidden'}
-    <p>Only an administrator can see diagnostics.</p>
+    <EmptyState title="Administrators only" icon="lock">
+      <p>Only an administrator can see diagnostics.</p>
+    </EmptyState>
   {:else if view.kind === 'error'}
     <ErrorPanel
       problem={view.problem}
@@ -124,52 +140,70 @@
   {:else}
     {@const data = view.data}
     {@const counts = statusCounts(data)}
-    <h2>Overall: {statusLabel(data.status)}</h2>
-    <p>
-      {counts.problem} problem{counts.problem === 1 ? '' : 's'}, {counts.warn}
-      warning{counts.warn === 1 ? '' : 's'}, {counts.ok} OK. Collected {when(data.generated_at)}
-      from {data.build}.
-    </p>
+    <div class="stack">
+      <section class="overall {statusTone(data.status)}" aria-labelledby="overall-heading">
+        <div class="summary">
+          <h2 id="overall-heading">Overall: {statusLabel(data.status)}</h2>
+          <p>
+            {counts.problem} problem{counts.problem === 1 ? '' : 's'}, {counts.warn}
+            warning{counts.warn === 1 ? '' : 's'}, {counts.ok} OK. Collected
+            <time datetime={data.generated_at} title={full(data.generated_at)}
+              >{when(data.generated_at)}</time
+            >
+            from <code>{data.build}</code>.
+          </p>
+        </div>
+        <div class="actions">
+          <Button icon="refresh" onclick={refresh} disabled={refreshing}>
+            {refreshing ? 'Collecting…' : 'Collect again'}
+          </Button>
+          <Button onclick={() => copy(data.markdown)}>Copy as Markdown</Button>
+          <Button onclick={() => download(data)}>Download .md</Button>
+          {#if settings?.enabled && settings.issues_url}
+            <Button variant="primary" onclick={report} disabled={preparing}>
+              {preparing ? 'Preparing…' : 'Report a problem…'}
+            </Button>
+          {/if}
+        </div>
+        <p role="status" class="status" class:shown={status !== ''}>{status}</p>
+      </section>
 
-    <div class="actions">
-      <button type="button" onclick={refresh} disabled={refreshing}>
-        {refreshing ? 'Collecting…' : 'Collect again'}
-      </button>
-      <button type="button" onclick={() => copy(data.markdown)}>Copy as Markdown</button>
-      <button type="button" onclick={() => download(data)}>Download .md</button>
-      {#if settings?.enabled && settings.issues_url}
-        <button type="button" onclick={report} disabled={preparing}>
-          {preparing ? 'Preparing…' : 'Report a problem…'}
-        </button>
+      {#if refusal}
+        <ErrorPanel problem={refusal} area="deployment" refusal />
       {/if}
+
+      {#each data.sections as section (section.title)}
+        <Panel title={section.title} flush>
+          <Table caption={section.title}>
+            <!-- The same widths in every section, so the columns line up
+                 down the page. -->
+            <colgroup>
+              <col class="name" />
+              <col class="state" />
+              <col />
+            </colgroup>
+            <thead>
+              <tr>
+                <th scope="col">Check</th>
+                <th scope="col">Status</th>
+                <th scope="col">Detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each section.checks as check (check.name)}
+                <tr>
+                  <th scope="row">{check.name}</th>
+                  <td>
+                    <StatusMark tone={statusTone(check.status)} label={statusLabel(check.status)} />
+                  </td>
+                  <td class="detail">{check.detail}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </Table>
+        </Panel>
+      {/each}
     </div>
-    <p role="status">{status}</p>
-
-    {#if refusal}
-      <ErrorPanel problem={refusal} area="deployment" refusal />
-    {/if}
-
-    {#each data.sections as section (section.title)}
-      <table>
-        <caption>{section.title}</caption>
-        <thead>
-          <tr>
-            <th scope="col">Check</th>
-            <th scope="col">Status</th>
-            <th scope="col">Detail</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each section.checks as check (check.name)}
-            <tr class={check.status}>
-              <th scope="row">{check.name}</th>
-              <td><strong>{statusLabel(check.status)}</strong></td>
-              <td>{check.detail}</td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    {/each}
 
     {#if draft && settings?.issues_url}
       <ReportPreview
@@ -180,43 +214,81 @@
       />
     {/if}
   {/if}
-</section>
+</div>
 
 <style>
+  .lede {
+    margin: 0 0 var(--space-5);
+    max-width: 85ch;
+    color: var(--text-muted);
+  }
+  .quiet {
+    color: var(--text-muted);
+  }
+  .stack {
+    display: grid;
+    gap: var(--space-5);
+  }
+  /* The overall state is said in its heading; the edge's colour repeats it. */
+  .overall {
+    padding: var(--space-4);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--tone);
+    border-radius: var(--radius-lg);
+  }
+  .overall.ok {
+    --tone: var(--ok);
+  }
+  .overall.warn {
+    --tone: var(--warn);
+  }
+  .overall.bad {
+    --tone: var(--bad);
+  }
+  .summary h2 {
+    margin: 0 0 var(--space-1);
+    font-size: var(--text-lg);
+  }
+  .summary p {
+    margin: 0;
+  }
+  .summary {
+    margin-bottom: var(--space-3);
+  }
   .actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.5rem;
+    gap: var(--space-2);
   }
-  button {
-    padding: 0.5rem 1rem;
+  .status {
+    margin: 0;
+    font-size: var(--text-sm);
   }
-  table {
-    border-collapse: collapse;
-    width: 100%;
-    margin-top: 1.5rem;
+  .status.shown {
+    margin-top: var(--space-2);
   }
-  caption {
-    text-align: left;
-    font-weight: 600;
-    font-size: 1.15em;
-    padding-bottom: 0.25rem;
-  }
-  th,
-  td {
-    text-align: left;
-    padding: 0.5rem;
-    border-bottom: 1px solid currentColor;
-    vertical-align: top;
-  }
-  td:last-child {
+  .detail {
     overflow-wrap: anywhere;
   }
-  /* The status is in words; the border only repeats it. */
-  tr.problem th {
-    border-left: 4px solid currentColor;
+  .stack :global(table) {
+    table-layout: fixed;
   }
-  tr.warn th {
-    border-left: 4px dashed currentColor;
+  .name {
+    width: 16rem;
+  }
+  .state {
+    width: 9rem;
+  }
+  @media (max-width: 700px) {
+    .name {
+      width: 9rem;
+    }
+    .state {
+      width: 7rem;
+    }
+  }
+  .stack :global(tbody th) {
+    overflow-wrap: anywhere;
   }
 </style>

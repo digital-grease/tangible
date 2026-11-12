@@ -5,6 +5,7 @@
 // prints, from the server, and the same prepared as a bug report.
 
 import type { components } from './api-types';
+import type { Tone } from './components/ui/tone';
 import type { IssueReport } from './report';
 import { apiCall, apiFetch, type Result } from './session';
 
@@ -36,6 +37,18 @@ export function statusLabel(status: CheckStatus): string {
       return 'Warning';
     case 'problem':
       return 'Problem';
+  }
+}
+
+/** A check's status as a tone, beside its words. */
+export function statusTone(status: CheckStatus): Tone {
+  switch (status) {
+    case 'ok':
+      return 'ok';
+    case 'warn':
+      return 'warn';
+    case 'problem':
+      return 'bad';
   }
 }
 

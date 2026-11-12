@@ -9,6 +9,7 @@ import {
   loadAuditEvents,
   metadataText,
   outcomeLabel,
+  outcomeTone,
 } from './audit';
 
 describe('reading the audit log', () => {
@@ -35,6 +36,9 @@ describe('reading the audit log', () => {
     expect(actionLabel('worker.revoked')).toBe('Worker revoked');
     expect(actionLabel('something.new')).toBe('something.new');
     expect(outcomeLabel('denied')).toBe('Refused');
+    expect(outcomeTone('success')).toBe('ok');
+    expect(outcomeTone('failure')).toBe('bad');
+    expect(outcomeTone('denied')).toBe('warn');
     expect(actorLabel({ actor_type: 'user', actor_id: 'alice' })).toBe('alice');
     expect(actorLabel({ actor_type: 'system', actor_id: 'restore-check' })).toBe(
       'Tangible (restore-check)',

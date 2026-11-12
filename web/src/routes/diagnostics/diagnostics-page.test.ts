@@ -4,6 +4,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/svelte';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { forgetReportSettings } from '$lib/report';
+import { axeViolations } from '$lib/testing/axe';
 import Page from './+page.svelte';
 
 // jsdom has no modal dialogs; see ReportPreview.test.ts.
@@ -97,9 +98,10 @@ describe('Diagnostics page', () => {
       '/api/v1/diagnostics': { status: 200, body: DIAGNOSTICS },
       '/api/v1/report-settings': settings(false),
     });
-    render(Page);
+    const { container } = render(Page);
     expect(await screen.findByRole('heading', { name: 'Overall: Problem' })).toBeTruthy();
     expect(screen.getByText(/1 problem, 1 warning, 1 OK\./)).toBeTruthy();
+    expect(await axeViolations(container)).toEqual([]);
     const database = screen.getByRole('table', { name: 'Database' });
     const schema = within(database).getByRole('row', { name: /Schema/ });
     expect(schema.textContent).toContain('Problem');

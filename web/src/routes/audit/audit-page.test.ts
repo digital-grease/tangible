@@ -3,6 +3,7 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { axeViolations } from '$lib/testing/axe';
 
 const { default: AuditPage } = await import('./+page.svelte');
 
@@ -58,9 +59,10 @@ describe('Audit log page', () => {
         body: { items: [event(2, 'worker.drained')], next_cursor: null },
       },
     });
-    render(AuditPage);
+    const { container } = render(AuditPage);
     expect(await screen.findByRole('rowheader', { name: 'Worker revoked' })).toBeTruthy();
     expect(screen.getByText('Done')).toBeTruthy();
+    expect(await axeViolations(container)).toEqual([]);
     await fireEvent.click(screen.getByRole('button', { name: 'Show older events' }));
     expect(await screen.findByRole('rowheader', { name: 'Worker drained' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Show older events' })).toBeNull();

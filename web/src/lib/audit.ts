@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import type { components } from './api-types';
+import type { Tone } from './components/ui/tone';
 import { apiCall, apiFetch, type Result } from './session';
 
 export type AuditEvent = components['schemas']['AuditEventView'];
@@ -106,6 +107,23 @@ const ACTIONS: Record<string, string> = {
 /** An action in words, or as stored when it is not one known here. */
 export function actionLabel(action: string): string {
   return ACTIONS[action] ?? action;
+}
+
+/**
+ * How an action came out, as a tone beside its words: a refusal is the
+ * server doing its job, so a warning rather than a failure.
+ */
+export function outcomeTone(outcome: string): Tone {
+  switch (outcome) {
+    case 'success':
+      return 'ok';
+    case 'failure':
+      return 'bad';
+    case 'denied':
+      return 'warn';
+    default:
+      return 'idle';
+  }
 }
 
 /** How an action came out, in words. Never colour alone. */

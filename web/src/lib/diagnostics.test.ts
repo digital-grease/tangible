@@ -7,6 +7,7 @@ import {
   loadDiagnosticsReport,
   statusCounts,
   statusLabel,
+  statusTone,
 } from './diagnostics';
 
 function answering(body: unknown) {
@@ -30,6 +31,9 @@ describe('diagnostics', () => {
     expect(statusLabel('ok')).toBe('OK');
     expect(statusLabel('warn')).toBe('Warning');
     expect(statusLabel('problem')).toBe('Problem');
+    expect(statusTone('ok')).toBe('ok');
+    expect(statusTone('warn')).toBe('warn');
+    expect(statusTone('problem')).toBe('bad');
   });
 
   it('counts checks across sections', () => {
