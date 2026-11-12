@@ -641,7 +641,11 @@ may change between minor versions, and the release notes say how.
   its progress, folded while every drive is idle. Below 1200 pixels the
   sidebar is icons only; below 900, a drawer. "System" is now "Overview"
   and "Discs" "Physical copies". One event stream per browser tab feeds
-  it all.
+  it all. The Overview is the first page rebuilt in it: five tiles
+  that link to where their figures come from and mark what asks for
+  somebody, the burns needing attention and the latest burns, a live panel
+  of what has happened since the page opened, and the server's health in
+  one line that opens to its checks.
 - The image is built on Debian 13 (trixie), moving from Debian 12
   (bookworm), now oldstable, and every tool in it moves too: chdman 0.251
   to 0.276, which makes DVD CHDs (a DVD's ISO gets one, made with

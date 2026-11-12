@@ -5,10 +5,12 @@
   // (docs/plans/ui-overhaul.md, decision 10).
   //
   // The page writes the thead and tbody; this gives them the dense style,
-  // a caption (hidden unless `showCaption`), and a scrolling region a
-  // keyboard can reach and a screen reader can name. A cell or heading with
-  // class `num` is right-aligned with tabular figures. With `maxHeight` the
-  // region also scrolls down, and the column headings stay in view.
+  // a caption (hidden unless `showCaption`), and a scrolling area a keyboard
+  // can reach and a screen reader can name. The area is a named group, not
+  // a landmark: a table usually sits in a Panel that is already a region of
+  // the same name, and two landmarks of one name help nobody. A cell or
+  // heading with class `num` is right-aligned with tabular figures. With
+  // `maxHeight` the area also scrolls down, and the headings stay in view.
   import type { Snippet } from 'svelte';
 
   let {
@@ -28,12 +30,12 @@
 
 <!-- Focusable so a keyboard can scroll it (axe's scrollable-region-focusable
      rule, WCAG 2.1.1), and named so that stop makes sense to a screen reader.
-     Svelte's lint does not know scrolling regions; the stop is deliberate. -->
+     Svelte's lint does not know scrolling areas; the stop is deliberate. -->
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <div
   class="table-region"
   class:scrolls={!!maxHeight}
-  role="region"
+  role="group"
   aria-label={caption}
   tabindex="0"
   style:max-height={maxHeight}

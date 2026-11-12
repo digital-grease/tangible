@@ -7,9 +7,9 @@ import { axeViolations } from '$lib/testing/axe';
 import UiHarness from '$lib/testing/UiHarness.svelte';
 
 describe('Table', () => {
-  it('scrolls inside a named region a keyboard can reach, and keeps its caption', async () => {
+  it('scrolls inside a named group a keyboard can reach, and keeps its caption', async () => {
     const { getAllByRole, getByRole, container } = render(UiHarness, { show: 'panel' });
-    const region = getAllByRole('region').find((element) =>
+    const region = getAllByRole('group').find((element) =>
       element.classList.contains('table-region'),
     );
     expect(region?.getAttribute('aria-label')).toBe('Latest burns');
