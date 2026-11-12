@@ -2,7 +2,7 @@
 
 > A self-hosted disc-image preservation, management, and burning platform.
 
-**Status:** early release, 0.1.0. Everything listed under "What it does" works
+**Status:** early release, 0.2.0. Everything listed under "What it does" works
 and is tested, including on a real optical drive. Expect the API and the
 manifest schema to change during 0.x, with release notes.
 
@@ -27,15 +27,29 @@ Existing media managers usually center on playable video files, episodes, songs,
 
 **Library**
 
-- Imports by upload, or from watched folders an administrator configures; a
-  folder holding a disc's files imports as one artifact.
+- Imports by upload (in resumable parts for large files), from watched folders
+  an administrator configures, from a URL, from qBittorrent, SABnzbd and
+  NZBGet, and from S3-compatible storage; a folder holding a disc's files
+  imports as one artifact, and ZIP, 7z and tar archives are unpacked. It never
+  searches for anything: every import is one an operator asked for.
 - Recognises ISO 9660 and UDF images, CUE/BIN, cdrdao TOC/BIN, CloneCD
-  CCD/IMG/SUB (keeping its subchannel), and DVD-Video `VIDEO_TS` folders, by
-  their structure rather than their file names, and reports what looks
-  wrong.
+  CCD/IMG/SUB (keeping its subchannel), Alcohol 120% MDS/MDF, CHD, and
+  DVD-Video `VIDEO_TS` folders, by their structure rather than their file
+  names, and reports what looks wrong.
 - Stores every file once, by SHA-256, read-only, never renamed or rewritten,
   with a portable manifest per artifact from which the catalogue can be rebuilt.
+  Integrity checks read it back, on request or on a schedule, and a garbage
+  collection plan says what nothing refers to.
+- Computes preservation hashes (CRC32, MD5, SHA-1) of every file and CD track,
+  and matches them against the Logiqx DATs you load, such as Redump's.
 - Catalogues titles, editions, disc sets and discs, and links images to discs.
+
+**Ripping**
+
+- Rips CDs (cdrdao, or redumper in the opt-in image) and DVDs in a worker's
+  drive into the library, recording the drive, the tools and every read error.
+- Rips encrypted DVDs from an opt-in worker image you build yourself; see
+  "Legal and content boundary" below.
 
 **Burning**
 
@@ -52,25 +66,33 @@ Existing media managers usually center on playable video files, episodes, songs,
 
 **Derivatives and RomM**
 
-- Makes a CHD of a CUE/BIN, TOC/BIN or CD ISO with chdman, and keeps it only
-  if it extracts back identical to the original, track by track.
+- Makes CUE/BIN, ISO and CHD derivatives (chdman, CD and DVD), each recording
+  what produced it, and keeps a CHD only if it extracts back identical to the
+  original.
 - Writes chosen games into RomM's library folder the way RomM scans it, one
   folder per game, preferring a checked CHD, and never touches files it did
-  not write.
+  not write. With RomM's API connected, asks RomM to scan what changed and
+  links each game to its page there.
 
 **Operations**
 
-- A web UI and a documented REST API (`openapi.json`, generated from the code).
+- A web UI, in a light and a dark theme, with a live view of every drive, and
+  a documented REST API (`openapi.json`, generated from the code) with an
+  event stream.
 - Accounts with viewer, operator and administrator roles, cookie sessions and
-  CSRF protection, and an audit trail of who did what.
+  CSRF protection, sign-in through an OpenID Connect provider, and an audit
+  log of who did what.
+- Worker enrollment, draining and revocation, and credential rotation.
+- Diagnostics safe to share, Prometheus metrics, and `restore-check` for after
+  restoring a backup.
 - Hardened containers, fuzzed parsers, and release images that are signed and
   carry an SBOM and provenance.
 
 ## Not yet
 
-URL and download-client imports, metadata providers, RomM's API, CHDs of DVDs,
-CCD/IMG/SUB, MDS/MDF and BDMV images, burning a VIDEO_TS folder, S3-compatible storage, and
-single sign-on. See `CHANGELOG.md` for what each release adds.
+Ripping Blu-ray discs, BDMV images, burning a `VIDEO_TS` folder, metadata
+providers, and S3-compatible storage for the library itself (S3 is an import
+source). See `CHANGELOG.md` for what each release adds.
 
 ## Architecture
 
@@ -165,7 +187,7 @@ or a real drive, and fuzzing.
 
 Tangible is neutral infrastructure for content the operator is authorized to acquire, preserve, transform, and reproduce. The project will not bundle release indexers or decryption keys, and will not fetch or derive keys.
 
-Ripping discs in a worker's drive is planned, including encrypted DVDs and Blu-rays. It will follow the arrangement VideoLAN and the Linux distributions use: the published images contain no decryption code. An operator who wants to rip encrypted discs builds a worker image locally that includes VideoLAN's libdvdcss, libaacs and libbdplus, and supplies any key files themselves. Decryption stays off until an administrator enables it. Whether ripping a particular disc is lawful where you are is yours to determine.
+Ripping discs in a worker's drive follows the arrangement VideoLAN and the Linux distributions use: the published images contain no decryption code. An operator who wants to rip encrypted DVDs builds a worker image locally from `deploy/decryption/Dockerfile`, which compiles VideoLAN's libdvdcss from its source release, and supplies any key files themselves. Decryption stays off until an administrator enables it. Whether ripping a particular disc is lawful where you are is yours to determine.
 
 ## License
 

@@ -2598,7 +2598,7 @@ dependencies = [
 
 [[package]]
 name = "tangible-api"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "argon2",
  "async-trait",
@@ -2638,7 +2638,7 @@ dependencies = [
 
 [[package]]
 name = "tangible-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2661,7 +2661,7 @@ dependencies = [
 
 [[package]]
 name = "tangible-burn"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "hex",
@@ -2681,7 +2681,7 @@ dependencies = [
 
 [[package]]
 name = "tangible-db"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde_json",
  "sqlx",
@@ -2695,7 +2695,7 @@ dependencies = [
 
 [[package]]
 name = "tangible-domain"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "hex",
  "serde",
@@ -2708,7 +2708,7 @@ dependencies = [
 
 [[package]]
 name = "tangible-image"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "flate2",
@@ -2730,7 +2730,7 @@ dependencies = [
 
 [[package]]
 name = "tangible-integrations"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aws-lc-rs",
  "base64 0.23.1",
@@ -2754,7 +2754,7 @@ dependencies = [
 
 [[package]]
 name = "tangible-storage"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "crc",
  "hex",

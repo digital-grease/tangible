@@ -2,11 +2,11 @@
 # SPDX-FileCopyrightText: 2026 digitalgrease
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Fail if an image carries decryption code (ADR 0013).
+# Fail if an image carries decryption code.
 #
 # The image Tangible publishes never contains libdvdcss, libaacs or libbdplus,
-# the tools built on them, redumper (which carries its own CSS and AACS code,
-# ADR 0015), or a key database; an operator who wants to rip
+# the tools built on them, redumper (which carries its own CSS and AACS
+# code), or a key database; an operator who wants to rip
 # encrypted discs builds deploy/decryption/Dockerfile themselves. This lists
 # every file in the image's filesystem, without running anything in it, and
 # refuses any that is one of those.

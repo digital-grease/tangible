@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 digitalgrease
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# OPT-IN. A burn-worker image that can rip encrypted discs (ADR 0013).
+# OPT-IN. A burn-worker image that can rip encrypted discs.
 #
 # The image Tangible publishes contains no decryption code. This file adds it,
 # on top of a published image, on the operator's own machine, and nothing the
@@ -12,8 +12,8 @@
 # first:
 #
 #   docker build -f deploy/decryption/Dockerfile \
-#     --build-arg TANGIBLE_IMAGE=ghcr.io/digital-grease/tangible:v0.1.0 \
-#     -t tangible-decryption:v0.1.0 deploy/decryption
+#     --build-arg TANGIBLE_IMAGE=ghcr.io/digital-grease/tangible:v0.2.0 \
+#     -t tangible-decryption:v0.2.0 deploy/decryption
 #
 # The result is yours: it is outside the release's signature, SBOM,
 # provenance and vulnerability scan. Rebuild it whenever you move to a new
@@ -28,8 +28,8 @@
 #   libaacs0   Debian's (main: no keys in it). Reads keys only from the
 #   libbdplus0 KEYDB.cfg the operator mounts; for Blu-ray, later.
 #   redumper   upstream's static Linux build, pinned below by build and
-#              SHA-256, for CD rips with the drive's read offset corrected
-#              (ADR 0015). It is here, not in the published image, because
+#              SHA-256, for CD rips with the drive's read offset
+#              corrected. It is here, not in the published image, because
 #              it also carries CSS and AACS code and commands that crack DVD
 #              keys; the worker only ever runs its drive::detect, dump and
 #              split, on a CD.
@@ -80,8 +80,7 @@ FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1de
 # To move to a newer build: take the build number and each zip's SHA-256
 # from https://github.com/superg/redumper/releases (GitHub shows a digest
 # for every asset), check them against the downloads yourself, and change
-# all four lines together. Then rip a test CD before trusting it
-# (docs/plans/redumper.md, phase F).
+# all four lines together. Then rip a test CD before trusting it.
 ARG REDUMPER_BUILD=b768
 ARG REDUMPER_SHA256_AMD64=34409e24beb1acb11db975bdda12a7818096b6b92642266cfb0a12b4f700baf9
 ARG REDUMPER_SHA256_ARM64=6e578b5e9c5ab577eac41b5a2b1dd2bcbf8a723bc1698a13797023203696577c

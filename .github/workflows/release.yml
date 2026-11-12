@@ -96,7 +96,7 @@ jobs:
           provenance: mode=max
 
       # Before anything is signed: the published image never carries
-      # decryption code (ADR 0013); operators who want it build
+      # decryption code; operators who want it build
       # deploy/decryption/Dockerfile themselves.
       - name: No decryption code in the image
         env:

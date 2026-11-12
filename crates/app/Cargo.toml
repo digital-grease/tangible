@@ -15,14 +15,14 @@ anyhow = "1.0.104"
 clap = { version = "4.6.5", features = ["derive", "env"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-tangible-api = { version = "0.1.0", path = "../api" }
-tangible-burn = { version = "0.1.0", path = "../burn" }
-tangible-db = { version = "0.1.0", path = "../db" }
-tangible-domain = { version = "0.1.0", path = "../domain" }
-tangible-image = { version = "0.1.0", path = "../image" }
-tangible-integrations = { version = "0.1.0", path = "../integrations" }
+tangible-api = { version = "0.2.0", path = "../api" }
+tangible-burn = { version = "0.2.0", path = "../burn" }
+tangible-db = { version = "0.2.0", path = "../db" }
+tangible-domain = { version = "0.2.0", path = "../domain" }
+tangible-image = { version = "0.2.0", path = "../image" }
+tangible-integrations = { version = "0.2.0", path = "../integrations" }
 url = "2.5.7"
-tangible-storage = { version = "0.1.0", path = "../storage" }
+tangible-storage = { version = "0.2.0", path = "../storage" }
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "signal"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }

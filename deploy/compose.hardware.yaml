@@ -17,7 +17,7 @@
 
 services:
   burner-sr0:
-    image: ghcr.io/digital-grease/tangible:v0.1.0
+    image: ghcr.io/digital-grease/tangible:v0.2.0
     command: ["burn-worker"]
     restart: unless-stopped
     # A worker asked to stop while it writes or erases a disc finishes

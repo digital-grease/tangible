@@ -3,8 +3,8 @@
 #
 # OPT-IN DECRYPTION OVERRIDE, on top of compose.hardware.yaml. Runs the burn
 # worker from an image you built yourself from deploy/decryption/Dockerfile,
-# so it can rip encrypted discs (ADR 0013). Read deploy/README.md, "Ripping
-# encrypted discs", first.
+# so it can rip encrypted discs. Read deploy/README.md, "Ripping encrypted
+# discs", first.
 #
 #   docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml \
 #     -f deploy/compose.decryption.yaml config

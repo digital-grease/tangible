@@ -4,7 +4,55 @@ Notable changes to Tangible, newest first. Versions follow semantic
 versioning; during 0.x the API, the manifest schema and the database schema
 may change between minor versions, and the release notes say how.
 
-## Unreleased
+## 0.2.0 (2026-11-12)
+
+Tangible reads discs as well as writing them, fetches what it imports, and
+looks after what it keeps. The highlights, each detailed below:
+
+- Ripping CDs and DVDs in a worker's drive, and encrypted DVDs with an
+  opt-in worker image the operator builds (deploy/README.md, "Ripping
+  encrypted discs").
+- Importing from a URL, in resumable parts, and from qBittorrent, SABnzbd,
+  NZBGet and S3-compatible storage, optionally removing the source once the
+  library's copy has been checked.
+- CloneCD, Alcohol 120% (MDS/MDF) and CHD originals, and archives unpacked
+  on import; CUE/BIN, ISO and CHD made from them.
+- Integrity checks, scheduled scrubs and a garbage collection plan;
+  preservation hashes and DAT matching; RomM's API, so exported games are
+  scanned and found.
+- Signing in through an OpenID Connect provider, an audit log, worker
+  management with credential rotation, deletion as tombstones, Prometheus
+  metrics, and a live event stream.
+- A web UI redesigned throughout, in a light and a dark theme.
+- The image is built on Debian 13.
+
+### Upgrading from 0.1.0
+
+1. Take a backup of the database and the library, as deploy/README.md
+   ("Backups") says. This release adds 25 database migrations (0009 to
+   0033), and they only move forward: 0.1.0 cannot run on the migrated
+   database, so going back means restoring that backup.
+2. Compare your Compose files and `.env` with this release's
+   `deploy/compose.yaml`, `deploy/compose.hardware.yaml` and
+   `deploy/.env.example`, and take what you need. Every new setting is off
+   unless set, except preservation hashing (below), and the server now
+   has a minute to stop (`stop_grace_period`).
+3. Point the server and every worker at the new image, by digest, then
+   `docker compose pull`, `docker compose run --rm server migrate`, and
+   `docker compose up -d`, as deploy/README.md ("Upgrading") says. Workers
+   run the same image; upgrade them with the server.
+4. A worker given an `http://` server URL across the network now refuses to
+   start. Use `https://`, or set `TANGIBLE_WORKER_PLAIN_HTTP=true` on that
+   worker (under Changed).
+5. If you built the opt-in decryption image, build it again from this
+   release: its stages are on Debian 13 now.
+
+After the upgrade the server computes preservation hashes (CRC32, MD5 and
+SHA-1) of every artifact already in the library, in the background, which
+reads each one once. Set `TANGIBLE_PRESERVATION_HASHES=false` to leave it
+off. And 0.1.0 kept a second copy of every import's bytes in
+`staging/imports/`: those of imports shown as complete can be deleted
+(under Fixed).
 
 ### Added
 
@@ -12,129 +60,124 @@ may change between minor versions, and the release notes say how.
   `GET /api/v1/drives/{drive_id}`): `activity`, the open burn, rip or
   erasure on it, with its state (a burn's job state, so waiting for a disc
   shows), the burn's disc title and number, the latest progress, the disc
-  the worker inspected, and the burned artifact's shape; `null` when
-  nothing is open. For the web UI's drive bay
-  (docs/plans/ui-overhaul.md).
+  the worker inspected, and the burned artifact's shape; `null` when nothing
+  is open. For the web UI's drive bay.
 - Library items carry `disc_shape`, the disc their manifest describes: its
   media family, its length in sectors and its tracks (session, sectors,
   audio or not), for drawing it. And the library can be searched by name:
   `GET /api/v1/artifacts?name=` keeps artifacts one of whose files has a
   name containing the text, in any case, as received or as stored.
-- Archives are unpacked on import (docs/plans/archives.md): when the one
-  file an import holds is a ZIP, a 7z or a tar (plain, gzip or xz),
-  recognised by its bytes, its files are imported in its place, so a
-  CUE/BIN in a `.7z` arrives as the CUE/BIN. The archive is not kept; the
-  manifest records it as `origin.container` (format, SHA-256, size, files,
-  notes) and the artifact detail as `unpacked_from`. Refused, with a stable
-  failure code: encrypted archives (`ARCHIVE_ENCRYPTED`), names that are
-  not plain relative paths, links, devices, sparse files and names twice
-  (`ARCHIVE_UNSAFE_ENTRY`), more than 10,000 entries, more than
-  `TANGIBLE_MAX_UPLOAD_BYTES` or a thousand times the archive's size
-  unpacked, a 7z dictionary over 1 GiB, or an index the decoders would
-  hold whole in memory (a ZIP's central directory or a 7z header over
-  64 MiB, a tar extension header over 1 MiB), checked from the bytes before
-  it is read (`ARCHIVE_TOO_LARGE`), unreadable
-  data (`ARCHIVE_CORRUPT`), unknown methods (`ARCHIVE_UNSUPPORTED`). macOS's
+- Archives are unpacked on import: when the one file an import holds is a
+  ZIP, a 7z or a tar (plain, gzip or xz), recognised by its bytes, its files
+  are imported in its place, so a CUE/BIN in a `.7z` arrives as the CUE/BIN.
+  The archive is not kept; the manifest records it as `origin.container`
+  (format, SHA-256, size, files, notes) and the artifact detail as
+  `unpacked_from`. Refused, with a stable failure code: encrypted archives
+  (`ARCHIVE_ENCRYPTED`), names that are not plain relative paths, links,
+  devices, sparse files and names twice (`ARCHIVE_UNSAFE_ENTRY`), more than
+  10,000 entries, more than `TANGIBLE_MAX_UPLOAD_BYTES` or a thousand times
+  the archive's size unpacked, a 7z dictionary over 1 GiB, or an index the
+  decoders would hold whole in memory (a ZIP's central directory or a 7z
+  header over 64 MiB, a tar extension header over 1 MiB), checked from the
+  bytes before it is read (`ARCHIVE_TOO_LARGE`), unreadable data
+  (`ARCHIVE_CORRUPT`), unknown methods (`ARCHIVE_UNSUPPORTED`). macOS's
   `__MACOSX` and `.DS_Store` are left out; an archive inside is imported as
   a file. An interrupted unpack starts again cleanly, from state kept in a
   staging area of Tangible's own (`<staging>/unpacks/`) that no source
-  writes to. No RAR. Pure Rust
-  decoders: `zip`, `sevenz-rust2`, `tar`, `flate2`, `lzma-rust2`. An
-  artifact's page says what archive its files came in, its size, digest
-  and notes, and that the archive itself is not kept.
-- Artifacts can be deleted, as tombstones (ADR 0020,
-  docs/plans/deletion.md). An administrator (new permission
-  `delete_artifacts`) asks with `POST /api/v1/artifacts/{id}/deletion-requests`
-  (an original needs `confirm_original`); the artifact is pending for
+  writes to. No RAR. Pure Rust decoders: `zip`, `sevenz-rust2`, `tar`,
+  `flate2`, `lzma-rust2`. An artifact's page says what archive its files
+  came in, its size, digest and notes, and that the archive itself is not
+  kept.
+- Artifacts can be deleted, as tombstones. An administrator (new permission
+  `delete_artifacts`) asks with
+  `POST /api/v1/artifacts/{id}/deletion-requests` (an original needs
+  `confirm_original`); the artifact is pending for
   `TANGIBLE_DELETION_GRACE_DAYS` (7 by default), when `DELETE` on the same
   path keeps it, and then its bytes are removed and its record kept:
   components, hashes, manifest, lineage, burns and discs. Refused with a
-  retention lock (`ARTIFACT_RETAINED`) or while a burn, derivation, check
-  or source removal of it is under way (`ARTIFACT_IN_USE`); while pending,
+  retention lock (`ARTIFACT_RETAINED`) or while a burn, derivation, check or
+  source removal of it is under way (`ARTIFACT_IN_USE`); while pending,
   burns and derivations of it are refused and the RomM export leaves it;
-  once deleted, its content and checks are refused (`ARTIFACT_DELETED`).
-  A stored file is removed only when no artifact still has it, under a lock
-  every import and derivation holds until it has registered what it
-  stored. The library list leaves deleted artifacts out (`?deleted=true`
-  lists them); every artifact view carries `deletion`, and `origin`. Scrubs, the GC plan,
-  restore checks, the dashboard and metrics leave them out. Migration 0033.
-  On an artifact's page, "Delete this artifact" says what happens and,
-  for an original, asks to be told it may be the only copy; a pending
-  artifact says when it goes and offers "Keep"; a deleted one shows its
-  record with nothing to download, check or burn. The Library marks
+  once deleted, its content and checks are refused (`ARTIFACT_DELETED`). A
+  stored file is removed only when no artifact still has it, under a lock
+  every import and derivation holds until it has registered what it stored.
+  The library list leaves deleted artifacts out (`?deleted=true` lists
+  them); every artifact view carries `deletion`, and `origin`. Scrubs, the
+  GC plan, restore checks, the dashboard and metrics leave them out.
+  Migration 0033. On an artifact's page, "Delete this artifact" says what
+  happens and, for an original, asks to be told it may be the only copy; a
+  pending artifact says when it goes and offers "Keep"; a deleted one shows
+  its record with nothing to download, check or burn. The Library marks
   pending deletions and can list only deleted artifacts.
-- `GET /api/v1/events`, the server-sent event stream API.md 12 describes
-  (docs/plans/event-stream.md): what changes in imports, burns and their
-  progress, rips, erasures, derivations, workers and the library, as it
-  commits, heard from the database itself (migration 0031). Topics can be
-  chosen; a client reconnecting with `Last-Event-ID` is sent what it
-  missed, or `stream.reset` to reconcile. Streams end after ten minutes and
-  at shutdown; one account may have 16 open, the server 256. Shutdown waits
-  at most 30 seconds for requests still under way. The burn queue and each burn, the rips and each rip, the
-  imports and the Workers page now follow it, refreshing as things change
-  and reconciling every minute; where a browser has no EventSource they
-  poll as before.
-- Worker credentials are rotated (docs/plans/credential-rotation.md). A
-  worker's heartbeat says `credential_rotation_required` when an
-  administrator asked (`POST /api/v1/workers/{id}/rotate-credential`) or
-  the credential is older than `TANGIBLE_WORKER_CREDENTIAL_MAX_AGE_DAYS`
-  (90 by default, `0` for never); between jobs the worker asks for a new
-  one (`POST /api/v1/workers/{id}/credential-rotations`), saves it and uses
-  it. The old credential works until the new one is first presented, then
-  never again, so a lost answer or a restart halfway never locks a worker
-  out. Issuing, rotating and asking are audited. Workers show when their
-  credential was issued and whether a rotation is due. The worker's
-  identity file is now written readable by its user alone and flushed to
-  disk before it replaces the old one. The Workers page shows each
-  credential's age, or that a rotation is asked for or due, and has a
-  "Rotate credential" button for administrators.
+- `GET /api/v1/events`, a server-sent event stream: what changes in imports,
+  burns and their progress, rips, erasures, derivations, workers and the
+  library, as it commits, heard from the database itself (migration 0031).
+  Topics can be chosen; a client reconnecting with `Last-Event-ID` is sent
+  what it missed, or `stream.reset` to reconcile. Streams end after ten
+  minutes and at shutdown; one account may have 16 open, the server 256.
+  Shutdown waits at most 30 seconds for requests still under way. The burn
+  queue and each burn, the rips and each rip, the imports and the Workers
+  page now follow it, refreshing as things change and reconciling every
+  minute; where a browser has no EventSource they poll as before.
+- Worker credentials are rotated. A worker's heartbeat says
+  `credential_rotation_required` when an administrator asked
+  (`POST /api/v1/workers/{id}/rotate-credential`) or the credential is older
+  than `TANGIBLE_WORKER_CREDENTIAL_MAX_AGE_DAYS` (90 by default, `0` for
+  never); between jobs the worker asks for a new one
+  (`POST /api/v1/workers/{id}/credential-rotations`), saves it and uses it.
+  The old credential works until the new one is first presented, then never
+  again, so a lost answer or a restart halfway never locks a worker out.
+  Issuing, rotating and asking are audited. Workers show when their
+  credential was issued and whether a rotation is due. The worker's identity
+  file is now written readable by its user alone and flushed to disk before
+  it replaces the old one. The Workers page shows each credential's age, or
+  that a rotation is asked for or due, and has a "Rotate credential" button
+  for administrators.
 - `GET /api/v1/drives/{id}` answers one drive as the drive list does.
-- The library can be filtered (docs/plans/library-filters.md):
-  `GET /api/v1/artifacts` takes `format`, `origin`, `validation_state`,
-  `integrity_state`, `linked` (`false` for artifacts linked to no disc)
-  and `created_after`/`created_before`, answered from the catalogue rather
-  than by reading every manifest. An unfiltered list is unchanged. The
-  Library page has a filter bar for format, where an artifact came from,
-  validation, stored bytes and whether it is linked to a disc.
-- `GET /api/v1/dashboard` (docs/plans/dashboard.md), for anyone signed in,
-  answers in one request what needs doing and what is under way: imports
-  under way and failed in the last week; burn jobs queued, waiting for a
-  disc, under way and needing attention; workers online, silent, draining,
-  pending and incompatible; artifacts damaged and never checked; objects
-  stored and the library volume's free space; and the five latest ended
-  burns and jobs needing attention, by title and disc number. The home
-  page shows it as cards, each in words and linking to its page, headed
-  "Needs somebody" when a burn needs attention or a disc, a worker has gone
-  silent, an artifact is damaged or an import failed this week.
-- The catalog can be edited (docs/plans/catalog-editing.md): `PATCH` on a
-  title, edition, disc set or disc changes the fields given, `null`
-  clearing one that may be empty. Every catalog row now has a `version`,
-  its `ETag`; an edit sent with `If-Match` naming a version somebody has
-  since changed is refused with `409 RESOURCE_VERSION_CONFLICT` rather than
-  overwriting their change. A renamed title's sort title follows the name
-  unless it was set on its own. Disc numbers stay unique within a set.
-  Edits need the `catalog` permission and are audited. `GET
-  /api/v1/editions/{id}` and `/disc-sets/{id}` are new. Database migration
-  0029 adds the version columns, additively. On the Catalog page, "Change
-  this title", "Change this edition", "Change this set" and "Change" on
-  each disc open a form that saves only what changed, and says so when
-  somebody else changed it first.
-- The audit log can be read (docs/plans/audit-log.md):
-  `GET /api/v1/audit-events`, newest first and paged, filtered by action
-  (or a kind of action, such as `worker.`), actor, target and outcome, and
-  `GET /api/v1/audit-events/{id}`. A new permission, `read_audit`, held by
-  administrators, guards both. The events have been written all along;
-  until now only the database could show them. The web UI's Audit log page
-  shows them in words, filtered by kind, who and what, with older events
-  on request.
-- Workers can be managed (docs/plans/worker-admin.md): `GET /api/v1/workers`
-  and `GET /api/v1/workers/{id}` list them with their status and drives,
-  and an administrator can drain one (it finishes what it holds and is
-  given no new burns, rips or erasures; its heartbeat says `drain`), enable
-  it again, or revoke it, which refuses its credential from its next request
-  for good. Each change is audited. Until now nothing set a worker draining
-  or revoked short of editing the database. The Workers page lists them,
-  with Drain, Enable and Revoke (which asks first and says what it does).
+- The library can be filtered: `GET /api/v1/artifacts` takes `format`,
+  `origin`, `validation_state`, `integrity_state`, `linked` (`false` for
+  artifacts linked to no disc) and `created_after`/`created_before`,
+  answered from the catalogue rather than by reading every manifest. An
+  unfiltered list is unchanged. The Library page has a filter bar for
+  format, where an artifact came from, validation, stored bytes and whether
+  it is linked to a disc.
+- `GET /api/v1/dashboard`, for anyone signed in, answers in one request what
+  needs doing and what is under way: imports under way and failed in the
+  last week; burn jobs queued, waiting for a disc, under way and needing
+  attention; workers online, silent, draining, pending and incompatible;
+  artifacts damaged and never checked; objects stored and the library
+  volume's free space; and the five latest ended burns and jobs needing
+  attention, by title and disc number. The home page shows it as cards, each
+  in words and linking to its page, headed "Needs somebody" when a burn
+  needs attention or a disc, a worker has gone silent, an artifact is
+  damaged or an import failed this week.
+- The catalog can be edited: `PATCH` on a title, edition, disc set or disc
+  changes the fields given, `null` clearing one that may be empty. Every
+  catalog row now has a `version`, its `ETag`; an edit sent with `If-Match`
+  naming a version somebody has since changed is refused with
+  `409 RESOURCE_VERSION_CONFLICT` rather than overwriting their change. A
+  renamed title's sort title follows the name unless it was set on its own.
+  Disc numbers stay unique within a set. Edits need the `catalog` permission
+  and are audited. `GET /api/v1/editions/{id}` and `/disc-sets/{id}` are
+  new. Database migration 0029 adds the version columns, additively. On the
+  Catalog page, "Change this title", "Change this edition", "Change this
+  set" and "Change" on each disc open a form that saves only what changed,
+  and says so when somebody else changed it first.
+- The audit log can be read: `GET /api/v1/audit-events`, newest first and
+  paged, filtered by action (or a kind of action, such as `worker.`), actor,
+  target and outcome, and `GET /api/v1/audit-events/{id}`. A new permission,
+  `read_audit`, held by administrators, guards both. The events have been
+  written all along; until now only the database could show them. The web
+  UI's Audit log page shows them in words, filtered by kind, who and what,
+  with older events on request.
+- Workers can be managed: `GET /api/v1/workers` and
+  `GET /api/v1/workers/{id}` list them with their status and drives, and an
+  administrator can drain one (it finishes what it holds and is given no new
+  burns, rips or erasures; its heartbeat says `drain`), enable it again, or
+  revoke it, which refuses its credential from its next request for good.
+  Each change is audited. Until now nothing set a worker draining or revoked
+  short of editing the database. The Workers page lists them, with Drain,
+  Enable and Revoke (which asks first and says what it does).
 - CHD images imported as originals are recognised: the header and the
   metadata chain are read with a bounded, fuzzed reader checked against
   chdman 0.251's own reading of CHDs it made, never the compressed data.
@@ -207,12 +250,11 @@ may change between minor versions, and the release notes say how.
   asking for an artifact's hashes again (`artifact.rehash_requested`), and
   for `restore-check` cataloguing an artifact again
   (`artifact.recatalogued`, by the system).
-- Worker enrollment is rate limited, as AGENTS.md requires of worker
-  registration: after five rejected tokens under one worker name in
-  fifteen minutes, or sixty in all, further rejected tokens are answered
-  429 `RATE_LIMITED` with `Retry-After` until the window passes, without a
-  log line each. A valid token always enrolls, so bad tokens cannot lock a
-  real worker out.
+- Worker enrollment is rate limited, as sign-in is: after five rejected
+  tokens under one worker name in fifteen minutes, or sixty in all, further
+  rejected tokens are answered 429 `RATE_LIMITED` with `Retry-After` until
+  the window passes, without a log line each. A valid token always enrolls,
+  so bad tokens cannot lock a real worker out.
 - Every command warns, at start, of each `TANGIBLE_` environment variable
   that is set and that nothing reads, which is most often a mistyped
   setting otherwise silently ignored. Only the name is logged, never the
@@ -385,7 +427,7 @@ may change between minor versions, and the release notes say how.
   whose SHA-256 and size are the artifact's, checked just before each
   delete, and then the folders left empty. Anything else stays and is
   counted. SABnzbd is then asked to forget the job (it archives it), NZBGet
-  to hide it. Diagnostics gains a "Removable roots" check (ADR 0017).
+  to hide it. Diagnostics gains a "Removable roots" check.
 - The web UI offers it: on the Integrations page, each download client and
   S3 integration has "After an import is in the library", keep or remove,
   saying what goes and when; a SABnzbd or NZBGet offers removing only on a
@@ -427,23 +469,21 @@ may change between minor versions, and the release notes say how.
   of binary files, known signatures at known offsets) with every name
   replaced (`GET /api/v1/artifacts/{id}/format-report`, new issue form
   `format_support.yml`).
-- CDs can be ripped into the library (ADR 0013, first part): an operator
-  asks for a rip of a drive's disc (`POST /api/v1/drives/{id}/rips`), the
-  drive's worker reads it with `cdrdao read-cd`, sends the table of
-  contents and data, and they are imported as a TOC/BIN artifact whose
-  origin says it was dumped from a disc. A rip can be withdrawn until its
-  import starts. DVDs, Blu-rays and blank discs are refused for now. A
-  drive now does one thing at a time across burns, erasures and rips. The
-  web UI's Rips page asks for a rip and follows it to the library, with
-  progress as the disc reads.
-- DVD data discs can be ripped too (ADR 0013, second part): the worker
-  reads the disc sector by sector from the drive itself into an image,
-  retrying a sector that fails and stopping at one that will not read, and
-  it is imported as an ISO. An encrypted (CSS) DVD is recognised while it
-  reads and refused, keeping nothing, including on drives that will not
-  read its video at all without authentication. A disc the system has not
-  caught up with since a burn is refused with a request to reload it.
-  Blu-rays are still refused.
+- CDs can be ripped into the library: an operator asks for a rip of a
+  drive's disc (`POST /api/v1/drives/{id}/rips`), the drive's worker reads
+  it with `cdrdao read-cd`, sends the table of contents and data, and they
+  are imported as a TOC/BIN artifact whose origin says it was dumped from a
+  disc. A rip can be withdrawn until its import starts. Blu-rays and blank
+  discs are refused. A drive now does one thing at a time across burns,
+  erasures and rips. The web UI's Rips page asks for a rip and follows it to
+  the library, with progress as the disc reads.
+- DVD data discs can be ripped too: the worker reads the disc sector by
+  sector from the drive itself into an image, retrying a sector that fails
+  and stopping at one that will not read, and it is imported as an ISO. An
+  encrypted (CSS) DVD is recognised while it reads and refused, keeping
+  nothing, including on drives that will not read its video at all without
+  authentication. A disc the system has not caught up with since a burn is
+  refused with a request to reload it. Blu-rays are still refused.
 - An opt-in worker image for ripping encrypted discs, built by the operator
   and never published (`deploy/decryption/Dockerfile`, with
   `deploy/compose.decryption.yaml` to run a worker from it): VideoLAN's
@@ -477,11 +517,11 @@ may change between minor versions, and the release notes say how.
   time limit and its key cache off, and nothing it prints that could carry
   key material is kept. A disc that will not decrypt fails as
   `DECRYPTION_FAILED`, keeping nothing.
-- The opt-in worker image also installs redumper (ADR 0015), from its
-  GitHub release pinned by build and SHA-256 for amd64 and arm64, for CD
-  rips with the drive's read offset corrected. The worker does not use it
-  yet. It is not in the published image, and the release's check refuses
-  it there, because it carries its own CSS and AACS code.
+- The opt-in worker image also installs redumper, from its GitHub release
+  pinned by build and SHA-256 for amd64 and arm64, for CD rips with the
+  drive's read offset corrected. It is not in the published image, and the
+  release's check refuses it there, because it carries its own CSS and AACS
+  code.
 - A rip can choose the tool for a CD (`cd_engine` on
   `POST /api/v1/drives/{id}/rips`): redumper, the default where the drive's
   worker has it, or cdrdao, for a drive whose redumper rips go wrong.
@@ -614,59 +654,37 @@ may change between minor versions, and the release notes say how.
 
 ### Changed
 
-- The web UI is being redesigned (docs/plans/ui-overhaul.md). First, the
-  foundations: one set of design tokens (colour by role, type, space,
-  shape) in a light and a dark theme, element styles every page starts
-  from, and the Inter and JetBrains Mono fonts, bundled and served by
-  Tangible itself (OFL-1.1; listed in `THIRD_PARTY_NOTICES.txt`), so the
-  Content Security Policy is unchanged. The theme follows the system's
-  setting unless the person picks Light or Dark in the header; the choice
-  is remembered in the browser. A test checks that every text colour
-  meets WCAG 2.2 AA contrast (4.5:1) on every background in both themes,
-  and form-control borders 3:1. Then the parts pages are built from:
-  buttons, fields, selects, checkboxes, tables that scroll inside
-  themselves, status marks (a shape and words for every state, never
-  colour alone), badges, progress bars, panels, page headers, tabs, a
-  menu and empty states, each checked with axe-core in its tests. Error
-  panels take the new look. And a drawing of a disc from its own data, to
-  scale: an artifact's tracks (audio tracks set apart as on a pressed CD),
-  a burn's written area growing outward toward the image's extent, a
-  rip's read area, an empty tray. And the shell every signed-in page now sits in:
-  a sidebar with the pages in groups (Overview; Collection: Library,
-  Catalog, Physical copies; Activity: Imports, Rips, Burns, with counts of
-  what is under way; Administration), the account, theme, sign-out and
-  source link at its foot; a top bar with where you are, a command bar
-  (Ctrl+K: any page, the three actions, artifacts by name) and a New menu;
-  and a drive bay showing each drive's state, the burn it is writing and
-  its progress, folded while every drive is idle. Below 1200 pixels the
-  sidebar is icons only; below 900, a drawer. "System" is now "Overview"
-  and "Discs" "Physical copies". One event stream per browser tab feeds
-  it all. The Overview is the first page rebuilt in it: five tiles
-  that link to where their figures come from and mark what asks for
-  somebody, the burns needing attention and the latest burns, a live panel
-  of what has happened since the page opened, and the server's health in
-  one line that opens to its checks. The Library and the artifact page follow: each
-  artifact's disc drawn in its row and, to scale beside its tracks, on its
-  Topology tab; search by part of a file's name; and the artifact's facts,
-  components, topology, validation, lineage and burning in tabs under a
-  header that says what it is and offers what can be done with it; its
-  integrity, identification, derivatives and deletion each say their state
-  with a mark, and deleting asks in place. So do
-  the Catalog, as three columns from title to disc set with the set's discs
-  below and an edition's RomM export in a panel of its own, and Physical copies, the discs to destroy first. Imports puts
-  each source in its own panel above the queue, which shows each import's
-  state as a mark with its progress. Rips and a rip
-  follow, with the dialog that starts a rip. So do the burn queue, a burn's page, which draws
-  its disc being written outward as the worker reports, and creating a
-  burn. Workers and drives shows each drive with its disc drawn and what
-  it is doing now, and asks before a worker is revoked or a disc erased,
-  taking the keyboard to the question. Accounts puts the list beside the
-  form that creates one. Integrations, Storage and DATs follow, each state
-  as a mark; removing an integration or a DAT asks under the list instead
-  of inside the row. So do the Audit log, filtered in one bar, and
-  Diagnostics, whose sections' columns line up down the page. Signing in
-  and setting up are a card centred under Tangible's mark, the identity
-  provider's button first when one is set up.
+- The web UI is redesigned throughout, as an operations console in a light
+  and a dark theme. The theme follows the system unless Light or Dark is
+  picked at the foot of the sidebar, and the choice is remembered in the
+  browser. The Inter and JetBrains Mono fonts are bundled and served by
+  Tangible itself (OFL-1.1; listed in `THIRD_PARTY_NOTICES-web.txt`), so the
+  Content Security Policy is unchanged.
+
+  Every signed-in page sits in one shell: a sidebar with the pages in groups
+  (Overview; Collection: Library, Catalog, Physical copies; Activity:
+  Imports, Rips, Burns, with counts of what is under way; Administration),
+  and the account, theme, sign-out and source link at its foot; a top bar
+  with where you are, a command bar (Ctrl+K: any page, the three actions,
+  artifacts by name) and a New menu; and a drive bay showing each drive's
+  state, the burn or rip in it and its progress, folded while every drive is
+  idle. Below 1200 pixels the sidebar is icons only; below 900, a drawer.
+  "System" is now "Overview" and "Discs" "Physical copies". One event stream
+  per browser tab keeps it all current.
+
+  Discs are drawn from their own data, to scale: an artifact's tracks in its
+  library row and on its Topology tab (audio tracks set apart as on a
+  pressed CD), a burn's written area growing outward as the worker reports,
+  a rip's read area, an empty tray.
+
+  Every state is a status mark, a shape and words, never colour alone.
+  Destructive actions ask in place, under what they are about, and take the
+  keyboard to the question. Pages are built from one set of components
+  (buttons, fields, tables that scroll within themselves, panels, tabs,
+  callouts, empty states), each checked with axe-core in its tests, and a
+  test checks that every text colour meets WCAG 2.2 AA contrast in both
+  themes. Signing in and setting up are a card centred under Tangible's
+  mark, the identity provider's button first when one is set up.
 - The image is built on Debian 13 (trixie), moving from Debian 12
   (bookworm), now oldstable, and every tool in it moves too: chdman 0.251
   to 0.276, which makes DVD CHDs (a DVD's ISO gets one, made with
@@ -685,15 +703,14 @@ may change between minor versions, and the release notes say how.
   (409), not `VALIDATION_FAILED`. No version set the old flag; a row that
   had it, set by hand, is reset to kept by migration 0033.
 - A CHD imported as it is goes to RomM as it is once `chdman verify` has
-  passed it (owner decision, OWNER_QUEUE 14; docs/plans/chd-images.md). The
-  export runs the verify once per CHD and chdman version, on a server whose
-  derivation engine is chdman, and records the verdict by the CHD's SHA-256
-  (migration 0032), only when chdman itself answered: a run that could not
-  start, took too long or was ended by a signal is tried again on the next
-  pass. One that fails is not sent, and the edition's status says what
-  chdman said, the library's path left out. A CHD made and
-  checked here is still preferred, then a verified imported one, then an
-  ISO or CUE/BIN.
+  passed it. The export runs the verify once per CHD and chdman version, on
+  a server whose derivation engine is chdman, and records the verdict by the
+  CHD's SHA-256 (migration 0032), only when chdman itself answered: a run
+  that could not start, took too long or was ended by a signal is tried
+  again on the next pass. One that fails is not sent, and the edition's
+  status says what chdman said, the library's path left out. A CHD made and
+  checked here is still preferred, then a verified imported one, then an ISO
+  or CUE/BIN.
 - **A worker refuses plain HTTP that would leave its machine** (breaking
   for a remote worker given an `http://` server URL). An `http://`
   `TANGIBLE_SERVER_URL` is accepted only where the server's address is
@@ -702,7 +719,7 @@ may change between minor versions, and the release notes say how.
   stops at start and says which address and why. Use an `https://` URL, or
   set the new `TANGIBLE_WORKER_PLAIN_HTTP=true` to accept plain HTTP across
   the network. A server URL carrying a user name or password is refused,
-  and the worker no longer follows redirects. BURN_WORKER_PROTOCOL.md 5 has
+  and the worker no longer follows redirects. The worker protocol has
   always required this; the worker did not enforce it.
 
 ### Fixed
@@ -760,6 +777,21 @@ may change between minor versions, and the release notes say how.
   kept a second full copy of its bytes in the staging directory, doubling
   the disk it used; those left by earlier versions can be deleted from
   `staging/imports/` for any import shown as complete.
+
+### Known limitations
+
+- Blu-ray discs cannot be ripped, and BDMV images are not recognised; the
+  opt-in decryption image decrypts CSS DVDs only.
+- A `VIDEO_TS` folder is kept and ripped, but cannot be burned.
+- chdman 0.276 still misreads a cdrdao TOC whose track has its pregap in the
+  file, so such a TOC is refused rather than converted.
+- Audio tracks are verified by length and readability, not compared, because
+  without the drive's read offset a comparison fails on correct hardware.
+- The library is stored on a local filesystem; S3-compatible storage is an
+  import source, not yet a store.
+- No metadata providers yet.
+- Tested on one drive so far, with CD-R and DVD-RW; see "Tested hardware" in
+  `deploy/README.md`.
 
 ## 0.1.0 (2026-10-07)
 

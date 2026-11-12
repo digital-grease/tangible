@@ -252,7 +252,7 @@ compose-hardening:
     TANGIBLE_WORKER_NAME=validate TANGIBLE_OPTICAL_GID=990 TANGIBLE_DECRYPTION_IMAGE=tangible-decryption:validate docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml -f deploy/compose.decryption.yaml --env-file deploy/.env.example config --format json | deploy/check-hardening.sh
 
 # Fail if an image carries decryption code, as the release does before
-# signing (ADR 0013). Run it on a locally built image before relying on it.
+# signing. Run it on a locally built image before relying on it.
 check-no-decryption image:
     deploy/check-no-decryption.sh {{image}}
 

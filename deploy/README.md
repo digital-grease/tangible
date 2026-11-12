@@ -834,7 +834,7 @@ correctly signed image. `cosign version` says which you have.
 
 ```bash
 IMAGE=ghcr.io/digital-grease/tangible@sha256:<digest from the release page>
-TAG=v0.1.0
+TAG=v0.2.0
 
 # The image was signed by this repository's release workflow at this tag.
 cosign verify "$IMAGE" \
@@ -886,7 +886,8 @@ up fixes published after the base image.
 Put a CD or DVD you own in a drive, open Rips in the web UI, and choose
 "Rip the disc in" that drive. The drive's worker reads it when the drive is
 free: a CD with `cdrdao read-cd` into a table of contents and its data,
-imported as TOC/BIN; a DVD sector by sector from the drive itself into an
+imported as TOC/BIN (or with redumper, imported as CUE/BIN, on a worker run
+from the image below); a DVD sector by sector from the drive itself into an
 image, imported as an ISO. Either is kept exactly as read, padding and all.
 Reading changes nothing on the disc, so a rip can be withdrawn while it
 reads. Blank discs and Blu-rays are refused. An encrypted DVD is
@@ -897,10 +898,12 @@ Straight after Tangible burns a disc, the system may still think the drive
 holds the old, blank disc. A rip then refuses ("take the disc out and put
 it back") rather than reading a fragment; reloading the disc fixes it.
 
-Ripped audio CDs are not read-offset corrected, so their audio will not
-match AccurateRip or Redump databases. Data tracks are unaffected. The
-image below also carries redumper, which will correct the offset on the
-workers that run it (ADR 0015); the worker does not use it yet.
+A CD read with cdrdao is not read-offset corrected, so its audio will not
+match AccurateRip or Redump databases; data tracks are unaffected. A worker
+run from the image below has redumper, and rips every CD with it unless the
+rip asks for cdrdao: the drive's read offset is corrected where redumper
+knows the drive, and the rip says when it does not. Ask for cdrdao instead
+for a drive whose redumper rips go wrong.
 
 ### Ripping encrypted discs
 
@@ -924,16 +927,16 @@ check it carries what you expect:
 
 ```bash
 docker build -f deploy/decryption/Dockerfile \
-  --build-arg TANGIBLE_IMAGE=ghcr.io/digital-grease/tangible:v0.1.0 \
-  -t tangible-decryption:v0.1.0 deploy/decryption
-docker run --rm --entrypoint cat tangible-decryption:v0.1.0 /usr/share/tangible/decryption.json
+  --build-arg TANGIBLE_IMAGE=ghcr.io/digital-grease/tangible:v0.2.0 \
+  -t tangible-decryption:v0.2.0 deploy/decryption
+docker run --rm --entrypoint cat tangible-decryption:v0.2.0 /usr/share/tangible/decryption.json
 ```
 
 Run the drive's worker from it with one more override, which changes only
 the image:
 
 ```bash
-TANGIBLE_DECRYPTION_IMAGE=tangible-decryption:v0.1.0 docker compose \
+TANGIBLE_DECRYPTION_IMAGE=tangible-decryption:v0.2.0 docker compose \
   -f deploy/compose.yaml -f deploy/compose.hardware.yaml \
   -f deploy/compose.decryption.yaml up -d
 ```
