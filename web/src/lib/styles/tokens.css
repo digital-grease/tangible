@@ -27,13 +27,13 @@
   --line-strong: #7a879b;
 
   /* Accent: links, the primary action, focus, selection */
-  --accent: #0a6aa3;
+  --accent: #0a659b;
   --accent-ink: #ffffff;
 
   /* Status. Each is always shown with a mark and a word as well. */
-  --ok: #0f7646;
-  --warn: #8f5b00;
-  --bad: #c02828;
+  --ok: #0e6d40;
+  --warn: #885600;
+  --bad: #b62626;
   /* Kept for a drive at work: only an active write or read is this colour. */
   --laser: #9a5700;
 

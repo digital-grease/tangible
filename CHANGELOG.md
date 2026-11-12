@@ -611,7 +611,12 @@ may change between minor versions, and the release notes say how.
   setting unless the person picks Light or Dark in the header; the choice
   is remembered in the browser. A test checks that every text colour
   meets WCAG 2.2 AA contrast (4.5:1) on every background in both themes,
-  and form-control borders 3:1.
+  and form-control borders 3:1. Then the parts pages are built from:
+  buttons, fields, selects, checkboxes, tables that scroll inside
+  themselves, status marks (a shape and words for every state, never
+  colour alone), badges, progress bars, panels, page headers, tabs, a
+  menu and empty states, each checked with axe-core in its tests. Error
+  panels take the new look.
 - The image is built on Debian 13 (trixie), moving from Debian 12
   (bookworm), now oldstable, and every tool in it moves too: chdman 0.251
   to 0.276, which makes DVD CHDs (a DVD's ISO gets one, made with

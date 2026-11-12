@@ -36,6 +36,15 @@ function luminance(hex: string): number {
   return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
 }
 
+/** `color-mix(in srgb, a share%, b)`, as the browser mixes it. */
+function mix(a: string, share: number, b: string): string {
+  const channel = (hex: string, offset: number) => parseInt(hex.slice(offset, offset + 2), 16);
+  const mixed = [1, 3, 5].map((offset) =>
+    Math.round(channel(a, offset) * share + channel(b, offset) * (1 - share)),
+  );
+  return `#${mixed.map((value) => value.toString(16).padStart(2, '0')).join('')}`;
+}
+
 function contrast(a: string, b: string): number {
   const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number];
   return (hi + 0.05) / (lo + 0.05);
@@ -90,6 +99,15 @@ describe('colour tokens', () => {
         expect(contrast(get('bg'), get(mark))).toBeGreaterThanOrEqual(4.5);
       },
     );
+
+    // StatusMark's pill: the state's words on a 12% tint of its own colour.
+    it.each(
+      ['ok', 'warn', 'bad', 'accent', 'text-muted'].flatMap((tone) =>
+        GROUNDS.map((bg) => [tone, bg]),
+      ),
+    )('puts --%s words on their own tint over --%s at 4.5:1 or better', (tone, bg) => {
+      expect(contrast(get(tone), mix(get(tone), 0.12, get(bg)))).toBeGreaterThanOrEqual(4.5);
+    });
 
     it.each(GROUNDS)('outlines a form control (--line-strong) at 3:1 or better on --%s', (bg) => {
       expect(contrast(get('line-strong'), get(bg))).toBeGreaterThanOrEqual(3);

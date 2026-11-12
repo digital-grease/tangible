@@ -132,10 +132,28 @@
 {/if}
 
 <style>
-  .refusal {
-    border: 2px solid currentColor;
-    padding: 0.75rem 1rem;
-    margin: 1rem 0;
+  /* A bar in the failure colour marks it out; the words say what failed,
+     so the colour is never the only sign. */
+  .refusal,
+  .error {
+    margin: var(--space-4) 0;
+    padding: var(--space-3) var(--space-4);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--bad);
+    border-radius: var(--radius);
+  }
+  .refusal > :global(:first-child),
+  .error > :global(:first-child) {
+    margin-top: 0;
+  }
+  .refusal > :global(:last-child),
+  .error > :global(:last-child) {
+    margin-bottom: 0;
+  }
+  summary {
+    cursor: pointer;
+    color: var(--text-muted);
   }
   p {
     overflow-wrap: anywhere;
