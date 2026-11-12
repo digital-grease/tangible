@@ -15,6 +15,8 @@
     type ReportSettings,
   } from '$lib/report';
   import type { Problem } from '$lib/session';
+  import Button from './ui/Button.svelte';
+  import Callout from './ui/Callout.svelte';
   import ErrorPanel from './ErrorPanel.svelte';
   import ReportPreview from './ReportPreview.svelte';
 
@@ -57,10 +59,10 @@
 </script>
 
 {#if settings?.enabled && settings.issues_url && formatReportOffered(artifact)}
-  <section aria-labelledby="format-report-heading" class="format-report">
-    <h2 id="format-report-heading">
-      {unrecognised ? 'Tangible did not recognise this image' : 'Ask about this format'}
-    </h2>
+  <Callout
+    tone={unrecognised ? 'warn' : 'info'}
+    title={unrecognised ? 'Tangible did not recognise this image' : 'Ask about this format'}
+  >
     <p>
       {unrecognised
         ? 'It was imported and kept exactly as received, but no detector claimed it.'
@@ -69,9 +71,11 @@
       and size, and the first bytes of each binary file. File names and paths are replaced, and nothing
       leaves this page until you have read it.
     </p>
-    <button type="button" onclick={prepare} disabled={preparing}>
-      {preparing ? 'Preparing…' : 'Ask for support…'}
-    </button>
+    <div>
+      <Button onclick={prepare} disabled={preparing}>
+        {preparing ? 'Preparing…' : 'Ask for support…'}
+      </Button>
+    </div>
     {#if problem}
       <ErrorPanel
         {problem}
@@ -90,16 +94,5 @@
         heading="Review this format report"
       />
     {/if}
-  </section>
+  </Callout>
 {/if}
-
-<style>
-  .format-report {
-    border: 1px solid currentColor;
-    padding: 0.75rem 1rem;
-    margin: 1rem 0;
-  }
-  button {
-    padding: 0.5rem 1rem;
-  }
-</style>

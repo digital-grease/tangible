@@ -237,7 +237,7 @@ describe('Artifact integrity', () => {
     expect(await screen.findByText('Waiting for its turn.')).toBeTruthy();
     await vi.advanceTimersByTimeAsync(3000);
     expect(await screen.findByText(/1 of 2 files/)).toBeTruthy();
-    expect(screen.getByRole('progressbar').getAttribute('value')).toBe('50');
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('50');
     await vi.advanceTimersByTimeAsync(3000);
     expect(await screen.findByText('Done: nothing wrong.')).toBeTruthy();
   });
@@ -264,9 +264,14 @@ describe('Deleting an artifact', () => {
     const asked = serve(artifact({ origin: 'imported_original', deletion: null }), {
       'POST /api/v1/artifacts/a1/deletion-requests': { status: 202, body: PENDING },
     });
-    render(ArtifactPage);
+    const { container } = render(ArtifactPage);
     await fireEvent.click(await screen.findByRole('button', { name: 'Delete this artifact…' }));
     expect(screen.getByText(/cannot be brought back/)).toBeTruthy();
+    // The keyboard is taken to the question.
+    await vi.waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Delete VIDEO_TS' })),
+    );
+    expect(await axeViolations(container)).toEqual([]);
     const submit = screen.getByRole('button', { name: 'Delete VIDEO_TS' });
     expect((submit as HTMLButtonElement).disabled).toBe(true);
     await fireEvent.click(screen.getByLabelText(/this is an original/));

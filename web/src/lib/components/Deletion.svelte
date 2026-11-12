@@ -7,6 +7,10 @@
    * server's grace period, during which it can be kept, and an original
    * needs saying so besides.
    */
+  import Button from '$lib/components/ui/Button.svelte';
+  import Callout from '$lib/components/ui/Callout.svelte';
+  import Checkbox from '$lib/components/ui/Checkbox.svelte';
+  import Confirm from '$lib/components/ui/Confirm.svelte';
   import {
     isOriginal,
     keepArtifact,
@@ -77,45 +81,44 @@
 </script>
 
 {#if deletion?.state === 'deleted'}
-  <section aria-labelledby="deleted-heading" class="notice">
-    <h2 id="deleted-heading">Deleted</h2>
+  <Callout tone="bad" title="Deleted" marked>
     <p>
       <strong>Deleted {when(deletion.deleted_at)}.</strong> Its bytes are gone. This record is what
       is left: its files' names and hashes, where it came from, what was made of it, and the discs
       burned from it. Asked for by {deletion.requested_by} on {when(deletion.requested_at)}.
     </p>
-  </section>
+  </Callout>
 {:else if deletion?.state === 'pending'}
-  <section aria-labelledby="pending-heading" class="notice">
-    <h2 id="pending-heading">Pending deletion</h2>
+  <Callout tone="warn" title="Pending deletion" marked>
     <p>
       <strong>Its bytes are removed after {when(deletion.delete_after)}</strong>, unless it is kept.
       Asked for by {deletion.requested_by} on {when(deletion.requested_at)}. Until then it can still
       be downloaded and checked, but nothing new is burned or made from it, and it is not sent to
       RomM.
     </p>
-    <button type="button" disabled={working} onclick={keep}>
-      {working ? 'Keeping…' : `Keep ${name}`}
-    </button>
-    <div role="alert">
-      {#if problem}<p><strong>Not kept.</strong> {explain(problem)}</p>{/if}
+    <div>
+      <Button variant="primary" disabled={working} onclick={keep}>
+        {working ? 'Keeping…' : `Keep ${name}`}
+      </Button>
     </div>
-  </section>
+    <div role="alert">
+      {#if problem}<p class="problem"><strong>Not kept.</strong> {explain(problem)}</p>{/if}
+    </div>
+  </Callout>
 {:else}
   <section aria-labelledby="delete-heading">
     <h2 id="delete-heading">Delete</h2>
     {#if !asking}
-      <button
-        type="button"
+      <Button
+        variant="danger"
         onclick={() => {
           asking = true;
           confirmed = false;
           problem = null;
-        }}>Delete this artifact…</button
+        }}>Delete this artifact…</Button
       >
     {:else}
-      <form class="danger" onsubmit={ask} aria-labelledby="delete-form-heading">
-        <h3 id="delete-form-heading">Delete {name}</h3>
+      <Confirm title={`Delete ${name}`} onsubmit={ask}>
         <p>
           <strong>After the grace period its bytes are removed, and cannot be brought back</strong>
           except from a backup. Until then it is pending and can be kept. Its record stays: the files'
@@ -123,33 +126,28 @@
           another artifact stays for that one.
         </p>
         {#if original}
-          <p>
-            <label>
-              <input type="checkbox" bind:checked={confirmed} />
-              I understand this is an original, which may be the only copy there is
-            </label>
-          </p>
+          <Checkbox
+            label="I understand this is an original, which may be the only copy there is"
+            bind:checked={confirmed}
+          />
         {/if}
         <div role="alert">
-          {#if problem}<p><strong>Not deleted.</strong> {explain(problem)}</p>{/if}
+          {#if problem}<p class="problem"><strong>Not deleted.</strong> {explain(problem)}</p>{/if}
         </div>
-        <button type="submit" disabled={working || (original && !confirmed)}>
-          {working ? 'Asking…' : `Delete ${name}`}
-        </button>
-        <button type="button" onclick={() => (asking = false)}>Keep {name}</button>
-      </form>
+        {#snippet actions()}
+          <Button type="submit" variant="danger" disabled={working || (original && !confirmed)}>
+            {working ? 'Asking…' : `Delete ${name}`}
+          </Button>
+          <Button onclick={() => (asking = false)}>Keep {name}</Button>
+        {/snippet}
+      </Confirm>
     {/if}
   </section>
 {/if}
 
 <style>
-  .danger {
-    border: 3px solid currentColor;
-    padding: 0 1rem 1rem;
-    margin-top: 1rem;
-  }
-  .notice {
-    border: 2px solid currentColor;
-    padding: 0 1rem 1rem;
+  .problem {
+    margin: 0;
+    color: var(--bad);
   }
 </style>

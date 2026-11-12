@@ -2,6 +2,8 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   import { onDestroy } from 'svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import StatusMark from '$lib/components/ui/StatusMark.svelte';
   import {
     isOpen,
     jobStateLabel,
@@ -84,9 +86,9 @@
 <section aria-labelledby="lineage-heading">
   <h2 id="lineage-heading">Derivatives</h2>
   {#if loadProblem}
-    <p>Lineage could not be loaded: {loadProblem.detail}</p>
+    <p class="problem">Lineage could not be loaded: {loadProblem.detail}</p>
   {:else if !lineage}
-    <p>Loading lineage…</p>
+    <p class="quiet">Loading lineage…</p>
   {:else}
     {#if lineage.derived_from}
       <p>
@@ -99,44 +101,88 @@
     {/if}
 
     {#if lineage.derivatives.length > 0}
-      <ul>
+      <ul class="list">
         {#each lineage.derivatives as derivative (derivative.child_artifact_id)}
           <li>
             <a href={`/library/${derivative.child_artifact_id}`}
               >{transformationLabel(derivative.transformation)}</a
-            >, by {derivative.tool_name}
-            {derivative.tool_version}: {lossLabel(derivative.loss_character)}
+            >
+            <span class="quiet"
+              >by {derivative.tool_name}
+              {derivative.tool_version}: {lossLabel(derivative.loss_character)}</span
+            >
           </li>
         {/each}
       </ul>
     {:else if !lineage.derived_from}
-      <p>Nothing has been made from this artifact.</p>
+      <p class="quiet">Nothing has been made from this artifact.</p>
     {/if}
 
     {#if lineage.jobs.some((job) => job.state.startsWith('failed'))}
       <h3>Failed attempts</h3>
-      <ul>
+      <ul class="list">
         {#each lineage.jobs.filter((job) => job.state.startsWith('failed')) as job (job.id)}
           <li>
-            {transformationLabel(job.transformation)}: {jobStateLabel(job)}
-            {#if job.error_detail}<br /><small>{job.error_detail}</small>{/if}
+            <StatusMark
+              tone="bad"
+              label={`${transformationLabel(job.transformation)}: ${jobStateLabel(job)}`}
+            />
+            {#if job.error_detail}<span class="hint">{job.error_detail}</span>{/if}
           </li>
         {/each}
       </ul>
     {/if}
 
     {#if offer}
-      <p>
-        <button type="button" onclick={makeDerivative} disabled={asking}>
+      <div class="action">
+        <Button onclick={makeDerivative} disabled={asking}>
           {asking ? 'Asking…' : offer.action}
-        </button>
-        <br />
-        <small>{offer.explanation}</small>
-      </p>
+        </Button>
+        <p class="hint">{offer.explanation}</p>
+      </div>
     {/if}
     <div role="alert">
-      {#if askProblem}<p><strong>Not started.</strong> {askProblem.detail}</p>{/if}
+      {#if askProblem}<p class="problem"><strong>Not started.</strong> {askProblem.detail}</p>{/if}
     </div>
-    <p aria-live="polite">{status}</p>
+    <p aria-live="polite" class="status">{status}</p>
   {/if}
 </section>
+
+<style>
+  .list {
+    display: grid;
+    gap: var(--space-2);
+    margin: 0 0 var(--space-4);
+    padding: 0;
+    list-style: none;
+  }
+  .list li {
+    display: grid;
+    gap: 0.125rem;
+    justify-items: start;
+  }
+  .list :global(.mark) {
+    font-weight: var(--weight-medium);
+  }
+  h3 {
+    margin: 0 0 var(--space-2);
+    font-size: var(--text-base);
+  }
+  .action {
+    display: grid;
+    gap: var(--space-2);
+    justify-items: start;
+  }
+  .hint {
+    max-width: 75ch;
+    margin: 0;
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+  }
+  .problem {
+    color: var(--bad);
+  }
+  .status {
+    margin: 0;
+  }
+</style>

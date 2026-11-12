@@ -5,6 +5,10 @@
   // hashes match, and the hashes themselves, which the server computes in
   // the background. A match only names a game; it changes nothing.
   import { onDestroy, onMount } from 'svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import StatusMark from '$lib/components/ui/StatusMark.svelte';
+  import Table from '$lib/components/ui/Table.svelte';
+  import type { Tone } from '$lib/components/ui/tone';
   import {
     FOLLOW_EVERY_MS,
     identificationStateLabel,
@@ -22,6 +26,11 @@
   import { sessionRole, type Problem } from '$lib/session';
 
   let { artifactId }: { artifactId: string } = $props();
+
+  /** The hashes' state as a tone, beside identificationStateLabel's words. */
+  function stateTone(state: string): Tone {
+    return state === 'done' ? 'ok' : state === 'failed' ? 'bad' : 'busy';
+  }
 
   let view = $state<Identification | null>(null);
   let problem = $state<Problem | null>(null);
@@ -81,9 +90,9 @@
 
   <div aria-live="polite">
     {#if problem}
-      <p><strong>Could not load the identification.</strong> {problem.detail}</p>
+      <p class="problem"><strong>Could not load the identification.</strong> {problem.detail}</p>
     {:else if view === null}
-      <p>Loading identification…</p>
+      <p class="quiet">Loading identification…</p>
     {:else}
       {#if view.matches.length === 0}
         {#if view.state === 'done'}
@@ -97,123 +106,167 @@
           {#each view.matches as match (match.dat_id + match.game_name)}
             {@const hint = partialHint(match)}
             <li>
-              <p>
-                <span aria-hidden="true">{match.kind === 'exact' ? '✓' : '!'}</span>
-                <strong>{matchLabel(match)}</strong>
-                <br /><small
-                  >In {matchSource(match)}{#if match.category}, {match.category}{/if}.</small
-                >
+              <StatusMark tone={match.kind === 'exact' ? 'ok' : 'warn'} label={matchLabel(match)} />
+              <p class="source">
+                In {matchSource(match)}{#if match.category}, {match.category}{/if}.
               </p>
               {#if match.description && match.description !== match.game_name}
                 <p>{match.description}</p>
               {/if}
-              <ul>
+              <ul class="files">
                 {#each match.files as file, index (index)}
                   <li>
-                    <span aria-hidden="true">{file.matched_by ? '✓' : '✕'}</span>
-                    {fileLine(file)}
+                    <StatusMark tone={file.matched_by ? 'ok' : 'bad'} label={fileLine(file)} />
                   </li>
                 {/each}
               </ul>
-              {#if hint}<p><small>{hint}</small></p>{/if}
+              {#if hint}<p class="source">{hint}</p>{/if}
             </li>
           {/each}
         </ul>
       {/if}
 
-      <p>
-        <span aria-hidden="true"
-          >{view.state === 'done' ? '✓' : view.state === 'failed' ? '✕' : '·'}</span
-        >
-        {identificationStateLabel(view)}{#if view.hashed_at}, {when(view.hashed_at)}{/if}.
+      <p class="state">
+        <StatusMark
+          tone={stateTone(view.state)}
+          label={`${identificationStateLabel(view)}${view.hashed_at ? `, ${when(view.hashed_at)}` : ''}.`}
+        />
       </p>
 
       {#if view.state === 'done' && (view.components.length > 0 || view.tracks.length > 0)}
         <details>
           <summary>Preservation hashes</summary>
-          <p>
-            <small
-              >CRC32, MD5 and SHA-1, as preservation databases list a dump. Each track is hashed as
-              Redump cuts it, its pregap included where the image holds it.</small
-            >
+          <p class="hint">
+            CRC32, MD5 and SHA-1, as preservation databases list a dump. Each track is hashed as
+            Redump cuts it, its pregap included where the image holds it.
           </p>
-          <table>
-            <caption class="visually-hidden">Preservation hashes</caption>
-            <thead>
-              <tr>
-                <th scope="col">File or track</th>
-                <th scope="col">Size</th>
-                <th scope="col">CRC32</th>
-                <th scope="col">MD5</th>
-                <th scope="col">SHA-1</th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each view.components as component (component.logical_path)}
+          <div class="hashes">
+            <Table caption="Preservation hashes">
+              <thead>
                 <tr>
-                  <th scope="row">{component.logical_path}</th>
-                  <td>{formatBytes(component.length_bytes)}</td>
-                  <td><code>{component.crc32 ?? '—'}</code></td>
-                  <td><code>{component.md5 ?? '—'}</code></td>
-                  <td><code>{component.sha1 ?? '—'}</code></td>
+                  <th scope="col">File or track</th>
+                  <th scope="col" class="num">Size</th>
+                  <th scope="col">CRC32</th>
+                  <th scope="col">MD5</th>
+                  <th scope="col">SHA-1</th>
                 </tr>
-              {/each}
-              {#each view.tracks as track (track.number)}
-                <tr>
-                  <th scope="row">Track {track.number}</th>
-                  <td>{formatBytes(track.length_bytes)}</td>
-                  <td><code>{track.crc32 ?? '—'}</code></td>
-                  <td><code>{track.md5 ?? '—'}</code></td>
-                  <td><code>{track.sha1 ?? '—'}</code></td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {#each view.components as component (component.logical_path)}
+                  <tr>
+                    <th scope="row">{component.logical_path}</th>
+                    <td class="num">{formatBytes(component.length_bytes)}</td>
+                    <td>{@render hash(component.crc32)}</td>
+                    <td>{@render hash(component.md5)}</td>
+                    <td>{@render hash(component.sha1)}</td>
+                  </tr>
+                {/each}
+                {#each view.tracks as track (track.number)}
+                  <tr>
+                    <th scope="row">Track {track.number}</th>
+                    <td class="num">{formatBytes(track.length_bytes)}</td>
+                    <td>{@render hash(track.crc32)}</td>
+                    <td>{@render hash(track.md5)}</td>
+                    <td>{@render hash(track.sha1)}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </Table>
+          </div>
         </details>
       {/if}
 
       {#if mayAsk && view.state !== 'pending'}
-        <p>
-          <button type="button" onclick={askAgain} disabled={asking}>
+        <div class="action">
+          <Button onclick={askAgain} disabled={asking}>
             {asking ? 'Asking…' : 'Hash again'}
-          </button>
-          <br />
-          <small
-            >Reads every stored file of this artifact once more to compute its hashes, then matches
+          </Button>
+          <p class="hint">
+            Reads every stored file of this artifact once more to compute its hashes, then matches
             them against the loaded DATs. Useful after its files were restored from a backup.
-            Changes nothing.</small
-          >
-        </p>
+            Changes nothing.
+          </p>
+        </div>
       {/if}
     {/if}
   </div>
 
   <div role="alert">
-    {#if refusal}<p><strong>Not asked.</strong> {refusal.detail}</p>{/if}
+    {#if refusal}<p class="problem"><strong>Not asked.</strong> {refusal.detail}</p>{/if}
   </div>
 </section>
 
+{#snippet hash(value: string | null | undefined)}
+  {#if value}<code>{value}</code>{:else}<span class="quiet">None</span>{/if}
+{/snippet}
+
 <style>
+  .matches {
+    display: grid;
+    gap: var(--space-3);
+    margin: 0 0 var(--space-3);
+    padding: 0;
+    list-style: none;
+    max-width: 50rem;
+  }
   .matches > li {
-    border: 1px solid currentColor;
-    padding: 0.75rem;
-    margin-bottom: 0.75rem;
+    display: grid;
+    gap: var(--space-1);
+    padding: var(--space-3) var(--space-4);
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+  }
+  .matches p {
+    margin: 0;
+  }
+  .source {
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+  }
+  .files {
+    display: grid;
+    gap: var(--space-1);
+    margin: var(--space-1) 0 0;
+    padding: 0;
     list-style: none;
   }
-  .matches {
-    padding-left: 0;
+  .files :global(.mark),
+  .state :global(.mark) {
+    font-weight: var(--weight-medium);
+  }
+  .files :global(.mark) {
+    white-space: normal;
   }
   details {
-    overflow-x: auto;
+    margin-bottom: var(--space-3);
   }
-  table {
-    border-collapse: collapse;
+  summary {
+    cursor: pointer;
+    font-weight: var(--weight-medium);
   }
-  th,
-  td {
-    text-align: left;
-    padding: 0.25rem 0.5rem;
-    border-bottom: 1px solid currentColor;
+  .hashes {
+    margin-top: var(--space-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .action {
+    display: grid;
+    gap: var(--space-2);
+    justify-items: start;
+  }
+  .hint {
+    max-width: 75ch;
+    margin: var(--space-2) 0 0;
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+  }
+  .action .hint {
+    margin: 0;
+  }
+  .problem {
+    color: var(--bad);
   }
   code {
     word-break: break-all;

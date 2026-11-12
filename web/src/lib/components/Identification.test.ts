@@ -4,6 +4,7 @@
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { rememberSession } from '$lib/session';
+import { axeViolations } from '$lib/testing/axe';
 
 const { default: Identification } = await import('./Identification.svelte');
 
@@ -73,12 +74,14 @@ function server(view: unknown, after: unknown = view): Asked[] {
 describe('the Identification section', () => {
   it('names the game a partial match is, and which track did not match', async () => {
     server(identification({ matches: [PARTIAL] }));
-    render(Identification, { artifactId: 'a1' });
+    const { container } = render(Identification, { artifactId: 'a1' });
     expect(await screen.findByText('Partly matches Game (USA): 1 of 2 files')).toBeTruthy();
+    expect(await axeViolations(container)).toEqual([]);
     expect(screen.getByText(/In Sony - PlayStation \(2026-10-01\), Games/)).toBeTruthy();
     const files = screen.getAllByRole('listitem').map((item) => item.textContent?.trim() ?? '');
-    expect(files).toContain('✓ Game (USA) (Track 1).bin (1000 B): matched by track 1');
-    expect(files).toContain('✕ Game (USA) (Track 2).bin (2.0 KiB): not matched');
+    // Each with its mark, drawn rather than written: the words say it.
+    expect(files).toContain('Game (USA) (Track 1).bin (1000 B): matched by track 1');
+    expect(files).toContain('Game (USA) (Track 2).bin (2.0 KiB): not matched');
     expect(screen.getByText(/offset correction/)).toBeTruthy();
   });
 

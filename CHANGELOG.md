@@ -649,7 +649,9 @@ may change between minor versions, and the release notes say how.
   artifact's disc drawn in its row and, to scale beside its tracks, on its
   Topology tab; search by part of a file's name; and the artifact's facts,
   components, topology, validation, lineage and burning in tabs under a
-  header that says what it is and offers what can be done with it. So do
+  header that says what it is and offers what can be done with it; its
+  integrity, identification, derivatives and deletion each say their state
+  with a mark, and deleting asks in place. So do
   the Catalog, as three columns from title to disc set with the set's discs
   below, and Physical copies, the discs to destroy first. Imports puts
   each source in its own panel above the queue, which shows each import's

@@ -4,15 +4,20 @@
   // An artifact's integrity: what the last check of all its stored files
   // found, and "Verify now", which reads them back against their digests
   // and follows the check to its end. Nothing found is repaired.
+  import Button from '$lib/components/ui/Button.svelte';
+  import Callout from '$lib/components/ui/Callout.svelte';
+  import Progress from '$lib/components/ui/Progress.svelte';
+  import StatusMark from '$lib/components/ui/StatusMark.svelte';
   import { shortDigest } from '$lib/ids';
+  import { integrityTone } from '$lib/library';
   import { onDestroy } from 'svelte';
   import {
     FOLLOW_EVERY_MS,
     checkPercent,
     checkProgress,
     checkStateLabel,
+    checkStateTone,
     integrityLabel,
-    integrityMark,
     isActive,
     loadCheck,
     problemKindLabel,
@@ -81,72 +86,109 @@
 
 <section aria-labelledby="integrity-heading">
   <h2 id="integrity-heading">Integrity</h2>
-  <p>
-    <span aria-hidden="true">{integrityMark(integrityState)}</span>
-    {integrityLabel(integrityState)}{#if checkedAt}, checked {when(checkedAt)}{/if}.
+  <p class="state">
+    <StatusMark
+      tone={integrityTone(integrityState)}
+      label={`${integrityLabel(integrityState)}${checkedAt ? `, checked ${when(checkedAt)}` : ''}.`}
+    />
   </p>
   {#if integrityState === 'damaged'}
-    <p class="badge">
-      <strong>Nothing was repaired.</strong>
-      Originals are never rewritten. Restore the damaged files from a backup, then verify again; the deploy
-      guide's "Checking stored bytes" says where each file lives.
-    </p>
+    <Callout tone="bad">
+      <p>
+        <strong>Nothing was repaired.</strong>
+        Originals are never rewritten. Restore the damaged files from a backup, then verify again; the
+        deploy guide's "Checking stored bytes" says where each file lives.
+      </p>
+    </Callout>
   {/if}
 
   {#if mayAsk}
-    <p>
-      <button
-        type="button"
-        onclick={verify}
-        disabled={asking || (check !== null && isActive(check))}
-      >
+    <div class="action">
+      <Button onclick={verify} disabled={asking || (check !== null && isActive(check))}>
         {asking ? 'Asking…' : 'Verify now'}
-      </button>
-      <br />
-      <small
-        >Reads every stored file of this artifact back and compares it with the digest recorded when
-        it was stored, and its manifest with the catalogue. Changes nothing.</small
-      >
-    </p>
+      </Button>
+      <p class="hint">
+        Reads every stored file of this artifact back and compares it with the digest recorded when
+        it was stored, and its manifest with the catalogue. Changes nothing.
+      </p>
+    </div>
   {/if}
 
   <div role="alert">
-    {#if refusal}<p><strong>Not checked.</strong> {refusal.detail}</p>{/if}
+    {#if refusal}<p class="problem"><strong>Not checked.</strong> {refusal.detail}</p>{/if}
   </div>
 
   <div aria-live="polite">
     {#if check}
       {@const percent = checkPercent(check)}
-      <p>
-        <strong>{checkStateLabel(check)}.</strong>
-        {#if isActive(check)}{checkProgress(check)}{/if}
-      </p>
-      {#if isActive(check) && percent !== null}
-        <progress max="100" value={percent} aria-label="Share of this artifact read"
-          >{percent}%</progress
-        >
-      {/if}
-      {#if check.state === 'failed' && check.error_detail}
-        <p>{check.error_detail}</p>
-      {/if}
-      {#if check.problems.length > 0}
-        <ul>
-          {#each check.problems as problem, index (index)}
-            <li>
-              {problemKindLabel(problem.kind)}{#if problem.sha256}:
-                <code title={problem.sha256}>{shortDigest(problem.sha256)}</code>{/if}
-              <br /><small>{problem.detail}</small>
-            </li>
-          {/each}
-        </ul>
-      {/if}
+      <div class="check">
+        <p class="state">
+          <StatusMark tone={checkStateTone(check)} label={`${checkStateLabel(check)}.`} />
+          {#if isActive(check)}<span>{checkProgress(check)}</span>{/if}
+        </p>
+        {#if isActive(check) && percent !== null}
+          <Progress value={percent / 100} label="Share of this artifact read" />
+        {/if}
+        {#if check.state === 'failed' && check.error_detail}
+          <p>{check.error_detail}</p>
+        {/if}
+        {#if check.problems.length > 0}
+          <ul class="problems">
+            {#each check.problems as problem, index (index)}
+              <li>
+                <strong>{problemKindLabel(problem.kind)}</strong>{#if problem.sha256}: <code
+                    title={problem.sha256}>{shortDigest(problem.sha256)}</code
+                  >{/if}
+                <span class="hint">{problem.detail}</span>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
     {/if}
   </div>
 </section>
 
 <style>
-  .badge {
-    border: 1px solid currentColor;
-    padding: 0.75rem;
+  .state {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    align-items: baseline;
+  }
+  .state :global(.mark) {
+    font-weight: var(--weight-medium);
+  }
+  .action {
+    display: grid;
+    gap: var(--space-2);
+    justify-items: start;
+    margin-bottom: var(--space-3);
+  }
+  .hint {
+    max-width: 75ch;
+    margin: 0;
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+  }
+  .problem {
+    color: var(--bad);
+  }
+  .check {
+    display: grid;
+    gap: var(--space-2);
+    max-width: 40rem;
+  }
+  .check p {
+    margin: 0;
+  }
+  .problems {
+    display: grid;
+    gap: var(--space-1);
+    margin: 0;
+    padding-left: var(--space-5);
+  }
+  .problems li {
+    display: grid;
   }
 </style>

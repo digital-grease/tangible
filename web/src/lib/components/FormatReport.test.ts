@@ -5,6 +5,7 @@ import { fireEvent, render, screen } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { forgetReportSettings, reportSettingsOnce } from '$lib/report';
+import { axeViolations } from '$lib/testing/axe';
 import FormatReport from './FormatReport.svelte';
 
 // jsdom has no modal dialogs; see ReportPreview.test.ts.
@@ -86,11 +87,12 @@ async function settled() {
 describe('FormatReport', () => {
   it('says an unrecognised image was not recognised, and offers support', async () => {
     server(true, { status: 200, body: REPORT });
-    render(FormatReport, { props: { artifact: unknown } });
+    const { container } = render(FormatReport, { props: { artifact: unknown } });
     expect(
       await screen.findByRole('heading', { name: 'Tangible did not recognise this image' }),
     ).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Ask for support…' })).toBeTruthy();
+    expect(await axeViolations(container)).toEqual([]);
   });
 
   it('offers a warned image under its own heading', async () => {

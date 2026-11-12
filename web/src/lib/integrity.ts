@@ -84,18 +84,6 @@ export function integrityLabel(state: string): string {
   }
 }
 
-/** A mark beside the words, so the state is never colour alone. */
-export function integrityMark(state: string): string {
-  switch (state) {
-    case 'intact':
-      return '✓';
-    case 'damaged':
-      return '✕';
-    default:
-      return '·';
-  }
-}
-
 /** How a check stands, in words. */
 export function checkStateLabel(check: Pick<IntegrityCheck, 'state' | 'problem_count'>): string {
   switch (check.state) {

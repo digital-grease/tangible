@@ -8,7 +8,6 @@ import {
   checkStateTone,
   graceLabel,
   integrityLabel,
-  integrityMark,
   isActive,
   loadGcPlan,
   problemKindLabel,
@@ -72,9 +71,6 @@ describe('integrity', () => {
     expect(integrityLabel('damaged')).toMatch(/^Damaged/);
     expect(integrityLabel('intact')).toMatch(/^Intact/);
     expect(integrityLabel('unchecked')).toBe('Not checked yet');
-    expect([integrityMark('intact'), integrityMark('damaged'), integrityMark('unchecked')]).toEqual(
-      ['✓', '✕', '·'],
-    );
   });
 
   it('says how a check stands and how far it has got', () => {

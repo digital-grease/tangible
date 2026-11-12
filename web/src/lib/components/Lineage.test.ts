@@ -3,6 +3,7 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { axeViolations } from '$lib/testing/axe';
 
 const { default: Lineage } = await import('./Lineage.svelte');
 
@@ -39,9 +40,10 @@ function server(suggested: string | null): Asked[] {
 describe('the Derivatives section', () => {
   it('offers a CUE/BIN of a CloneCD image, saying it drops the subchannel', async () => {
     const asked = server('cue_bin_from_ccd');
-    render(Lineage, { artifactId: 'a1' });
+    const { container } = render(Lineage, { artifactId: 'a1' });
     const button = await screen.findByRole('button', { name: 'Make a CUE/BIN' });
     expect(screen.getByText(/drops the subchannel/)).toBeTruthy();
+    expect(await axeViolations(container)).toEqual([]);
     expect(screen.queryByRole('button', { name: 'Make a CHD' })).toBeNull();
     await fireEvent.click(button);
     expect(await screen.findByText('A CUE/BIN of this already exists.')).toBeTruthy();
