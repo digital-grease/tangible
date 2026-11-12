@@ -2,17 +2,27 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import Disc from '$lib/components/ui/Disc.svelte';
+  import PageHeader from '$lib/components/ui/PageHeader.svelte';
+  import Panel from '$lib/components/ui/Panel.svelte';
+  import Progress from '$lib/components/ui/Progress.svelte';
+  import StatusMark from '$lib/components/ui/StatusMark.svelte';
+  import Table from '$lib/components/ui/Table.svelte';
+  import type { DiscShape } from '$lib/disc';
   import { onDestroy, onMount } from 'svelte';
   import { page } from '$app/state';
   import {
     attemptOutcomeLabel,
+    attemptOutcomeTone,
+    burnDrawing,
     canCancel,
     canRetry,
     cancelBurnJob,
     eventMessage,
     isLive,
     jobStateLabel,
-    jobStateMark,
+    jobStateTone,
     loadAttempt,
     loadAttemptEvents,
     loadBurnJob,
@@ -28,13 +38,16 @@
   } from '$lib/burns';
   import BurnReport from '$lib/components/BurnReport.svelte';
   import { names, watch } from '$lib/events';
-  import type { LoadState, Problem } from '$lib/library';
+  import { loadArtifact, type LoadState, type Problem } from '$lib/library';
   import { loadReportSettings, type ReportSettings } from '$lib/report';
 
   let view = $state<LoadState<BurnJobDetail>>({ kind: 'loading' });
   let events = $state<BurnEventView[]>([]);
   /** The latest attempt in full: what preflight found in the tray. */
   let latestDetail = $state<BurnAttemptDetail | null>(null);
+  /** The disc the burn's artifact describes, for the drawing; read once. */
+  let shape = $state<DiscShape | null>(null);
+  let shapeAsked = false;
   /** Whether this server offers issue reports; null until known, or if not. */
   let reportSettings = $state<ReportSettings | null>(null);
   /** A refused command, kept beside the button that was pressed. */
@@ -68,6 +81,15 @@
     // exactly when an operator least wants the page to blank itself.
     if (next.kind === 'error' && view.kind === 'ready') return;
     view = next;
+
+    if (next.kind === 'ready' && !shapeAsked) {
+      // What the disc will hold does not change, so it is read once; a burn
+      // whose artifact cannot be read is drawn without its layout.
+      shapeAsked = true;
+      void loadArtifact(next.data.artifact_id).then((artifact) => {
+        if (artifact.kind === 'ready') shape = artifact.data.disc_shape;
+      });
+    }
 
     const attempt = next.kind === 'ready' ? next.data.attempts.at(-1) : undefined;
     if (attempt) {
@@ -140,12 +162,11 @@
   <title>{job ? `Burn ${job.id.slice(0, 8)} — Tangible` : 'Burn — Tangible'}</title>
 </svelte:head>
 
-<p><a href="/burns">← Burn queue</a></p>
-
 <div aria-busy={view.kind === 'loading'}>
   {#if view.kind === 'loading'}
-    <p>Loading burn…</p>
+    <p class="quiet">Loading burn…</p>
   {:else if view.kind === 'error'}
+    <p><a href="/burns">Burn queue</a></p>
     <ErrorPanel
       problem={view.problem}
       area="other"
@@ -154,275 +175,382 @@
       level={1}
     />
   {:else if job}
-    <h1>Burn <code>{job.id.slice(0, 8)}</code></h1>
+    {@const drawing = burnDrawing(job)}
+    {@const percent = job.progress ? progressPercent(job.progress.fraction) : null}
+    <PageHeader
+      title={`Burn ${job.id.slice(0, 8)}`}
+      crumbs={[{ label: 'Burn queue', href: '/burns' }, { label: job.id.slice(0, 8) }]}
+    />
 
     <!-- The live region is this section alone. Progress changes every few
          seconds, and announcing the whole page each time would be unusable. -->
     <section aria-live="polite" aria-labelledby="status-heading" class="status">
-      <h2 id="status-heading">
-        <span aria-hidden="true">{jobStateMark(job.state)}</span>
-        {jobStateLabel(job.state)}
-      </h2>
+      <Disc
+        mode={drawing.mode}
+        {shape}
+        capacity={latestDetail?.medium?.capacity_blocks ?? null}
+        progress={drawing.progress}
+        size={136}
+        hole="var(--surface)"
+      />
+      <div class="state">
+        <h2 id="status-heading">
+          <StatusMark tone={jobStateTone(job.state)} label={jobStateLabel(job.state)} />
+        </h2>
 
-      <p class="visually-hidden">{progressSentence(job)}</p>
+        <p class="visually-hidden">{progressSentence(job)}</p>
 
-      {#if job.state === 'waiting_for_media'}
-        <p class="instruction">
-          <strong>Insert a disc.</strong>
-          {#if job.requested_media_profile}
-            This burn asked for {job.requested_media_profile}.
-          {:else}
-            Any blank disc the drive can write and the image fits on.
-          {/if}
-        </p>
-      {/if}
-
-      {#if job.progress}
-        <p aria-hidden="true">
-          {stageLabel(job.progress.stage)}
-          {#if progressPercent(job.progress.fraction) !== null}
-            — {progressPercent(job.progress.fraction)}%
-          {/if}
-        </p>
-        {#if progressPercent(job.progress.fraction) !== null}
-          <!-- A native progress element, so assistive technology reads it
-               without any ARIA of ours. -->
-          <progress max="100" value={progressPercent(job.progress.fraction)}></progress>
+        {#if job.state === 'waiting_for_media'}
+          <p class="instruction">
+            <strong>Insert a disc.</strong>
+            {#if job.requested_media_profile}
+              This burn asked for {job.requested_media_profile}.
+            {:else}
+              Any blank disc the drive can write and the image fits on.
+            {/if}
+          </p>
         {/if}
-      {/if}
 
-      {#if job.has_started_writing && isLive(job.state)}
-        <p class="note">
-          A disc is being written. The worker finishes locally even if this page or the network goes
-          away, and it will report the outcome when it can.
-        </p>
-      {/if}
+        {#if job.progress}
+          <p aria-hidden="true" class="stage">
+            {stageLabel(job.progress.stage)}{percent !== null ? `, ${percent}%` : ''}
+          </p>
+          {#if percent !== null}
+            <Progress value={percent / 100} label={stageLabel(job.progress.stage)} tone="laser" />
+          {/if}
+        {/if}
+
+        {#if job.has_started_writing && isLive(job.state)}
+          <p class="quiet small">
+            A disc is being written. The worker finishes locally even if this page or the network
+            goes away, and it will report the outcome when it can.
+          </p>
+        {/if}
+      </div>
     </section>
 
     {#if refusal}
       <ErrorPanel problem={refusal} area="other" refusal />
     {/if}
 
-    <section aria-labelledby="actions-heading">
-      <h2 id="actions-heading">Actions</h2>
-      {#if canCancel(job)}
-        <!-- Offered only while nothing physical has happened. Once a disc is
-             being consumed the control is gone rather than disabled: an
-             option that cannot be honoured should not be presented as one. -->
-        <button type="button" onclick={cancel} disabled={working}>
-          Cancel this burn — no disc has been written yet
-        </button>
-      {:else if isLive(job.state)}
-        <p>
-          This burn cannot be cancelled: a disc is being consumed. Stopping a write part-way ruins
-          the disc, so the attempt finishes and its outcome is recorded.
-        </p>
-      {/if}
+    <div class="columns">
+      <div class="stack">
+        <Panel title="Attempts" aside={String(job.attempts.length)} flush>
+          {#if job.attempts.length === 0}
+            <p class="quiet padded">No worker has taken this burn yet.</p>
+          {:else}
+            <p class="quiet padded">
+              {job.attempts.filter((attempt) => attempt.consumed_media).length} of {job.attempts
+                .length}
+              attempt{job.attempts.length === 1 ? '' : 's'} consumed a disc.
+            </p>
+            <Table caption="Attempts made at this burn">
+              <thead>
+                <tr>
+                  <th scope="col" class="num">#</th>
+                  <th scope="col">Outcome</th>
+                  <th scope="col">Disc consumed</th>
+                  <th scope="col">Engine</th>
+                  <th scope="col">Started</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each job.attempts as attempt (attempt.id)}
+                  <tr>
+                    <th scope="row" class="num">{attempt.attempt_number}</th>
+                    <td>
+                      <div class="outcome">
+                        <StatusMark
+                          tone={attemptOutcomeTone(attempt.state)}
+                          label={attemptOutcomeLabel(attempt.state)}
+                          pill
+                        />
+                        {#if attempt.error_code}
+                          <small><code>{attempt.error_code}</code></small>
+                        {/if}
+                        {#if attempt.error_detail}
+                          <details>
+                            <summary>What the worker said</summary>
+                            <pre>{attempt.error_detail}</pre>
+                          </details>
+                        {/if}
+                      </div>
+                    </td>
+                    <td>
+                      {#if attempt.consumed_media}
+                        {#if attempt.physical_copy_id}
+                          <a href={`/discs/${attempt.physical_copy_id}`}>Yes: the disc</a>
+                        {:else}
+                          Yes
+                        {/if}
+                      {:else}
+                        No
+                      {/if}
+                    </td>
+                    <td>{attempt.engine} {attempt.engine_version}</td>
+                    <td>
+                      <time datetime={attempt.started_at}
+                        >{new Date(attempt.started_at).toLocaleString()}</time
+                      >
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </Table>
+          {/if}
+        </Panel>
 
-      {#if canRetry(job)}
-        <button type="button" onclick={retry} disabled={working}>
-          Retry — queues another attempt and spends another disc
-        </button>
-      {:else if job.state === 'complete'}
-        <p>This burn is finished. Producing another copy is a new burn job.</p>
-      {:else if job.state === 'needs_attention'}
-        <p>
-          This burn needs a person. A disc it may have written is unaccounted for, so no further
-          attempt is offered until somebody has looked.
-        </p>
-        <ol>
-          <li>Check the drive and find the disc, if there is one.</li>
-          <li>
-            Record what you found against it in <a href="/discs">the disc inventory</a>, including
-            destroying it if it cannot be trusted.
-          </li>
-          <li>Then release this burn, which makes it retryable.</li>
-        </ol>
-        <button type="button" onclick={resolve} disabled={working}>
-          I have accounted for the disc
-        </button>
-      {/if}
-    </section>
-
-    <section aria-labelledby="details-heading">
-      <h2 id="details-heading">Details</h2>
-      <dl>
-        <dt>Artifact</dt>
-        <dd><a href={`/library/${job.artifact_id}`}><code>{job.artifact_id}</code></a></dd>
-        <dt>Disc</dt>
-        <dd><code>{job.disc_id}</code></dd>
-        <dt>Verification</dt>
-        <dd>{job.verification_policy.join(', ').replace(/_/g, ' ')}</dd>
-        <dt>Eject policy</dt>
-        <dd>{job.eject_policy.replace(/_/g, ' ')}</dd>
-        <dt>Media requested</dt>
-        <dd>{job.requested_media_profile ?? 'Any the drive can write'}</dd>
-        {#if latestDetail?.medium}
-          <dt>Disc found</dt>
-          <dd>{mediumLabel(latestDetail.medium)}</dd>
-        {/if}
-        <dt>Priority</dt>
-        <dd>{job.priority}</dd>
-        <dt>Queued</dt>
-        <dd>{new Date(job.created_at).toLocaleString()}</dd>
-        {#if job.completed_at}
-          <dt>Finished</dt>
-          <dd>{new Date(job.completed_at).toLocaleString()}</dd>
-        {/if}
-      </dl>
-      <p class="note">
-        Target compatibility is unknown. A verified disc holds the same bytes, which is not a
-        promise that any particular player, console or drive will accept it.
-      </p>
-    </section>
-
-    <section aria-labelledby="attempts-heading">
-      <h2 id="attempts-heading">Attempts</h2>
-      {#if job.attempts.length === 0}
-        <p>No worker has taken this burn yet.</p>
-      {:else}
-        <p>
-          {job.attempts.filter((attempt) => attempt.consumed_media).length} of {job.attempts.length}
-          attempt{job.attempts.length === 1 ? '' : 's'} consumed a disc.
-        </p>
-        <table>
-          <caption class="visually-hidden">Attempts made at this burn</caption>
-          <thead>
-            <tr>
-              <th scope="col">#</th>
-              <th scope="col">Outcome</th>
-              <th scope="col">Disc consumed</th>
-              <th scope="col">Engine</th>
-              <th scope="col">Started</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each job.attempts as attempt (attempt.id)}
-              <tr>
-                <th scope="row">{attempt.attempt_number}</th>
-                <td>
-                  {attemptOutcomeLabel(attempt.state)}
-                  {#if attempt.error_code}
-                    <br /><small><code>{attempt.error_code}</code></small>
-                  {/if}
-                  {#if attempt.error_detail}
-                    <details>
-                      <summary>What the worker said</summary>
-                      <pre>{attempt.error_detail}</pre>
-                    </details>
-                  {/if}
-                </td>
-                <td>
-                  {#if attempt.consumed_media}
-                    {#if attempt.physical_copy_id}
-                      <a href={`/discs/${attempt.physical_copy_id}`}>Yes — the disc</a>
-                    {:else}
-                      Yes
+        {#if latestAttempt}
+          <Panel title="Latest attempt timeline">
+            {#if events.length === 0}
+              <p class="quiet">The worker has not reported anything yet.</p>
+            {:else}
+              <ol class="timeline">
+                {#each events as event (event.sequence)}
+                  <li>
+                    <time datetime={event.observed_at}
+                      >{new Date(event.observed_at).toLocaleTimeString()}</time
+                    >
+                    <span>
+                      <strong>{stageLabel(event.stage)}</strong>
+                      <code>{event.code}</code>
+                      {#if progressPercent(event.fraction) !== null}
+                        {progressPercent(event.fraction)}%
+                      {/if}
+                    </span>
+                    {#if eventMessage(event)}
+                      <span class="message">{eventMessage(event)}</span>
                     {/if}
-                  {:else}
-                    No
-                  {/if}
-                </td>
-                <td>{attempt.engine} {attempt.engine_version}</td>
-                <td>{new Date(attempt.started_at).toLocaleString()}</td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      {/if}
-    </section>
+                  </li>
+                {/each}
+              </ol>
+            {/if}
+          </Panel>
 
-    {#if latestAttempt}
-      <section aria-labelledby="timeline-heading">
-        <h2 id="timeline-heading">Latest attempt timeline</h2>
-        {#if events.length === 0}
-          <p>The worker has not reported anything yet.</p>
-        {:else}
-          <ol class="timeline">
-            {#each events as event (event.sequence)}
-              <li>
-                <strong>{stageLabel(event.stage)}</strong>
-                <code>{event.code}</code>
-                {#if progressPercent(event.fraction) !== null}
-                  — {progressPercent(event.fraction)}%
-                {/if}
-                {#if eventMessage(event)}
-                  <span class="message">{eventMessage(event)}</span>
-                {/if}
-                <small>{new Date(event.observed_at).toLocaleTimeString()}</small>
-              </li>
-            {/each}
-          </ol>
+          <BurnReport attempt={latestAttempt} settings={reportSettings} />
         {/if}
-      </section>
+      </div>
 
-      <BurnReport attempt={latestAttempt} settings={reportSettings} />
-    {/if}
+      <div class="stack">
+        <Panel title="Actions">
+          {#if canCancel(job)}
+            <!-- Offered only while nothing physical has happened. Once a disc
+                 is being consumed the control is gone rather than disabled: an
+                 option that cannot be honoured should not be presented as one. -->
+            <Button onclick={cancel} disabled={working}>
+              Cancel this burn: no disc has been written yet
+            </Button>
+          {:else if isLive(job.state)}
+            <p>
+              This burn cannot be cancelled: a disc is being consumed. Stopping a write part-way
+              ruins the disc, so the attempt finishes and its outcome is recorded.
+            </p>
+          {/if}
+
+          {#if canRetry(job)}
+            <Button onclick={retry} disabled={working}>
+              Retry: queues another attempt and spends another disc
+            </Button>
+          {:else if job.state === 'complete'}
+            <p>This burn is finished. Producing another copy is a new burn job.</p>
+          {:else if job.state === 'needs_attention'}
+            <p>
+              This burn needs a person. A disc it may have written is unaccounted for, so no further
+              attempt is offered until somebody has looked.
+            </p>
+            <ol>
+              <li>Check the drive and find the disc, if there is one.</li>
+              <li>
+                Record what you found against it in <a href="/discs">the disc inventory</a>,
+                including destroying it if it cannot be trusted.
+              </li>
+              <li>Then release this burn, which makes it retryable.</li>
+            </ol>
+            <Button variant="primary" onclick={resolve} disabled={working}>
+              I have accounted for the disc
+            </Button>
+          {:else if !canCancel(job) && !isLive(job.state)}
+            <p class="quiet">Nothing to do here.</p>
+          {/if}
+        </Panel>
+
+        <Panel title="Details">
+          <dl class="facts">
+            <div>
+              <dt>Artifact</dt>
+              <dd><a href={`/library/${job.artifact_id}`}><code>{job.artifact_id}</code></a></dd>
+            </div>
+            <div>
+              <dt>Disc</dt>
+              <dd><code>{job.disc_id}</code></dd>
+            </div>
+            <div>
+              <dt>Verification</dt>
+              <dd>{job.verification_policy.join(', ').replace(/_/g, ' ')}</dd>
+            </div>
+            <div>
+              <dt>Eject policy</dt>
+              <dd>{job.eject_policy.replace(/_/g, ' ')}</dd>
+            </div>
+            <div>
+              <dt>Media requested</dt>
+              <dd>{job.requested_media_profile ?? 'Any the drive can write'}</dd>
+            </div>
+            {#if latestDetail?.medium}
+              <div>
+                <dt>Disc found</dt>
+                <dd>{mediumLabel(latestDetail.medium)}</dd>
+              </div>
+            {/if}
+            <div>
+              <dt>Priority</dt>
+              <dd class="num">{job.priority}</dd>
+            </div>
+            <div>
+              <dt>Queued</dt>
+              <dd>
+                <time datetime={job.created_at}>{new Date(job.created_at).toLocaleString()}</time>
+              </dd>
+            </div>
+            {#if job.completed_at}
+              <div>
+                <dt>Finished</dt>
+                <dd>
+                  <time datetime={job.completed_at}
+                    >{new Date(job.completed_at).toLocaleString()}</time
+                  >
+                </dd>
+              </div>
+            {/if}
+          </dl>
+          <p class="quiet small note">
+            <StatusMark tone="idle" label="Target compatibility unknown" /> A verified disc holds the
+            same bytes, which is not a promise that any particular player, console or drive will accept
+            it.
+          </p>
+        </Panel>
+      </div>
+    </div>
   {/if}
 </div>
 
 <style>
-  dl {
+  .status {
+    display: flex;
+    gap: var(--space-5);
+    align-items: center;
+    padding: var(--space-4);
+    margin-bottom: var(--space-4);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+  }
+  .state {
+    flex: 1;
     display: grid;
-    grid-template-columns: max-content 1fr;
-    gap: 0.25rem 1rem;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+  .state h2 {
+    margin: 0;
+    font-size: var(--text-lg);
+  }
+  .state p {
+    margin: 0;
+  }
+  .instruction {
+    font-size: var(--text-md);
+  }
+  .stage {
+    color: var(--text-muted);
+  }
+  .columns {
+    display: grid;
+    grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+    gap: var(--space-4);
+    align-items: start;
+  }
+  @media (max-width: 1099px) {
+    .columns {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+  @media (max-width: 599px) {
+    .status {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+  }
+  .stack {
+    display: grid;
+    gap: var(--space-4);
+    min-width: 0;
+  }
+  .stack :global(.panel .body > button + button) {
+    margin-top: var(--space-2);
+  }
+  .outcome {
+    display: grid;
+    gap: var(--space-1);
+    justify-items: start;
+  }
+  .facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+    gap: var(--space-3) var(--space-4);
+    margin: 0;
   }
   dt {
-    font-weight: 600;
+    color: var(--text-muted);
+    font-size: var(--text-sm);
   }
   dd {
     margin: 0;
-  }
-  table {
-    border-collapse: collapse;
-    width: 100%;
-  }
-  table th,
-  table td {
-    text-align: left;
-    padding: 0.5rem;
-    border-bottom: 1px solid currentColor;
-  }
-  .status {
-    border: 1px solid currentColor;
-    padding: 0.75rem 1rem;
-  }
-  .instruction {
-    font-size: 1.1em;
+    font-weight: var(--weight-medium);
+    overflow-wrap: anywhere;
   }
   .note {
-    font-size: 0.9em;
-  }
-  progress {
-    width: 100%;
-  }
-  button {
-    display: block;
-    margin: 0.5rem 0;
-    padding: 0.5rem 1rem;
+    margin: var(--space-3) 0 0;
   }
   .timeline {
-    padding-left: 1.25rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    font-size: var(--text-sm);
   }
   .timeline li {
-    margin-bottom: 0.25rem;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0 var(--space-3);
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--line-2);
+  }
+  .timeline li:last-child {
+    border-bottom: 0;
+  }
+  .timeline time {
+    color: var(--text-muted);
   }
   .message {
-    display: block;
-    font-family: monospace;
-    font-size: 0.9em;
+    grid-column: 1 / -1;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
     overflow-wrap: anywhere;
   }
   pre {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    margin: 0.25rem 0 0;
+    margin: var(--space-1) 0 0;
   }
-  .visually-hidden {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
+  .padded {
+    padding: var(--space-3) var(--space-4) 0;
+  }
+  .small {
+    font-size: var(--text-sm);
+  }
+  .quiet {
+    color: var(--text-muted);
   }
 </style>

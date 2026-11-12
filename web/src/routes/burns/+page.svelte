@@ -2,12 +2,19 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import EmptyState from '$lib/components/ui/EmptyState.svelte';
+  import PageHeader from '$lib/components/ui/PageHeader.svelte';
+  import Panel from '$lib/components/ui/Panel.svelte';
+  import Progress from '$lib/components/ui/Progress.svelte';
+  import StatusMark from '$lib/components/ui/StatusMark.svelte';
+  import Table from '$lib/components/ui/Table.svelte';
   import { apiFetch } from '$lib/session';
   import { onDestroy, onMount } from 'svelte';
   import {
     isLive,
     jobStateLabel,
-    jobStateMark,
+    jobStateTone,
     loadBurnQueue,
     progressPercent,
     stageLabel,
@@ -67,42 +74,49 @@
 
 <svelte:head><title>Burn queue — Tangible</title></svelte:head>
 
-<h1>Burn queue</h1>
+<PageHeader title="Burn queue">
+  {#snippet actions()}
+    <Button variant="primary" icon="burn" href="/burns/new">Create burn job</Button>
+  {/snippet}
+</PageHeader>
 
 <!-- One live region for the whole view, so a change is announced once rather
      than per row. -->
 <div aria-live="polite" aria-busy={view.kind === 'loading'}>
   {#if view.kind === 'loading'}
-    <p>Loading the burn queue…</p>
+    <p class="quiet">Loading the burn queue…</p>
   {:else if view.kind === 'empty'}
-    <section>
-      <h2>No burn jobs</h2>
+    <EmptyState title="No burn jobs" icon="burn">
       <p>Select a compatible artifact and choose <strong>Create burn job</strong>.</p>
-      <p><a href="/library">Browse the library</a></p>
-    </section>
+      {#snippet action()}<Button href="/library" icon="library">Browse the library</Button
+        >{/snippet}
+    </EmptyState>
   {:else if view.kind === 'error'}
-    <section>
-      <ErrorPanel
-        problem={view.problem}
-        area="other"
-        endpoint="GET /api/v1/burn-jobs"
-        heading="Could not load the burn queue"
-      />
-    </section>
+    <ErrorPanel
+      problem={view.problem}
+      area="other"
+      endpoint="GET /api/v1/burn-jobs"
+      heading="Could not load the burn queue"
+    />
   {:else}
     {#if waiting.length > 0}
       <!-- The one thing on this page that needs a person to get up and do
            something. It goes first, and says which job. -->
       <section class="callout" aria-labelledby="waiting-heading">
         <h2 id="waiting-heading">
-          {waiting.length === 1 ? 'A burn is waiting for a disc' : 'Burns are waiting for a disc'}
+          <StatusMark
+            tone="warn"
+            label={waiting.length === 1
+              ? 'A burn is waiting for a disc'
+              : 'Burns are waiting for a disc'}
+          />
         </h2>
         <ul>
           {#each waiting as job (job.id)}
             <li>
               <a href={`/burns/${job.id}`}>Insert a disc for burn {job.id.slice(0, 8)}</a>
               {#if job.requested_media_profile}
-                — {job.requested_media_profile}
+                <span class="quiet">: {job.requested_media_profile}</span>
               {/if}
             </li>
           {/each}
@@ -110,94 +124,102 @@
       </section>
     {/if}
 
-    <p>
-      {view.data.items.length} burn job{view.data.items.length === 1 ? '' : 's'}, {active.length}
-      running or queued.
-    </p>
-
-    <table>
-      <caption class="visually-hidden">Burn jobs, newest first</caption>
-      <thead>
-        <tr>
-          <th scope="col">Burn</th>
-          <th scope="col">State</th>
-          <th scope="col">Stage</th>
-          <th scope="col">Attempts</th>
-          <th scope="col">Queued</th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each view.data.items as job (job.id)}
+    <Panel
+      title="Burn jobs"
+      aside={`${view.data.items.length} shown, ${active.length} running or queued`}
+      flush
+    >
+      <Table caption="Burn jobs, newest first">
+        <thead>
           <tr>
-            <th scope="row"><a href={`/burns/${job.id}`}><code>{job.id.slice(0, 8)}</code></a></th>
-            <td>
-              <!-- A symbol carries the status alongside any styling, so it is
-                   never communicated by colour alone. -->
-              <span aria-hidden="true">{jobStateMark(job.state)}</span>
-              {jobStateLabel(job.state)}
-            </td>
-            <td>
-              {#if job.progress}
-                {stageLabel(job.progress.stage)}
-                {#if progressPercent(job.progress.fraction) !== null}
-                  — {progressPercent(job.progress.fraction)}%
-                {/if}
-              {:else}
-                —
-              {/if}
-            </td>
-            <td>
-              {job.attempt_count}
-              {#if job.attempt_count > 1}
-                <small>({job.attempt_count} discs)</small>
-              {/if}
-            </td>
-            <td>{new Date(job.created_at).toLocaleString()}</td>
+            <th scope="col">Burn</th>
+            <th scope="col">State</th>
+            <th scope="col">Stage</th>
+            <th scope="col" class="num">Attempts</th>
+            <th scope="col">Queued</th>
           </tr>
-        {/each}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {#each view.data.items as job (job.id)}
+            {@const percent = job.progress ? progressPercent(job.progress.fraction) : null}
+            <tr>
+              <th scope="row"><a href={`/burns/${job.id}`}><code>{job.id.slice(0, 8)}</code></a></th
+              >
+              <td>
+                <StatusMark tone={jobStateTone(job.state)} label={jobStateLabel(job.state)} pill />
+              </td>
+              <td>
+                {#if job.progress}
+                  <div class="stage">
+                    <span
+                      >{stageLabel(job.progress.stage)}{percent !== null
+                        ? `, ${percent}%`
+                        : ''}</span
+                    >
+                    {#if percent !== null}
+                      <Progress
+                        value={percent / 100}
+                        label={`Burn ${job.id.slice(0, 8)}: ${stageLabel(job.progress.stage)}`}
+                        tone="laser"
+                      />
+                    {/if}
+                  </div>
+                {:else}
+                  <span class="quiet">·</span>
+                {/if}
+              </td>
+              <td class="num">
+                {job.attempt_count}
+                {#if job.attempt_count > 1}
+                  <small class="quiet">({job.attempt_count} discs)</small>
+                {/if}
+              </td>
+              <td
+                ><time datetime={job.created_at}>{new Date(job.created_at).toLocaleString()}</time
+                ></td
+              >
+            </tr>
+          {/each}
+        </tbody>
+      </Table>
+    </Panel>
 
     {#if view.data.next_cursor}
-      <button type="button" onclick={loadMore} disabled={loadingMore}>
-        {loadingMore ? 'Loading…' : 'Load more'}
-      </button>
+      <div class="more">
+        <Button onclick={loadMore} disabled={loadingMore}>
+          {loadingMore ? 'Loading…' : 'Load more'}
+        </Button>
+      </div>
     {/if}
   {/if}
 </div>
 
 <style>
-  table {
-    border-collapse: collapse;
-    width: 100%;
-  }
-  th,
-  td {
-    text-align: left;
-    padding: 0.5rem;
-    border-bottom: 1px solid currentColor;
-  }
   .callout {
-    border: 2px solid currentColor;
-    padding: 0.75rem 1rem;
-    margin-bottom: 1.5rem;
+    padding: var(--space-3) var(--space-4);
+    margin-bottom: var(--space-4);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--warn);
+    border-radius: var(--radius);
+  }
+  .callout h2 {
+    margin: 0 0 var(--space-2);
+    font-size: var(--text-md);
   }
   .callout ul {
-    margin: 0.5rem 0 0;
+    margin: 0;
     padding-left: 1.25rem;
   }
-  .visually-hidden {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
+  .stage {
+    display: grid;
+    gap: var(--space-1);
+    max-width: 12rem;
   }
-  button {
-    margin-top: 1rem;
-    padding: 0.5rem 1rem;
+  .more {
+    margin-top: var(--space-4);
   }
-  small {
-    font-size: 0.85em;
+  .quiet {
+    color: var(--text-muted);
   }
 </style>

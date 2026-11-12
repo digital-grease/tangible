@@ -8,7 +8,7 @@
  */
 import type { Tone } from './components/ui/tone';
 import type { IconName } from './components/ui/icons';
-import { attemptOutcomeLabel, jobStateLabel } from './burns';
+import { attemptOutcomeLabel, attemptOutcomeTone, jobStateLabel, jobStateTone } from './burns';
 import {
   burnsSummary,
   importsSummary,
@@ -116,42 +116,8 @@ export function tiles(board: Dashboard): Tile[] {
   ];
 }
 
-/** A burn job's state as a tone. */
-export function jobTone(state: string): Tone {
-  switch (state) {
-    case 'complete':
-      return 'ok';
-    case 'failed':
-    case 'needs_attention':
-      return 'bad';
-    case 'waiting_for_media':
-      return 'warn';
-    case 'queued':
-    case 'canceled':
-      return 'idle';
-    default:
-      return 'busy';
-  }
-}
-
-/** How a burn attempt ended, as a tone. */
-export function outcomeTone(state: string): Tone {
-  switch (state) {
-    case 'verified':
-      return 'ok';
-    case 'written':
-      return 'warn';
-    case 'verification_failed':
-    case 'write_failed':
-    case 'failed_before_write':
-    case 'interrupted':
-      return 'bad';
-    case 'canceled':
-      return 'idle';
-    default:
-      return 'busy';
-  }
-}
+/** Tones for burns, from where their labels live; named for this page. */
+export { jobStateTone as jobTone, attemptOutcomeTone as outcomeTone } from './burns';
 
 /** One line of the events panel. */
 export interface EventLine {
@@ -183,7 +149,7 @@ export function eventLine(
       return {
         topic: 'Burn',
         words: `${names.get(id) ?? 'A burn'}: ${jobStateLabel(state)}`,
-        tone: jobTone(state),
+        tone: jobStateTone(state),
         href: id ? `/burns/${id}` : null,
       };
     case 'burn_attempt.changed': {
@@ -191,7 +157,7 @@ export function eventLine(
       return {
         topic: 'Burn',
         words: `${names.get(job) ?? 'A burn attempt'}: ${attemptOutcomeLabel(state)}`,
-        tone: outcomeTone(state),
+        tone: attemptOutcomeTone(state),
         href: job ? `/burns/${job}` : null,
       };
     }

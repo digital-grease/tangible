@@ -654,7 +654,9 @@ may change between minor versions, and the release notes say how.
   below, and Physical copies, the discs to destroy first. Imports puts
   each source in its own panel above the queue, which shows each import's
   state as a mark with its progress. Rips and a rip
-  follow.
+  follow. So do the burn queue, a burn's page, which draws
+  its disc being written outward as the worker reports, and creating a
+  burn.
 - The image is built on Debian 13 (trixie), moving from Debian 12
   (bookworm), now oldstable, and every tool in it moves too: chdman 0.251
   to 0.276, which makes DVD CHDs (a DVD's ISO gets one, made with

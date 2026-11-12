@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 digitalgrease
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import type { Tone } from './components/ui/tone';
 import type { components } from './api-types';
 import { apiFetch, transportProblem } from './session';
 import type { LoadState, Problem } from './library';
@@ -249,6 +250,63 @@ export function jobStateLabel(state: string): string {
     default:
       return state;
   }
+}
+
+/** A burn job's state as a tone, for a status mark. */
+export function jobStateTone(state: string): Tone {
+  switch (state) {
+    case 'complete':
+      return 'ok';
+    case 'failed':
+    case 'needs_attention':
+      return 'bad';
+    case 'waiting_for_media':
+      return 'warn';
+    case 'queued':
+    case 'canceled':
+      return 'idle';
+    default:
+      return 'busy';
+  }
+}
+
+/** How a burn attempt ended, as a tone. */
+export function attemptOutcomeTone(state: string): Tone {
+  switch (state) {
+    case 'verified':
+      return 'ok';
+    case 'written':
+      return 'warn';
+    case 'verification_failed':
+    case 'write_failed':
+    case 'failed_before_write':
+    case 'interrupted':
+      return 'bad';
+    case 'canceled':
+      return 'idle';
+    default:
+      return 'busy';
+  }
+}
+
+/**
+ * What a drawing of a burn's disc shows: an empty tray while it waits for a
+ * disc; otherwise the blank, written outward as far as the worker has said.
+ * Closing, reading back and done are drawn fully written; before writing,
+ * nothing is.
+ */
+export function burnDrawing(job: Pick<BurnJobView, 'state' | 'progress'>): {
+  mode: 'burn' | 'empty';
+  progress: number;
+} {
+  if (job.state === 'waiting_for_media') return { mode: 'empty', progress: 0 };
+  if (['finalizing', 'verifying', 'complete'].includes(job.state)) {
+    return { mode: 'burn', progress: 1 };
+  }
+  if (job.progress?.stage === 'writing' && job.progress.fraction != null) {
+    return { mode: 'burn', progress: job.progress.fraction };
+  }
+  return { mode: 'burn', progress: 0 };
 }
 
 /** A short symbol accompanying a state, so status is never colour alone. */

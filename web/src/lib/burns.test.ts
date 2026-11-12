@@ -3,6 +3,9 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  attemptOutcomeTone,
+  burnDrawing,
+  jobStateTone,
   attemptOutcomeLabel,
   canCancel,
   canRetry,
@@ -428,5 +431,34 @@ describe('which reports an attempt offers', () => {
     expect(reportOptions({ state: 'verified', engine: 'fake' }).worked).toBe(false);
     expect(reportOptions({ state: 'write_failed', engine: 'auto' }).worked).toBe(false);
     expect(reportOptions({ state: 'verification_failed', engine: 'auto' }).worked).toBe(false);
+  });
+});
+
+describe('a burn, as tones and a drawing', () => {
+  it('gives job states and attempt outcomes a tone', () => {
+    expect(jobStateTone('waiting_for_media')).toBe('warn');
+    expect(jobStateTone('needs_attention')).toBe('bad');
+    expect(jobStateTone('writing')).toBe('busy');
+    expect(attemptOutcomeTone('verified')).toBe('ok');
+    expect(attemptOutcomeTone('written')).toBe('warn');
+    expect(attemptOutcomeTone('interrupted')).toBe('bad');
+  });
+
+  it('draws an empty tray while waiting, the written area while writing, all of it after', () => {
+    expect(burnDrawing({ state: 'waiting_for_media', progress: null })).toEqual({
+      mode: 'empty',
+      progress: 0,
+    });
+    expect(
+      burnDrawing({ state: 'writing', progress: { stage: 'writing', fraction: 0.43 } as never }),
+    ).toEqual({ mode: 'burn', progress: 0.43 });
+    expect(burnDrawing({ state: 'verifying', progress: null })).toEqual({
+      mode: 'burn',
+      progress: 1,
+    });
+    expect(burnDrawing({ state: 'staging', progress: null })).toEqual({
+      mode: 'burn',
+      progress: 0,
+    });
   });
 });
