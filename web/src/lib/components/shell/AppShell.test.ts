@@ -79,6 +79,9 @@ describe('the shell', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
     expect(onSignOut).toHaveBeenCalledOnce();
     expect(screen.getByRole('link', { name: 'Source code' }).getAttribute('href')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Buy me a coffee' }).getAttribute('href')).toBe(
+      'https://www.buymeacoffee.com/digitalgrease',
+    );
   });
 
   it('opens the menu as a drawer on a narrow screen, and closes it with Escape', async () => {

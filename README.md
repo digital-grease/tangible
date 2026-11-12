@@ -2,6 +2,8 @@
 
 > A self-hosted disc-image preservation, management, and burning platform.
 
+<a href="https://www.buymeacoffee.com/digitalgrease"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-red.png" alt="Buy Me A Coffee" height="60" width="217"></a>
+
 **Status:** early release, 0.2.1. Everything listed under "What it does" works
 and is tested, including on a real optical drive. Expect the API and the
 manifest schema to change during 0.x, with release notes.

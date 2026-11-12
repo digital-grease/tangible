@@ -24,7 +24,7 @@
     toggledSidebar,
     type SidebarChoice,
   } from '$lib/sidebar';
-  import { LICENSE_NAME, SOURCE_URL } from '$lib/source';
+  import { LICENSE_NAME, SOURCE_URL, SUPPORT_URL } from '$lib/source';
   import { THEME_CHOICES, isThemeChoice, themeLabel, type ThemeChoice } from '$lib/theme';
   import CommandBar from './CommandBar.svelte';
   import DriveBay from './DriveBay.svelte';
@@ -171,6 +171,11 @@
            get its source (AGPL section 13). -->
       <p class="source label">
         <a href={SOURCE_URL} rel="noreferrer">Source code</a>, {LICENSE_NAME}
+      </p>
+      <!-- A plain link: the page's Content Security Policy loads no image
+           from elsewhere, and nothing is fetched until it is followed. -->
+      <p class="source label">
+        <a href={SUPPORT_URL} rel="noreferrer">Buy me a coffee</a>
       </p>
       <a class="icon-button source-icon" href={SOURCE_URL} rel="noreferrer" title="Source code">
         <Icon name="source" label="Source code, {LICENSE_NAME}" />

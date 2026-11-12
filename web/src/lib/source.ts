@@ -13,3 +13,9 @@ export const SOURCE_URL = 'https://github.com/digital-grease/tangible';
 
 /** The licence the source is offered under. */
 export const LICENSE_NAME = 'AGPL-3.0-or-later';
+
+/**
+ * Where to support Tangible's development, offered beside the source as
+ * the README offers it. A fork may point it at its own, or drop it.
+ */
+export const SUPPORT_URL = 'https://www.buymeacoffee.com/digitalgrease';

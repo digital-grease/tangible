@@ -4,6 +4,15 @@ Notable changes to Tangible, newest first. Versions follow semantic
 versioning; during 0.x the API, the manifest schema and the database schema
 may change between minor versions, and the release notes say how.
 
+## Unreleased
+
+### Added
+
+- A "Buy me a coffee" link at the foot of the web UI's sidebar, under the
+  source code link, and a button in the README, for anyone who wants to
+  support Tangible's development. The link is plain text: the page loads
+  nothing from elsewhere, and nothing is fetched unless it is followed.
+
 ## 0.2.1 (2026-11-12)
 
 A security release: a review of 0.2.0 found the faults under "Security",
