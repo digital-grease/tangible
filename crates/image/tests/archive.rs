@@ -342,6 +342,97 @@ fn a_huge_tar_extension_header_is_refused_before_it_is_read() {
     ));
 }
 
+/// One PAX record, `"<length> <key>=<value>\n"`, its length counting itself.
+fn pax_record(key: &str, value: &str) -> Vec<u8> {
+    let body = format!(" {key}={value}\n");
+    let mut length = body.len() + 1;
+    while format!("{length}{body}").len() != length {
+        length += 1;
+    }
+    format!("{length}{body}").into_bytes()
+}
+
+/// A PAX header block and its data, padded to whole blocks.
+fn pax_header(records: &[u8]) -> Vec<u8> {
+    let mut out = tar_header(
+        "PaxHeaders/entry",
+        b'x',
+        format!("{:011o}\0", records.len()).as_bytes(),
+    );
+    let mut data = records.to_vec();
+    data.resize(records.len().div_ceil(512) * 512, 0);
+    out.extend(data);
+    out
+}
+
+fn unpack_bytes(
+    bytes: &[u8],
+) -> Result<(TempDir, tangible_image::archive::Unpacked), ArchiveError> {
+    let dir = TempDir::new().unwrap();
+    let archive = dir.path().join("crafted.tar");
+    std::fs::write(&archive, bytes).unwrap();
+    let out = TempDir::new().unwrap();
+    let unpacked = unpack(&archive, ArchiveKind::Tar, out.path(), &limits())?;
+    drop(dir);
+    Ok((out, unpacked))
+}
+
+#[test]
+fn a_pax_size_does_not_put_the_guard_out_of_step() {
+    // Found by the 2026-11-12 security review. A PAX size of 0 for an entry
+    // whose own header says 1024: the reader skips nothing, and a guard
+    // counting the header's 1024 would skip the next header, a GNU long
+    // name past the cap, and let the reader hold it whole. 2 MiB here; the
+    // same with gigabytes ran the server out of memory.
+    let long_name: usize = 2 << 20;
+    let mut tar = pax_header(&pax_record("size", "0"));
+    tar.extend(tar_header("a", b'0', b"00000002000\0"));
+    let mut long = tar_header(
+        "././@LongLink",
+        b'L',
+        format!("{long_name:011o}\0").as_bytes(),
+    );
+    long[257..265].copy_from_slice(b"ustar  \0");
+    tar.extend(long);
+    tar.extend(std::iter::repeat_n(0_u8, long_name));
+    tar.extend(tar_header("b", b'0', b"00000000000\0"));
+    tar.extend(std::iter::repeat_n(0_u8, 1024));
+
+    let error = unpack_bytes(&tar).unwrap_err();
+    assert!(
+        matches!(error, ArchiveError::Index("tar extension header")),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_pax_size_is_followed_as_the_reader_follows_it() {
+    // How a tar records a file over 8 GiB: its header's size is a stand-in,
+    // and a PAX record gives the real one. Here 1000 bytes behind a header
+    // that says 0; the guard must skip what the reader reads.
+    let data: Vec<u8> = (0..1000_u32)
+        .map(|i| u8::try_from(i % 251).unwrap())
+        .collect();
+    let mut tar = pax_header(&pax_record("size", "1000"));
+    tar.extend(tar_header("disc.bin", b'0', b"00000000000\0"));
+    let mut padded = data.clone();
+    padded.resize(1024, 0);
+    tar.extend(padded);
+    tar.extend(std::iter::repeat_n(0_u8, 1024));
+
+    let (out, _) = unpack_bytes(&tar).unwrap();
+    assert_eq!(std::fs::read(out.path().join("disc.bin")).unwrap(), data);
+}
+
+#[test]
+fn two_pax_headers_for_one_entry_are_refused() {
+    let mut tar = pax_header(&pax_record("size", "0"));
+    tar.extend(pax_header(&pax_record("size", "512")));
+    tar.extend(tar_header("a", b'0', b"00000000000\0"));
+    tar.extend(std::iter::repeat_n(0_u8, 1536));
+    assert!(unpack_bytes(&tar).is_err());
+}
+
 /// A 7z number of exactly eight bytes.
 fn seven_zip_u64(value: u64) -> Vec<u8> {
     let mut bytes = vec![0xFF];

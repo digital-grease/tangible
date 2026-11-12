@@ -947,6 +947,15 @@ type Refusal = std::rc::Rc<std::cell::RefCell<Option<ArchiveError>>>;
 /// reader reads it, as is an old GNU sparse file, whose extra headers would
 /// put the count out of step; and the deadline is kept while the reader
 /// skips data it does not hand on.
+///
+/// The guard must count each entry's data exactly as the reader does, or it
+/// takes data for headers and headers for data. So a PAX `size` record is
+/// followed as the reader follows it (tar 0.4: a local `x` header's size,
+/// read with the reader's own record parser, replaces the size of the next
+/// entry that is not itself an extension header; a global `g` header uses
+/// it up; two `x` headers for one entry are an error). Missing that let a
+/// PAX size of 0 hide a long name past the cap (security review,
+/// 2026-11-12).
 struct TarGuard<R> {
     inner: R,
     header: [u8; 512],
@@ -954,6 +963,11 @@ struct TarGuard<R> {
     data_left: u64,
     deadline: Option<Instant>,
     refusal: Refusal,
+    /// A local PAX header's records, waiting for the entry they describe.
+    pax: Option<Vec<u8>>,
+    /// A local PAX header's records as they pass, and how many are to come.
+    capture: Option<Vec<u8>>,
+    capture_left: u64,
 }
 
 impl<R> TarGuard<R> {
@@ -971,13 +985,40 @@ impl<R> TarGuard<R> {
         if header.iter().all(|byte| *byte == 0) {
             return Ok(());
         }
-        let size = tar_size(&header[124..136]).ok_or_else(|| {
+        let mut size = tar_size(&header[124..136]).ok_or_else(|| {
             ArchiveError::Corrupt("a tar header's size is not a number".to_owned())
         })?;
-        match header[156] {
+        let kind = header[156];
+        match kind {
             b'L' | b'K' | b'x' | b'g' if size > MAX_TAR_EXTENSION_BYTES => {
                 return Err(ArchiveError::Index("tar extension header"));
             }
+            // The reader takes these as extensions only with a ustar or GNU
+            // magic, and otherwise as ordinary entries; rather than follow
+            // that, an extension header without one is refused.
+            b'L' | b'K' | b'x' | b'g' if !recognised_tar_magic(header) => {
+                return Err(ArchiveError::Corrupt(
+                    "a tar extension header without a ustar or GNU magic".to_owned(),
+                ));
+            }
+            b'x' => {
+                if self.pax.is_some() || self.capture.is_some() {
+                    return Err(ArchiveError::Corrupt(
+                        "two PAX headers describe one tar entry".to_owned(),
+                    ));
+                }
+                // At most MAX_TAR_EXTENSION_BYTES, refused above otherwise.
+                self.capture = Some(Vec::with_capacity(usize::try_from(size).unwrap_or(0)));
+                self.capture_left = size;
+                if size == 0 {
+                    self.pax = self.capture.take();
+                }
+            }
+            // A global header is an entry to the reader, and uses up the
+            // local records waiting, without taking their size.
+            b'g' => self.pax = None,
+            // Long names and links wait with the records for their entry.
+            b'L' | b'K' => {}
             b'S' => {
                 return Err(ArchiveError::NotAFile {
                     name: String::from_utf8_lossy(&header[..100])
@@ -986,7 +1027,15 @@ impl<R> TarGuard<R> {
                     kind: "sparse file",
                 });
             }
-            _ => {}
+            // The entry the waiting records describe: their size, if they
+            // give one, is the size the reader uses.
+            _ => {
+                if let Some(records) = self.pax.take()
+                    && let Some(pax) = pax_size(&records)
+                {
+                    size = pax;
+                }
+            }
         }
         self.data_left = size
             .div_ceil(512)
@@ -994,6 +1043,28 @@ impl<R> TarGuard<R> {
             .ok_or_else(|| ArchiveError::Corrupt("a tar entry's size is impossible".to_owned()))?;
         Ok(())
     }
+}
+
+/// Whether a tar header block carries the ustar or the GNU magic, as the
+/// tar reader checks it before it takes the block for an extension header.
+fn recognised_tar_magic(header: &[u8; 512]) -> bool {
+    let (magic, version) = (&header[257..263], &header[263..265]);
+    (magic == b"ustar\0" && version == b"00") || (magic == b"ustar " && version == b" \0")
+}
+
+/// A PAX `size` record, found exactly as the tar reader finds it (tar 0.4,
+/// `pax_extensions_value`): the first record named `size`, with the reader's
+/// own record parser; a malformed record before it, or a value that is not
+/// a number, means none.
+fn pax_size(records: &[u8]) -> Option<u64> {
+    for record in tar::PaxExtensions::new(records) {
+        let record = record.ok()?;
+        if record.key() != Ok("size") {
+            continue;
+        }
+        return record.value().ok()?.parse::<u64>().ok();
+    }
+    None
 }
 
 impl<R: Read> Read for TarGuard<R> {
@@ -1009,6 +1080,16 @@ impl<R: Read> Read for TarGuard<R> {
         while at < read {
             if self.data_left > 0 {
                 let take = (read - at).min(usize::try_from(self.data_left).unwrap_or(usize::MAX));
+                // A local PAX header's records, kept for the entry they
+                // describe; its padding is not kept.
+                if let Some(capture) = self.capture.as_mut() {
+                    let keep = take.min(usize::try_from(self.capture_left).unwrap_or(usize::MAX));
+                    capture.extend_from_slice(&buffer[at..at + keep]);
+                    self.capture_left -= keep as u64;
+                    if self.capture_left == 0 {
+                        self.pax = self.capture.take();
+                    }
+                }
                 self.data_left -= take as u64;
                 at += take;
                 continue;
@@ -1055,6 +1136,9 @@ fn unpack_tar(reader: impl Read, writer: &mut Writer<'_>) -> Result<(), ArchiveE
         data_left: 0,
         deadline: writer.limits.deadline,
         refusal: std::rc::Rc::clone(&refusal),
+        pax: None,
+        capture: None,
+        capture_left: 0,
     };
     let outcome = unpack_tar_entries(guard, writer);
     // What the guard refused is the reason, whatever the reader made of it.

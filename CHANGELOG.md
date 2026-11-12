@@ -28,6 +28,13 @@ Found by a security review of 0.2.0.
   one Tangible did not make and nothing in it is touched. The marker is read
   without following a link, only as a regular file of at most 1 MiB, and
   only regular files are deleted.
+- A crafted tar could run the server out of memory. Its unpacking guard
+  counted each entry's size from the entry's header, while the tar reader
+  takes a PAX `size` record over it; a PAX size of 0 put the guard out of
+  step, and a GNU long-name header past the guard's 1 MiB cap was read
+  whole, however large. The guard now follows PAX sizes as the reader does.
+  The same fix lets a tar holding a file over 8 GiB, whose size only a PAX
+  record can give, be imported: before, it was refused as damaged.
 
 ## 0.2.0 (2026-11-12)
 
