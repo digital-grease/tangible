@@ -93,6 +93,63 @@ async fn server() -> Server {
 
 /// A server, with decryption turned on by its administrator or not.
 async fn server_with(decryption_allowed: bool) -> Server {
+    server_from(decryption_allowed, None).await
+}
+
+/// The first reports of how an attempt ended that a server answers with a
+/// status of its own, rather than recording them: what a server that is
+/// restarting, or that refuses, looks like to a worker.
+#[derive(Clone)]
+struct RefusedCompletions {
+    remaining: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    status: axum::http::StatusCode,
+}
+
+impl RefusedCompletions {
+    fn new(count: usize, status: axum::http::StatusCode) -> Self {
+        Self {
+            remaining: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(count)),
+            status,
+        }
+    }
+
+    fn left(&self) -> usize {
+        self.remaining.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+async fn refuse_completions(
+    axum::extract::State(refused): axum::extract::State<RefusedCompletions>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
+    let path = request.uri().path();
+    if request.method() == axum::http::Method::POST
+        && path.starts_with("/api/v1/burn-attempts/")
+        && path.ends_with("/complete")
+        && refused
+            .remaining
+            .fetch_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |left| left.checked_sub(1),
+            )
+            .is_ok()
+    {
+        return (
+            refused.status,
+            axum::Json(serde_json::json!({
+                "code": "REFUSED_BY_THE_TEST",
+                "detail": "this report was not recorded",
+            })),
+        )
+            .into_response();
+    }
+    next.run(request).await
+}
+
+async fn server_from(decryption_allowed: bool, refused: Option<RefusedCompletions>) -> Server {
     let url = std::env::var("TANGIBLE_TEST_DATABASE_URL")
         .or_else(|_| std::env::var("TANGIBLE_DATABASE_URL"))
         .expect("set TANGIBLE_TEST_DATABASE_URL to run integration tests");
@@ -129,8 +186,15 @@ async fn server_with(decryption_allowed: bool) -> Server {
             upload_part_bytes: tangible_domain::upload::PART_BYTES,
         })
         .with_decryption_allowed(decryption_allowed);
+    let app = match refused {
+        Some(refused) => router(state).layer(axum::middleware::from_fn_with_state(
+            refused,
+            refuse_completions,
+        )),
+        None => router(state),
+    };
     let handle = tokio::spawn(async move {
-        let _ = axum::serve(listener, router(state))
+        let _ = axum::serve(listener, app)
             .with_graceful_shutdown(async {
                 let _ = stopped.await;
             })
@@ -683,6 +747,116 @@ async fn a_worker_enrolls_claims_burns_and_reports_without_help() {
     assert_eq!(detail["medium"]["profile"], "CD-R", "{detail}");
     assert_eq!(detail["medium"]["blank"], true, "{detail}");
     assert!(detail["medium"]["capacity_blocks"].as_u64().unwrap_or(0) > 0);
+
+    server.stop().await;
+}
+
+/// When each of `job`'s attempts started and ended.
+async fn attempt_times(
+    pool: &PgPool,
+    job: &str,
+) -> Vec<(time::OffsetDateTime, Option<time::OffsetDateTime>)> {
+    sqlx::query_as(
+        "SELECT started_at, ended_at FROM burn_attempts
+         WHERE burn_job_id = $1::uuid ORDER BY started_at",
+    )
+    .bind(job)
+    .fetch_all(pool)
+    .await
+    .expect("the attempts")
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_worker_whose_report_is_not_taken_asks_again_before_taking_more() {
+    // Found by the 2026-11-12 security review. The report of how an attempt
+    // ended was sent once: if the server could not take it, the worker went
+    // on to the next job, whose attempt overwrote the record of the disc the
+    // server had not heard about.
+    let _queue = exclusive_queue().await;
+    let refused = RefusedCompletions::new(3, axum::http::StatusCode::SERVICE_UNAVAILABLE);
+    let mut server = server_from(false, Some(refused.clone())).await;
+    server.drain_queue().await;
+
+    let artifact = server.import(&iso_image("ASKAGAIN", 24)).await;
+    let disc = server.seed_disc().await;
+    let first = server.queue_burn(&disc, &artifact).await;
+    let second = server.queue_burn(&disc, &artifact).await;
+
+    let worker_dir = TempDir::new().expect("temp dir");
+    let token = server.enrollment_token().await;
+    let settings = settings(&server, worker_dir.path().to_path_buf(), token);
+    let engine = FakeEngine::new(settings.state_dir.join("media"));
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let worker = spawn_worker(settings, engine, stopped);
+
+    let first_settled = server.await_settled(&first).await;
+    let second_settled = server.await_settled(&second).await;
+    let _ = stop.send(());
+    let outcome = worker.await.expect("the worker task");
+    assert!(outcome.is_ok(), "the worker exited badly: {outcome:?}");
+
+    assert_eq!(refused.left(), 0, "every refusal was met");
+    for settled in [&first_settled, &second_settled] {
+        assert_eq!(settled["state"], "complete", "{settled}");
+        assert_eq!(settled["attempt_count"], 1, "{settled}");
+        assert_eq!(settled["attempts"][0]["state"], "verified", "{settled}");
+    }
+    // The second burn was taken only once the first was reported.
+    let first_ended = attempt_times(&server.pool, &first).await[0]
+        .1
+        .expect("the first attempt ended");
+    let second_began = attempt_times(&server.pool, &second).await[0].0;
+    assert!(
+        second_began >= first_ended,
+        "the second burn began at {second_began} before the first was reported at {first_ended}"
+    );
+
+    server.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_worker_whose_report_is_refused_settles_it_before_taking_more() {
+    // A refusal is not asked again, but the worker must still not take the
+    // next job over a disc the server has not heard about: it reconciles
+    // first, and here the server, holding the attempt as verifying, says a
+    // person must look.
+    let _queue = exclusive_queue().await;
+    let refused = RefusedCompletions::new(1, axum::http::StatusCode::NOT_FOUND);
+    let mut server = server_from(false, Some(refused.clone())).await;
+    server.drain_queue().await;
+
+    let artifact = server.import(&iso_image("REFUSED", 24)).await;
+    let disc = server.seed_disc().await;
+    let first = server.queue_burn(&disc, &artifact).await;
+    let second = server.queue_burn(&disc, &artifact).await;
+
+    let worker_dir = TempDir::new().expect("temp dir");
+    let token = server.enrollment_token().await;
+    let settings = settings(&server, worker_dir.path().to_path_buf(), token);
+    let engine = FakeEngine::new(settings.state_dir.join("media"));
+    let (_stop, stopped) = tokio::sync::oneshot::channel();
+    let worker = spawn_worker(settings, engine, stopped);
+
+    let outcome = tokio::time::timeout(Duration::from_secs(30), worker)
+        .await
+        .expect("the worker stopped")
+        .expect("the worker task");
+    assert!(
+        matches!(
+            outcome,
+            Err(tangible_burn::runner::RunnerError::NeedsAttention)
+        ),
+        "{outcome:?}"
+    );
+    assert_eq!(refused.left(), 0);
+    assert!(
+        attempt_times(&server.pool, &second).await.is_empty(),
+        "the second burn was never taken"
+    );
+    let first_now = server.get(&format!("/api/v1/burn-jobs/{first}")).await;
+    assert_eq!(first_now["attempt_count"], 1, "{first_now}");
 
     server.stop().await;
 }

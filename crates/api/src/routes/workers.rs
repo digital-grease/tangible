@@ -1692,21 +1692,39 @@ pub struct RecoveryResponse {
     pub may_write: bool,
 }
 
+/// Whether a recovering worker's own stage says it may have written.
+///
+/// Read in the worker's own vocabulary ([`WorkerStage`]), which has stages
+/// no attempt state names: `finalizing` and `completing` come after a write,
+/// `waiting_for_media` before one. Read as attempt states alone, those were
+/// unknown, and an unknown stage counted as nothing written, so a worker
+/// that had finished a disc could be told to discard its record of it
+/// (security review, 2026-11-12). An attempt state is still understood, and
+/// anything else is taken as possibly written: the worker is already in
+/// trouble, and only the cautious reading cannot cost a disc.
+fn local_stage_may_have_written(local_stage: &str) -> bool {
+    if let Ok(stage) = local_stage.parse::<WorkerStage>() {
+        return stage.may_have_consumed_media();
+    }
+    local_stage
+        .parse::<BurnAttemptState>()
+        .map_or(true, |state| state.consumed_media())
+}
+
 /// Decide what a recovering worker may do.
 ///
 /// The governing rule is that no answer may cause a second write. Where the
 /// worker's account and the server's disagree, the more dangerous reading
 /// wins: a worker that might have written is never told to discard.
+///
+/// The worker's own claim to have started writing is enough to rule out a
+/// discard, whatever the server believes. The server's record can lag: the
+/// event carrying "writing" may never have arrived.
 fn directive_for(
     server_state: Option<BurnAttemptState>,
-    local_stage: Option<BurnAttemptState>,
+    worker_may_have_written: bool,
     engine_running: bool,
 ) -> RecoveryDirective {
-    // The worker's own claim to have started writing is enough to rule out a
-    // discard, whatever the server believes. The server's record can lag: the
-    // event carrying "writing" may never have arrived.
-    let worker_may_have_written = local_stage.is_some_and(|stage| stage.consumed_media());
-
     match server_state {
         // The write is still going. Reattach and keep reporting.
         Some(BurnAttemptState::Writing) if engine_running => RecoveryDirective::ResumeReporting,
@@ -1776,13 +1794,12 @@ pub async fn recover(
             unavailable("the attempt could not be read")
         })?;
 
-    // An unrecognised stage is treated as absent rather than rejected: the
-    // worker is already in trouble, and the decision below defaults to the
-    // cautious answer when it cannot tell.
-    let local_stage = request.local_stage.parse::<BurnAttemptState>().ok();
+    // An unrecognised stage is not rejected: the worker is already in
+    // trouble, and it is read as possibly written, the cautious answer.
+    let worker_may_have_written = local_stage_may_have_written(&request.local_stage);
     let engine_running = request.engine_process_state == "running";
 
-    let directive = directive_for(server_state, local_stage, engine_running);
+    let directive = directive_for(server_state, worker_may_have_written, engine_running);
     let plan = plan_for(directive);
 
     // A discarded attempt that the server still holds open, short of a write,
@@ -2068,20 +2085,72 @@ mod tests {
 
     // --- recovery ----------------------------------------------------------
 
+    /// Every stage name a worker could report: its own, and every attempt
+    /// state.
+    fn every_local_stage() -> Vec<&'static str> {
+        WorkerStage::all()
+            .iter()
+            .map(WorkerStage::as_str)
+            .chain(BurnAttemptState::all().iter().map(BurnAttemptState::as_str))
+            .collect()
+    }
+
     #[test]
     fn no_recovery_directive_ever_permits_writing() {
         // The one property the whole route exists to guarantee. A worker that
         // restarts cannot know whether the laser already ran.
-        for server in BurnAttemptState::all() {
-            for local in BurnAttemptState::all() {
+        let servers = BurnAttemptState::all().iter().copied().map(Some);
+        for server in servers.chain([None]) {
+            for wrote in [true, false] {
                 for running in [true, false] {
-                    let directive = directive_for(Some(*server), Some(*local), running);
+                    let directive = directive_for(server, wrote, running);
                     assert!(
                         !plan_for(directive).may_write,
-                        "{server:?}/{local:?} produced a directive permitting a write"
+                        "{server:?}/{wrote}/{running} produced a directive permitting a write"
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn every_stage_a_worker_reports_after_writing_counts_as_written() {
+        // Found by the 2026-11-12 security review: finalizing and completing
+        // were not attempt states, so they were read as nothing written, and
+        // a worker that had finished a disc could be told to discard it.
+        for stage in WorkerStage::all() {
+            assert_eq!(
+                local_stage_may_have_written(stage.as_str()),
+                stage.may_have_consumed_media(),
+                "{stage}"
+            );
+        }
+        assert!(local_stage_may_have_written("finalizing"));
+        assert!(local_stage_may_have_written("completing"));
+        assert!(!local_stage_may_have_written("waiting_for_media"));
+        for state in BurnAttemptState::all() {
+            assert_eq!(
+                local_stage_may_have_written(state.as_str()),
+                state.consumed_media(),
+                "{state:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_local_stage_is_taken_as_possibly_written() {
+        for unknown in ["", "rewinding", "WRITING"] {
+            assert!(local_stage_may_have_written(unknown), "{unknown:?}");
+        }
+        for server in [
+            None,
+            Some(BurnAttemptState::Claimed),
+            Some(BurnAttemptState::Preflighting),
+        ] {
+            assert_eq!(
+                directive_for(server, local_stage_may_have_written("rewinding"), false),
+                RecoveryDirective::MarkNeedsAttention
+            );
         }
     }
 
@@ -2090,15 +2159,16 @@ mod tests {
         // Discarding is only safe when nothing physical happened. The worker's
         // own account is enough to rule it out, because the server's record
         // can lag: the event carrying "writing" may never have arrived.
-        for local in BurnAttemptState::all()
-            .iter()
-            .filter(|s| s.consumed_media())
+        for local in every_local_stage()
+            .into_iter()
+            .filter(|stage| local_stage_may_have_written(stage))
         {
+            let wrote = local_stage_may_have_written(local);
             for running in [true, false] {
                 assert_ne!(
-                    directive_for(None, Some(*local), running),
+                    directive_for(None, wrote, running),
                     RecoveryDirective::DiscardPrewriteState,
-                    "an unknown attempt with local stage {local:?} must not be discarded"
+                    "an unknown attempt with local stage {local} must not be discarded"
                 );
                 for server in [
                     BurnAttemptState::Claimed,
@@ -2106,9 +2176,9 @@ mod tests {
                     BurnAttemptState::Preflighting,
                 ] {
                     assert_ne!(
-                        directive_for(Some(server), Some(*local), running),
+                        directive_for(Some(server), wrote, running),
                         RecoveryDirective::DiscardPrewriteState,
-                        "{server:?} disagreeing with local {local:?} must not be discarded"
+                        "{server:?} disagreeing with local {local} must not be discarded"
                     );
                 }
             }
@@ -2118,11 +2188,7 @@ mod tests {
     #[test]
     fn an_interrupted_write_with_no_engine_needs_attention() {
         assert_eq!(
-            directive_for(
-                Some(BurnAttemptState::Writing),
-                Some(BurnAttemptState::Writing),
-                false
-            ),
+            directive_for(Some(BurnAttemptState::Writing), true, false),
             RecoveryDirective::MarkNeedsAttention
         );
     }
@@ -2130,11 +2196,7 @@ mod tests {
     #[test]
     fn a_live_write_resumes_reporting() {
         assert_eq!(
-            directive_for(
-                Some(BurnAttemptState::Writing),
-                Some(BurnAttemptState::Writing),
-                true
-            ),
+            directive_for(Some(BurnAttemptState::Writing), true, true),
             RecoveryDirective::ResumeReporting
         );
     }
@@ -2143,7 +2205,7 @@ mod tests {
     fn a_finished_write_resumes_verification() {
         for state in [BurnAttemptState::Written, BurnAttemptState::Verifying] {
             assert_eq!(
-                directive_for(Some(state), Some(state), false),
+                directive_for(Some(state), true, false),
                 RecoveryDirective::ResumeVerification
             );
         }
@@ -2155,23 +2217,29 @@ mod tests {
         // state. The server already holds the outcome, so holding the worker
         // would strand a drive for nothing.
         for state in BurnAttemptState::all().iter().filter(|s| s.is_terminal()) {
-            let directive = directive_for(Some(*state), Some(*state), false);
-            assert_eq!(directive, RecoveryDirective::DiscardPrewriteState);
-            assert!(plan_for(directive).may_accept_new_work);
+            for wrote in [true, false] {
+                let directive = directive_for(Some(*state), wrote, false);
+                assert_eq!(directive, RecoveryDirective::DiscardPrewriteState);
+                assert!(plan_for(directive).may_accept_new_work);
+            }
         }
     }
 
     #[test]
-    fn an_unparseable_local_stage_does_not_widen_permissions() {
-        // A worker reporting a stage this server does not know is already in
-        // trouble. Treating it as absent must not turn a cautious answer into
-        // a permissive one for anything that consumed media.
-        for server in BurnAttemptState::all()
-            .iter()
-            .filter(|s| s.consumed_media())
-        {
-            let directive = directive_for(Some(*server), None, false);
-            assert!(!plan_for(directive).may_write);
+    fn a_worker_that_never_wrote_may_discard() {
+        for server in [
+            None,
+            Some(BurnAttemptState::Claimed),
+            Some(BurnAttemptState::Staging),
+            Some(BurnAttemptState::Preflighting),
+        ] {
+            for stage in ["claimed", "staging", "waiting_for_media", "preflighting"] {
+                assert_eq!(
+                    directive_for(server, local_stage_may_have_written(stage), false),
+                    RecoveryDirective::DiscardPrewriteState,
+                    "{server:?}/{stage}"
+                );
+            }
         }
     }
 }

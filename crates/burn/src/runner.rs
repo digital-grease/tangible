@@ -32,10 +32,10 @@ use tangible_domain::{
 use time::OffsetDateTime;
 
 use crate::client::{
-    Capabilities, ClientError, Completion, DriveDescription, EngineDescription, ErasureClaim,
-    FailureBody, Leased, PhysicalMediumBody, RipCapabilityBody, RipClaim, RipEventBody,
-    RipStanding, VerificationReportBody, WorkerClient, WorkerIdentity, WriteReportBody,
-    identity_path, rfc3339,
+    Capabilities, ClientError, Completion, CompletionAck, DriveDescription, EngineDescription,
+    ErasureClaim, FailureBody, Leased, PhysicalMediumBody, RipCapabilityBody, RipClaim,
+    RipEventBody, RipStanding, VerificationReportBody, WorkerClient, WorkerIdentity,
+    WriteReportBody, identity_path, rfc3339,
 };
 use crate::device_lock::{DeviceLock, DeviceLockError};
 use crate::dvdbackup::{CssCopier, Dvdbackup};
@@ -53,6 +53,10 @@ use crate::worker::{EventBuffer, RecoveryRecord, RecoveryStore, WorkerStage, pla
 
 /// How long after a failed credential rotation the worker tries again.
 const ROTATION_RETRY_INTERVAL: Duration = Duration::from_secs(10 * 60);
+
+/// The longest pause between reports of how an attempt ended, while the
+/// server cannot take one.
+const MAX_COMPLETION_PAUSE: Duration = Duration::from_secs(60);
 
 /// How one pass of the run loop ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -485,7 +489,8 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         }
     }
 
-    /// Reconcile anything a previous run left behind.
+    /// Reconcile an attempt whose end the server has not acknowledged: one a
+    /// previous run left behind, or one whose report this run could not make.
     ///
     /// # Errors
     ///
@@ -509,7 +514,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         tracing::warn!(
             attempt_id = %record.attempt_id,
             stage = %record.stage,
-            "reconciling an attempt left over from a previous run"
+            "reconciling an attempt whose end the server has not acknowledged"
         );
 
         // The engine process cannot have survived this process, so it is
@@ -755,6 +760,12 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         drive_id: DriveId,
         may_rotate: bool,
     ) -> Result<Step, RunnerError> {
+        // An attempt whose end the server has not acknowledged is settled
+        // before anything else is taken: its recovery record stands for a
+        // disc that may exist, and the next attempt would overwrite it. With
+        // no record, which is every step but one after such a failure, this
+        // reads a file that is not there.
+        self.reconcile(identity).await?;
         let heartbeat = self.client.heartbeat(&identity.worker_id).await?;
         if heartbeat.credential_rotation_required && may_rotate {
             return Ok(Step::RotateCredential);
@@ -1214,7 +1225,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             failure: outcome.failure,
         };
 
-        let ack = self.client.complete(attempt_id, &completion).await?;
+        let ack = self.report_completion(attempt_id, &completion).await?;
         tracing::info!(
             attempt_id = %attempt_id,
             physical_copy_id = ?ack.physical_copy_id,
@@ -1636,6 +1647,46 @@ impl<E: BurnEngine> WorkerRuntime<E> {
                 return Ok(report);
             }
             tokio::time::sleep(self.settings.media_poll_interval).await;
+        }
+    }
+
+    /// Report how an attempt ended, until the server has it.
+    ///
+    /// The report is the server's only account of a disc that may exist, and
+    /// until it is acknowledged this worker may take no other work: the next
+    /// attempt would overwrite the recovery record that stands for it. So a
+    /// server that cannot be reached, or cannot answer now, is asked again,
+    /// with a pause that doubles up to a minute, for as long as it takes; the
+    /// report is idempotent, so a repeat records nothing twice. Before, one
+    /// failure ended the step, and the next took new work (security review,
+    /// 2026-11-12).
+    ///
+    /// Once one report has failed, a request to stop is no longer held for
+    /// it: the disc is finished, and the next start reconciles the record.
+    /// A refusal is returned as it is, and the next step reconciles the
+    /// record before it takes anything.
+    async fn report_completion(
+        &self,
+        attempt_id: BurnAttemptId,
+        completion: &Completion,
+    ) -> Result<CompletionAck, RunnerError> {
+        let mut pause = self.settings.report_interval;
+        loop {
+            match self.client.complete(attempt_id, completion).await {
+                Ok(ack) => return Ok(ack),
+                Err(error) if error.is_transient() => {
+                    self.changing_disc.store(false, Ordering::SeqCst);
+                    tracing::warn!(
+                        error = ?error,
+                        attempt_id = %attempt_id,
+                        retry_in = ?pause,
+                        "could not report how the attempt ended; asking again"
+                    );
+                    tokio::time::sleep(pause).await;
+                    pause = pause.saturating_mul(2).min(MAX_COMPLETION_PAUSE);
+                }
+                Err(error) => return Err(error.into()),
+            }
         }
     }
 

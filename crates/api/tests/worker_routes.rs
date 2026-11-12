@@ -1773,6 +1773,47 @@ async fn a_worker_that_wrote_is_held_rather_than_told_to_discard() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
+async fn a_worker_past_its_write_is_held_whatever_it_calls_the_stage() {
+    // Found by the 2026-11-12 security review: a worker reports its own
+    // stage names, and finalizing and completing, which come after a write,
+    // were not understood and counted as nothing written. With the server's
+    // record still at claimed, the worker was told to discard its record of
+    // a disc and the attempt was closed as failed before writing. An
+    // unknown name is now held the same way.
+    let _queue = exclusive_queue().await;
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let attempt = claimed_attempt(&harness).await;
+
+    for stage in ["finalizing", "completing", "a_stage_from_a_newer_worker"] {
+        let (status, body) = harness
+            .post(
+                &format!("/api/v1/workers/{}/recoveries", attempt.worker),
+                Some(&attempt.credential),
+                serde_json::json!({
+                    "attempt_id": attempt.id,
+                    "local_stage": stage,
+                    "last_event_sequence": 9,
+                    "engine_process_state": "not_running",
+                }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["directive"], "mark_needs_attention", "{stage}");
+        assert_eq!(body["discard_local_state"], false, "{stage}");
+        assert_eq!(body["may_accept_new_work"], false, "{stage}");
+    }
+
+    let state: String = sqlx::query_scalar("SELECT state FROM burn_attempts WHERE id = $1::uuid")
+        .bind(&attempt.id)
+        .fetch_one(&harness.pool)
+        .await
+        .expect("the attempt");
+    assert_eq!(state, "claimed", "a disc may exist; nothing closed it");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn a_recovery_for_another_workers_attempt_is_not_answered() {
     // Answering with another worker's attempt state would let one worker
     // decide what another does with a disc.

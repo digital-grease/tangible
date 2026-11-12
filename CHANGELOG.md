@@ -54,6 +54,18 @@ Found by a security review of 0.2.0.
   begun writing as writing, which then needed an operator to settle. Only
   the attempt's own worker may now; any other gets `404 NOT_FOUND`, as
   does an attempt that does not exist, which before was a server error.
+- A burned disc could go unrecorded. A burn worker that restarts tells the
+  server the stage it had reached, and the server did not understand two
+  of the worker's stage names, `finalizing` and `completing`, which come
+  after a write; it took them as nothing written, and if it had not heard
+  the write begin, it told the worker to discard its record of the disc and
+  failed the attempt as never written, so a retry burned another. Those
+  stages, and any name the server does not know, now count as possibly
+  written, and the attempt is held for a person. And a worker whose report
+  of how a burn ended did not reach the server went on to the next burn,
+  whose record replaced the first's; it now asks again, with a pause up to
+  a minute, until the server takes the report, and if the server refuses
+  it, reconciles before taking more work.
 
 ## 0.2.0 (2026-11-12)
 

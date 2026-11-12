@@ -120,6 +120,19 @@ impl ClientError {
     pub fn is_unauthenticated(&self) -> bool {
         matches!(self, Self::Refused { status: 401, .. })
     }
+
+    /// Whether the same request may succeed if made again later: the server
+    /// could not be reached, or answered that it could not serve it now
+    /// (a 5xx, 408 or 429). Any other refusal is an answer, and repeating
+    /// the request would get the same one.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Self::Transport(_) => true,
+            Self::Refused { status, .. } => *status >= 500 || matches!(status, 408 | 429),
+            _ => false,
+        }
+    }
 }
 
 /// A file's SHA-256, in lowercase hex, and its length, read in chunks.
@@ -1581,6 +1594,27 @@ mod tests {
             detail: String::new(),
         };
         assert!(!busy.is_unauthenticated());
+    }
+
+    #[test]
+    fn only_a_server_that_could_not_answer_now_is_worth_asking_again() {
+        let refused = |status: u16| ClientError::Refused {
+            status,
+            code: "X".to_owned(),
+            detail: String::new(),
+        };
+        for status in [500, 502, 503, 504, 408, 429] {
+            assert!(refused(status).is_transient(), "{status}");
+        }
+        for status in [400, 401, 403, 404, 409, 422] {
+            assert!(!refused(status).is_transient(), "{status}");
+        }
+        assert!(
+            !ClientError::TooLong {
+                what: "x".to_owned()
+            }
+            .is_transient()
+        );
     }
 
     #[test]
