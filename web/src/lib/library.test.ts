@@ -311,6 +311,14 @@ describe('library filters', () => {
     expect(libraryQuery({ deleted: true })).toBe('?deleted=true');
     expect(filtersNothing({ deleted: true })).toBe(false);
   });
+
+  it('searches by name, trimmed, and treats blank as no search', () => {
+    expect(libraryQuery({ name: '  vol 2 ' })).toBe('?name=vol+2');
+    expect(libraryQuery({ name: '100%' })).toBe('?name=100%25');
+    expect(libraryQuery({ name: '   ' })).toBe('');
+    expect(filtersNothing({ name: '' })).toBe(true);
+    expect(filtersNothing({ name: 'iso' })).toBe(false);
+  });
 });
 
 describe('deleting an artifact', () => {

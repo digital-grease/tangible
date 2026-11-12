@@ -631,7 +631,17 @@ may change between minor versions, and the release notes say how.
   panels take the new look. And a drawing of a disc from its own data, to
   scale: an artifact's tracks (audio tracks set apart as on a pressed CD),
   a burn's written area growing outward toward the image's extent, a
-  rip's read area, an empty tray.
+  rip's read area, an empty tray. And the shell every signed-in page now sits in:
+  a sidebar with the pages in groups (Overview; Collection: Library,
+  Catalog, Physical copies; Activity: Imports, Rips, Burns, with counts of
+  what is under way; Administration), the account, theme, sign-out and
+  source link at its foot; a top bar with where you are, a command bar
+  (Ctrl+K: any page, the three actions, artifacts by name) and a New menu;
+  and a drive bay showing each drive's state, the burn it is writing and
+  its progress, folded while every drive is idle. Below 1200 pixels the
+  sidebar is icons only; below 900, a drawer. "System" is now "Overview"
+  and "Discs" "Physical copies". One event stream per browser tab feeds
+  it all.
 - The image is built on Debian 13 (trixie), moving from Debian 12
   (bookworm), now oldstable, and every tool in it moves too: chdman 0.251
   to 0.276, which makes DVD CHDs (a DVD's ISO gets one, made with

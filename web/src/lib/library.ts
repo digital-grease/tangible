@@ -74,6 +74,8 @@ export type LibraryFilter = {
   linked?: boolean | null;
   /** `true` lists only deleted artifacts, the tombstones (ADR 0020). */
   deleted?: boolean;
+  /** Part of the name of one of its files, in any case. */
+  name?: string;
 };
 
 /** Whether a filter keeps everything. */
@@ -90,6 +92,8 @@ export function libraryQuery(filter: LibraryFilter, cursor?: string): string {
   }
   if (filter.linked === true || filter.linked === false) query.set('linked', String(filter.linked));
   if (filter.deleted === true) query.set('deleted', 'true');
+  const name = filter.name?.trim();
+  if (name) query.set('name', name);
   if (cursor) query.set('cursor', cursor);
   const text = query.toString();
   return text ? `?${text}` : '';

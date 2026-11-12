@@ -9,25 +9,17 @@
   import '$lib/styles/base.css';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
+  import AppShell from '$lib/components/shell/AppShell.svelte';
   import {
     loadSession,
     loadSetupStatus,
     rememberSession,
-    roleLabel,
     signOut,
     whenSignedOut,
     type SessionView,
   } from '$lib/session';
   import { LICENSE_NAME, SOURCE_URL } from '$lib/source';
-  import {
-    THEME_CHOICES,
-    applyTheme,
-    isThemeChoice,
-    loadTheme,
-    saveTheme,
-    themeLabel,
-    type ThemeChoice,
-  } from '$lib/theme';
+  import { applyTheme, loadTheme, saveTheme, type ThemeChoice } from '$lib/theme';
   let { children } = $props();
 
   // Applied as the app starts, on every page, signed in or not.
@@ -35,22 +27,11 @@
   applyTheme(startingTheme);
   let theme = $state<ThemeChoice>(startingTheme);
 
-  function chooseTheme(value: string) {
-    if (!isThemeChoice(value)) return;
-    theme = value;
-    saveTheme(value);
-    applyTheme(value);
+  function chooseTheme(choice: ThemeChoice) {
+    theme = choice;
+    saveTheme(choice);
+    applyTheme(choice);
   }
-
-  const links = [
-    { href: '/', label: 'System' },
-    { href: '/imports', label: 'Imports' },
-    { href: '/library', label: 'Library' },
-    { href: '/catalog', label: 'Catalog' },
-    { href: '/burns', label: 'Burns' },
-    { href: '/discs', label: 'Discs' },
-    { href: '/rips', label: 'Rips' },
-  ];
 
   /** Pages anyone may see: the way in. */
   const PUBLIC_PATHS = ['/login', '/setup'];
@@ -128,81 +109,15 @@
     {@render children()}
   </main>
 {:else if gate.kind === 'signed-in'}
-  <header>
-    <!-- A nav landmark with an accessible name, so a screen reader can jump
-         straight to it. -->
-    <nav aria-label="Primary">
-      <strong>Tangible</strong>
-      <ul>
-        {#each links as link (link.href)}
-          <li>
-            <a href={link.href} aria-current={page.url.pathname === link.href ? 'page' : undefined}
-              >{link.label}</a
-            >
-          </li>
-        {/each}
-        {#if gate.session.role === 'administrator'}
-          <!-- Shown to administrators only for tidiness; the server is what
-               refuses everyone else. -->
-          <li>
-            <a href="/workers" aria-current={page.url.pathname === '/workers' ? 'page' : undefined}
-              >Workers</a
-            >
-          </li>
-          <li>
-            <a href="/users" aria-current={page.url.pathname === '/users' ? 'page' : undefined}
-              >Accounts</a
-            >
-          </li>
-          <li>
-            <a
-              href="/integrations"
-              aria-current={page.url.pathname === '/integrations' ? 'page' : undefined}
-              >Integrations</a
-            >
-          </li>
-          <li>
-            <a href="/storage" aria-current={page.url.pathname === '/storage' ? 'page' : undefined}
-              >Storage</a
-            >
-          </li>
-          <li>
-            <a href="/dats" aria-current={page.url.pathname === '/dats' ? 'page' : undefined}
-              >DATs</a
-            >
-          </li>
-          <li>
-            <a href="/audit" aria-current={page.url.pathname === '/audit' ? 'page' : undefined}
-              >Audit log</a
-            >
-          </li>
-          <li>
-            <a
-              href="/diagnostics"
-              aria-current={page.url.pathname === '/diagnostics' ? 'page' : undefined}
-              >Diagnostics</a
-            >
-          </li>
-        {/if}
-      </ul>
-      <div class="who">
-        <label class="theme">
-          Theme
-          <select value={theme} onchange={(event) => chooseTheme(event.currentTarget.value)}>
-            {#each THEME_CHOICES as choice (choice)}
-              <option value={choice}>{themeLabel(choice)}</option>
-            {/each}
-          </select>
-        </label>
-        <span>{gate.session.username} ({roleLabel(gate.session.role)})</span>
-        <button type="button" onclick={leave}>Sign out</button>
-      </div>
-    </nav>
-  </header>
-
-  <main id="main">
+  <AppShell
+    session={gate.session}
+    pathname={page.url.pathname}
+    {theme}
+    onTheme={chooseTheme}
+    onSignOut={leave}
+  >
     {@render children()}
-  </main>
+  </AppShell>
 {:else if gate.kind === 'unreachable'}
   <main id="main">
     <h1>Tangible</h1>
@@ -219,10 +134,13 @@
 {/if}
 
 <!-- On every page, signed in or not: users of a network service are owed
-     the means to get its source (AGPL section 13). -->
-<footer>
-  <a href={SOURCE_URL} rel="noreferrer">Source code</a>, free software under {LICENSE_NAME}
-</footer>
+     the means to get its source (AGPL section 13). Signed in, the shell's
+     sidebar carries it. -->
+{#if gate.kind !== 'signed-in'}
+  <footer>
+    <a href={SOURCE_URL} rel="noreferrer">Source code</a>, free software under {LICENSE_NAME}
+  </footer>
+{/if}
 
 <style>
   /* Visible only when focused: keyboard users get it, everyone else does not. */
@@ -234,38 +152,6 @@
     position: static;
     display: inline-block;
     padding: 0.5rem;
-  }
-  header {
-    background: var(--surface);
-    border-bottom: 1px solid var(--line);
-  }
-  nav {
-    display: flex;
-    gap: 1.5rem;
-    align-items: center;
-    max-width: 60rem;
-    margin: 0 auto;
-    padding: 0.75rem 1rem;
-  }
-  .who {
-    margin-left: auto;
-    display: flex;
-    gap: 0.75rem;
-    align-items: center;
-  }
-  nav ul {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.25rem 1rem;
-    list-style: none;
-    margin: 0;
-    padding: 0;
-  }
-  /* aria-current is the source of truth; the underline is the visual echo, so
-     the state is never communicated by styling alone. */
-  nav a[aria-current='page'] {
-    text-decoration: underline;
-    font-weight: 600;
   }
   main {
     max-width: 60rem;
@@ -279,11 +165,7 @@
     font-size: var(--text-sm);
     color: var(--text-muted);
   }
-  .theme {
-    display: flex;
-    gap: 0.5rem;
-    align-items: center;
-    font-weight: var(--weight-regular);
-    color: var(--text-muted);
+  .skip:focus {
+    z-index: 50;
   }
 </style>
