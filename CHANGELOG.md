@@ -602,6 +602,16 @@ may change between minor versions, and the release notes say how.
 
 ### Changed
 
+- The web UI is being redesigned (docs/plans/ui-overhaul.md). First, the
+  foundations: one set of design tokens (colour by role, type, space,
+  shape) in a light and a dark theme, element styles every page starts
+  from, and the Inter and JetBrains Mono fonts, bundled and served by
+  Tangible itself (OFL-1.1; listed in `THIRD_PARTY_NOTICES.txt`), so the
+  Content Security Policy is unchanged. The theme follows the system's
+  setting unless the person picks Light or Dark in the header; the choice
+  is remembered in the browser. A test checks that every text colour
+  meets WCAG 2.2 AA contrast (4.5:1) on every background in both themes,
+  and form-control borders 3:1.
 - The image is built on Debian 13 (trixie), moving from Debian 12
   (bookworm), now oldstable, and every tool in it moves too: chdman 0.251
   to 0.276, which makes DVD CHDs (a DVD's ISO gets one, made with

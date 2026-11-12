@@ -16,6 +16,14 @@ describe('third-party notices', () => {
     );
   });
 
+  it('finds the package a bundled stylesheet came from, so fonts are listed', () => {
+    // The fonts arrive as a CSS module that names its font files; the
+    // stylesheet is what places them in the bundle.
+    expect(packageRoot(nm('@fontsource-variable', 'inter', 'index.css'))).toBe(
+      nm('@fontsource-variable', 'inter'),
+    );
+  });
+
   it('takes the innermost package of a nested dependency', () => {
     expect(packageRoot(nm('.pnpm', 'svelte@5', 'node_modules', 'esm-env', 'index.js'))).toBe(
       nm('.pnpm', 'svelte@5', 'node_modules', 'esm-env'),

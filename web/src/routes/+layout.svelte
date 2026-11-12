@@ -1,6 +1,12 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  // The design system (docs/plans/ui-overhaul.md): fonts bundled and served
+  // from this origin, then the tokens, then the element styles.
+  import '@fontsource-variable/inter';
+  import '@fontsource-variable/jetbrains-mono';
+  import '$lib/styles/tokens.css';
+  import '$lib/styles/base.css';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import {
@@ -13,7 +19,28 @@
     type SessionView,
   } from '$lib/session';
   import { LICENSE_NAME, SOURCE_URL } from '$lib/source';
+  import {
+    THEME_CHOICES,
+    applyTheme,
+    isThemeChoice,
+    loadTheme,
+    saveTheme,
+    themeLabel,
+    type ThemeChoice,
+  } from '$lib/theme';
   let { children } = $props();
+
+  // Applied as the app starts, on every page, signed in or not.
+  const startingTheme = loadTheme();
+  applyTheme(startingTheme);
+  let theme = $state<ThemeChoice>(startingTheme);
+
+  function chooseTheme(value: string) {
+    if (!isThemeChoice(value)) return;
+    theme = value;
+    saveTheme(value);
+    applyTheme(value);
+  }
 
   const links = [
     { href: '/', label: 'System' },
@@ -159,6 +186,14 @@
         {/if}
       </ul>
       <div class="who">
+        <label class="theme">
+          Theme
+          <select value={theme} onchange={(event) => chooseTheme(event.currentTarget.value)}>
+            {#each THEME_CHOICES as choice (choice)}
+              <option value={choice}>{themeLabel(choice)}</option>
+            {/each}
+          </select>
+        </label>
         <span>{gate.session.username} ({roleLabel(gate.session.role)})</span>
         <button type="button" onclick={leave}>Sign out</button>
       </div>
@@ -190,11 +225,6 @@
 </footer>
 
 <style>
-  :global(body) {
-    margin: 0;
-    font-family: system-ui, sans-serif;
-    line-height: 1.5;
-  }
   /* Visible only when focused: keyboard users get it, everyone else does not. */
   .skip {
     position: absolute;
@@ -206,7 +236,8 @@
     padding: 0.5rem;
   }
   header {
-    border-bottom: 1px solid currentColor;
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
   }
   nav {
     display: flex;
@@ -224,7 +255,8 @@
   }
   nav ul {
     display: flex;
-    gap: 1rem;
+    flex-wrap: wrap;
+    gap: 0.25rem 1rem;
     list-style: none;
     margin: 0;
     padding: 0;
@@ -244,11 +276,14 @@
     max-width: 60rem;
     margin: 0 auto;
     padding: 1rem;
-    font-size: 0.875rem;
+    font-size: var(--text-sm);
+    color: var(--text-muted);
   }
-  :global(a:focus-visible),
-  :global(button:focus-visible) {
-    outline: 3px solid currentColor;
-    outline-offset: 2px;
+  .theme {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    font-weight: var(--weight-regular);
+    color: var(--text-muted);
   }
 </style>

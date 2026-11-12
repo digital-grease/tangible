@@ -1,0 +1,134 @@
+/* SPDX-FileCopyrightText: 2026 digitalgrease */
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/*
+ * Design tokens (docs/plans/ui-overhaul.md, "Tokens").
+ *
+ * Colours are named by role, never by hue, and given as six-digit hex so the
+ * contrast test (tokens.test.ts) can read them. The theme follows the
+ * system's setting unless the person chose one, which sets data-theme on the
+ * root element (theme.ts). The dark values therefore appear twice, once for
+ * a chosen dark theme and once for the system's; the test fails if the two
+ * blocks drift apart.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Surfaces and text */
+  --bg: #edf0f4;
+  --surface: #ffffff;
+  --surface-2: #f5f7fa;
+  --text: #111720;
+  --text-muted: #566273;
+  /* Hairlines that only separate; and borders that identify a control. */
+  --line: #d6dce5;
+  --line-2: #e6eaf0;
+  --line-strong: #7a879b;
+
+  /* Accent: links, the primary action, focus, selection */
+  --accent: #0a6aa3;
+  --accent-ink: #ffffff;
+
+  /* Status. Each is always shown with a mark and a word as well. */
+  --ok: #0f7646;
+  --warn: #8f5b00;
+  --bad: #c02828;
+  /* Kept for a drive at work: only an active write or read is this colour. */
+  --laser: #9a5700;
+
+  /* The disc drawing's tints. Decorative: the drawing is never the only
+     place what it shows is said. */
+  --cd: #b4c4cb;
+  --dvd: #b3a5e6;
+  --bluray: #7fb0e0;
+  --dye: #d9c37e;
+  --unknown: #c3c9d2;
+
+  /* Type */
+  --font-sans: 'Inter Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.625rem;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-strong: 600;
+
+  /* Space, in 4-pixel steps */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+
+  /* Shape and depth */
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-lg: 8px;
+  --radius-full: 999px;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.08);
+  --shadow-2: 0 12px 32px -12px rgb(0 0 0 / 0.35);
+
+  /* Focus: never removed, only restyled */
+  --focus-width: 3px;
+  --focus-offset: 2px;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0b0e13;
+  --surface: #11161e;
+  --surface-2: #161c26;
+  --text: #d7dde7;
+  --text-muted: #8592a5;
+  --line: #232b38;
+  --line-2: #1a212c;
+  --line-strong: #5f6b7e;
+  --accent: #5ac3f5;
+  --accent-ink: #04121b;
+  --ok: #41d090;
+  --warn: #f3b33e;
+  --bad: #ff6d6d;
+  --laser: #ffb547;
+  --cd: #8b9ea6;
+  --dvd: #8b7bcc;
+  --bluray: #5a8fc4;
+  --dye: #a8935a;
+  --unknown: #4a5260;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-2: 0 16px 40px -12px rgb(0 0 0 / 0.7);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg: #0b0e13;
+    --surface: #11161e;
+    --surface-2: #161c26;
+    --text: #d7dde7;
+    --text-muted: #8592a5;
+    --line: #232b38;
+    --line-2: #1a212c;
+    --line-strong: #5f6b7e;
+    --accent: #5ac3f5;
+    --accent-ink: #04121b;
+    --ok: #41d090;
+    --warn: #f3b33e;
+    --bad: #ff6d6d;
+    --laser: #ffb547;
+    --cd: #8b9ea6;
+    --dvd: #8b7bcc;
+    --bluray: #5a8fc4;
+    --dye: #a8935a;
+    --unknown: #4a5260;
+    --shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
+    --shadow-2: 0 16px 40px -12px rgb(0 0 0 / 0.7);
+  }
+}
