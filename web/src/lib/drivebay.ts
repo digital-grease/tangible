@@ -26,7 +26,11 @@ export interface BayDisc {
 export interface BayEntry {
   id: string;
   name: string;
-  /** "worker-name · /dev/disc-block". */
+  /**
+   * The drive's worker, and for an administrator its device:
+   * "worker-name · /dev/disc-block". Host device paths are not shown to
+   * anybody else (UX.md 11).
+   */
   where: string;
   tone: Tone;
   /** The state, in words. */
@@ -57,12 +61,18 @@ export function profileFamily(profile: string | null | undefined): string | null
   return null;
 }
 
-/** One drive as the bay shows it. */
-export function bayEntry(drive: DriveView): BayEntry {
+/**
+ * One drive as the bay shows it. `device` adds the host's device path to
+ * where it is, for an administrator.
+ */
+export function bayEntry(
+  drive: DriveView,
+  { device = false }: { device?: boolean } = {},
+): BayEntry {
   const base = {
     id: drive.id,
     name: drive.name,
-    where: `${drive.worker_name} · ${drive.device}`,
+    where: device ? `${drive.worker_name} · ${drive.device}` : drive.worker_name,
   };
   const activity = drive.activity;
   const empty: BayDisc = {

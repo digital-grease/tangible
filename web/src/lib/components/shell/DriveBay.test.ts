@@ -44,6 +44,18 @@ describe('the drive bay', () => {
     expect(await axeViolations(container)).toEqual([]);
   });
 
+  it("shows a drive's device path to an administrator only", async () => {
+    server(drives([drive('d1', 'Slimtype DS8A8SH', WRITING)]));
+    const first = render(DriveBay);
+    await screen.findByText('Slimtype DS8A8SH');
+    expect(screen.queryByText(/\/dev\//)).toBeNull();
+    first.unmount();
+
+    render(DriveBay, { administrator: true });
+    await screen.findByText('Slimtype DS8A8SH');
+    expect(screen.getByText(/\/dev\//)).toBeTruthy();
+  });
+
   it('folds to one line while every drive is idle, and opens and folds by hand', async () => {
     server(drives([drive('d1', 'Slimtype DS8A8SH'), drive('d2', 'LG GH24NSD5')]));
     render(DriveBay);

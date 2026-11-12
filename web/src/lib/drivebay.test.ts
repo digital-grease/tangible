@@ -56,7 +56,8 @@ describe('the drive bay', () => {
   it('says an idle drive is idle, or what its worker is doing instead', () => {
     const idle = bayEntry(drive());
     expect(idle).toMatchObject({ tone: 'idle', state: 'Idle', title: null, showsProgress: false });
-    expect(idle.where).toBe('bench-1 · /dev/disc-block');
+    expect(idle.where).toBe('bench-1');
+    expect(bayEntry(drive(), { device: true }).where).toBe('bench-1 · /dev/disc-block');
     expect(idle.disc.mode).toBe('empty');
     expect(bayEntry(drive(null, 'offline')).state).toBe('Not heard from lately');
   });

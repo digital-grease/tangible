@@ -36,7 +36,9 @@
   let said = $state('');
   let seen: Map<string, string> | null = null;
 
-  const entries = $derived<BayEntry[]>((drives ?? []).map(bayEntry));
+  // Host device paths are for administrators (UX.md 11).
+  const entry = (drive: DriveView) => bayEntry(drive, { device: administrator });
+  const entries = $derived<BayEntry[]>((drives ?? []).map(entry));
   const open = $derived(fold === 'open' || (fold === 'auto' && anyBusy(drives ?? [])));
 
   function remembered(): Fold {
@@ -65,7 +67,7 @@
     }
     problem = null;
     drives = result.data.items;
-    const now = drives.map(bayEntry);
+    const now = drives.map(entry);
     said = announcement(seen, now);
     seen = statesOf(now);
   }
