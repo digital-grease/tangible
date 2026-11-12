@@ -20,7 +20,7 @@ import {
 import type { StreamEvent } from './events';
 import { importStateLabel } from './imports';
 import { formatBytes } from './library';
-import { ripStateLabel } from './rips';
+import { ripStateLabel, ripStateTone } from './rips';
 import { erasureStateLabel, workerStatusLabel } from './workers';
 
 export interface Tile {
@@ -206,14 +206,7 @@ export function eventLine(
       return {
         topic: 'Rip',
         words: `A rip: ${ripStateLabel(state)}`,
-        tone:
-          state === 'complete'
-            ? 'ok'
-            : state === 'failed' || state === 'refused'
-              ? 'bad'
-              : state === 'canceled'
-                ? 'idle'
-                : 'busy',
+        tone: ripStateTone(state),
         href: id ? `/rips/${id}` : null,
       };
     case 'erasure.changed':

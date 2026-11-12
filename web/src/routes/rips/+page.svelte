@@ -8,9 +8,22 @@
   import { onDestroy, onMount } from 'svelte';
   import { watch } from '$lib/events';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
+  import Badge from '$lib/components/ui/Badge.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import PageHeader from '$lib/components/ui/PageHeader.svelte';
+  import Panel from '$lib/components/ui/Panel.svelte';
+  import StatusMark from '$lib/components/ui/StatusMark.svelte';
+  import Table from '$lib/components/ui/Table.svelte';
   import RipDialog from '$lib/components/RipDialog.svelte';
   import { formatBytes } from '$lib/library';
-  import { requestRip, loadRips, ripStateLabel, type RipRequest, type RipView } from '$lib/rips';
+  import {
+    requestRip,
+    loadRips,
+    ripStateLabel,
+    ripStateTone,
+    type RipRequest,
+    type RipView,
+  } from '$lib/rips';
   import type { Problem } from '$lib/session';
   import { driveModel, loadDrives, type DriveView } from '$lib/workers';
 
@@ -85,14 +98,12 @@
 
 <svelte:head><title>Rips — Tangible</title></svelte:head>
 
-<h1>Rip a disc</h1>
+<PageHeader
+  title="Rip a disc"
+  description="Put a disc you own in a drive and rip it into the library. The drive's worker reads it, sends what it read, and it is imported and kept exactly as read. Reading changes nothing on the disc. CDs and DVDs, for now; a CD becomes a table of contents and its data, a DVD an image."
+/>
 
-<p>
-  Put a disc you own in a drive and rip it into the library. The drive's worker reads it, sends what
-  it read, and it is imported and kept exactly as read. Reading changes nothing on the disc. CDs and
-  DVDs, for now; a CD becomes a table of contents and its data, a DVD an image.
-</p>
-<p>
+<p class="note">
   An encrypted disc is ripped only by a drive that offers to decrypt it: its worker runs an image
   built to decrypt, and an administrator has turned decryption on. Elsewhere an encrypted disc is
   refused and nothing read from it is kept.
@@ -107,117 +118,140 @@
   />
 {/if}
 
-<section aria-labelledby="drives-heading" aria-busy={drives.kind === 'loading'}>
-  <h2 id="drives-heading">Drives</h2>
-  {#if drives.kind === 'loading'}
-    <p>Loading drives…</p>
-  {:else if drives.kind === 'error'}
-    <ErrorPanel problem={drives.problem} area="other" endpoint="GET /api/v1/drives" />
-  {:else if drives.data.length === 0}
-    <p>No drive is enrolled. An administrator adds one on the Workers page.</p>
-  {:else}
-    <table>
-      <caption class="visually-hidden">Drives that can be asked to rip</caption>
-      <thead>
-        <tr>
-          <th scope="col">Drive</th>
-          <th scope="col">Hardware</th>
-          <th scope="col">Worker</th>
-          <th scope="col"><span class="visually-hidden">Rip</span></th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each drives.data as drive (drive.id)}
-          <tr>
-            <th scope="row">{drive.name}</th>
-            <td>{driveModel(drive)}</td>
-            <td>{drive.worker_name} ({drive.worker_status})</td>
-            <td>
-              <button type="button" onclick={() => choose(drive)} disabled={asking !== null}>
-                {asking === drive.id ? 'Asking…' : `Rip the disc in ${drive.name}`}
-              </button>
-              {#if drive.can_rip_with_redumper}
-                <small>Corrects CD read offsets</small>
-              {/if}
-              {#if drive.can_decrypt_rips}
-                <small>Can decrypt</small>
-              {/if}
-            </td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
-  {/if}
-</section>
+<div class="stack">
+  <div aria-busy={drives.kind === 'loading'}>
+    <Panel title="Drives" flush>
+      {#if drives.kind === 'loading'}
+        <p class="quiet padded">Loading drives…</p>
+      {:else if drives.kind === 'error'}
+        <div class="padded">
+          <ErrorPanel problem={drives.problem} area="other" endpoint="GET /api/v1/drives" />
+        </div>
+      {:else if drives.data.length === 0}
+        <p class="quiet padded">
+          No drive is enrolled. An administrator adds one on the Workers page.
+        </p>
+      {:else}
+        <Table caption="Drives that can be asked to rip">
+          <thead>
+            <tr>
+              <th scope="col">Drive</th>
+              <th scope="col">Hardware</th>
+              <th scope="col">Worker</th>
+              <th scope="col"><span class="visually-hidden">Rip</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each drives.data as drive (drive.id)}
+              <tr>
+                <th scope="row">{drive.name}</th>
+                <td>{driveModel(drive)}</td>
+                <td>
+                  <StatusMark
+                    tone={drive.worker_status === 'online' ? 'ok' : 'warn'}
+                    label={`${drive.worker_name} (${drive.worker_status})`}
+                  />
+                </td>
+                <td>
+                  <div class="rip">
+                    <Button
+                      size="sm"
+                      icon="rip"
+                      onclick={() => choose(drive)}
+                      disabled={asking !== null}
+                    >
+                      {asking === drive.id ? 'Asking…' : `Rip the disc in ${drive.name}`}
+                    </Button>
+                    {#if drive.can_rip_with_redumper}
+                      <Badge>Corrects CD read offsets</Badge>
+                    {/if}
+                    {#if drive.can_decrypt_rips}
+                      <Badge>Can decrypt</Badge>
+                    {/if}
+                  </div>
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </Table>
+      {/if}
+    </Panel>
+  </div>
 
-{#if choosing}
-  <RipDialog
-    drive={choosing}
-    bind:open={dialogOpen}
-    asking={asking !== null}
-    onstart={(options) => choosing && rip(choosing, options)}
-  />
-{/if}
-
-<section aria-labelledby="rips-heading" aria-live="polite" aria-busy={rips.kind === 'loading'}>
-  <h2 id="rips-heading">Recent rips</h2>
-  {#if rips.kind === 'loading'}
-    <p>Loading rips…</p>
-  {:else if rips.kind === 'error'}
-    <ErrorPanel problem={rips.problem} area="import" endpoint="GET /api/v1/rips" />
-  {:else if rips.data.length === 0}
-    <p>Nothing has been ripped yet.</p>
-  {:else}
-    <table>
-      <caption class="visually-hidden">Rips, newest first</caption>
-      <thead>
-        <tr>
-          <th scope="col">Asked for</th>
-          <th scope="col">Drive</th>
-          <th scope="col">State</th>
-          <th scope="col">Read</th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each rips.data as item (item.id)}
-          <tr>
-            <th scope="row"><a href={`/rips/${item.id}`}>{when(item.created_at)}</a></th>
-            <td>{item.drive_name}</td>
-            <td>{ripStateLabel(item.state)}</td>
-            <td>{item.bytes_received > 0 ? formatBytes(item.bytes_received) : '—'}</td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
+  {#if choosing}
+    <RipDialog
+      drive={choosing}
+      bind:open={dialogOpen}
+      asking={asking !== null}
+      onstart={(options) => choosing && rip(choosing, options)}
+    />
   {/if}
-</section>
+
+  <div aria-live="polite" aria-busy={rips.kind === 'loading'}>
+    <Panel title="Recent rips" flush>
+      {#if rips.kind === 'loading'}
+        <p class="quiet padded">Loading rips…</p>
+      {:else if rips.kind === 'error'}
+        <div class="padded">
+          <ErrorPanel problem={rips.problem} area="import" endpoint="GET /api/v1/rips" />
+        </div>
+      {:else if rips.data.length === 0}
+        <p class="quiet padded">Nothing has been ripped yet.</p>
+      {:else}
+        <Table caption="Rips, newest first">
+          <thead>
+            <tr>
+              <th scope="col">Asked for</th>
+              <th scope="col">Drive</th>
+              <th scope="col">State</th>
+              <th scope="col" class="num">Read</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each rips.data as item (item.id)}
+              <tr>
+                <th scope="row"><a href={`/rips/${item.id}`}>{when(item.created_at)}</a></th>
+                <td>{item.drive_name}</td>
+                <td>
+                  <StatusMark
+                    tone={ripStateTone(item.state)}
+                    label={ripStateLabel(item.state)}
+                    pill
+                  />
+                </td>
+                <td class="num"
+                  >{item.bytes_received > 0 ? formatBytes(item.bytes_received) : '·'}</td
+                >
+              </tr>
+            {/each}
+          </tbody>
+        </Table>
+      {/if}
+    </Panel>
+  </div>
+</div>
 
 <style>
-  table {
-    border-collapse: collapse;
-    width: 100%;
+  .note {
+    max-width: 75ch;
+    color: var(--text-muted);
+    margin: calc(-1 * var(--space-3)) 0 var(--space-5);
   }
-  th,
-  td {
-    text-align: left;
-    padding: 0.5rem;
-    border-bottom: 1px solid currentColor;
+  .stack {
+    display: grid;
+    gap: var(--space-4);
   }
-  button {
-    padding: 0.5rem 1rem;
+  .rip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    align-items: center;
   }
-  small {
-    display: block;
+  .padded {
+    padding: var(--space-3) var(--space-4);
   }
-  section {
-    margin-top: 1.5rem;
-  }
-  .visually-hidden {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
+  .quiet {
+    color: var(--text-muted);
+    margin: 0;
   }
 </style>

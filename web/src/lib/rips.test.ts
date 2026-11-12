@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it, vi } from 'vitest';
 import {
+  ripStateTone,
   cancelRip,
   cdEngineLabel,
   decryptionSummary,
@@ -192,5 +193,15 @@ describe('rips', () => {
     expect(rippedDrive({ ...ripped, drive_connection: 'unknown' })).toBe(
       'Slimtype DVD A DS8A8SH, firmware KS21',
     );
+  });
+});
+
+describe('a rip’s state, as a tone', () => {
+  it('marks done, refused or failed, withdrawn and under way', () => {
+    expect(ripStateTone('complete')).toBe('ok');
+    expect(ripStateTone('refused')).toBe('bad');
+    expect(ripStateTone('failed')).toBe('bad');
+    expect(ripStateTone('canceled')).toBe('idle');
+    expect(ripStateTone('reading')).toBe('busy');
   });
 });

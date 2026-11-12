@@ -8,6 +8,12 @@
   import { names, watch } from '$lib/events';
   import { page } from '$app/state';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import PageHeader from '$lib/components/ui/PageHeader.svelte';
+  import Panel from '$lib/components/ui/Panel.svelte';
+  import Progress from '$lib/components/ui/Progress.svelte';
+  import StatusMark from '$lib/components/ui/StatusMark.svelte';
+  import Table from '$lib/components/ui/Table.svelte';
   import { formatBytes } from '$lib/library';
   import {
     cancelRip,
@@ -21,6 +27,7 @@
     ripProgress,
     ripRefusal,
     ripStateLabel,
+    ripStateTone,
     readOffsetLabel,
     retriedLabel,
     writeOffsetLabel,
@@ -85,11 +92,10 @@
 
 <svelte:head><title>Rip — Tangible</title></svelte:head>
 
-<p><a href="/rips">← Rips</a></p>
-
 {#if view.kind === 'loading'}
-  <p>Loading rip…</p>
+  <p class="quiet">Loading rip…</p>
 {:else if view.kind === 'error'}
+  <p><a href="/rips">Rips</a></p>
   <ErrorPanel
     problem={view.problem}
     area="import"
@@ -98,15 +104,28 @@
     level={1}
   />
 {:else if rip}
-  <h1>Rip of the disc in {rip.drive_name}</h1>
+  <PageHeader
+    title={`Rip of the disc in ${rip.drive_name}`}
+    crumbs={[{ label: 'Rips', href: '/rips' }, { label: rip.drive_name }]}
+  >
+    {#snippet actions()}
+      {#if rip.can_cancel}
+        <Button variant="danger" onclick={withdraw} disabled={working}>
+          {working ? 'Withdrawing…' : 'Withdraw this rip'}
+        </Button>
+      {/if}
+    {/snippet}
+  </PageHeader>
 
   <section aria-labelledby="status-heading" class="status" aria-live="polite">
-    <h2 id="status-heading">{ripStateLabel(rip.state)}</h2>
+    <h2 id="status-heading">
+      <StatusMark tone={ripStateTone(rip.state)} label={ripStateLabel(rip.state)} />
+    </h2>
     {#if rip.state === 'reading' && progress !== null}
-      <p>
-        <progress max="100" value={progress} aria-label="Reading the disc"></progress>
-        {progress}% read
-      </p>
+      <div class="progress">
+        <Progress value={progress / 100} label="Reading the disc" tone="laser" />
+        <span class="num">{progress}% read</span>
+      </div>
     {/if}
     {#if rip.bytes_received > 0}
       <p>{formatBytes(rip.bytes_received)} received.</p>
@@ -131,6 +150,11 @@
         <p>Error code: <code>{rip.error_code}</code></p>
       </details>
     {/if}
+    {#if rip.can_cancel}
+      <p class="quiet small">
+        Withdrawing stops reading and discards anything already sent. The disc is not affected.
+      </p>
+    {/if}
   </section>
 
   {#if refusal}
@@ -142,143 +166,203 @@
     />
   {/if}
 
-  {#if rip.can_cancel}
-    <p>
-      <button type="button" onclick={withdraw} disabled={working}>
-        {working ? 'Withdrawing…' : 'Withdraw this rip'}
-      </button>
-      Stops reading and discards anything already sent. The disc is not affected.
-    </p>
-  {/if}
-
-  <section aria-labelledby="details-heading">
-    <h2 id="details-heading">Details</h2>
-    <dl>
-      <dt>Asked for</dt>
-      <dd>{when(rip.created_at)} by {rip.requested_by}</dd>
-      <dt>Started</dt>
-      <dd>{when(rip.started_at)}</dd>
-      <dt>Ended</dt>
-      <dd>{when(rip.completed_at)}</dd>
-      <dt>Disc found</dt>
-      <dd>{rip.medium ? rip.medium.profile : '—'}</dd>
-      {#if rip.cd_engine}
-        <dt>CD tool asked for</dt>
-        <dd>{cdEngineLabel(rip.cd_engine)}</dd>
-      {/if}
-      <dt>Decryption</dt>
-      <dd>{rip.decrypt ? `Asked for. Keep: ${keepLabel(rip.keep)}` : 'Not asked for'}</dd>
-      <dt>Encryption found</dt>
-      <dd>{encryptionLabel(rip.encryption)}</dd>
-      {#if rip.decryption}
-        <dt>Decrypted with</dt>
-        <dd>{decryptionSummary(rip.decryption)}</dd>
-      {/if}
-      <dt>Read with</dt>
-      <dd>{rip.engine ? `${rip.engine} ${rip.engine_version ?? ''}` : '—'}</dd>
-      {#if readOffset}
-        <dt>Read offset</dt>
-        <dd>{readOffset}</dd>
-      {/if}
-      {#if rip.cd_read}
-        <dt>Write offset</dt>
-        <dd>{writeOffsetLabel(rip.cd_read)}</dd>
-        <dt>Generic drive</dt>
-        <dd>{genericDriveLabel(rip.cd_read.generic_drive)}</dd>
-      {/if}
-      <dt>Read errors</dt>
-      <dd>
-        {#if rip.read_errors}
-          {rip.read_errors.unreadable_sectors} unreadable, {rip.read_errors.retried_sectors} retried
-          {rip.read_errors.unreadable_sectors === 0 ? '' : '(the image is incomplete)'}
-        {:else if rip.cd_read}
-          {retriedLabel(rip.cd_read)}
-        {:else}
-          —
+  <div class="columns">
+    <Panel title="Details">
+      <dl class="facts">
+        <div>
+          <dt>Asked for</dt>
+          <dd>{when(rip.created_at)} by {rip.requested_by}</dd>
+        </div>
+        <div>
+          <dt>Started</dt>
+          <dd>{when(rip.started_at)}</dd>
+        </div>
+        <div>
+          <dt>Ended</dt>
+          <dd>{when(rip.completed_at)}</dd>
+        </div>
+        <div>
+          <dt>Disc found</dt>
+          <dd>{rip.medium ? rip.medium.profile : '·'}</dd>
+        </div>
+        {#if rip.cd_engine}
+          <div>
+            <dt>CD tool asked for</dt>
+            <dd>{cdEngineLabel(rip.cd_engine)}</dd>
+          </div>
         {/if}
-      </dd>
-    </dl>
-    {#if rip.files.length > 0}
-      <table>
-        <caption>Files received</caption>
-        <thead>
-          <tr><th scope="col">File</th><th scope="col">Size</th><th scope="col">SHA-256</th></tr>
-        </thead>
-        <tbody>
-          {#each rip.files as file (file.name)}
-            <tr>
-              <th scope="row"><code>{file.name}</code></th>
-              <td>{formatBytes(file.bytes)}</td>
-              <td><code title={file.sha256}>{file.sha256.slice(0, 12)}…</code></td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    {/if}
-  </section>
+        <div>
+          <dt>Decryption</dt>
+          <dd>{rip.decrypt ? `Asked for. Keep: ${keepLabel(rip.keep)}` : 'Not asked for'}</dd>
+        </div>
+        <div>
+          <dt>Encryption found</dt>
+          <dd>{encryptionLabel(rip.encryption)}</dd>
+        </div>
+        {#if rip.decryption}
+          <div>
+            <dt>Decrypted with</dt>
+            <dd>{decryptionSummary(rip.decryption)}</dd>
+          </div>
+        {/if}
+        <div>
+          <dt>Read with</dt>
+          <dd>{rip.engine ? `${rip.engine} ${rip.engine_version ?? ''}` : '·'}</dd>
+        </div>
+        {#if readOffset}
+          <div>
+            <dt>Read offset</dt>
+            <dd>{readOffset}</dd>
+          </div>
+        {/if}
+        {#if rip.cd_read}
+          <div>
+            <dt>Write offset</dt>
+            <dd>{writeOffsetLabel(rip.cd_read)}</dd>
+          </div>
+          <div>
+            <dt>Generic drive</dt>
+            <dd>{genericDriveLabel(rip.cd_read.generic_drive)}</dd>
+          </div>
+        {/if}
+        <div>
+          <dt>Read errors</dt>
+          <dd>
+            {#if rip.read_errors}
+              {rip.read_errors.unreadable_sectors} unreadable, {rip.read_errors.retried_sectors} retried
+              {rip.read_errors.unreadable_sectors === 0 ? '' : '(the image is incomplete)'}
+            {:else if rip.cd_read}
+              {retriedLabel(rip.cd_read)}
+            {:else}
+              ·
+            {/if}
+          </dd>
+        </div>
+      </dl>
+      {#if rip.files.length > 0}
+        <div class="files">
+          <Table caption="Files received" showCaption>
+            <thead>
+              <tr>
+                <th scope="col">File</th>
+                <th scope="col" class="num">Size</th>
+                <th scope="col">SHA-256</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each rip.files as file (file.name)}
+                <tr>
+                  <th scope="row"><code>{file.name}</code></th>
+                  <td class="num">{formatBytes(file.bytes)}</td>
+                  <td><code title={file.sha256}>{file.sha256.slice(0, 12)}…</code></td>
+                </tr>
+              {/each}
+            </tbody>
+          </Table>
+        </div>
+      {/if}
+    </Panel>
 
-  <section aria-labelledby="events-heading">
-    <h2 id="events-heading">What the worker said</h2>
-    {#if events.length === 0}
-      <p>Nothing yet.</p>
-    {:else}
-      <ol class="timeline">
-        {#each events as event (event.sequence)}
-          <li>
-            <time datetime={event.worker_time}>{when(event.worker_time)}</time>
-            <code>{event.code}</code>
-            {#if event.message}<span class="message">{event.message}</span>{/if}
-          </li>
-        {/each}
-      </ol>
-    {/if}
-  </section>
+    <Panel title="What the worker said">
+      {#if events.length === 0}
+        <p class="quiet">Nothing yet.</p>
+      {:else}
+        <ol class="timeline">
+          {#each events as event (event.sequence)}
+            <li>
+              <time datetime={event.worker_time}>{when(event.worker_time)}</time>
+              <code>{event.code}</code>
+              {#if event.message}<span class="message">{event.message}</span>{/if}
+            </li>
+          {/each}
+        </ol>
+      {/if}
+    </Panel>
+  </div>
 {/if}
 
 <style>
   .status {
-    border: 1px solid currentColor;
-    padding: 0.75rem 1rem;
+    padding: var(--space-3) var(--space-4);
+    margin-bottom: var(--space-4);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
   }
-  dl {
+  .status h2 {
+    margin: 0 0 var(--space-2);
+    font-size: var(--text-md);
+  }
+  .status p {
+    margin: var(--space-2) 0 0;
+  }
+  .progress {
     display: grid;
-    grid-template-columns: max-content 1fr;
-    gap: 0.25rem 1rem;
+    grid-template-columns: minmax(0, 30rem) auto;
+    gap: var(--space-3);
+    align-items: center;
+    font-size: var(--text-sm);
+  }
+  .columns {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+    gap: var(--space-4);
+    align-items: start;
+  }
+  @media (max-width: 1099px) {
+    .columns {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+  .facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+    gap: var(--space-3) var(--space-5);
+    margin: 0;
   }
   dt {
-    font-weight: 600;
+    color: var(--text-muted);
+    font-size: var(--text-sm);
   }
   dd {
     margin: 0;
+    font-weight: var(--weight-medium);
+    overflow-wrap: anywhere;
   }
-  table {
-    border-collapse: collapse;
-    width: 100%;
-    margin-top: 1rem;
-  }
-  th,
-  td {
-    text-align: left;
-    padding: 0.5rem;
-    border-bottom: 1px solid currentColor;
-  }
-  caption {
-    text-align: left;
-    font-weight: 600;
-  }
-  button {
-    padding: 0.5rem 1rem;
-  }
-  progress {
-    width: min(30rem, 100%);
+  .files {
+    margin-top: var(--space-4);
   }
   .timeline {
-    padding-left: 1.25rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    font-size: var(--text-sm);
+  }
+  .timeline li {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0 var(--space-3);
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--line-2);
+  }
+  .timeline li:last-child {
+    border-bottom: 0;
+  }
+  .timeline time {
+    color: var(--text-muted);
   }
   .message {
-    display: block;
-    font-family: monospace;
-    font-size: 0.9em;
+    grid-column: 1 / -1;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
     overflow-wrap: anywhere;
+  }
+  .small {
+    font-size: var(--text-sm);
+  }
+  .quiet {
+    color: var(--text-muted);
   }
 </style>

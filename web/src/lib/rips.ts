@@ -6,6 +6,7 @@
 // the drive's worker do the work; this asks for it, shows how it is going,
 // and lets a person withdraw it while reading.
 
+import type { Tone } from './components/ui/tone';
 import type { components } from './api-types';
 import { apiCall, apiFetch, type Result } from './session';
 
@@ -108,6 +109,21 @@ export function ripStateLabel(state: string): string {
       return 'Failed';
     default:
       return state;
+  }
+}
+
+/** A rip's state as a tone, for a status mark. */
+export function ripStateTone(state: string): Tone {
+  switch (state) {
+    case 'complete':
+      return 'ok';
+    case 'failed':
+    case 'refused':
+      return 'bad';
+    case 'canceled':
+      return 'idle';
+    default:
+      return 'busy';
   }
 }
 

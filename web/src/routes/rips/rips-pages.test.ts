@@ -4,6 +4,7 @@
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { forgetReportSettings } from '$lib/report';
+import { axeViolations } from '$lib/testing/axe';
 
 const goto = vi.fn();
 vi.mock('$app/navigation', () => ({ goto: (...args: unknown[]) => goto(...args) }));
@@ -506,5 +507,24 @@ describe('Rip page', () => {
     render(RipPage);
     expect(await screen.findByText(/Only a decrypted image was kept/)).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'Open the decrypted copy' })).toBeNull();
+  });
+});
+
+describe('Rips pages, for assistive technology', () => {
+  it('has nothing axe objects to on the list or on a rip', async () => {
+    server({
+      '/api/v1/drives': { status: 200, body: { items: [DRIVE] } },
+      '/api/v1/rips?limit=20': { status: 200, body: { items: [rip()] } },
+      '/api/v1/rips/r1': { status: 200, body: rip() },
+      '/api/v1/rips/r1/events': { status: 200, body: { items: [] } },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    const list = render(RipsPage);
+    expect(await screen.findByRole('button', { name: 'Rip the disc in sr0' })).toBeTruthy();
+    expect(await axeViolations(list.container)).toEqual([]);
+    list.unmount();
+    const one = render(RipPage);
+    expect(await screen.findByRole('heading', { name: 'Reading the disc' })).toBeTruthy();
+    expect(await axeViolations(one.container)).toEqual([]);
   });
 });
