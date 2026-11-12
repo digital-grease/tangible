@@ -26,6 +26,12 @@ allowBuilds:
 # js-yaml: @redocly/openapi-core, which openapi-typescript uses to read the
 # API description, pins exactly 4.3.1, affected by GHSA-2883-xcg3-v3hh; 4.3.2
 # is the patch release that fixes it.
+#
+# minimatch: @typescript-eslint/typescript-estree asks for ^10.2.2, affected by
+# GHSA-g3hv-75wg-m249, which only 11.0.1 and later fix. The parser calls one
+# function, minimatch(), on its allowDefaultProject patterns at lint time, and
+# 11 keeps both the function and a CommonJS entry; lint is unchanged by it.
 overrides:
   cookie@<0.7.0: ^0.7.0
   js-yaml@4.3.1: 4.3.2
+  '@typescript-eslint/typescript-estree>minimatch': ^11.0.8
