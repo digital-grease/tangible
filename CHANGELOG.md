@@ -75,6 +75,17 @@ Found by a security review of 0.2.0.
   sent, pasted onto the server's address, so a path beginning `@` sent the
   request, with the worker's credential, to another host; the worker now
   fetches the manifest by the artifact's identifier from its own server.
+- Making a CHD could read files outside the image. An imported CUE or TOC
+  naming `../../somewhere/file` has the name reduced to `file` to find it
+  among the image's files, but chdman was given the sheet as it was and
+  followed the name out, and a comment longer than chdman reads in one go
+  could hide a file line from Tangible altogether; a derivation that then
+  failed its check said how the file it reached differed. chdman now reads
+  a CUE that Tangible writes, naming the image's own files; a TOC must name
+  only those; and either is read again as chdman reads it, so a sheet that
+  would have chdman open anything else, or that has a line it could split,
+  is refused with `DERIVATION_SHEET_REFUSED`. The imported sheet is left
+  as it is.
 
 ## 0.2.0 (2026-11-12)
 

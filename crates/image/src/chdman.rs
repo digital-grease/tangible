@@ -53,6 +53,18 @@ pub const CHDMAN: &str = "/usr/bin/chdman";
 /// The first chdman release with `createdvd`.
 const FIRST_DVD_MINOR: u32 = 262;
 
+/// The longest line, in bytes before its line ending, of a sheet chdman is
+/// given. chdman reads a sheet a line at a time with `fgets` into 511 bytes,
+/// so a longer line goes on as a second one: a long comment could carry a
+/// FILE line that Tangible, reading the line whole, never saw (security
+/// review, 2026-11-12). Well under, with room for any line ending; a FILE
+/// line naming a 255-byte file fits.
+const MAX_SHEET_LINE_BYTES: usize = 400;
+
+/// What chdman is given instead of a CUE sheet: Tangible's own copy, whose
+/// FILE lines name the staged files (see [`sheet_for_chdman`]).
+const CHDMAN_SHEET_STEM: &str = "tangible-chdman";
+
 /// Output kept from each pipe: chdman redraws a progress line with carriage
 /// returns, which on a large image is megabytes nobody reads.
 const OUTPUT_LIMIT: usize = 64 * 1024;
@@ -200,19 +212,23 @@ impl DerivationEngine for Chdman {
         let input_text = path_arg(&input)?;
         let output_text = path_arg(request.output)?;
         let result = match request.transformation {
+            Transformation::ChdCreateCd if !has_extension(request.input, "iso") => {
+                // chdman opens the files a sheet names, as it reads them. It
+                // is given one whose every such file is staged here, or none.
+                let sheet = sheet_for_chdman(request.input_dir, request.input).await?;
+                let (codecs, hunk) = chd_options(request)?;
+                self.make_and_check(
+                    request,
+                    "createcd",
+                    &path_arg(&sheet)?,
+                    &output_text,
+                    &codecs,
+                    &hunk,
+                )
+                .await
+            }
             Transformation::ChdCreateCd | Transformation::ChdCreateDvd => {
-                let options = request.options.ok_or_else(|| DeriveError::Failed {
-                    code: "DERIVATION_INTERNAL",
-                    detail: "a CHD is made with its options, and none were given".to_owned(),
-                    retryable: false,
-                })?;
-                let codecs = options
-                    .compression
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(",");
-                let hunk = options.hunk_bytes.to_string();
+                let (codecs, hunk) = chd_options(request)?;
                 let create = if request.transformation == Transformation::ChdCreateCd {
                     "createcd"
                 } else {
@@ -432,12 +448,7 @@ impl Chdman {
                     "extract",
                 )
                 .await?;
-                let is_iso = request
-                    .input
-                    .as_str()
-                    .rsplit_once('.')
-                    .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("iso"));
-                if is_iso {
+                if has_extension(request.input, "iso") {
                     let original = request.input_dir.join(request.input.as_str());
                     compare_files(&original, &back_bin)
                         .await
@@ -709,6 +720,189 @@ async fn staged_files(dir: &Path) -> std::io::Result<Vec<LogicalPath>> {
     Ok(found)
 }
 
+/// The compression and hunk size a CHD is made with, as chdman takes them.
+fn chd_options(request: &DeriveRequest<'_>) -> Result<(String, String), DeriveError> {
+    let options = request.options.ok_or_else(|| DeriveError::Failed {
+        code: "DERIVATION_INTERNAL",
+        detail: "a CHD is made with its options, and none were given".to_owned(),
+        retryable: false,
+    })?;
+    let codecs = options
+        .compression
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    Ok((codecs, options.hunk_bytes.to_string()))
+}
+
+/// Whether `path` ends `.<extension>`, in any case.
+fn has_extension(path: &LogicalPath, extension: &str) -> bool {
+    path.as_str()
+        .rsplit_once('.')
+        .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case(extension))
+}
+
+fn sheet_refused(detail: String) -> DeriveError {
+    DeriveError::Failed {
+        code: "DERIVATION_SHEET_REFUSED",
+        detail,
+        retryable: false,
+    }
+}
+
+/// The sheet chdman is to read for the CUE or TOC `input` staged in `dir`.
+///
+/// chdman opens every file its sheet names, relative to the sheet, as it
+/// reads the names, and that is not always as Tangible does: Tangible reduces
+/// `../../x` to `x` to find a staged file, and chdman follows it out of the
+/// staging area. A derivation's error then told an operator about the file
+/// it reached (security review, 2026-11-12). So:
+///
+/// - a CUE sheet is rewritten, every FILE naming the staged file Tangible
+///   resolved it to, and the copy written beside the staged files, under a
+///   name no staged file has; the staged original is left as it is;
+/// - a TOC is given as it is, there being no rewriter for it;
+///
+/// and either way the sheet chdman will read is read again as chdman reads
+/// it ([`chdman_named_files`]): every file it names must be one staged here,
+/// and no line may be long enough for chdman to split. Otherwise nothing is
+/// run. The round trip still compares the CHD with the original sheet.
+async fn sheet_for_chdman(dir: &Path, input: &LogicalPath) -> Result<PathBuf, DeriveError> {
+    let bytes = tokio::fs::read(dir.join(input.as_str()))
+        .await
+        .map_err(|e| io("reading the sheet", e))?;
+    let staged = staged_files(dir)
+        .await
+        .map_err(|e| io("listing the staged files", e))?;
+    if has_extension(input, "toc") {
+        let base = input
+            .as_str()
+            .rsplit_once('/')
+            .map(|(parent, _)| parent.to_owned());
+        check_chdman_names(&bytes, true, base.as_deref(), &staged)?;
+        return Ok(dir.join(input.as_str()));
+    }
+
+    let sheet = cue::parse(&bytes).map_err(|e| sheet_refused(e.to_string()))?;
+    let names: Vec<String> = sheet.files.iter().map(|file| file.name.clone()).collect();
+    let resolution = cue::resolve_names(&names, &staged);
+    let mut renames = std::collections::BTreeMap::new();
+    for file in &resolution.files {
+        let resolved = file.resolved.as_ref().ok_or_else(|| {
+            sheet_refused(format!(
+                "{:?} names a file that is not staged",
+                file.declared
+            ))
+        })?;
+        renames.insert(file.declared.clone(), resolved.as_str().to_owned());
+    }
+    let rewritten = cue::rewrite_file_names(&bytes, |name| renames.get(name).cloned())
+        .map_err(|e| sheet_refused(e.to_string()))?;
+    check_chdman_names(&rewritten, false, None, &staged)?;
+
+    // One more name than there are staged files is sure to hold a free one.
+    let taken = |name: &str| staged.iter().any(|path| path.as_str() == name);
+    let name = std::iter::once(format!("{CHDMAN_SHEET_STEM}.cue"))
+        .chain((1..=staged.len()).map(|n| format!("{CHDMAN_SHEET_STEM}-{n}.cue")))
+        .find(|name| !taken(name))
+        .unwrap_or_default();
+    let path = dir.join(name);
+    tokio::fs::write(&path, &rewritten)
+        .await
+        .map_err(|e| io("writing the sheet chdman reads", e))?;
+    Ok(path)
+}
+
+/// Refuse a sheet that chdman would read a file from that is not staged.
+/// `base` is the sheet's folder among the staged files, `None` at the top.
+fn check_chdman_names(
+    sheet: &[u8],
+    toc: bool,
+    base: Option<&str>,
+    staged: &[LogicalPath],
+) -> Result<(), DeriveError> {
+    for (line, name) in chdman_named_files(sheet, toc)? {
+        let full = match base {
+            Some(base) => format!("{base}/{name}"),
+            None => name.clone(),
+        };
+        let is_staged = LogicalPath::parse(&full).is_ok_and(|path| staged.contains(&path));
+        if !is_staged {
+            return Err(sheet_refused(format!(
+                "line {line} of the sheet names {name:?}, which is not a file staged for this \
+                 derivation"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Every file chdman would open for `sheet`, with its line number, read as
+/// chdman reads it: a line at a time, the first two tokens of each, a token
+/// running to unquoted white space (C's `isspace`) with either kind of quote
+/// toggling and dropped, and nothing past a NUL. A CUE's command is `FILE`, a
+/// TOC's `FILE`, `DATAFILE` or `AUDIOFILE`, compared exactly, as chdman does.
+///
+/// # Errors
+///
+/// A line longer than [`MAX_SHEET_LINE_BYTES`], which chdman might read as
+/// two, or a name that is not UTF-8.
+fn chdman_named_files(sheet: &[u8], toc: bool) -> Result<Vec<(usize, String)>, DeriveError> {
+    let mut named = Vec::new();
+    for (index, line) in sheet.split(|byte| *byte == b'\n').enumerate() {
+        let number = index + 1;
+        if line.len() > MAX_SHEET_LINE_BYTES {
+            return Err(sheet_refused(format!(
+                "line {number} of the sheet is longer than {MAX_SHEET_LINE_BYTES} bytes, \
+                 which chdman may read as two lines"
+            )));
+        }
+        let (command, at) = chdman_token(line, 0);
+        let names_a_file = if toc {
+            matches!(command.as_slice(), b"FILE" | b"DATAFILE" | b"AUDIOFILE")
+        } else {
+            command == b"FILE"
+        };
+        if !names_a_file {
+            continue;
+        }
+        let (name, _) = chdman_token(line, at);
+        let name = String::from_utf8(name).map_err(|_| {
+            sheet_refused(format!(
+                "line {number} of the sheet names a file not in UTF-8"
+            ))
+        })?;
+        named.push((number, name));
+    }
+    Ok(named)
+}
+
+/// One token of a line as chdman's `cdrom_file::tokenize` takes it, from
+/// `at`; and where it stopped.
+fn chdman_token(line: &[u8], mut at: usize) -> (Vec<u8>, usize) {
+    let space = |byte: u8| matches!(byte, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r');
+    while at < line.len() && space(line[at]) {
+        at += 1;
+    }
+    let (mut single, mut double) = (false, false);
+    let mut token = Vec::new();
+    while at < line.len() && line[at] != 0 {
+        let byte = line[at];
+        if !single && byte == b'"' {
+            double = !double;
+        } else if !double && byte == b'\'' {
+            single = !single;
+        } else if !single && !double && space(byte) {
+            break;
+        } else {
+            token.push(byte);
+        }
+        at += 1;
+    }
+    (token, at)
+}
+
 /// Compare two discs track by track. `Ok(Err(reason))` when they differ.
 ///
 /// # Errors
@@ -936,6 +1130,168 @@ async fn read_bounded<R: AsyncRead + Unpin>(pipe: Option<R>) -> String {
 #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    fn named(sheet: &[u8], toc: bool) -> Vec<String> {
+        chdman_named_files(sheet, toc)
+            .unwrap()
+            .into_iter()
+            .map(|(_, name)| name)
+            .collect()
+    }
+
+    #[test]
+    fn a_sheet_is_read_for_its_files_as_chdman_reads_it() {
+        // Either quote, and none; white space as C's isspace; the command
+        // compared exactly; nothing past a NUL.
+        assert_eq!(
+            named(
+                b"FILE \"a b.bin\" BINARY\n  FILE c.bin MOTOROLA\r\n\t'FILE' '../d.bin' BINARY\n",
+                false
+            ),
+            ["a b.bin", "c.bin", "../d.bin"]
+        );
+        assert!(named(b"file \"x.bin\" BINARY\nREM FILE \"y.bin\"\n", false).is_empty());
+        assert_eq!(
+            named(b"FILE \"ok.bin\0../x.bin\" BINARY\n", false),
+            ["ok.bin"]
+        );
+        // A TOC's three ways to name one; a CUE has only FILE.
+        let toc = b"CD_ROM\nTRACK AUDIO\nAUDIOFILE \"a.bin\" 0\nTRACK MODE1\nDATAFILE \"d.bin\"\nFILE \"f.bin\" 0\n";
+        assert_eq!(named(toc, true), ["a.bin", "d.bin", "f.bin"]);
+        assert_eq!(named(toc, false), ["f.bin"]);
+    }
+
+    #[test]
+    fn a_line_chdman_might_read_as_two_is_refused() {
+        // Found by the 2026-11-12 security review: chdman reads 510 bytes of
+        // a line at a time, so the rest of a long comment is a line of its
+        // own, and can be a FILE line.
+        let mut sheet = b"FILE \"disc.bin\" BINARY\nREM ".to_vec();
+        sheet.extend(std::iter::repeat_n(b'x', 506));
+        sheet.extend_from_slice(b"FILE \"../../etc/passwd\" BINARY\n");
+        let error = chdman_named_files(&sheet, false).unwrap_err();
+        assert!(error.to_string().contains("line 2"), "{error}");
+        let ok = [b"REM ".as_slice(), &[b'x'; MAX_SHEET_LINE_BYTES - 4]].concat();
+        assert!(chdman_named_files(&ok, false).is_ok());
+    }
+
+    fn staged(dir: &Path, files: &[(&str, &[u8])]) {
+        for (name, bytes) in files {
+            let path = dir.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn chdman_gets_a_cue_naming_only_the_staged_files() {
+        // Tangible reads `../../x/disc.bin` as the staged `disc.bin`; chdman
+        // would have followed it out. It is given a sheet that names the
+        // staged file, and the staged original is left as it was.
+        let dir = tempfile::TempDir::new().unwrap();
+        let original = b"REM from elsewhere\nFILE \"../../x/disc.bin\" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n";
+        staged(
+            dir.path(),
+            &[("Game/disc.cue", original), ("Game/disc.bin", &[0; 2352])],
+        );
+        let input = LogicalPath::parse("Game/disc.cue").unwrap();
+
+        let sheet = sheet_for_chdman(dir.path(), &input).await.unwrap();
+        assert_eq!(sheet, dir.path().join("tangible-chdman.cue"));
+        let given = std::fs::read(&sheet).unwrap();
+        assert_eq!(
+            given,
+            b"REM from elsewhere\nFILE \"Game/disc.bin\" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n"
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("Game/disc.cue")).unwrap(),
+            original
+        );
+
+        // A staged file of that name is not overwritten.
+        let dir = tempfile::TempDir::new().unwrap();
+        staged(
+            dir.path(),
+            &[
+                ("disc.cue", b"FILE \"tangible-chdman.cue\" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n"),
+                ("tangible-chdman.cue", &[0; 2352]),
+            ],
+        );
+        let sheet = sheet_for_chdman(dir.path(), &LogicalPath::parse("disc.cue").unwrap())
+            .await
+            .unwrap();
+        assert_eq!(sheet, dir.path().join("tangible-chdman-1.cue"));
+    }
+
+    #[tokio::test]
+    async fn a_sheet_chdman_would_read_outside_the_staged_files_is_refused() {
+        let refused = |result: Result<PathBuf, DeriveError>, why: &str| match result {
+            Err(DeriveError::Failed {
+                code: "DERIVATION_SHEET_REFUSED",
+                detail,
+                ..
+            }) => detail.contains(why),
+            _ => false,
+        };
+        let bin: &[u8] = &[0; 2352];
+
+        // A FILE line in single quotes, which Tangible's reading does not
+        // take for one and chdman does.
+        let dir = tempfile::TempDir::new().unwrap();
+        staged(
+            dir.path(),
+            &[
+                ("disc.cue", b"FILE \"disc.bin\" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n'FILE' '../outside.bin' BINARY\n"),
+                ("disc.bin", bin),
+            ],
+        );
+        let input = LogicalPath::parse("disc.cue").unwrap();
+        assert!(refused(
+            sheet_for_chdman(dir.path(), &input).await,
+            "line 4 of the sheet names \"../outside.bin\""
+        ));
+
+        // A comment long enough that chdman reads its end as a line.
+        let mut cue =
+            b"FILE \"disc.bin\" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\nREM "
+                .to_vec();
+        cue.extend(std::iter::repeat_n(b'x', 506));
+        cue.extend_from_slice(b"FILE \"/etc/passwd\" BINARY\n");
+        std::fs::write(dir.path().join("disc.cue"), &cue).unwrap();
+        assert!(refused(
+            sheet_for_chdman(dir.path(), &input).await,
+            "line 4 of the sheet is longer"
+        ));
+
+        // A TOC, which is given as it is, must name only what is staged
+        // beside it.
+        let dir = tempfile::TempDir::new().unwrap();
+        staged(
+            dir.path(),
+            &[
+                (
+                    "Game/disc.toc",
+                    b"CD_ROM\nTRACK MODE1_RAW\nDATAFILE \"../outside.bin\"\n",
+                ),
+                ("outside.bin", bin),
+            ],
+        );
+        let toc = LogicalPath::parse("Game/disc.toc").unwrap();
+        assert!(refused(
+            sheet_for_chdman(dir.path(), &toc).await,
+            "names \"../outside.bin\""
+        ));
+        std::fs::write(
+            dir.path().join("Game/disc.toc"),
+            b"CD_ROM\nTRACK MODE1_RAW\nDATAFILE \"disc.bin\"\n",
+        )
+        .unwrap();
+        staged(dir.path(), &[("Game/disc.bin", bin)]);
+        assert_eq!(
+            sheet_for_chdman(dir.path(), &toc).await.unwrap(),
+            dir.path().join("Game/disc.toc")
+        );
+    }
 
     #[test]
     fn the_version_is_read_from_the_banner() {

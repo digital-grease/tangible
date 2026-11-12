@@ -136,6 +136,30 @@ async fn a_single_file_cue_bin_round_trips_track_for_track() {
 }
 
 #[tokio::test]
+async fn chdman_reads_the_staged_file_a_sheet_names_and_nothing_beside_it() {
+    // Found by the 2026-11-12 security review: Tangible reads `../x/disc.bin`
+    // as the staged `disc.bin`, and chdman, given the sheet as it was,
+    // followed it out of the staging area; the round trip's refusal then
+    // told the operator how the file it reached differed.
+    let Some(engine) = chdman().await else { return };
+    let (dir, input) = input_dir();
+    let d = disc();
+    write(&input, "disc.bin", &d.data);
+    let outside = dir.path().join("x");
+    std::fs::create_dir_all(&outside).unwrap();
+    write(&outside, "disc.bin", &noise(d.data.len(), 9));
+    write(
+        &input,
+        "disc.cue",
+        b"FILE \"../x/disc.bin\" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n",
+    );
+    let (loss, _) = derive(&engine, dir.path(), "disc.cue", Transformation::ChdCreateCd)
+        .await
+        .expect("a CHD of the staged file, which round-trips");
+    assert_eq!(loss, LossCharacter::StructurallyEquivalent);
+}
+
+#[tokio::test]
 async fn a_file_per_track_cue_bin_round_trips_too() {
     let Some(engine) = chdman().await else { return };
     let (dir, input) = input_dir();
