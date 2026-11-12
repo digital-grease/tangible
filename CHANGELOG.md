@@ -669,6 +669,11 @@ may change between minor versions, and the release notes say how.
 
 ### Fixed
 
+- The web UI's smallest font files were built into its stylesheet as
+  `data:` URIs, which its Content Security Policy refuses, so the
+  characters they cover fell back to a system font. Assets are never
+  inlined now; each is served as a file from Tangible's own origin.
+
 - A drive that drops off its bus while xorriso reads what is in it (a USB
   drive whose hub resets, seen on the bench) is reported as unavailable.
   xorriso had already printed a summary naming a blank CD-R and nothing of
