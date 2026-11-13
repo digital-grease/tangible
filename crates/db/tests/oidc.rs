@@ -73,14 +73,14 @@ async fn a_sign_in_under_way_is_taken_once_and_not_after_it_expires() {
     )
     .await
     .unwrap();
-    pool.execute(
+    pool.execute(sqlx::AssertSqlSafe(
         format!(
             "UPDATE oidc_logins SET created_at = now() - interval '1 hour',
                                     expires_at = now() - interval '1 minute'
              WHERE state_hash = '{expired}'"
         )
         .as_str(),
-    )
+    ))
     .await
     .unwrap();
     assert!(

@@ -31,13 +31,13 @@ async fn pool() -> PgPool {
 /// A worker whose credential hashes to `old-{id}`.
 async fn worker(pool: &PgPool) -> WorkerId {
     let worker = WorkerId::generate();
-    pool.execute(
+    pool.execute(sqlx::AssertSqlSafe(
         format!(
             "INSERT INTO workers (id, name, software_version, protocol_version, credential_hash) \
              VALUES ('{worker}', 'rotate-{worker}', '0.1.0', '1alpha1', 'old-{worker}')"
         )
         .as_str(),
-    )
+    ))
     .await
     .expect("seed");
     worker

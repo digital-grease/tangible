@@ -42,11 +42,11 @@ use crate::outbound::{OutboundClient, OutboundError, Url};
 const CLIENT: &str = "the S3 endpoint";
 
 /// How long a presigned HEAD is good for: it is sent at once.
-const HEAD_EXPIRY: Duration = Duration::from_secs(5 * 60);
+const HEAD_EXPIRY: Duration = Duration::from_mins(5);
 
 /// How long a presigned GET is good for. S3 checks expiry when a request
 /// starts, so a long transfer outlives it; a resumed one gets a new URL.
-pub const GET_EXPIRY: Duration = Duration::from_secs(60 * 60);
+pub const GET_EXPIRY: Duration = Duration::from_hours(1);
 
 /// The longest object key S3 allows, in bytes.
 pub const MAX_KEY_BYTES: usize = 1024;

@@ -45,7 +45,7 @@ const RECORD: &str = "record.json";
 const RECORD_LIMIT: u64 = 64 << 10;
 
 /// How long unpacking may take.
-const DEADLINE: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+const DEADLINE: std::time::Duration = std::time::Duration::from_hours(6);
 
 /// What an import was unpacked from, as its checkpoint keeps it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

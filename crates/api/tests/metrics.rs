@@ -56,7 +56,7 @@ async fn a_scrape_reads_the_catalogue_in_the_text_format() {
     let name = format!("metrics-{}", id.simple());
     database
         .pool()
-        .execute(
+        .execute(sqlx::AssertSqlSafe(
             format!(
                 "INSERT INTO workers (id, name, status, software_version, protocol_version,
                                       credential_hash, capabilities_json, last_seen_at)
@@ -64,7 +64,7 @@ async fn a_scrape_reads_the_catalogue_in_the_text_format() {
                          now() - interval '30 seconds')"
             )
             .as_str(),
-        )
+        ))
         .await
         .expect("a worker");
 
@@ -123,7 +123,9 @@ async fn a_scrape_reads_the_catalogue_in_the_text_format() {
 
     database
         .pool()
-        .execute(format!("DELETE FROM workers WHERE id = '{id}'").as_str())
+        .execute(sqlx::AssertSqlSafe(
+            format!("DELETE FROM workers WHERE id = '{id}'").as_str(),
+        ))
         .await
         .expect("remove the worker");
     listening.stop().await;

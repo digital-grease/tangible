@@ -126,11 +126,11 @@ pub async fn create_first_administrator(
         return Ok(None);
     }
 
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "INSERT INTO users (id, username, password_hash, role, created_by)
          VALUES ($1, $2, $3, 'administrator', 'setup')
          RETURNING {USER_COLUMNS}"
-    ))
+    )))
     .bind(uuid::Uuid::now_v7())
     .bind(username)
     .bind(password_hash)
@@ -164,12 +164,12 @@ pub async fn create_user(
     created_by: &str,
 ) -> Result<Result<UserRecord, CreateUserOutcome>, DbError> {
     let mut tx = pool.begin().await.map_err(DbError::Query)?;
-    let inserted = sqlx::query(&format!(
+    let inserted = sqlx::query(sqlx::AssertSqlSafe(format!(
         "INSERT INTO users (id, username, password_hash, role, created_by)
          VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (username) DO NOTHING
          RETURNING {USER_COLUMNS}"
-    ))
+    )))
     .bind(uuid::Uuid::now_v7())
     .bind(username)
     .bind(password_hash)
@@ -209,12 +209,12 @@ pub async fn list_users(
     limit: i64,
     after: Option<uuid::Uuid>,
 ) -> Result<Vec<UserRecord>, DbError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {USER_COLUMNS} FROM users
          WHERE ($1::uuid IS NULL OR id > $1)
          ORDER BY id
          LIMIT $2"
-    ))
+    )))
     .bind(after)
     .bind(limit)
     .fetch_all(pool)
@@ -254,9 +254,9 @@ pub async fn user_for_sign_in(
     pool: &PgPool,
     username: &str,
 ) -> Result<Option<SignInRecord>, DbError> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {USER_COLUMNS}, password_hash, created_by FROM users WHERE username = $1"
-    ))
+    )))
     .bind(username)
     .fetch_optional(pool)
     .await

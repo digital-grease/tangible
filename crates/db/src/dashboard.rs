@@ -196,7 +196,7 @@ pub async fn summary(
 
 /// The latest ended burn attempts, and the latest jobs needing attention.
 async fn listed_burns(pool: &PgPool) -> Result<(Vec<BurnSummary>, Vec<BurnSummary>), DbError> {
-    let recent = sqlx::query(&format!(
+    let recent = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT j.id AS burn_job_id, d.id AS disc_id, t.display_title AS title,
                 d.sequence_number AS disc_number, a.state, a.error_code, a.ended_at AS at
          FROM burn_attempts a
@@ -205,13 +205,13 @@ async fn listed_burns(pool: &PgPool) -> Result<(Vec<BurnSummary>, Vec<BurnSummar
          WHERE a.ended_at IS NOT NULL
          ORDER BY a.ended_at DESC, a.id DESC
          LIMIT $1"
-    ))
+    )))
     .bind(LISTED)
     .fetch_all(pool)
     .await
     .map_err(DbError::Query)?;
 
-    let attention = sqlx::query(&format!(
+    let attention = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT j.id AS burn_job_id, d.id AS disc_id, t.display_title AS title,
                 d.sequence_number AS disc_number, j.state,
                 (SELECT a.error_code FROM burn_attempts a WHERE a.burn_job_id = j.id
@@ -222,7 +222,7 @@ async fn listed_burns(pool: &PgPool) -> Result<(Vec<BurnSummary>, Vec<BurnSummar
          WHERE j.state = 'needs_attention'
          ORDER BY j.updated_at DESC, j.id DESC
          LIMIT $1"
-    ))
+    )))
     .bind(LISTED)
     .fetch_all(pool)
     .await

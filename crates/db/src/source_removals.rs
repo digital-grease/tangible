@@ -145,11 +145,13 @@ pub async fn get_removal(
     pool: &PgPool,
     id: uuid::Uuid,
 ) -> Result<Option<SourceRemovalRecord>, DbError> {
-    let row = sqlx::query(&format!("SELECT {COLUMNS} FROM {FROM} WHERE r.id = $1"))
-        .bind(id)
-        .fetch_optional(pool)
-        .await
-        .map_err(DbError::Query)?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {COLUMNS} FROM {FROM} WHERE r.id = $1"
+    )))
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(DbError::Query)?;
     row.as_ref().map(from_row).transpose()
 }
 
@@ -165,9 +167,9 @@ pub async fn removals_for_imports(
     if import_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {COLUMNS} FROM {FROM} WHERE r.import_job_id = ANY($1)"
-    ))
+    )))
     .bind(import_ids)
     .fetch_all(pool)
     .await

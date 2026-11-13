@@ -83,7 +83,7 @@ async fn planted(pool: &PgPool, title: &str) -> uuid::Uuid {
              'VERIFY_MISMATCH', now() + interval '100 years')"
         ),
     ] {
-        pool.execute(statement.as_str())
+        pool.execute(sqlx::AssertSqlSafe(statement.as_str()))
             .await
             .unwrap_or_else(|error| panic!("{statement}: {error}"));
     }
@@ -132,6 +132,10 @@ async fn the_dashboard_says_what_needs_doing_to_anyone_signed_in() {
         format!("DELETE FROM burn_attempts WHERE burn_job_id = '{job}'"),
         format!("DELETE FROM burn_jobs WHERE id = '{job}'"),
     ] {
-        database.pool().execute(statement.as_str()).await.unwrap();
+        database
+            .pool()
+            .execute(sqlx::AssertSqlSafe(statement.as_str()))
+            .await
+            .unwrap();
     }
 }

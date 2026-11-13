@@ -356,11 +356,11 @@ pub async fn open_scans(
     pool: &PgPool,
     integration_id: uuid::Uuid,
 ) -> Result<Vec<ScanRecord>, DbError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {SCAN_COLUMNS} FROM romm_scans
          WHERE integration_id = $1 AND state IN ('queued', 'running')
          ORDER BY requested_at, id"
-    ))
+    )))
     .bind(integration_id)
     .fetch_all(pool)
     .await
@@ -377,11 +377,11 @@ pub async fn last_scan(
     pool: &PgPool,
     platform: Option<&str>,
 ) -> Result<Option<ScanRecord>, DbError> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {SCAN_COLUMNS} FROM romm_scans
          WHERE $1::text IS NULL OR $1 = ANY(platforms)
          ORDER BY requested_at DESC, id DESC LIMIT 1"
-    ))
+    )))
     .bind(platform)
     .fetch_optional(pool)
     .await

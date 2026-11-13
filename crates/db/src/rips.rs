@@ -287,9 +287,9 @@ async fn rip_in(
     tx: &mut Transaction<'_, Postgres>,
     id: RipJobId,
 ) -> Result<Option<RipRecord>, DbError> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {RIP_COLUMNS} FROM {RIP_FROM} WHERE r.id = $1"
-    ))
+    )))
     .bind(id.as_uuid())
     .fetch_optional(&mut **tx)
     .await
@@ -369,9 +369,9 @@ pub async fn drive_rip_engines(pool: &PgPool, drive_id: DriveId) -> Result<Optio
 ///
 /// [`DbError::Query`] on a database failure.
 pub async fn drive_can_decrypt(pool: &PgPool, drive_id: DriveId) -> Result<bool, DbError> {
-    let can: Option<bool> = sqlx::query_scalar(&format!(
+    let can: Option<bool> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT {CAN_DECRYPT} FROM drives d JOIN workers w ON w.id = d.worker_id WHERE d.id = $1"
-    ))
+    )))
     .bind(drive_id.as_uuid())
     .fetch_optional(pool)
     .await
@@ -392,9 +392,9 @@ pub(crate) const HAS_REDUMPER: &str = "COALESCE(w.capabilities_json -> 'rip' -> 
 ///
 /// [`DbError::Query`] on a database failure.
 pub async fn drive_has_redumper(pool: &PgPool, drive_id: DriveId) -> Result<bool, DbError> {
-    let has: Option<bool> = sqlx::query_scalar(&format!(
+    let has: Option<bool> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT {HAS_REDUMPER} FROM drives d JOIN workers w ON w.id = d.worker_id WHERE d.id = $1"
-    ))
+    )))
     .bind(drive_id.as_uuid())
     .fetch_optional(pool)
     .await
@@ -493,12 +493,12 @@ pub async fn list_rips(
     limit: i64,
     before: Option<RipJobId>,
 ) -> Result<Vec<RipRecord>, DbError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {RIP_COLUMNS} FROM {RIP_FROM}
          WHERE $2::uuid IS NULL
             OR (r.created_at, r.id) < (SELECT created_at, id FROM rip_jobs WHERE id = $2)
          ORDER BY r.created_at DESC, r.id DESC LIMIT $1"
-    ))
+    )))
     .bind(limit)
     .bind(before.map(|id| *id.as_uuid()))
     .fetch_all(pool)
@@ -513,9 +513,9 @@ pub async fn list_rips(
 ///
 /// [`DbError::Query`] on a database failure.
 pub async fn get_rip(pool: &PgPool, id: RipJobId) -> Result<Option<RipRecord>, DbError> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {RIP_COLUMNS} FROM {RIP_FROM} WHERE r.id = $1"
-    ))
+    )))
     .bind(id.as_uuid())
     .fetch_optional(pool)
     .await
@@ -630,16 +630,17 @@ pub async fn claim_rip(
         return Ok(Ok(None));
     }
 
-    let next: Option<(uuid::Uuid, bool, bool, Option<String>, bool)> = sqlx::query_as(&format!(
-        "SELECT r.id, r.decrypt, {CAN_DECRYPT}, r.cd_engine, {HAS_REDUMPER}
+    let next: Option<(uuid::Uuid, bool, bool, Option<String>, bool)> =
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT r.id, r.decrypt, {CAN_DECRYPT}, r.cd_engine, {HAS_REDUMPER}
          FROM rip_jobs r JOIN drives d ON d.id = r.drive_id JOIN workers w ON w.id = d.worker_id
          WHERE r.drive_id = $1 AND r.state = 'queued'
          ORDER BY r.created_at LIMIT 1 FOR UPDATE OF r"
-    ))
-    .bind(drive_id.as_uuid())
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(DbError::Query)?;
+        )))
+        .bind(drive_id.as_uuid())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(DbError::Query)?;
     let Some((next, decrypt, worker_can, cd_engine, has_redumper)) = next else {
         tx.commit().await.map_err(DbError::Query)?;
         return Ok(Ok(None));
@@ -754,9 +755,9 @@ pub async fn get_rip_for_worker(
     worker_id: WorkerId,
     id: RipJobId,
 ) -> Result<Option<RipRecord>, DbError> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {RIP_COLUMNS} FROM {RIP_FROM} WHERE r.id = $1 AND d.worker_id = $2"
-    ))
+    )))
     .bind(id.as_uuid())
     .bind(worker_id.as_uuid())
     .fetch_optional(pool)
@@ -1340,14 +1341,14 @@ pub async fn settle_rips(pool: &PgPool) -> Result<Vec<RipJobId>, DbError> {
 /// Queue the import of every decrypted copy whose original is now an
 /// artifact.
 async fn queue_copies(tx: &mut Transaction<'_, Postgres>) -> Result<Vec<RipJobId>, DbError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT r.id, r.copy_staging_id, r.requested_by, r.decryption_json, r.outputs_json,
                 i.artifact_id, i.source_descriptor_json
          FROM rip_jobs r JOIN import_jobs i ON i.id = r.import_job_id
          WHERE r.state = 'registering' AND i.state = 'complete'
            AND r.copy_staging_id IS NOT NULL AND r.copy_import_job_id IS NULL AND {HAS_COPY}
          FOR UPDATE OF r"
-    ))
+    )))
     .fetch_all(&mut **tx)
     .await
     .map_err(DbError::Query)?;
@@ -1466,7 +1467,7 @@ async fn fail_copy(
 /// Complete every rip whose imports have all completed, recording a copy's
 /// lineage.
 async fn complete_rips(tx: &mut Transaction<'_, Postgres>) -> Result<Vec<RipJobId>, DbError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT r.id, r.started_at, i.artifact_id AS parent, c.artifact_id AS child,
                 c.source_descriptor_json -> 'lineage' AS lineage
          FROM rip_jobs r
@@ -1475,7 +1476,7 @@ async fn complete_rips(tx: &mut Transaction<'_, Postgres>) -> Result<Vec<RipJobI
          WHERE r.state = 'registering' AND i.state = 'complete'
            AND ((NOT {HAS_COPY}) OR c.state = 'complete')
          FOR UPDATE OF r"
-    ))
+    )))
     .fetch_all(&mut **tx)
     .await
     .map_err(DbError::Query)?;

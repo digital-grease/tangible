@@ -50,7 +50,7 @@ pub struct IntegrityRunnerSettings {
 impl Default for IntegrityRunnerSettings {
     fn default() -> Self {
         Self {
-            lease: Duration::from_secs(30 * 60),
+            lease: Duration::from_mins(30),
             poll_interval: Duration::from_secs(60),
             progress_every: Duration::from_secs(2),
             batch: 500,

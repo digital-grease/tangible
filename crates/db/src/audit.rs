@@ -89,7 +89,7 @@ pub async fn list_audit_events(
         Some(action) if action.ends_with('.') => (None, Some(like_prefix(action))),
         other => (other, None),
     };
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {COLUMNS} FROM audit_events
          WHERE ($1::uuid IS NULL OR id < $1)
            AND ($2::text IS NULL OR action = $2)
@@ -100,7 +100,7 @@ pub async fn list_audit_events(
            AND ($7::text IS NULL OR outcome = $7)
          ORDER BY id DESC
          LIMIT $8"
-    ))
+    )))
     .bind(before)
     .bind(action_exact)
     .bind(action_kind)
@@ -124,11 +124,13 @@ pub async fn get_audit_event(
     pool: &PgPool,
     id: uuid::Uuid,
 ) -> Result<Option<AuditEventRecord>, DbError> {
-    let row = sqlx::query(&format!("SELECT {COLUMNS} FROM audit_events WHERE id = $1"))
-        .bind(id)
-        .fetch_optional(pool)
-        .await
-        .map_err(DbError::Query)?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {COLUMNS} FROM audit_events WHERE id = $1"
+    )))
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(DbError::Query)?;
     row.as_ref().map(event_from_row).transpose()
 }
 

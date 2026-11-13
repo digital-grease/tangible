@@ -706,7 +706,7 @@ impl FreshDatabase {
             .expect("set TANGIBLE_TEST_DATABASE_URL to run integration tests");
         let name = format!("tangible_setup_{}", uuid::Uuid::now_v7().simple());
         let admin = sqlx::PgPool::connect(&admin_url).await.expect("connect");
-        sqlx::query(&format!("CREATE DATABASE {name}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
             .execute(&admin)
             .await
             .expect("create a scratch database (the test role needs CREATEDB)");
@@ -729,10 +729,10 @@ impl FreshDatabase {
         let admin = sqlx::PgPool::connect(&self.admin_url)
             .await
             .expect("connect");
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "DROP DATABASE IF EXISTS {} WITH (FORCE)",
             self.name
-        ))
+        )))
         .execute(&admin)
         .await
         .expect("drop the scratch database");

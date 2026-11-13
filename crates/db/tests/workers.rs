@@ -47,7 +47,9 @@ async fn worker_and_drive(pool: &PgPool) -> (WorkerId, DriveId) {
              VALUES ('{drive}', '{worker}', 'bench', '/dev/sr0')"
         ),
     ] {
-        pool.execute(statement.as_str()).await.expect("seed");
+        pool.execute(sqlx::AssertSqlSafe(statement.as_str()))
+            .await
+            .expect("seed");
     }
     (worker, drive)
 }

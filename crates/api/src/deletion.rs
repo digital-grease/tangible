@@ -43,7 +43,7 @@ use crate::state::ApiState;
 pub const DEFAULT_GRACE_DAYS: u32 = 7;
 
 /// How often the runner looks for artifacts due, when nothing prompts it.
-const INTERVAL: Duration = Duration::from_secs(15 * 60);
+const INTERVAL: Duration = Duration::from_mins(15);
 
 /// How many artifacts due are read at a time.
 const BATCH: i64 = 100;
@@ -51,7 +51,7 @@ const BATCH: i64 = 100;
 /// How long collection waits for a moment when nothing is ingesting before
 /// it waits for the ingests under way instead, holding new ones back: a
 /// library imported into without pause would otherwise never be collected.
-const MAX_DEFERRAL: Duration = Duration::from_secs(6 * 60 * 60);
+const MAX_DEFERRAL: Duration = Duration::from_hours(6);
 
 /// Refuse to use an artifact's bytes when it is deleted or, unless
 /// `pending_is_usable`, pending deletion.

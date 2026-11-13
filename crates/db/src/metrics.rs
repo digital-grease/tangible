@@ -64,7 +64,7 @@ const JOB_TABLES: [(&str, &str, &str); 8] = [
     ("upload", "uploads", "open"),
 ];
 
-async fn grouped(pool: &PgPool, sql: &str) -> Result<Vec<(String, i64)>, DbError> {
+async fn grouped(pool: &PgPool, sql: impl sqlx::SqlSafeStr) -> Result<Vec<(String, i64)>, DbError> {
     sqlx::query_as::<_, (String, i64)>(sql)
         .fetch_all(pool)
         .await
@@ -99,18 +99,14 @@ pub async fn snapshot(pool: &PgPool) -> Result<MetricsSnapshot, DbError> {
 
     for (kind, table, waiting) in JOB_TABLES {
         // The names are this file's own constants, never input.
-        for (state, count) in grouped(
-            pool,
-            &format!("SELECT state, count(*) FROM {table} GROUP BY state ORDER BY state"),
-        )
-        .await?
-        {
+        let by_state = format!("SELECT state, count(*) FROM {table} GROUP BY state ORDER BY state");
+        for (state, count) in grouped(pool, sqlx::AssertSqlSafe(by_state)).await? {
             snapshot.jobs.push((kind, state, count));
         }
-        let oldest: Option<f64> = sqlx::query_scalar(&format!(
+        let oldest: Option<f64> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT extract(epoch FROM now() - min(created_at))::float8 \
              FROM {table} WHERE state = '{waiting}'"
-        ))
+        )))
         .fetch_one(pool)
         .await
         .map_err(DbError::Query)?;

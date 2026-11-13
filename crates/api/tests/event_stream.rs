@@ -88,11 +88,11 @@ impl Server {
         let worker = WorkerId::generate();
         self.pool
             .execute(
-                format!(
+                sqlx::AssertSqlSafe(format!(
                     "INSERT INTO workers (id, name, software_version, protocol_version, credential_hash) \
                      VALUES ('{worker}', 'stream-{worker}', '0.1.0', '1alpha1', 'stream-{worker}')"
                 )
-                .as_str(),
+                .as_str()),
             )
             .await
             .expect("insert");

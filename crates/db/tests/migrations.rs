@@ -28,7 +28,7 @@ fn with_database(url: &str, name: &str) -> String {
 async fn an_empty_database_has_every_migration_pending_until_migrated() {
     let admin = Database::connect(&DbConfig::new(url())).await.unwrap();
     let name = format!("tangible_pending_{}", uuid::Uuid::now_v7().simple());
-    sqlx::query(&format!("CREATE DATABASE {name}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
         .execute(admin.pool())
         .await
         .unwrap();
@@ -46,8 +46,10 @@ async fn an_empty_database_has_every_migration_pending_until_migrated() {
     fresh.pool().close().await;
     // FORCE: a closed connection's server process may not have exited yet,
     // and a plain DROP then fails with "being accessed by other users".
-    sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)"))
-        .execute(admin.pool())
-        .await
-        .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE {name} WITH (FORCE)"
+    )))
+    .execute(admin.pool())
+    .await
+    .unwrap();
 }

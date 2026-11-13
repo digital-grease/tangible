@@ -65,10 +65,10 @@ pub async fn unfinished_jobs(pool: &PgPool) -> Result<Vec<(&'static str, String,
     let mut found = Vec::new();
     for (kind, table, states) in UNFINISHED {
         // The names and states are this file's own constants, never input.
-        let rows: Vec<(String, i64)> = sqlx::query_as(&format!(
+        let rows: Vec<(String, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT state, count(*) FROM {table} WHERE state IN ({states}) \
              GROUP BY state ORDER BY state"
-        ))
+        )))
         .fetch_all(pool)
         .await
         .map_err(DbError::Query)?;

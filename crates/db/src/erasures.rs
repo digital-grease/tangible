@@ -162,10 +162,10 @@ async fn erasure_in(
     tx: &mut Transaction<'_, Postgres>,
     id: ErasureId,
 ) -> Result<Option<ErasureRecord>, DbError> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {ERASURE_COLUMNS} FROM media_erasures e JOIN drives d ON d.id = e.drive_id
          WHERE e.id = $1"
-    ))
+    )))
     .bind(id.as_uuid())
     .fetch_optional(&mut **tx)
     .await
@@ -213,10 +213,10 @@ fn drive_from_row(row: &sqlx::postgres::PgRow) -> Result<DriveRecord, DbError> {
 ///
 /// [`DbError::Query`] on a database failure.
 pub async fn list_drives(pool: &PgPool) -> Result<Vec<DriveRecord>, DbError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {DRIVE_COLUMNS} FROM drives d JOIN workers w ON w.id = d.worker_id
          ORDER BY w.name, d.configured_name, d.id"
-    ))
+    )))
     .fetch_all(pool)
     .await
     .map_err(DbError::Query)?;
@@ -229,10 +229,10 @@ pub async fn list_drives(pool: &PgPool) -> Result<Vec<DriveRecord>, DbError> {
 ///
 /// [`DbError::Query`] on a database failure.
 pub async fn get_drive(pool: &PgPool, id: DriveId) -> Result<Option<DriveRecord>, DbError> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {DRIVE_COLUMNS} FROM drives d JOIN workers w ON w.id = d.worker_id
          WHERE d.id = $1"
-    ))
+    )))
     .bind(id.as_uuid())
     .fetch_optional(pool)
     .await
@@ -304,10 +304,10 @@ pub async fn request_erasure(
 ///
 /// [`DbError::Query`] on a database failure.
 pub async fn list_erasures(pool: &PgPool, limit: i64) -> Result<Vec<ErasureRecord>, DbError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {ERASURE_COLUMNS} FROM media_erasures e JOIN drives d ON d.id = e.drive_id
          ORDER BY e.created_at DESC, e.id DESC LIMIT $1"
-    ))
+    )))
     .bind(limit)
     .fetch_all(pool)
     .await

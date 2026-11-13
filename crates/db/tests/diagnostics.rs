@@ -29,7 +29,7 @@ async fn workers_come_with_their_engines_and_versions() {
     let pool = pool().await;
     let id = uuid::Uuid::now_v7();
     let version = format!("diag-{}", id.simple());
-    pool.execute(
+    pool.execute(sqlx::AssertSqlSafe(
         format!(
             "INSERT INTO workers (id, name, status, software_version, protocol_version,
                                   credential_hash, capabilities_json, last_seen_at)
@@ -37,7 +37,7 @@ async fn workers_come_with_their_engines_and_versions() {
                      '{{\"engines\": [{{\"name\": \"xorriso\", \"version\": \"1.5.6\"}}]}}', now())"
         )
         .as_str(),
-    )
+    ))
     .await
     .expect("insert worker");
 
@@ -61,13 +61,13 @@ async fn a_worker_that_reported_no_engines_has_an_empty_list() {
     let pool = pool().await;
     let id = uuid::Uuid::now_v7();
     let version = format!("diag-{}", id.simple());
-    pool.execute(
+    pool.execute(sqlx::AssertSqlSafe(
         format!(
             "INSERT INTO workers (id, name, software_version, protocol_version, credential_hash)
              VALUES ('{id}', 'diag-{id}', '{version}', '1alpha1', 'hash-{id}')"
         )
         .as_str(),
-    )
+    ))
     .await
     .expect("insert worker");
 
@@ -89,7 +89,7 @@ async fn failures_are_codes_and_times_newest_first() {
     let newer = format!("DIAG_{tag}_NEWER_FAILED");
     // In the future, so nothing another test writes meanwhile is newer.
     for (code, offset) in [(&older, "1 hour"), (&newer, "2 hours")] {
-        pool.execute(
+        pool.execute(sqlx::AssertSqlSafe(
             format!(
                 "INSERT INTO import_jobs (id, source_kind, source_descriptor_json, state,
                                           error_code, error_detail, created_by, updated_at)
@@ -98,15 +98,15 @@ async fn failures_are_codes_and_times_newest_first() {
                 uuid::Uuid::now_v7()
             )
             .as_str(),
-        )
+        ))
         .await
         .expect("insert failed import");
     }
 
     let failures = recent_failures(&pool, 1000).await.expect("recent failures");
-    pool.execute(
+    pool.execute(sqlx::AssertSqlSafe(
         format!("DELETE FROM import_jobs WHERE error_code IN ('{older}', '{newer}')").as_str(),
-    )
+    ))
     .await
     .expect("remove the test's imports");
 

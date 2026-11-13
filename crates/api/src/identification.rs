@@ -46,9 +46,9 @@ impl Default for IdentificationSettings {
     fn default() -> Self {
         Self {
             owner: "tangible-server".to_owned(),
-            lease: Duration::from_secs(60 * 60),
+            lease: Duration::from_hours(1),
             poll_interval: Duration::from_secs(60),
-            retry_after: Duration::from_secs(60 * 60),
+            retry_after: Duration::from_hours(1),
             max_attempts: 3,
         }
     }

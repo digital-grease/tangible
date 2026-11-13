@@ -250,9 +250,9 @@ pub async fn complete_upload(
         return Ok(Err(UploadOutcome::NotFound));
     };
     if upload.state == "completed" {
-        let row = sqlx::query(&format!(
+        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {IMPORT_JOB_COLUMNS} FROM import_jobs WHERE id = $1"
-        ))
+        )))
         .bind(id)
         .fetch_optional(pool)
         .await
@@ -304,13 +304,13 @@ pub async fn complete_upload(
         return Ok(Err(UploadOutcome::Incomplete { missing }));
     }
 
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "INSERT INTO import_jobs
              (id, source_kind, source_descriptor_json, state, bytes_expected,
               bytes_received, created_by)
          VALUES ($1, 'upload', $2, 'staged', $3, $3, $4)
          RETURNING {IMPORT_JOB_COLUMNS}"
-    ))
+    )))
     .bind(id)
     .bind(descriptor)
     .bind(to_i64(upload.total_bytes))

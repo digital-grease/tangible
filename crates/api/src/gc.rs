@@ -339,7 +339,7 @@ mod tests {
     use super::*;
     use crate::import::PromotedComponent;
 
-    const DAY: Duration = Duration::from_secs(86_400);
+    const DAY: Duration = Duration::from_hours(24);
 
     fn digest(n: u8) -> Sha256Digest {
         Sha256Digest::from_bytes([n; 32])

@@ -49,7 +49,9 @@ async fn worker_and_drive(pool: &PgPool) -> (WorkerId, DriveId) {
              VALUES ('{drive}', '{worker}', 'd1', '/dev/sr0')"
         ),
     ] {
-        pool.execute(statement.as_str()).await.expect("seed");
+        pool.execute(sqlx::AssertSqlSafe(statement.as_str()))
+            .await
+            .expect("seed");
     }
     (worker, drive)
 }
@@ -481,7 +483,7 @@ async fn a_rip_ends_with_its_import() {
             record.staging_id
         ),
     ] {
-        pool.execute(statement.as_str())
+        pool.execute(sqlx::AssertSqlSafe(statement.as_str()))
             .await
             .expect("finish the import");
     }
@@ -493,14 +495,14 @@ async fn a_rip_ends_with_its_import() {
         .await
         .unwrap()
         .unwrap();
-    pool.execute(
+    pool.execute(sqlx::AssertSqlSafe(
         format!(
             "UPDATE import_jobs SET state = 'failed_terminal', error_code = 'IMPORT_READ_FAILED', \
              completed_at = now() WHERE id = '{}'",
             failing.staging_id
         )
         .as_str(),
-    )
+    ))
     .await
     .expect("fail the import");
 

@@ -1475,7 +1475,7 @@ async fn burn_job_by_idempotency_key(
     key: &str,
 ) -> Result<Option<BurnJobRecord>, DbError> {
     let sql = format!("{BURN_JOB_SELECT} WHERE j.idempotency_key = $1");
-    let row = sqlx::query(&sql)
+    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(key)
         .fetch_optional(pool)
         .await
@@ -1539,7 +1539,7 @@ pub async fn list_burn_jobs(
          LIMIT $5"
     );
 
-    let rows = sqlx::query(&sql)
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(filter.state.map(|state| state.as_str()))
         .bind(filter.artifact_id)
         .bind(filter.disc_id)
@@ -1559,7 +1559,7 @@ pub async fn list_burn_jobs(
 /// [`DbError::Query`] on a database failure.
 pub async fn get_burn_job(pool: &PgPool, id: BurnJobId) -> Result<Option<BurnJobRecord>, DbError> {
     let sql = format!("{BURN_JOB_SELECT} WHERE j.id = $1");
-    let row = sqlx::query(&sql)
+    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(id.as_uuid())
         .fetch_optional(pool)
         .await
@@ -1909,7 +1909,7 @@ pub async fn list_burn_attempts(
     burn_job_id: BurnJobId,
 ) -> Result<Vec<BurnAttemptRecord>, DbError> {
     let sql = format!("{BURN_ATTEMPT_SELECT} WHERE a.burn_job_id = $1 ORDER BY a.attempt_number");
-    let rows = sqlx::query(&sql)
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(burn_job_id.as_uuid())
         .fetch_all(pool)
         .await
@@ -1927,7 +1927,7 @@ pub async fn get_burn_attempt(
     attempt_id: BurnAttemptId,
 ) -> Result<Option<BurnAttemptRecord>, DbError> {
     let sql = format!("{BURN_ATTEMPT_SELECT} WHERE a.id = $1");
-    let row = sqlx::query(&sql)
+    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(attempt_id.as_uuid())
         .fetch_optional(pool)
         .await
@@ -2487,13 +2487,13 @@ pub async fn create_import_job(
     // RETURNING rather than an insert followed by a select: a select in the
     // same statement would read the snapshot from before the insert and find
     // nothing.
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "INSERT INTO import_jobs
              (id, source_kind, source_descriptor_json, state, bytes_expected,
               bytes_received, created_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING {IMPORT_JOB_COLUMNS}"
-    ))
+    )))
     .bind(new.id.as_uuid())
     .bind(new.source_kind)
     .bind(new.source_descriptor)
@@ -2521,13 +2521,13 @@ pub async fn create_audited_import_job(
     metadata: &serde_json::Value,
 ) -> Result<ImportJobRecord, DbError> {
     let mut tx = pool.begin().await.map_err(DbError::Query)?;
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "INSERT INTO import_jobs
              (id, source_kind, source_descriptor_json, state, bytes_expected,
               bytes_received, created_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING {IMPORT_JOB_COLUMNS}"
-    ))
+    )))
     .bind(new.id.as_uuid())
     .bind(new.source_kind)
     .bind(new.source_descriptor)
@@ -2593,9 +2593,9 @@ pub async fn get_import_job(
     pool: &PgPool,
     id: ImportJobId,
 ) -> Result<Option<ImportJobRecord>, DbError> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {IMPORT_JOB_COLUMNS} FROM import_jobs WHERE id = $1"
-    ))
+    )))
     .bind(id.as_uuid())
     .fetch_optional(pool)
     .await
@@ -2617,13 +2617,13 @@ pub async fn list_import_jobs(
     limit: i64,
     before: Option<uuid::Uuid>,
 ) -> Result<Vec<ImportJobRecord>, DbError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {IMPORT_JOB_COLUMNS} FROM import_jobs
          WHERE ($1::text IS NULL OR state = $1)
            AND ($2::uuid IS NULL OR id < $2)
          ORDER BY id DESC
          LIMIT $3"
-    ))
+    )))
     .bind(state.map(|state| state.as_str()))
     .bind(before)
     .bind(limit)
@@ -2682,7 +2682,7 @@ pub async fn claim_next_import_job(
         // started. A job that reached hashing and whose lease then lapsed is a
         // process that died mid-import, and picking it up again from its
         // checkpoint is exactly what the lease exists to allow.
-        let row = sqlx::query(&format!(
+        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT id, interrupted_runs,
                     lease_owner IS NOT NULL
                         AND lease_owner NOT IN {IMPORT_WAIT_OWNERS} AS interrupted
@@ -2693,7 +2693,7 @@ pub async fn claim_next_import_job(
              ORDER BY created_at
              FOR UPDATE SKIP LOCKED
              LIMIT 1"
-        ))
+        )))
         .fetch_optional(&mut *tx)
         .await
         .map_err(DbError::Query)?;
@@ -2759,9 +2759,9 @@ pub async fn claim_next_import_job(
     .await
     .map_err(DbError::Query)?;
 
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {IMPORT_JOB_COLUMNS} FROM import_jobs WHERE id = $1"
-    ))
+    )))
     .bind(id)
     .fetch_one(&mut *tx)
     .await
@@ -3225,7 +3225,7 @@ pub async fn list_physical_copies(
     limit: i64,
     before: Option<uuid::Uuid>,
 ) -> Result<Vec<PhysicalCopyRecord>, DbError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "{PHYSICAL_COPY_SELECT}
          WHERE ($1::uuid IS NULL OR c.disc_id = $1)
            AND ($2::uuid IS NULL OR c.artifact_id = $2)
@@ -3233,7 +3233,7 @@ pub async fn list_physical_copies(
            AND ($4::uuid IS NULL OR c.id < $4)
          ORDER BY c.id DESC
          LIMIT $5"
-    ))
+    )))
     .bind(filter.disc_id)
     .bind(filter.artifact_id)
     .bind(filter.status.map(|status| status.as_str()))
@@ -3255,11 +3255,13 @@ pub async fn get_physical_copy(
     pool: &PgPool,
     id: PhysicalCopyId,
 ) -> Result<Option<PhysicalCopyRecord>, DbError> {
-    let row = sqlx::query(&format!("{PHYSICAL_COPY_SELECT} WHERE c.id = $1"))
-        .bind(id.as_uuid())
-        .fetch_optional(pool)
-        .await
-        .map_err(DbError::Query)?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{PHYSICAL_COPY_SELECT} WHERE c.id = $1"
+    )))
+    .bind(id.as_uuid())
+    .fetch_optional(pool)
+    .await
+    .map_err(DbError::Query)?;
     row.as_ref().map(physical_copy_from_row).transpose()
 }
 
@@ -3688,11 +3690,13 @@ pub(crate) fn title_from_row(row: &sqlx::postgres::PgRow) -> Result<TitleRecord,
 ///
 /// [`DbError::Query`] on a database failure.
 pub async fn get_title(pool: &PgPool, id: TitleId) -> Result<Option<TitleRecord>, DbError> {
-    let row = sqlx::query(&format!("{TITLE_SELECT} WHERE t.id = $1"))
-        .bind(id.as_uuid())
-        .fetch_optional(pool)
-        .await
-        .map_err(DbError::Query)?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{TITLE_SELECT} WHERE t.id = $1"
+    )))
+    .bind(id.as_uuid())
+    .fetch_optional(pool)
+    .await
+    .map_err(DbError::Query)?;
     row.as_ref().map(title_from_row).transpose()
 }
 
@@ -3710,13 +3714,13 @@ pub async fn list_titles(
     limit: i64,
     after: Option<&str>,
 ) -> Result<Vec<TitleRecord>, DbError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "{TITLE_SELECT}
          WHERE ($1::text IS NULL OR t.display_title ILIKE '%' || $1 || '%')
            AND ($2::text IS NULL OR (t.sort_title, t.id::text) > ($2, ''))
          ORDER BY t.sort_title, t.id
          LIMIT $3"
-    ))
+    )))
     .bind(search)
     .bind(after)
     .bind(limit)
@@ -3817,11 +3821,13 @@ pub(crate) fn edition_from_row(row: &sqlx::postgres::PgRow) -> Result<EditionRec
 ///
 /// [`DbError::Query`] on a database failure.
 pub async fn get_edition(pool: &PgPool, id: EditionId) -> Result<Option<EditionRecord>, DbError> {
-    let row = sqlx::query(&format!("{EDITION_SELECT} WHERE e.id = $1"))
-        .bind(id.as_uuid())
-        .fetch_optional(pool)
-        .await
-        .map_err(DbError::Query)?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{EDITION_SELECT} WHERE e.id = $1"
+    )))
+    .bind(id.as_uuid())
+    .fetch_optional(pool)
+    .await
+    .map_err(DbError::Query)?;
     row.as_ref().map(edition_from_row).transpose()
 }
 
@@ -3834,9 +3840,9 @@ pub async fn list_editions(
     pool: &PgPool,
     title_id: TitleId,
 ) -> Result<Vec<EditionRecord>, DbError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "{EDITION_SELECT} WHERE e.title_id = $1 ORDER BY e.display_name, e.id"
-    ))
+    )))
     .bind(title_id.as_uuid())
     .fetch_all(pool)
     .await
@@ -3922,11 +3928,13 @@ pub(crate) fn disc_set_from_row(row: &sqlx::postgres::PgRow) -> Result<DiscSetRe
 ///
 /// [`DbError::Query`] on a database failure.
 pub async fn get_disc_set(pool: &PgPool, id: DiscSetId) -> Result<Option<DiscSetRecord>, DbError> {
-    let row = sqlx::query(&format!("{DISC_SET_SELECT} WHERE s.id = $1"))
-        .bind(id.as_uuid())
-        .fetch_optional(pool)
-        .await
-        .map_err(DbError::Query)?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{DISC_SET_SELECT} WHERE s.id = $1"
+    )))
+    .bind(id.as_uuid())
+    .fetch_optional(pool)
+    .await
+    .map_err(DbError::Query)?;
     row.as_ref().map(disc_set_from_row).transpose()
 }
 
@@ -3939,9 +3947,9 @@ pub async fn list_disc_sets(
     pool: &PgPool,
     edition_id: EditionId,
 ) -> Result<Vec<DiscSetRecord>, DbError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "{DISC_SET_SELECT} WHERE s.edition_id = $1 ORDER BY s.name, s.id"
-    ))
+    )))
     .bind(edition_id.as_uuid())
     .fetch_all(pool)
     .await
@@ -4044,11 +4052,13 @@ pub(crate) fn disc_from_row(row: &sqlx::postgres::PgRow) -> Result<DiscRecord, D
 ///
 /// [`DbError::Query`] on a database failure.
 pub async fn get_disc(pool: &PgPool, id: DiscId) -> Result<Option<DiscRecord>, DbError> {
-    let row = sqlx::query(&format!("{DISC_SELECT} WHERE d.id = $1"))
-        .bind(id.as_uuid())
-        .fetch_optional(pool)
-        .await
-        .map_err(DbError::Query)?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{DISC_SELECT} WHERE d.id = $1"
+    )))
+    .bind(id.as_uuid())
+    .fetch_optional(pool)
+    .await
+    .map_err(DbError::Query)?;
     row.as_ref().map(disc_from_row).transpose()
 }
 
@@ -4058,9 +4068,9 @@ pub async fn get_disc(pool: &PgPool, id: DiscId) -> Result<Option<DiscRecord>, D
 ///
 /// [`DbError::Query`] on a database failure.
 pub async fn list_discs(pool: &PgPool, disc_set_id: DiscSetId) -> Result<Vec<DiscRecord>, DbError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "{DISC_SELECT} WHERE d.disc_set_id = $1 ORDER BY d.sequence_number"
-    ))
+    )))
     .bind(disc_set_id.as_uuid())
     .fetch_all(pool)
     .await

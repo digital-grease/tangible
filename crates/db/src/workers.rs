@@ -106,12 +106,12 @@ pub async fn list_workers(
     limit: i64,
     after: Option<uuid::Uuid>,
 ) -> Result<Vec<WorkerRecord>, DbError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {WORKER_COLUMNS} FROM workers w
          WHERE ($1::uuid IS NULL OR w.id > $1)
          ORDER BY w.id
          LIMIT $2"
-    ))
+    )))
     .bind(after)
     .bind(limit)
     .fetch_all(pool)
@@ -126,9 +126,9 @@ pub async fn list_workers(
 ///
 /// [`DbError::Query`] on a database failure.
 pub async fn get_worker(pool: &PgPool, id: WorkerId) -> Result<Option<WorkerRecord>, DbError> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {WORKER_COLUMNS} FROM workers w WHERE w.id = $1"
-    ))
+    )))
     .bind(id.as_uuid())
     .fetch_optional(pool)
     .await
@@ -140,9 +140,9 @@ async fn read_in(
     tx: &mut Transaction<'_, Postgres>,
     id: WorkerId,
 ) -> Result<Option<WorkerRecord>, DbError> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {WORKER_COLUMNS} FROM workers w WHERE w.id = $1"
-    ))
+    )))
     .bind(id.as_uuid())
     .fetch_optional(&mut **tx)
     .await
@@ -172,7 +172,7 @@ async fn change(
     actor: &str,
     action: &str,
     allowed: fn(&str) -> Option<bool>,
-    update: &str,
+    update: &'static str,
 ) -> Result<WorkerChange, DbError> {
     let mut tx = pool.begin().await.map_err(DbError::Query)?;
     let Some(status) = lock_status(&mut tx, id).await? else {

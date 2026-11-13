@@ -97,7 +97,7 @@ pub struct ImportRunnerSettings {
 impl Default for ImportRunnerSettings {
     fn default() -> Self {
         Self {
-            lease: Duration::from_secs(30 * 60),
+            lease: Duration::from_mins(30),
             poll_interval: Duration::from_secs(2),
             retry_backoff: Duration::from_secs(30),
             owner: "tangible-server".to_owned(),

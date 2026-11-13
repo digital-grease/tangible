@@ -200,11 +200,11 @@ pub async fn request_derivation(
 ) -> Result<DerivationRequestOutcome, DbError> {
     let mut tx = pool.begin().await.map_err(DbError::Query)?;
 
-    let existing = sqlx::query(&format!(
+    let existing = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {DERIVATION_COLUMNS} FROM derivations
          WHERE parent_artifact_id = $1 AND command_fingerprint = $2 AND NOT superseded
          LIMIT 1"
-    ))
+    )))
     .bind(request.parent_artifact_id.as_uuid())
     .bind(request.command_fingerprint)
     .fetch_optional(&mut *tx)
@@ -216,7 +216,7 @@ pub async fn request_derivation(
     } else {
         // The partial unique index decides the race between two requests:
         // whichever inserts first wins, and the other finds its job.
-        let inserted = sqlx::query(&format!(
+        let inserted = sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO derivation_jobs
                  (id, parent_artifact_id, transformation, options_json, tool_name,
                   tool_version, command_fingerprint, created_by)
@@ -225,7 +225,7 @@ pub async fn request_derivation(
                  WHERE state IN ('queued', 'running', 'failed_retryable')
                  DO NOTHING
              RETURNING {JOB_COLUMNS}"
-        ))
+        )))
         .bind(DerivationJobId::generate().as_uuid())
         .bind(request.parent_artifact_id.as_uuid())
         .bind(request.transformation.as_str())
@@ -240,11 +240,11 @@ pub async fn request_derivation(
         if let Some(row) = inserted {
             DerivationRequestOutcome::Queued(job_from_row(&row)?)
         } else {
-            let row = sqlx::query(&format!(
+            let row = sqlx::query(sqlx::AssertSqlSafe(format!(
                 "SELECT {JOB_COLUMNS} FROM derivation_jobs
                  WHERE parent_artifact_id = $1 AND command_fingerprint = $2
                    AND state IN ('queued', 'running', 'failed_retryable')"
-            ))
+            )))
             .bind(request.parent_artifact_id.as_uuid())
             .bind(request.command_fingerprint)
             .fetch_one(&mut *tx)
@@ -291,9 +291,9 @@ pub async fn get_derivation_job(
     pool: &PgPool,
     id: DerivationJobId,
 ) -> Result<Option<DerivationJobRecord>, DbError> {
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {JOB_COLUMNS} FROM derivation_jobs WHERE id = $1"
-    ))
+    )))
     .bind(id.as_uuid())
     .fetch_optional(pool)
     .await
@@ -312,12 +312,12 @@ pub async fn derivation_jobs_for(
     pool: &PgPool,
     parent: ArtifactId,
 ) -> Result<Vec<DerivationJobRecord>, DbError> {
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {JOB_COLUMNS} FROM derivation_jobs
          WHERE parent_artifact_id = $1
          ORDER BY created_at DESC
          LIMIT 100"
-    ))
+    )))
     .bind(parent.as_uuid())
     .fetch_all(pool)
     .await
@@ -343,11 +343,11 @@ pub struct Lineage {
 ///
 /// [`DbError::Query`] on a database failure.
 pub async fn lineage(pool: &PgPool, artifact: ArtifactId) -> Result<Lineage, DbError> {
-    let derived_from = sqlx::query(&format!(
+    let derived_from = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {DERIVATION_COLUMNS} FROM derivations
          WHERE child_artifact_id = $1
          ORDER BY started_at DESC LIMIT 1"
-    ))
+    )))
     .bind(artifact.as_uuid())
     .fetch_optional(pool)
     .await
@@ -355,11 +355,11 @@ pub async fn lineage(pool: &PgPool, artifact: ArtifactId) -> Result<Lineage, DbE
     .as_ref()
     .map(derivation_from_row)
     .transpose()?;
-    let derivatives = sqlx::query(&format!(
+    let derivatives = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {DERIVATION_COLUMNS} FROM derivations
          WHERE parent_artifact_id = $1 AND NOT superseded
          ORDER BY started_at DESC LIMIT 100"
-    ))
+    )))
     .bind(artifact.as_uuid())
     .fetch_all(pool)
     .await
@@ -404,7 +404,7 @@ pub async fn claim_next_derivation_job(
         return Ok(None);
     };
     let id: uuid::Uuid = row.try_get("id").map_err(DbError::Query)?;
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE derivation_jobs
          SET state = 'running', attempts = attempts + 1,
              started_at = COALESCE(started_at, now()),
@@ -413,7 +413,7 @@ pub async fn claim_next_derivation_job(
              error_code = NULL, error_detail = NULL
          WHERE id = $1
          RETURNING {JOB_COLUMNS}"
-    ))
+    )))
     .bind(id)
     .bind(lease_owner)
     .bind(lease_seconds(lease_duration_seconds))
@@ -450,9 +450,9 @@ pub async fn complete_derivation_job(
     completed: CompletedDerivation,
 ) -> Result<bool, DbError> {
     let mut tx = pool.begin().await.map_err(DbError::Query)?;
-    let Some(job) = sqlx::query(&format!(
+    let Some(job) = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {JOB_COLUMNS} FROM derivation_jobs WHERE id = $1 FOR UPDATE"
-    ))
+    )))
     .bind(completed.job_id.as_uuid())
     .fetch_optional(&mut *tx)
     .await
@@ -607,9 +607,9 @@ pub async fn cancel_derivation_job(
     actor: &str,
 ) -> Result<CancelOutcome, DbError> {
     let mut tx = pool.begin().await.map_err(DbError::Query)?;
-    let Some(job) = sqlx::query(&format!(
+    let Some(job) = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {JOB_COLUMNS} FROM derivation_jobs WHERE id = $1 FOR UPDATE"
-    ))
+    )))
     .bind(id.as_uuid())
     .fetch_optional(&mut *tx)
     .await
@@ -625,13 +625,13 @@ pub async fn cancel_derivation_job(
         tx.rollback().await.map_err(DbError::Query)?;
         return Ok(CancelOutcome::Refused(job.state));
     }
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE derivation_jobs
          SET state = 'canceled', completed_at = now(),
              lease_owner = NULL, lease_expires_at = NULL
          WHERE id = $1
          RETURNING {JOB_COLUMNS}"
-    ))
+    )))
     .bind(id.as_uuid())
     .fetch_one(&mut *tx)
     .await

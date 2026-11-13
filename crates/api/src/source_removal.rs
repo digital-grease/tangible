@@ -76,11 +76,11 @@ impl Default for SourceRemovalSettings {
     fn default() -> Self {
         Self {
             owner: "tangible-server".to_owned(),
-            lease: Duration::from_secs(5 * 60),
+            lease: Duration::from_mins(5),
             poll_interval: Duration::from_secs(60),
             check_poll: Duration::from_secs(15),
             first_retry: Duration::from_secs(60),
-            max_retry: Duration::from_secs(60 * 60),
+            max_retry: Duration::from_hours(1),
         }
     }
 }

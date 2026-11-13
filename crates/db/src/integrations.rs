@@ -116,9 +116,9 @@ fn from_row(row: &sqlx::postgres::PgRow) -> Result<IntegrationRecord, DbError> {
 ///
 /// [`DbError::Query`] on a database failure.
 pub async fn list_integrations(pool: &PgPool) -> Result<Vec<IntegrationRecord>, DbError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {COLUMNS} FROM integrations i ORDER BY i.name"
-    ))
+    )))
     .fetch_all(pool)
     .await
     .map_err(DbError::Query)?;
@@ -134,9 +134,9 @@ pub async fn get_integration(
     pool: &PgPool,
     id: uuid::Uuid,
 ) -> Result<Option<IntegrationRecord>, DbError> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {COLUMNS} FROM integrations i WHERE i.id = $1"
-    ))
+    )))
     .bind(id)
     .fetch_optional(pool)
     .await
@@ -150,9 +150,9 @@ pub async fn get_integration(
 ///
 /// [`DbError::Query`] on a database failure.
 pub async fn romm_api_integration(pool: &PgPool) -> Result<Option<IntegrationRecord>, DbError> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {COLUMNS} FROM integrations i WHERE i.kind = 'romm_api'"
-    ))
+    )))
     .fetch_optional(pool)
     .await
     .map_err(DbError::Query)?;

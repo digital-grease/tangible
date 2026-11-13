@@ -324,7 +324,7 @@ impl CdrdaoEngine {
 /// An 80 minute disc at single speed is 80 minutes, and a disc that needs
 /// retries is slower still. Unlike a write, a read that is stopped ruins
 /// nothing, so it can have a limit at all.
-const READBACK_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
+const READBACK_TIMEOUT: Duration = Duration::from_hours(2);
 
 impl CdrdaoEngine {
     /// Read a disc of tracks back and check each track.

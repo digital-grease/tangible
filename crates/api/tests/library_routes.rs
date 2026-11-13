@@ -763,7 +763,7 @@ async fn catalogued() -> (TempDir, axum::Router, String, String, String) {
             ids[0], chain[3]
         ),
     ] {
-        sqlx::query(&statement)
+        sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
             .execute(database.pool())
             .await
             .unwrap_or_else(|error| panic!("{statement}: {error}"));

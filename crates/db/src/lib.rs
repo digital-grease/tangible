@@ -6,6 +6,12 @@
 //! In place: the pool, the migration runner, the readiness probe, and the
 //! initial schema, with every constraint covered by an integration test that
 //! asserts it actually rejects. Typed repositories follow in epic E2.
+//!
+//! A query's text is a literal, or is put together from this crate's own
+//! constants (column lists, table names, fixed state lists) and nothing
+//! else; every value a caller or a client supplies goes through `.bind()`.
+//! sqlx takes text it cannot see is literal only through
+//! `sqlx::AssertSqlSafe`, and each use here is that promise: keep it.
 
 pub mod accounts;
 pub mod audit;

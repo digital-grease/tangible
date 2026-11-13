@@ -52,7 +52,7 @@ use crate::transport::{PlainHttp, ServerUrl, ServerUrlError, Transport};
 use crate::worker::{EventBuffer, RecoveryRecord, RecoveryStore, WorkerStage, plan_for};
 
 /// How long after a failed credential rotation the worker tries again.
-const ROTATION_RETRY_INTERVAL: Duration = Duration::from_secs(10 * 60);
+const ROTATION_RETRY_INTERVAL: Duration = Duration::from_mins(10);
 
 /// The longest pause between reports of how an attempt ended, while the
 /// server cannot take one.
@@ -131,7 +131,7 @@ impl WorkerSettings {
             poll_interval: Duration::from_secs(5),
             // Long enough that somebody can walk to the machine, short enough
             // that a forgotten job does not hold a drive overnight.
-            media_wait: Duration::from_secs(30 * 60),
+            media_wait: Duration::from_mins(30),
             media_poll_interval: Duration::from_secs(5),
             report_interval: Duration::from_secs(5),
             decryption: None,

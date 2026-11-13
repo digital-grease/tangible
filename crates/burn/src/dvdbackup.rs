@@ -50,12 +50,12 @@ const MIRROR_NAME: &str = "disc";
 /// How long authenticating may take. libdvdread works out every title's
 /// key, which it warns "can take a _long_ time"; the bench disc took
 /// seconds, a damaged one may take minutes.
-const AUTHENTICATE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const AUTHENTICATE_TIMEOUT: Duration = Duration::from_mins(15);
 
 /// How long a decrypted copy may take. A dual-layer disc over USB copied at
 /// about 2 MB/s on the bench, which is an hour; a disc that needs retries is
 /// slower still.
-const MIRROR_TIMEOUT: Duration = Duration::from_secs(4 * 60 * 60);
+const MIRROR_TIMEOUT: Duration = Duration::from_hours(4);
 
 /// How often a copy's progress is measured.
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(2);

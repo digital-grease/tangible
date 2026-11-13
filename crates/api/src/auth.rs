@@ -70,7 +70,7 @@ const SESSION_PREFIX: &str = "tgs_";
 const LOGIN_FAILURES_ALLOWED: u32 = 5;
 
 /// How long failed sign-ins are remembered.
-const LOGIN_WINDOW: Duration = Duration::from_secs(15 * 60);
+const LOGIN_WINDOW: Duration = Duration::from_mins(15);
 
 /// Usernames tracked before old entries are swept.
 ///
@@ -129,8 +129,8 @@ impl Default for AuthSettings {
     fn default() -> Self {
         Self {
             secure_cookie: true,
-            idle_timeout: Duration::from_secs(12 * 60 * 60),
-            absolute_timeout: Duration::from_secs(7 * 24 * 60 * 60),
+            idle_timeout: Duration::from_hours(12),
+            absolute_timeout: Duration::from_hours(168),
             password_sign_in: PasswordSignIn::All,
         }
     }
@@ -1078,7 +1078,7 @@ pub const ENROLLMENT_FAILURES_PER_NAME: u32 = 5;
 pub const ENROLLMENT_FAILURES_IN_ALL: u32 = 60;
 
 /// How long rejected enrollment tokens are remembered.
-pub const ENROLLMENT_WINDOW: Duration = Duration::from_secs(15 * 60);
+pub const ENROLLMENT_WINDOW: Duration = Duration::from_mins(15);
 
 /// Limits worker enrollment (AGENTS.md 16), which is unauthenticated: the
 /// one-use token is the credential. Rejected tokens are counted per worker
@@ -1127,7 +1127,7 @@ impl EnrollmentLimiter {
 pub const URL_IMPORTS_ALLOWED: u32 = 30;
 
 /// The window URL imports are counted over.
-pub const URL_IMPORT_WINDOW: Duration = Duration::from_secs(60 * 60);
+pub const URL_IMPORT_WINDOW: Duration = Duration::from_hours(1);
 
 /// Counts an action per account over a fixed window, such as URL imports.
 ///

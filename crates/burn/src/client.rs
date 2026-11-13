@@ -42,7 +42,7 @@ use crate::worker::{RecoveryRecord, WorkerEvent, WorkerStage};
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long a component download may take.
-const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_hours(6);
 
 /// Protocol version this client speaks.
 pub const PROTOCOL_VERSION: &str = "1alpha1";

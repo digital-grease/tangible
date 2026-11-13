@@ -66,10 +66,10 @@ pub async fn catalogue_marks(pool: &PgPool) -> Result<CatalogueMarks, DbError> {
     .fetch_all(&mut *tx)
     .await
     .map_err(get)?;
-    let import_checkpoints: Vec<Value> = sqlx::query_scalar(&format!(
+    let import_checkpoints: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT checkpoint_json FROM import_jobs
          WHERE checkpoint_json IS NOT NULL AND state NOT IN {ENDED_IMPORT_STATES}"
-    ))
+    )))
     .fetch_all(&mut *tx)
     .await
     .map_err(get)?;

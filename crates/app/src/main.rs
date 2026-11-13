@@ -1728,7 +1728,7 @@ mod tests {
         assert_eq!(scrub_interval(0), None);
         assert_eq!(
             scrub_interval(7),
-            Some(std::time::Duration::from_secs(7 * 86_400))
+            Some(std::time::Duration::from_hours(168))
         );
         let cli = Cli::try_parse_from([
             "tangible",

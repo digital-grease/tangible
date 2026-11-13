@@ -75,7 +75,7 @@ const BLOCK_BYTES: u64 = 2048;
 /// Generous: a quarter of a gigabyte at single speed from a disc that needs
 /// retries is several minutes. Unlike a write, a read that is stopped ruins
 /// nothing, so it can have a limit at all.
-const VERIFY_CHUNK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const VERIFY_CHUNK_TIMEOUT: Duration = Duration::from_mins(30);
 
 /// How much tool output is retained.
 ///

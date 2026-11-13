@@ -71,7 +71,7 @@ const OUTPUT_LIMIT: usize = 64 * 1024;
 
 /// Longest a single chdman run may take. A Blu-ray image compresses for a
 /// long time on a slow machine; a run that exceeds this is stuck.
-const RUN_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
+const RUN_TIMEOUT: Duration = Duration::from_hours(6);
 
 /// Bytes compared at a time.
 const COMPARE_CHUNK: usize = 1 << 20;

@@ -42,7 +42,7 @@ use tokio::sync::Notify;
 use crate::romm_sync::RommSyncHandle;
 
 /// How often every export is checked when nothing prompts it sooner.
-const INTERVAL: Duration = Duration::from_secs(10 * 60);
+const INTERVAL: Duration = Duration::from_mins(10);
 
 /// Largest CUE sheet read for rewriting, as the importer bounds it.
 const MAX_SHEET_BYTES: u64 = 1 << 20;

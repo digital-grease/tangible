@@ -140,7 +140,7 @@ async fn seed(tx: &mut Transaction<'_, Postgres>, f: &Fixture) {
         ),
     ];
     for statement in statements {
-        tx.execute(statement.as_str())
+        tx.execute(sqlx::AssertSqlSafe(statement.as_str()))
             .await
             .unwrap_or_else(|error| panic!("seeding failed on {statement}: {error}"));
     }
@@ -152,7 +152,7 @@ async fn seed(tx: &mut Transaction<'_, Postgres>, f: &Fixture) {
 /// error, so without one the first rejection would poison every later query.
 async fn must_reject(tx: &mut Transaction<'_, Postgres>, statement: &str, why: &str) {
     tx.execute("SAVEPOINT probe").await.expect("savepoint");
-    let result = tx.execute(statement).await;
+    let result = tx.execute(sqlx::AssertSqlSafe(statement)).await;
     assert!(
         result.is_err(),
         "the database accepted a statement it must reject: {why}\n  statement: {statement}"
@@ -330,12 +330,12 @@ async fn preservation_hashes_are_well_formed_and_an_artifact_says_consistently_w
     seed(&mut tx, &f).await;
     let artifact = f.artifact;
     tx.execute(
-        format!(
+        sqlx::AssertSqlSafe(format!(
             "INSERT INTO artifact_track_hashes (artifact_id, track_number, length_bytes, crc32, md5, sha1) \
              VALUES ('{artifact}', 1, 2352, '414fa339', '9e107d9d372bb6826bd81d3542a419d6', \
                      '2fd4e1c67a2d28fced849ee1bb76e7391b93eb12')"
         )
-        .as_str(),
+        .as_str()),
     )
     .await
     .expect("a track's hashes");
@@ -376,12 +376,12 @@ async fn preservation_hashes_are_well_formed_and_an_artifact_says_consistently_w
     ] {
         must_reject(&mut tx, &statement, why).await;
     }
-    tx.execute(
+    tx.execute(sqlx::AssertSqlSafe(
         format!(
             "UPDATE artifacts SET hashes_state = 'done', hashed_at = now() WHERE id = '{artifact}'"
         )
         .as_str(),
-    )
+    ))
     .await
     .expect("done, saying when");
     tx.rollback().await.expect("rollback");
@@ -402,7 +402,7 @@ async fn dat_files_are_well_formed_an_exact_match_is_whole_and_removing_a_dat_ta
     let game = uuid::Uuid::now_v7();
     let sha256 = "0".repeat(64);
     tx.execute(
-        format!(
+        sqlx::AssertSqlSafe(format!(
             "INSERT INTO dat_files (id, name, source_sha256, game_count, rom_count, loaded_by) \
              VALUES ('{dat}', 'schema-{dat}', '{sha256}', 1, 1, 'tests'); \
              INSERT INTO dat_games (id, dat_id, name) VALUES ('{game}', '{dat}', 'Game'); \
@@ -411,7 +411,7 @@ async fn dat_files_are_well_formed_an_exact_match_is_whole_and_removing_a_dat_ta
              INSERT INTO artifact_dat_matches (artifact_id, game_id, kind, roms_matched, roms_total) \
              VALUES ('{artifact}', '{game}', 'exact', 1, 1)"
         )
-        .as_str(),
+        .as_str()),
     )
     .await
     .expect("a DAT, a game, a file and a match");
@@ -456,9 +456,11 @@ async fn dat_files_are_well_formed_an_exact_match_is_whole_and_removing_a_dat_ta
     ] {
         must_reject(&mut tx, &statement, why).await;
     }
-    tx.execute(format!("DELETE FROM dat_files WHERE id = '{dat}'").as_str())
-        .await
-        .expect("remove the DAT");
+    tx.execute(sqlx::AssertSqlSafe(
+        format!("DELETE FROM dat_files WHERE id = '{dat}'").as_str(),
+    ))
+    .await
+    .expect("remove the DAT");
     let left: i64 =
         sqlx::query_scalar("SELECT count(*) FROM artifact_dat_matches WHERE artifact_id = $1")
             .bind(artifact)
@@ -483,32 +485,32 @@ async fn a_source_removal_is_one_per_import_and_says_consistently_whether_it_end
     seed(&mut tx, &f).await;
     let integration = Uuid::now_v7();
     let import = Uuid::now_v7();
-    tx.execute(
+    tx.execute(sqlx::AssertSqlSafe(
         format!(
             "INSERT INTO integrations (id, kind, name, configuration_json) \
              VALUES ('{integration}', 'qbittorrent', 'removals-{integration}', '{{}}')"
         )
         .as_str(),
-    )
+    ))
     .await
     .expect("an integration");
-    tx.execute(
+    tx.execute(sqlx::AssertSqlSafe(
         format!(
             "INSERT INTO import_jobs (id, source_kind, source_descriptor_json, created_by) \
              VALUES ('{import}', 'qbittorrent_job', '{{}}', 'u')"
         )
         .as_str(),
-    )
+    ))
     .await
     .expect("an import");
     let second = Uuid::now_v7();
-    tx.execute(
+    tx.execute(sqlx::AssertSqlSafe(
         format!(
             "INSERT INTO import_jobs (id, source_kind, source_descriptor_json, created_by) \
              VALUES ('{second}', 'qbittorrent_job', '{{}}', 'u')"
         )
         .as_str(),
-    )
+    ))
     .await
     .expect("another import");
     let insert = |state: &str, ended: &str, lease: &str| {
@@ -545,19 +547,21 @@ async fn a_source_removal_is_one_per_import_and_says_consistently_whether_it_end
     ] {
         must_reject(&mut tx, &statement, why).await;
     }
-    tx.execute(
+    tx.execute(sqlx::AssertSqlSafe(
         format!(
             "INSERT INTO integration_jobs \
                  (id, integration_id, client_job_id, import_job_id, created_by, content_path) \
              VALUES (gen_random_uuid(), '{integration}', 'abc', '{import}', 'u', 'disc.iso')"
         )
         .as_str(),
-    )
+    ))
     .await
     .expect("a job with the path it was imported from");
-    tx.execute(insert("verifying", "NULL", "'x', now()").as_str())
-        .await
-        .expect("an open, leased removal");
+    tx.execute(sqlx::AssertSqlSafe(
+        insert("verifying", "NULL", "'x', now()").as_str(),
+    ))
+    .await
+    .expect("an open, leased removal");
     must_reject(
         &mut tx,
         &insert("removing", "NULL", "NULL, NULL"),
@@ -588,13 +592,13 @@ async fn a_romm_scan_record_says_consistently_whether_romm_queued_it() {
     let pool = pool().await;
     let mut tx = pool.begin().await.expect("begin");
     let integration = Uuid::now_v7();
-    tx.execute(
+    tx.execute(sqlx::AssertSqlSafe(
         format!(
             "INSERT INTO integrations (id, kind, name, configuration_json) \
              VALUES ('{integration}', 'webhook', 'scans-{integration}', '{{}}')"
         )
         .as_str(),
-    )
+    ))
     .await
     .expect("an integration to file scans under");
     let insert = |task: &str, state: &str, ended: &str| {
@@ -603,12 +607,16 @@ async fn a_romm_scan_record_says_consistently_whether_romm_queued_it() {
              VALUES (gen_random_uuid(), '{integration}', ARRAY['psx'], {task}, '{state}', {ended})"
         )
     };
-    tx.execute(insert("NULL", "refused", "now()").as_str())
-        .await
-        .expect("a refused scan is recordable");
-    tx.execute(insert("'32708cfa-50ff-4401-9e6b-adc8b5b301d6'", "running", "NULL").as_str())
-        .await
-        .expect("a running scan is recordable");
+    tx.execute(sqlx::AssertSqlSafe(
+        insert("NULL", "refused", "now()").as_str(),
+    ))
+    .await
+    .expect("a refused scan is recordable");
+    tx.execute(sqlx::AssertSqlSafe(
+        insert("'32708cfa-50ff-4401-9e6b-adc8b5b301d6'", "running", "NULL").as_str(),
+    ))
+    .await
+    .expect("a running scan is recordable");
     for (statement, why) in [
         (
             insert("'32708cfa-50ff'", "refused", "now()"),
@@ -657,14 +665,14 @@ async fn a_link_to_romm_has_an_id_exactly_when_romm_has_the_game() {
     let f = Fixture::new();
     let mut tx = pool.begin().await.expect("begin");
     seed(&mut tx, &f).await;
-    tx.execute(
+    tx.execute(sqlx::AssertSqlSafe(
         format!(
             "INSERT INTO romm_edition_exports (edition_id, state, folder) \
              VALUES ('{}', 'current', 'psx/Game')",
             f.edition
         )
         .as_str(),
-    )
+    ))
     .await
     .expect("an export");
     let link = |state: &str, id: &str, checked: &str| {
@@ -674,12 +682,16 @@ async fn a_link_to_romm_has_an_id_exactly_when_romm_has_the_game() {
             f.edition
         )
     };
-    tx.execute(link("'linked'", "41", "now()").as_str())
-        .await
-        .expect("a linked export");
-    tx.execute(link("'unseen'", "NULL", "now()").as_str())
-        .await
-        .expect("an unseen export");
+    tx.execute(sqlx::AssertSqlSafe(
+        link("'linked'", "41", "now()").as_str(),
+    ))
+    .await
+    .expect("a linked export");
+    tx.execute(sqlx::AssertSqlSafe(
+        link("'unseen'", "NULL", "now()").as_str(),
+    ))
+    .await
+    .expect("an unseen export");
     for (statement, why) in [
         (
             link("'unseen'", "41", "now()"),
@@ -724,23 +736,23 @@ async fn a_failed_verification_still_records_its_ruined_disc() {
     let mut tx = pool.begin().await.expect("begin");
     seed(&mut tx, &f).await;
 
-    tx.execute(
+    tx.execute(sqlx::AssertSqlSafe(
         format!(
             "UPDATE burn_attempts SET state = 'verification_failed' WHERE id = '{}'",
             f.attempt
         )
         .as_str(),
-    )
+    ))
     .await
     .expect("mark the attempt as verification-failed");
 
     tx.execute(
-        format!(
+        sqlx::AssertSqlSafe(format!(
             "INSERT INTO physical_copies (id, disc_id, artifact_id, burn_attempt_id, media_profile, status) \
              VALUES (gen_random_uuid(), '{}', '{}', '{}', 'CD-R', 'verification_failed')",
             f.disc, f.artifact, f.attempt
         )
-        .as_str(),
+        .as_str()),
     )
     .await
     .expect("a disc that was written but failed verification must be recordable");
@@ -757,24 +769,24 @@ async fn a_drive_frees_up_once_its_attempt_is_terminal() {
     let mut tx = pool.begin().await.expect("begin");
     seed(&mut tx, &f).await;
 
-    tx.execute(
+    tx.execute(sqlx::AssertSqlSafe(
         format!(
             "UPDATE burn_attempts SET state = 'write_failed' WHERE id = '{}'",
             f.attempt
         )
         .as_str(),
-    )
+    ))
     .await
     .expect("mark the attempt as failed");
 
     tx.execute(
-        format!(
+        sqlx::AssertSqlSafe(format!(
             "INSERT INTO burn_attempts \
              (id, burn_job_id, worker_id, drive_id, attempt_number, lease_token_hash, lease_expires_at, engine, engine_version, plan_json) \
              VALUES (gen_random_uuid(), '{}', '{}', '{}', 1, 'h', now() + interval '1 hour', 'fake', '0.1.0', '{{}}')",
             f.job_two, f.worker, f.drive
         )
-        .as_str(),
+        .as_str()),
     )
     .await
     .expect("the drive must accept a new attempt once the previous one is terminal");

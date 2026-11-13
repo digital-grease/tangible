@@ -127,11 +127,11 @@ pub async fn user_for_identity(
         .map(|column| format!("u.{column}"))
         .collect::<Vec<_>>()
         .join(", ");
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {columns} FROM users u
          JOIN user_identities i ON i.user_id = u.id
          WHERE i.issuer = $1 AND i.subject = $2"
-    ))
+    )))
     .bind(issuer)
     .bind(subject)
     .fetch_optional(pool)
@@ -168,12 +168,12 @@ pub async fn create_identity_user(
             let keep = 64_usize.saturating_sub(suffix.len());
             format!("{}{suffix}", &username[..username.len().min(keep)])
         };
-        let row = sqlx::query(&format!(
+        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO users (id, username, password_hash, role, created_by)
              VALUES ($1, $2, NULL, $3, $4)
              ON CONFLICT (username) DO NOTHING
              RETURNING {USER_COLUMNS}"
-        ))
+        )))
         .bind(uuid::Uuid::now_v7())
         .bind(&candidate)
         .bind(role.as_str())

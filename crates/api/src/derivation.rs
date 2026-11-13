@@ -1656,7 +1656,7 @@ pub struct DerivationRunnerSettings {
 impl Default for DerivationRunnerSettings {
     fn default() -> Self {
         Self {
-            lease: Duration::from_secs(4 * 60 * 60),
+            lease: Duration::from_hours(4),
             poll_interval: Duration::from_secs(30),
             retry_backoff: Duration::from_secs(60),
             owner: "tangible-server".to_owned(),

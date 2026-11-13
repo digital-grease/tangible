@@ -136,7 +136,7 @@ fn merged<T: PartialEq + Clone>(
 /// current fields, or why not.
 async fn lock(
     tx: &mut Transaction<'_, Postgres>,
-    select: &str,
+    select: &'static str,
     id: uuid::Uuid,
     expected: Option<i64>,
 ) -> Result<Result<sqlx::postgres::PgRow, EditFailure>, DbError> {
@@ -179,7 +179,7 @@ async fn audit(
     id: uuid::Uuid,
     changed: &[&str],
 ) -> Result<(), DbError> {
-    let version: i64 = sqlx::query_scalar(&format!(
+    let version: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT version FROM {} WHERE id = $1",
         match action {
             "title.updated" => "titles",
@@ -187,7 +187,7 @@ async fn audit(
             "disc_set.updated" => "disc_sets",
             _ => "discs",
         }
-    ))
+    )))
     .bind(id)
     .fetch_one(&mut **tx)
     .await
@@ -278,11 +278,13 @@ pub async fn edit_title(
     }
     // Read in the same transaction, so the version answered is the one
     // this edit made, not a later edit's.
-    let row = sqlx::query(&format!("{TITLE_SELECT} WHERE t.id = $1"))
-        .bind(id.as_uuid())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(DbError::Query)?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{TITLE_SELECT} WHERE t.id = $1"
+    )))
+    .bind(id.as_uuid())
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
     let record = row.as_ref().map(title_from_row).transpose()?;
     tx.commit().await.map_err(DbError::Query)?;
     Ok(record.map_or(EditOutcome::NotFound, EditOutcome::Done))
@@ -351,11 +353,13 @@ pub async fn edit_edition(
     }
     // Read in the same transaction, so the version answered is the one
     // this edit made, not a later edit's.
-    let row = sqlx::query(&format!("{EDITION_SELECT} WHERE e.id = $1"))
-        .bind(id.as_uuid())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(DbError::Query)?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{EDITION_SELECT} WHERE e.id = $1"
+    )))
+    .bind(id.as_uuid())
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
     let record = row.as_ref().map(edition_from_row).transpose()?;
     tx.commit().await.map_err(DbError::Query)?;
     Ok(record.map_or(EditOutcome::NotFound, EditOutcome::Done))
@@ -430,11 +434,13 @@ pub async fn edit_disc_set(
     }
     // Read in the same transaction, so the version answered is the one
     // this edit made, not a later edit's.
-    let row = sqlx::query(&format!("{DISC_SET_SELECT} WHERE s.id = $1"))
-        .bind(id.as_uuid())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(DbError::Query)?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{DISC_SET_SELECT} WHERE s.id = $1"
+    )))
+    .bind(id.as_uuid())
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
     let record = row.as_ref().map(disc_set_from_row).transpose()?;
     tx.commit().await.map_err(DbError::Query)?;
     Ok(record.map_or(EditOutcome::NotFound, EditOutcome::Done))
@@ -519,11 +525,13 @@ pub async fn edit_disc(
     }
     // Read in the same transaction, so the version answered is the one
     // this edit made, not a later edit's.
-    let row = sqlx::query(&format!("{DISC_SELECT} WHERE d.id = $1"))
-        .bind(id.as_uuid())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(DbError::Query)?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{DISC_SELECT} WHERE d.id = $1"
+    )))
+    .bind(id.as_uuid())
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
     let record = row.as_ref().map(disc_from_row).transpose()?;
     tx.commit().await.map_err(DbError::Query)?;
     Ok(record.map_or(EditOutcome::NotFound, EditOutcome::Done))

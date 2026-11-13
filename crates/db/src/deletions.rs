@@ -64,9 +64,9 @@ async fn lock_artifact(
     tx: &mut Transaction<'_, Postgres>,
     id: ArtifactId,
 ) -> Result<Option<(ArtifactOrigin, bool, Deletion)>, DbError> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {DELETION_COLUMNS} FROM artifacts WHERE id = $1 FOR UPDATE"
-    ))
+    )))
     .bind(id.as_uuid())
     .fetch_optional(&mut **tx)
     .await
@@ -91,9 +91,9 @@ async fn lock_artifact(
 ///
 /// [`DbError::Query`] on a database failure.
 pub async fn deletion_state(pool: &PgPool, id: ArtifactId) -> Result<Option<Deletion>, DbError> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {DELETION_COLUMNS} FROM artifacts WHERE id = $1"
-    ))
+    )))
     .bind(id.as_uuid())
     .fetch_optional(pool)
     .await

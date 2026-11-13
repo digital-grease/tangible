@@ -68,9 +68,9 @@ pub struct RommSyncSettings {
 impl Default for RommSyncSettings {
     fn default() -> Self {
         Self {
-            interval: Duration::from_secs(60 * 60),
+            interval: Duration::from_hours(1),
             poll: Duration::from_secs(5),
-            scan_bound: Duration::from_secs(30 * 60),
+            scan_bound: Duration::from_mins(30),
             retry: Duration::from_secs(60),
             keep_scans: 200,
         }

@@ -147,11 +147,11 @@ pub async fn request_check(
             Some(false) => {}
         }
     }
-    let inserted = sqlx::query(&format!(
+    let inserted = sqlx::query(sqlx::AssertSqlSafe(format!(
         "INSERT INTO integrity_checks (id, scope, artifact_id, created_by)
          VALUES ($1, $2, $3, $4)
          RETURNING {COLUMNS}"
-    ))
+    )))
     .bind(uuid::Uuid::now_v7())
     .bind(scope.as_str())
     .bind(artifact_id)
@@ -171,11 +171,11 @@ pub async fn request_check(
             // The failed insert ended the transaction; the one under way is
             // read outside it.
             drop(tx);
-            let row = sqlx::query(&format!(
+            let row = sqlx::query(sqlx::AssertSqlSafe(format!(
                 "SELECT {COLUMNS} FROM integrity_checks
                  WHERE scope = $1 AND artifact_id IS NOT DISTINCT FROM $2
                    AND state IN ('queued', 'running')"
-            ))
+            )))
             .bind(scope.as_str())
             .bind(artifact_id)
             .fetch_one(pool)
@@ -214,13 +214,13 @@ pub async fn claim_next_check(
         tx.rollback().await.map_err(DbError::Query)?;
         return Ok(None);
     };
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE integrity_checks
          SET state = 'running', started_at = COALESCE(started_at, now()),
              lease_owner = $2, lease_expires_at = now() + ($3::int * interval '1 second')
          WHERE id = $1
          RETURNING {COLUMNS}"
-    ))
+    )))
     .bind(id)
     .bind(owner)
     .bind(seconds(lease_seconds))
@@ -473,13 +473,13 @@ pub async fn complete_check(
     owner: &str,
 ) -> Result<bool, DbError> {
     let mut tx = pool.begin().await.map_err(DbError::Query)?;
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE integrity_checks
          SET state = 'complete', completed_at = now(), lease_owner = NULL,
              lease_expires_at = NULL
          WHERE id = $1 AND state = 'running' AND lease_owner = $2
          RETURNING {COLUMNS}"
-    ))
+    )))
     .bind(id.as_uuid())
     .bind(owner)
     .fetch_optional(&mut *tx)
@@ -596,9 +596,9 @@ pub async fn get_check(
     pool: &PgPool,
     id: IntegrityCheckId,
 ) -> Result<Option<IntegrityCheckRecord>, DbError> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {COLUMNS} FROM integrity_checks WHERE id = $1"
-    ))
+    )))
     .bind(id.as_uuid())
     .fetch_optional(pool)
     .await
@@ -616,11 +616,11 @@ pub async fn list_checks(
     before: Option<uuid::Uuid>,
     limit: i64,
 ) -> Result<Vec<IntegrityCheckRecord>, DbError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {COLUMNS} FROM integrity_checks
          WHERE $1::uuid IS NULL OR id < $1
          ORDER BY id DESC LIMIT $2"
-    ))
+    )))
     .bind(before)
     .bind(limit)
     .fetch_all(pool)
@@ -672,7 +672,7 @@ pub async fn queue_scheduled_scrub(
     pool: &PgPool,
     interval_seconds: i64,
 ) -> Result<Option<IntegrityCheckRecord>, DbError> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "INSERT INTO integrity_checks (id, scope, created_by)
          SELECT $1, 'all', 'scheduler'
          WHERE NOT EXISTS (
@@ -684,7 +684,7 @@ pub async fn queue_scheduled_scrub(
          ON CONFLICT (scope) WHERE scope = 'all' AND state IN ('queued', 'running')
          DO NOTHING
          RETURNING {COLUMNS}"
-    ))
+    )))
     .bind(uuid::Uuid::now_v7())
     .bind(interval_seconds.max(1))
     .fetch_optional(pool)

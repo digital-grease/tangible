@@ -296,9 +296,9 @@ const DAT_COLUMNS: &str = "d.id, d.name, d.description, d.version, d.author, d.h
 ///
 /// [`DbError::Query`] on a database failure.
 pub async fn list_dats(pool: &PgPool) -> Result<Vec<DatRecord>, DbError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {DAT_COLUMNS} FROM dat_files d ORDER BY d.name"
-    ))
+    )))
     .fetch_all(pool)
     .await
     .map_err(DbError::Query)?;
@@ -311,9 +311,9 @@ pub async fn list_dats(pool: &PgPool) -> Result<Vec<DatRecord>, DbError> {
 ///
 /// [`DbError::Query`] on a database failure.
 pub async fn get_dat(pool: &PgPool, id: uuid::Uuid) -> Result<Option<DatRecord>, DbError> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {DAT_COLUMNS} FROM dat_files d WHERE d.id = $1"
-    ))
+    )))
     .bind(id)
     .fetch_optional(pool)
     .await
@@ -427,7 +427,7 @@ pub async fn rematch_in(
     .execute(&mut **tx)
     .await
     .map_err(DbError::Query)?;
-    let inserted = sqlx::query(&format!(
+    let inserted = sqlx::query(sqlx::AssertSqlSafe(format!(
         "WITH {UNITS},
          unit_counts AS (SELECT artifact_id, count(*) AS n FROM units GROUP BY artifact_id),
          classes AS (
@@ -461,7 +461,7 @@ pub async fn rematch_in(
          ON CONFLICT (artifact_id, game_id) DO UPDATE
              SET kind = EXCLUDED.kind, roms_matched = EXCLUDED.roms_matched,
                  roms_total = EXCLUDED.roms_total"
-    ))
+    )))
     .bind(artifacts)
     .bind(dat)
     .execute(&mut **tx)
@@ -554,7 +554,7 @@ pub async fn matches_for(pool: &PgPool, artifact: uuid::Uuid) -> Result<Vec<Matc
     // Each file paired with at most one unit, and each unit with at most
     // one file: within a SHA-1, the k-th file (by its order in the DAT) with
     // the k-th unit, as the counting in rematch_in assumes.
-    let files = sqlx::query(&format!(
+    let files = sqlx::query(sqlx::AssertSqlSafe(format!(
         "WITH {UNITS},
          ranked_units AS (
              SELECT sha1, length_bytes, unit,
@@ -573,7 +573,7 @@ pub async fn matches_for(pool: &PgPool, artifact: uuid::Uuid) -> Result<Vec<Matc
            ON ru.sha1 = rr.sha1 AND ru.k = rr.k
           AND (rr.size IS NULL OR rr.size = ru.length_bytes)
          ORDER BY rr.game_id, rr.id"
-    ))
+    )))
     .bind(vec![artifact])
     .bind(&games)
     .fetch_all(pool)

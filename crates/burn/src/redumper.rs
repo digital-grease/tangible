@@ -61,19 +61,19 @@ pub const RETRIES: u32 = 20;
 const SECTOR_ORDERS: [&str; 4] = ["DATA_C2_SUB", "DATA_SUB_C2", "DATA_SUB", "DATA_C2"];
 
 /// How long detecting the drive's layout may take: one sector read four ways.
-const DETECT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const DETECT_TIMEOUT: Duration = Duration::from_mins(10);
 
 /// How long a dump may take. The bench's small disc took 40 seconds over
 /// USB; a full one read slowly, with errors, takes an hour or more.
-const DUMP_TIMEOUT: Duration = Duration::from_secs(4 * 60 * 60);
+const DUMP_TIMEOUT: Duration = Duration::from_hours(4);
 
 /// How long retrying may take: every bad sector up to [`RETRIES`] times, on a
 /// disc that may be scratched all over.
-const REFINE_TIMEOUT: Duration = Duration::from_secs(8 * 60 * 60);
+const REFINE_TIMEOUT: Duration = Duration::from_hours(8);
 
 /// How long splitting may take. It reads only files; the bench took 2
 /// seconds.
-const SPLIT_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const SPLIT_TIMEOUT: Duration = Duration::from_mins(30);
 
 /// How often a running command checks whether its rip was withdrawn.
 const CANCEL_POLL: Duration = Duration::from_millis(250);

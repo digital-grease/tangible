@@ -62,10 +62,10 @@ pub const RESET: &str = "stream.reset";
 const RECENT_LIMIT: usize = 1024;
 
 /// How long an event is kept for them.
-const RECENT_AGE: Duration = Duration::from_secs(10 * 60);
+const RECENT_AGE: Duration = Duration::from_mins(10);
 
 /// How long one stream stays open before it ends and the client reconnects.
-const STREAM_LIFETIME: Duration = Duration::from_secs(10 * 60);
+const STREAM_LIFETIME: Duration = Duration::from_mins(10);
 
 /// How many streams may be open at once.
 const MAX_STREAMS: usize = 256;

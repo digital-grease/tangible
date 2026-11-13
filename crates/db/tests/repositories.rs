@@ -114,7 +114,7 @@ async fn seed(pool: &PgPool) -> World {
         ),
     ];
     for statement in statements {
-        pool.execute(statement.as_str())
+        pool.execute(sqlx::AssertSqlSafe(statement.as_str()))
             .await
             .unwrap_or_else(|error| panic!("seed failed on {statement}: {error}"));
     }
@@ -133,7 +133,9 @@ async fn queue_job(pool: &PgPool, world: &World) -> uuid::Uuid {
         "INSERT INTO burn_jobs (id, disc_id, artifact_id, created_by) VALUES ('{id}', '{}', '{}', 'test')",
         world.disc, world.artifact
     );
-    pool.execute(statement.as_str()).await.expect("queue job");
+    pool.execute(sqlx::AssertSqlSafe(statement.as_str()))
+        .await
+        .expect("queue job");
     id
 }
 
@@ -232,7 +234,9 @@ async fn attempt_numbers_increase_within_a_job() {
         "UPDATE burn_jobs SET state = 'queued' WHERE id = '{}'",
         first.burn_job_id
     );
-    pool.execute(statement.as_str()).await.expect("requeue");
+    pool.execute(sqlx::AssertSqlSafe(statement.as_str()))
+        .await
+        .expect("requeue");
 
     let second = claim(&pool, &world).await.expect("second");
     assert_eq!(second.burn_job_id, first.burn_job_id);
@@ -608,7 +612,9 @@ async fn issue_enrollment(pool: &PgPool, hash: &str, minutes: i64) {
          VALUES ('{}', '{hash}', now() + interval '{minutes} minutes', 'admin')",
         uuid::Uuid::now_v7()
     );
-    pool.execute(statement.as_str()).await.expect("issue");
+    pool.execute(sqlx::AssertSqlSafe(statement.as_str()))
+        .await
+        .expect("issue");
 }
 
 fn hash() -> String {
@@ -830,7 +836,9 @@ async fn a_revoked_worker_cannot_authenticate() {
         "UPDATE workers SET status = 'revoked', revoked_at = now() WHERE id = '{}'",
         world.worker
     );
-    pool.execute(statement.as_str()).await.expect("revoke");
+    pool.execute(sqlx::AssertSqlSafe(statement.as_str()))
+        .await
+        .expect("revoke");
 
     assert_eq!(
         authenticate_worker(&pool, &credential)
@@ -872,7 +880,9 @@ async fn a_heartbeat_from_a_revoked_worker_is_refused() {
         "UPDATE workers SET status = 'revoked', revoked_at = now() WHERE id = '{}'",
         world.worker
     );
-    pool.execute(statement.as_str()).await.expect("revoke");
+    pool.execute(sqlx::AssertSqlSafe(statement.as_str()))
+        .await
+        .expect("revoke");
 
     assert_eq!(
         record_heartbeat(&pool, world.worker)
@@ -893,7 +903,9 @@ async fn a_heartbeat_does_not_resurrect_a_draining_worker() {
         "UPDATE workers SET status = 'draining' WHERE id = '{}'",
         world.worker
     );
-    pool.execute(statement.as_str()).await.expect("drain");
+    pool.execute(sqlx::AssertSqlSafe(statement.as_str()))
+        .await
+        .expect("drain");
 
     assert_eq!(
         record_heartbeat(&pool, world.worker)
