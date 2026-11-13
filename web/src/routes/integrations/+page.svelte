@@ -533,8 +533,7 @@
                   spellcheck="false"
                   bind:value={form.buckets}
                   required
-                  aria-describedby={describedBy}
-                ></textarea>
+                  aria-describedby={describedBy}></textarea>
               {/snippet}
             </Field>
           {:else if form.kind === 'romm_api'}
