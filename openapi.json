@@ -8004,11 +8004,11 @@
               "disc": {
                 "oneOf": [
                   {
-                    "type": "null"
-                  },
-                  {
                     "$ref": "#/components/schemas/DiscLayout",
                     "description": "The disc's tracks, when the artifact was described by a CUE sheet or a\nTOC whose tracks could be laid out."
+                  },
+                  {
+                    "type": "null"
                   }
                 ]
               },
@@ -8020,11 +8020,11 @@
               "ripped": {
                 "oneOf": [
                   {
-                    "type": "null"
-                  },
-                  {
                     "$ref": "#/components/schemas/RippedView",
                     "description": "How it was ripped, when a worker read it from a disc in a drive."
+                  },
+                  {
+                    "type": "null"
                   }
                 ]
               },
@@ -8035,11 +8035,11 @@
               "unpacked_from": {
                 "oneOf": [
                   {
-                    "type": "null"
-                  },
-                  {
                     "$ref": "#/components/schemas/UnpackedFromView",
                     "description": "The archive its files arrived in, when the import unpacked one\n(docs/plans/archives.md). The archive itself is not kept."
+                  },
+                  {
+                    "type": "null"
                   }
                 ]
               },
@@ -8078,11 +8078,11 @@
           "best_match": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/BestMatchView",
                 "description": "The game of a loaded DAT it best matches, if any\n(docs/plans/dat-matching.md)."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -8094,11 +8094,11 @@
           "deletion": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ArtifactDeletionView",
                 "description": "Its deletion, once asked for (ADR 0020): pending until\n`delete_after`, or deleted, its bytes gone and this record kept."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -8295,11 +8295,11 @@
               "medium": {
                 "oneOf": [
                   {
-                    "type": "null"
-                  },
-                  {
                     "$ref": "#/components/schemas/MediumView",
                     "description": "What preflight last found in the tray; absent until it looked, and\nfor attempts by workers older than this field."
+                  },
+                  {
+                    "type": "null"
                   }
                 ]
               },
@@ -8621,11 +8621,11 @@
           "progress": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/BurnProgress",
                 "description": "The most recent thing a worker reported, if any."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -8714,11 +8714,11 @@
           "rip": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/RipCapability",
                 "description": "What it can rip, if anything. Absent from workers older than ripping,\nwhose drives are then not offered for a rip."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -8968,11 +8968,11 @@
           "failure": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/FailureReport",
                 "description": "Why it failed, when it did."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -8992,11 +8992,11 @@
           "verification_report": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/VerificationReport",
                 "description": "The read-back comparison, when one ran."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -9909,11 +9909,11 @@
           "css": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/CssDecryptionReport",
                 "description": "DVD decryption, through libdvdcss and dvdbackup."
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -10086,22 +10086,22 @@
           "derivation": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/DerivationView",
                 "description": "The derivation, when it already exists."
+              },
+              {
+                "type": "null"
               }
             ]
           },
           "job": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/DerivationJobView",
                 "description": "The job, when one is queued or running."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -10512,11 +10512,11 @@
           "disc_shape": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/DiscShapeView",
                 "description": "For a burn, the disc its artifact describes, as a library item has it,\nso a drawing of the disc can show what will be written, to scale\nagainst `medium.capacity_blocks`. `null` when the manifest cannot be\nread."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -10531,11 +10531,11 @@
           "medium": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/MediumView",
                 "description": "The disc in the drive, once the worker has inspected it (a burn or a\nrip)."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -10661,11 +10661,11 @@
           "activity": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/DriveActivityView",
                 "description": "What it is doing now: the burn, rip or erasure open on it, or `null`\nwhen there is none (docs/plans/ui-overhaul.md, S1). The event\nstream's `burn.progress`, `rip.progress`, `burn_attempt.changed`,\n`burn_job.changed`, `rip.changed` and `erasure.changed` say when to\nread it again."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -10928,22 +10928,22 @@
           "in_romm": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/RommLinkView",
                 "description": "What RomM made of the export, once RomM's API has looked it up."
+              },
+              {
+                "type": "null"
               }
             ]
           },
           "last_scan": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/RommScanView",
                 "description": "The last scan of the platform's folder asked for."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -11171,11 +11171,11 @@
           "medium": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ErasureMedium",
                 "description": "What was in the drive, when there was a disc to look at."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -11300,11 +11300,11 @@
           "medium_before": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ErasureMedium",
                 "description": "What the worker found in the drive before deciding."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -11897,11 +11897,11 @@
           "source_removal": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/SourceRemovalView",
                 "description": "Removing its source from the download client or bucket, where the\nintegration removes after import (docs/plans/source-retention.md)."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -12417,11 +12417,11 @@
           "derived_from": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/DerivationView",
                 "description": "How it was made, when it is itself a derivative."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -13178,11 +13178,11 @@
           "decryption": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/DecryptionReport",
                 "description": "What it can decrypt. Present only from a worker image its operator\nbuilt to decrypt (ADR 0013); the published image reports none."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -13266,22 +13266,22 @@
           "cd_read": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/CdReadView",
                 "description": "For `read` of a CD by redumper, and only then: the offsets it applied\nand found (ADR 0015)."
+              },
+              {
+                "type": "null"
               }
             ]
           },
           "decryption": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/DecryptionView",
                 "description": "For `read`, when anything was decrypted: the library and tool, never\na key. Only for a rip asked to decrypt."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -13341,11 +13341,11 @@
           "read_errors": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ReadErrors",
                 "description": "For `read`: sectors that gave trouble."
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -13573,11 +13573,11 @@
           "cd_read": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/CdReadView",
                 "description": "For a CD read by redumper: the offsets it applied and found\n(ADR 0015)."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -13613,11 +13613,11 @@
           "decryption": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/DecryptionView",
                 "description": "The library and tool that decrypted it, when anything was decrypted."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -13696,22 +13696,22 @@
           "medium": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/MediumView",
                 "description": "What the worker found in the drive."
+              },
+              {
+                "type": "null"
               }
             ]
           },
           "read_errors": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ReadErrors",
                 "description": "Sectors that gave trouble."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -13746,11 +13746,11 @@
           "cd_read": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/CdReadView",
                 "description": "For a CD read by redumper: the offsets it applied and found\n(ADR 0015)."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -13761,11 +13761,11 @@
           "decryption": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/DecryptionView",
                 "description": "How it was decrypted, when it was."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -13812,11 +13812,11 @@
           "read_errors": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ReadErrors",
                 "description": "Sectors that gave trouble, when the engine counts them."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -13856,11 +13856,11 @@
           "last_scan": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/RommScanView",
                 "description": "The last scan asked for."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -14022,11 +14022,11 @@
           "api": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/RommApiView",
                 "description": "RomM's API, when an administrator has configured it."
+              },
+              {
+                "type": "null"
               }
             ]
           },

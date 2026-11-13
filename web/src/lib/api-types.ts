@@ -2392,16 +2392,16 @@ export interface components {
         ArtifactDetail: components["schemas"]["ArtifactSummary"] & {
             /** @description The files making up the artifact. */
             components: components["schemas"]["ComponentView"][];
-            disc?: null | components["schemas"]["DiscLayout"];
+            disc?: components["schemas"]["DiscLayout"] | null;
             /**
              * Format: float
              * @description Detection confidence, from 0 to 1. Diagnostic only.
              */
             format_confidence: number;
-            ripped?: null | components["schemas"]["RippedView"];
+            ripped?: components["schemas"]["RippedView"] | null;
             /** @description Where the bytes came from. */
             source_kind: string;
-            unpacked_from?: null | components["schemas"]["UnpackedFromView"];
+            unpacked_from?: components["schemas"]["UnpackedFromView"] | null;
             /** @description Structural findings, if any. */
             warnings: string[];
         };
@@ -2414,10 +2414,10 @@ export interface components {
         ArtifactSummary: {
             /** @description Shape of the artifact. */
             artifact_kind: string;
-            best_match?: null | components["schemas"]["BestMatchView"];
+            best_match?: components["schemas"]["BestMatchView"] | null;
             /** @description Number of files. */
             component_count: number;
-            deletion?: null | components["schemas"]["ArtifactDeletionView"];
+            deletion?: components["schemas"]["ArtifactDeletionView"] | null;
             /**
              * @description The disc it describes, as far as its manifest says, for a drawing of
              *     it (docs/plans/ui-overhaul.md, S2).
@@ -2516,7 +2516,7 @@ export interface components {
         };
         /** @description One attempt with the reports it produced. */
         BurnAttemptDetail: components["schemas"]["BurnAttemptView"] & {
-            medium?: null | components["schemas"]["MediumView"];
+            medium?: components["schemas"]["MediumView"] | null;
             /** @description The read-back comparison, when one ran. */
             verify_report?: unknown;
             /** @description The engine's account of the write, once there is one. */
@@ -2660,7 +2660,7 @@ export interface components {
              * @description Queue priority; higher is claimed first.
              */
             priority: number;
-            progress?: null | components["schemas"]["BurnProgress"];
+            progress?: components["schemas"]["BurnProgress"] | null;
             /** @description Media profile requested, when one was. */
             requested_media_profile?: string | null;
             /** @description Lifecycle state. */
@@ -2695,7 +2695,7 @@ export interface components {
             drive: components["schemas"]["DriveReportBody"];
             /** @description Engines it can run. */
             engines?: components["schemas"]["EngineReport"][];
-            rip?: null | components["schemas"]["RipCapability"];
+            rip?: components["schemas"]["RipCapability"] | null;
             /** @description The worker's software version. */
             software_version: string;
         };
@@ -2829,7 +2829,7 @@ export interface components {
         };
         /** @description What a worker sends when it finishes. */
         CompletionRequest: {
-            failure?: null | components["schemas"]["FailureReport"];
+            failure?: components["schemas"]["FailureReport"] | null;
             /**
              * Format: int64
              * @description The last event sequence the worker emitted.
@@ -2839,7 +2839,7 @@ export interface components {
             lease_token: string;
             /** @description What was in the drive. */
             physical_medium: components["schemas"]["PhysicalMedium"];
-            verification_report?: null | components["schemas"]["VerificationReport"];
+            verification_report?: components["schemas"]["VerificationReport"] | null;
             /** @description The engine's account of the write. */
             write_report: components["schemas"]["WriteReport"];
         };
@@ -3258,7 +3258,7 @@ export interface components {
          *     reports a key, a key file, or where one is.
          */
         DecryptionReport: {
-            css?: null | components["schemas"]["CssDecryptionReport"];
+            css?: components["schemas"]["CssDecryptionReport"] | null;
         };
         /** @description The library and tool that decrypted a disc as it was read. */
         DecryptionView: {
@@ -3328,8 +3328,8 @@ export interface components {
         };
         /** @description What a request came to. */
         DerivationRequestView: {
-            derivation?: null | components["schemas"]["DerivationView"];
-            job?: null | components["schemas"]["DerivationJobView"];
+            derivation?: components["schemas"]["DerivationView"] | null;
+            job?: components["schemas"]["DerivationJobView"] | null;
             /**
              * @description `queued` for a new job, `pending` when the same work is already
              *     queued or running, `exists` when the derivative was already made.
@@ -3535,7 +3535,7 @@ export interface components {
              * @description For a burn, which disc of its set.
              */
             disc_number?: number | null;
-            disc_shape?: null | components["schemas"]["DiscShapeView"];
+            disc_shape?: components["schemas"]["DiscShapeView"] | null;
             /**
              * @description The burn job (`/api/v1/burn-jobs/{id}`), the rip
              *     (`/api/v1/rips/{id}`) or the erasure (`/api/v1/erasures/{id}`).
@@ -3543,7 +3543,7 @@ export interface components {
             id: string;
             /** @description `burn`, `rip` or `erasure`. */
             kind: string;
-            medium?: null | components["schemas"]["MediumView"];
+            medium?: components["schemas"]["MediumView"] | null;
             /**
              * Format: float
              * @description How far it has got, from 0 to 1, once the worker has said.
@@ -3603,7 +3603,7 @@ export interface components {
         };
         /** @description A drive, and the worker it belongs to. */
         DriveView: {
-            activity?: null | components["schemas"]["DriveActivityView"];
+            activity?: components["schemas"]["DriveActivityView"] | null;
             /**
              * @description Whether a rip on this drive may decrypt an encrypted disc: this
              *     server allows decryption and the drive's worker can (ADR 0013).
@@ -3715,8 +3715,8 @@ export interface components {
             file_count: number;
             /** @description The folder in RomM's library, `platform/game`. */
             folder?: string | null;
-            in_romm?: null | components["schemas"]["RommLinkView"];
-            last_scan?: null | components["schemas"]["RommScanView"];
+            in_romm?: components["schemas"]["RommLinkView"] | null;
+            last_scan?: components["schemas"]["RommScanView"] | null;
             /** @description The platform, as a RomM slug. */
             platform?: string | null;
             /**
@@ -3819,7 +3819,7 @@ export interface components {
             error_code?: string | null;
             /** @description More about that. */
             error_detail?: string | null;
-            medium?: null | components["schemas"]["ErasureMedium"];
+            medium?: components["schemas"]["ErasureMedium"] | null;
             /** @description `erased`, `already_blank`, `refused` or `failed`. */
             outcome: string;
         };
@@ -3865,7 +3865,7 @@ export interface components {
             id: string;
             /** @description Whether it is still going. */
             is_open: boolean;
-            medium_before?: null | components["schemas"]["ErasureMedium"];
+            medium_before?: components["schemas"]["ErasureMedium"] | null;
             /** @description `quick` or `full`. */
             mode: string;
             /** @description Who asked. */
@@ -4156,7 +4156,7 @@ export interface components {
              *     URL without credentials, query or fragment.
              */
             source_reference?: string | null;
-            source_removal?: null | components["schemas"]["SourceRemovalView"];
+            source_removal?: components["schemas"]["SourceRemovalView"] | null;
             /** @description Lifecycle state. */
             state: string;
             /** @description When it last changed. */
@@ -4389,7 +4389,7 @@ export interface components {
         LineageView: {
             /** @description What has been derived from it. */
             derivatives: components["schemas"]["DerivationView"][];
-            derived_from?: null | components["schemas"]["DerivationView"];
+            derived_from?: components["schemas"]["DerivationView"] | null;
             /** @description Derivation jobs asked of it, newest first. */
             jobs: components["schemas"]["DerivationJobView"][];
             /** @description The transformation that suits it, when this server can run one. */
@@ -4754,7 +4754,7 @@ export interface components {
         };
         /** @description What a worker can rip with. */
         RipCapability: {
-            decryption?: null | components["schemas"]["DecryptionReport"];
+            decryption?: components["schemas"]["DecryptionReport"] | null;
             /** @description The engines that read discs, such as `cdrdao`. */
             engines?: components["schemas"]["EngineReport"][];
         };
@@ -4795,8 +4795,8 @@ export interface components {
         };
         /** @description How a rip ended, as the worker reports it. */
         RipCompletion: {
-            cd_read?: null | components["schemas"]["CdReadView"];
-            decryption?: null | components["schemas"]["DecryptionView"];
+            cd_read?: components["schemas"]["CdReadView"] | null;
+            decryption?: components["schemas"]["DecryptionView"] | null;
             /**
              * @description For `read`: the disc's encryption, `none` (the default), `css`,
              *     `aacs` or `unknown`.
@@ -4822,7 +4822,7 @@ export interface components {
              *     and a decrypted copy's under `decrypted/`.
              */
             outputs?: string[];
-            read_errors?: null | components["schemas"]["ReadErrors"];
+            read_errors?: components["schemas"]["ReadErrors"] | null;
         };
         /** @description What the server answers a worker's report with. */
         RipEventAck: {
@@ -4916,7 +4916,7 @@ export interface components {
              *     for the worker's best.
              */
             cd_engine?: string | null;
-            cd_read?: null | components["schemas"]["CdReadView"];
+            cd_read?: components["schemas"]["CdReadView"] | null;
             /** @description When it ended. */
             completed_at?: string | null;
             /** @description The decrypted copy's artifact, once imported. */
@@ -4930,7 +4930,7 @@ export interface components {
             created_at: string;
             /** @description Whether they asked for an encrypted disc to be decrypted. */
             decrypt: boolean;
-            decryption?: null | components["schemas"]["DecryptionView"];
+            decryption?: components["schemas"]["DecryptionView"] | null;
             /** @description The drive. */
             drive_id: string;
             /** @description What the drive is called. */
@@ -4961,8 +4961,8 @@ export interface components {
              *     `decrypted_original`.
              */
             keep?: string | null;
-            medium?: null | components["schemas"]["MediumView"];
-            read_errors?: null | components["schemas"]["ReadErrors"];
+            medium?: components["schemas"]["MediumView"] | null;
+            read_errors?: components["schemas"]["ReadErrors"] | null;
             /** @description Who asked. */
             requested_by: string;
             /** @description When the worker took it. */
@@ -4978,13 +4978,13 @@ export interface components {
          *     tool versions only; nothing about keys.
          */
         RippedView: {
-            cd_read?: null | components["schemas"]["CdReadView"];
+            cd_read?: components["schemas"]["CdReadView"] | null;
             /**
              * @description Whether these bytes were decrypted as they were read: such an image
              *     is not a faithful copy of the disc.
              */
             decrypted_at_acquisition: boolean;
-            decryption?: null | components["schemas"]["DecryptionView"];
+            decryption?: components["schemas"]["DecryptionView"] | null;
             /** @description How it was attached: `usb`, `sata` or `unknown`, when known. */
             drive_connection?: string | null;
             /** @description Its firmware revision. */
@@ -4999,7 +4999,7 @@ export interface components {
             engine: string;
             /** @description Its version. */
             engine_version: string;
-            read_errors?: null | components["schemas"]["ReadErrors"];
+            read_errors?: components["schemas"]["ReadErrors"] | null;
             /** @description The rip that read it. */
             rip_id: string;
         };
@@ -5011,7 +5011,7 @@ export interface components {
             integration_id: string;
             /** @description Why it last failed, as a stable code. */
             last_error_code?: string | null;
-            last_scan?: null | components["schemas"]["RommScanView"];
+            last_scan?: components["schemas"]["RommScanView"] | null;
             /** @description When it last worked. */
             last_success_at?: string | null;
             /** @description Its name. */
@@ -5092,7 +5092,7 @@ export interface components {
         };
         /** @description Whether this server exports to RomM, and to which platforms. */
         RommSettings: {
-            api?: null | components["schemas"]["RommApiView"];
+            api?: components["schemas"]["RommApiView"] | null;
             /** @description Whether an export root is configured. Without one, nothing exports. */
             configured: boolean;
             /** @description The platforms an edition may name. */

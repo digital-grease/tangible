@@ -53,13 +53,7 @@ reason = "LGPL-3.0 FFI to libdiscid for what is ~10 lines of SHA-1 and base64. P
 
 [advisories]
 yanked = "deny"
-ignore = [
-    # `paste` is unmaintained. It is not a vulnerability: the advisory records
-    # that the author archived the repository. It reaches us only transitively
-    # through utoipa-axum, a proc-macro dependency with no runtime surface.
-    # Revisit when utoipa drops it; do not add `paste` as a direct dependency.
-    { id = "RUSTSEC-2024-0436", reason = "transitive proc-macro dep via utoipa-axum; unmaintained, not vulnerable" },
-]
+ignore = []
 
 [sources]
 unknown-registry = "deny"
