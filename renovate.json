@@ -141,6 +141,13 @@
       "groupName": "pnpm"
     },
     {
+      "description": "TypeScript stays below 7 until the tools that run it say they take 7: svelte-check declares TypeScript 5 or 6, and typescript-eslint below 6.1. SvelteKit 3 asks for 6.",
+      "matchPackageNames": [
+        "typescript"
+      ],
+      "allowedVersions": "<7"
+    },
+    {
       "description": "The overrides in web/pnpm-workspace.yaml force a patched release of a dependency's own major, so a new major is never the fix there.",
       "matchFileNames": [
         "web/pnpm-workspace.yaml"
