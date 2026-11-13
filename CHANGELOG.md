@@ -8,6 +8,17 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
+- Requests (ADR 0021, the first part): anybody signed in, viewers
+  included, may ask for an item on the new Requests page, describing it
+  and ticking a box to attest, on every request, that they legally own it
+  and want a digital image of it. The server refuses a request without the
+  attestation and does not keep it. An operator or administrator approves
+  or declines each request, saying why when declining; their own requests
+  are approved as made. A viewer sees and withdraws only their own. Each
+  request and decision is in the audit log. Nothing is searched for or
+  downloaded yet: finding a release for an approved request comes later.
+  Migration 0035 adds the requests table; the previous version neither
+  reads nor writes it.
 - A "Buy me a coffee" link at the foot of the web UI's sidebar, under the
   source code link, and a button in the README, for anyone who wants to
   support Tangible's development. The link is plain text: the page loads

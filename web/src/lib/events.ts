@@ -20,7 +20,7 @@
 
 /** The event stream's topics. */
 export type Topic =
-  'imports' | 'burns' | 'rips' | 'erasures' | 'workers' | 'derivations' | 'library';
+  'imports' | 'burns' | 'rips' | 'erasures' | 'workers' | 'derivations' | 'library' | 'requests';
 
 /** Every event type the server sends, by topic. */
 export const EVENT_TYPES: Record<Topic, readonly string[]> = {
@@ -31,6 +31,7 @@ export const EVENT_TYPES: Record<Topic, readonly string[]> = {
   workers: ['worker.changed'],
   derivations: ['derivation.changed'],
   library: ['artifact.changed'],
+  requests: ['request.changed'],
 };
 
 /** What the stream sends when a client may have missed something. */

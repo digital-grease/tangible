@@ -43,8 +43,11 @@
   let moreProblem = $state<Problem | null>(null);
 
   const ROLES = [
-    { value: 'viewer', label: 'Viewer: sees the library, burns and discs; changes nothing' },
-    { value: 'operator', label: 'Operator: imports, catalogs and burns' },
+    {
+      value: 'viewer',
+      label: 'Viewer: sees the library, burns and discs, and asks for items; changes nothing',
+    },
+    { value: 'operator', label: 'Operator: imports, catalogs, burns and approves requests' },
     { value: 'administrator', label: 'Administrator: also manages accounts and workers' },
   ] as const;
 

@@ -14,6 +14,7 @@ describe('the command bar', () => {
       'Library',
       'Catalog',
       'Physical copies',
+      'Requests',
       'Imports',
       'Rips',
       'Burns',

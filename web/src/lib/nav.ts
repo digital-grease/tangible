@@ -41,6 +41,7 @@ export const NAV: readonly NavGroup[] = [
   {
     label: 'Activity',
     items: [
+      { href: '/requests', label: 'Requests', icon: 'request' },
       { href: '/imports', label: 'Imports', icon: 'import', count: 'imports' },
       { href: '/rips', label: 'Rips', icon: 'rip' },
       { href: '/burns', label: 'Burns', icon: 'burn', count: 'burns' },
