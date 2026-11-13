@@ -15,7 +15,7 @@
 # the API. Node exists only in this stage; the runtime image has none.
 FROM node:24-trixie-slim@sha256:54f84b4cf8432b21aaffd5d3ce8d41e12cea0d10d33c09d2f3c9879d49d6b446 AS web
 WORKDIR /web
-RUN npm install --global pnpm@11.26.0
+RUN npm install --global pnpm@11.28.11
 # Dependencies first, from the lockfile alone, so they are cached across
 # source changes. pnpm-workspace.yaml carries the install-script allowlist.
 COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
