@@ -45,6 +45,8 @@ struct Inner {
     url_import_limiter: ActionLimiter,
     /// Uploads started per account, likewise shared.
     upload_limiter: ActionLimiter,
+    /// Requests for items per account (ADR 0021), likewise shared.
+    request_limiter: ActionLimiter,
     /// The built web UI, when this server serves one.
     web: Option<WebUi>,
     /// The RomM export, when an export root is configured.
@@ -119,6 +121,7 @@ impl ApiState {
                 enrollment_limiter: EnrollmentLimiter::default(),
                 url_import_limiter: ActionLimiter::url_imports(),
                 upload_limiter: ActionLimiter::uploads(),
+                request_limiter: ActionLimiter::requests(),
                 web: None,
                 romm: None,
                 derivations: None,
@@ -150,6 +153,7 @@ impl ApiState {
                 enrollment_limiter: EnrollmentLimiter::default(),
                 url_import_limiter: ActionLimiter::url_imports(),
                 upload_limiter: ActionLimiter::uploads(),
+                request_limiter: ActionLimiter::requests(),
                 web: None,
                 romm: None,
                 derivations: None,
@@ -449,6 +453,12 @@ impl ApiState {
     #[must_use]
     pub fn upload_limiter(&self) -> &ActionLimiter {
         &self.inner.upload_limiter
+    }
+
+    /// Requests for items per account.
+    #[must_use]
+    pub fn request_limiter(&self) -> &ActionLimiter {
+        &self.inner.request_limiter
     }
 
     /// The manifest store, when a library root is configured.

@@ -78,6 +78,18 @@ pub enum Permission {
     /// Administrators only: after the grace period the bytes are gone, and
     /// an original may be somebody's only copy.
     DeleteArtifacts,
+    /// Ask for an item, attesting to owning it, and withdraw one's own
+    /// requests (ADR 0021, docs/plans/requests.md).
+    ///
+    /// Viewers too (owner, 2026-11-13): asking changes nothing until an
+    /// operator or administrator approves it.
+    Request,
+    /// Approve or decline requests, search for a release for one, and grab
+    /// it (ADR 0021).
+    ///
+    /// Operators and administrators: the same people who may hand a job to
+    /// a download client by hand.
+    DecideRequests,
 }
 
 impl Permission {
@@ -99,6 +111,8 @@ impl Permission {
             Self::ManageDats => "manage_dats",
             Self::ReadAudit => "read_audit",
             Self::DeleteArtifacts => "delete_artifacts",
+            Self::Request => "request",
+            Self::DecideRequests => "decide_requests",
         }
     }
 
@@ -106,8 +120,10 @@ impl Permission {
     #[must_use]
     pub const fn least_role(self) -> Role {
         match self {
-            Self::Read => Role::Viewer,
-            Self::Import | Self::ImportUrl | Self::Catalog | Self::Burn => Role::Operator,
+            Self::Read | Self::Request => Role::Viewer,
+            Self::Import | Self::ImportUrl | Self::Catalog | Self::Burn | Self::DecideRequests => {
+                Role::Operator
+            }
             Self::Erase
             | Self::ManageWorkers
             | Self::ManageUsers
@@ -199,9 +215,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_viewer_reads_and_changes_nothing() {
+    fn a_viewer_reads_and_asks_and_changes_nothing() {
         assert!(Role::Viewer.allows(Permission::Read));
+        // Asking changes nothing until somebody who may decide approves.
+        assert!(Role::Viewer.allows(Permission::Request));
         for permission in [
+            Permission::DecideRequests,
             Permission::Import,
             Permission::ImportUrl,
             Permission::Catalog,
@@ -227,6 +246,8 @@ mod tests {
             Permission::ImportUrl,
             Permission::Catalog,
             Permission::Burn,
+            Permission::Request,
+            Permission::DecideRequests,
         ] {
             assert!(Role::Operator.allows(permission), "{permission:?}");
         }
@@ -255,6 +276,8 @@ mod tests {
             Permission::ManageDats,
             Permission::ReadAudit,
             Permission::DeleteArtifacts,
+            Permission::Request,
+            Permission::DecideRequests,
         ] {
             assert!(Role::Administrator.allows(permission), "{permission:?}");
         }

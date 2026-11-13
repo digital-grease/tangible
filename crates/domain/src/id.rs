@@ -152,6 +152,10 @@ uuid_id!(
     /// Identifies one audit or operational event record.
     EventId
 );
+uuid_id!(
+    /// Identifies a request for an item (docs/plans/requests.md, ADR 0021).
+    RequestId
+);
 
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]

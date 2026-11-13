@@ -38,13 +38,14 @@ pub use enums::{
     ComponentRole, DerivationJobState, DiscRelationship, DriveConnection, DriveStatus, EjectPolicy,
     EnumParseError, ErasureMode, ErasureState, HashAlgorithm, IntegrationKind, IntegrityCheckState,
     IntegrityProblemKind, IntegrityScope, IntegrityState, LossCharacter, MediaFamily,
-    PhysicalCopyStatus, QuarantineState, RipOriginal, RipState, Role, SetKind, SourceRemovalState,
-    TitleKind, Transformation, ValidationState, VerificationStep, WorkerStatus,
+    PhysicalCopyStatus, QuarantineState, RequestKind, RequestState, RipOriginal, RipState, Role,
+    SetKind, SourceRemovalState, TitleKind, Transformation, ValidationState, VerificationStep,
+    WorkerStatus,
 };
 pub use id::{
     ArtifactId, BurnAttemptId, BurnJobId, ComponentId, DerivationJobId, DiscId, DiscSetId, DriveId,
     EditionId, ErasureId, EventId, IdParseError, ImportJobId, IntegrationId, IntegrityCheckId,
-    PhysicalCopyId, RipJobId, TitleId, WorkerId,
+    PhysicalCopyId, RequestId, RipJobId, TitleId, WorkerId,
 };
 pub use import::{ImportState, ImportTransitionError};
 pub use logical_path::{LogicalPath, LogicalPathError};

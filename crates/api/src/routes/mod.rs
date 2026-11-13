@@ -22,6 +22,7 @@ pub mod integrity;
 pub mod oidc;
 pub mod physical_copies;
 pub mod reports;
+pub mod requests;
 pub mod rips;
 pub mod romm;
 pub mod s3_imports;

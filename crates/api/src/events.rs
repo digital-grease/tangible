@@ -42,7 +42,7 @@ use crate::problem::{ErrorCode, Problem};
 use crate::state::ApiState;
 
 /// Every topic, in the order a client would name them.
-pub const TOPICS: [&str; 7] = [
+pub const TOPICS: [&str; 8] = [
     "imports",
     "burns",
     "rips",
@@ -50,6 +50,7 @@ pub const TOPICS: [&str; 7] = [
     "workers",
     "derivations",
     "library",
+    "requests",
 ];
 
 /// The topic of the events the stream itself sends, which every client gets.

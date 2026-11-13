@@ -1537,6 +1537,110 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Requests, newest first.
+         * @description Requests, newest first: a viewer's own, or everybody's for an operator or administrator.
+         */
+        get: operations["list_all_requests"];
+        put?: never;
+        /**
+         * Ask for an item.
+         * @description Ask for an item. The requester attests, on every request, that they legally own the item and want a digital image of it (`attests_ownership: true`); the attestation is checked and not stored. A viewer's request waits for an operator or administrator to approve it; theirs is approved as made. At most 30 an hour per account.
+         */
+        post: operations["create_one_request"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/requests/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One request.
+         * @description One request. A viewer is answered only about their own.
+         */
+        get: operations["get_one_request"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/requests/{request_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve a request, so a release for it may be searched for.
+         * @description Approve a request that waits, so a release for it may be searched for. Operators and administrators.
+         */
+        post: operations["approve_one_request"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/requests/{request_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Withdraw a request.
+         * @description Withdraw a request before its download starts, or after one failed. A viewer withdraws their own; operators and administrators, anybody's.
+         */
+        post: operations["cancel_one_request"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/requests/{request_id}/decline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Decline a request, saying why.
+         * @description Decline a request, waiting or approved, saying why; the requester sees the reason. Operators and administrators.
+         */
+        post: operations["decline_one_request"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/rips": {
         parameters: {
             query?: never;
@@ -2955,6 +3059,30 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** @description What a person sends to ask for an item. */
+        CreateItemRequest: {
+            /**
+             * @description That the requester legally owns the item and wants a digital image
+             *     of it. Must be true; it is checked and not stored.
+             */
+            attests_ownership?: boolean;
+            /**
+             * @description Platform, year, region, edition and the like: up to eight, each a
+             *     name of lowercase letters, digits and underscores, and a value of up
+             *     to 200 characters.
+             */
+            details?: {
+                [key: string]: string;
+            };
+            /** @description `game`, `music`, `movie`, `television`, `software` or `other`. */
+            kind: string;
+            /** @description Anything else, up to 2000 characters. */
+            note?: string | null;
+            /** @description Where the item was found, up to sixteen. */
+            refs?: components["schemas"]["RequestRefView"][];
+            /** @description The item, as a person sees it: up to 300 characters. */
+            title: string;
+        };
         /** @description A new title. */
         CreateTitleRequest: {
             /** @description What it is called. */
@@ -3252,6 +3380,11 @@ export interface components {
             source_sha256: string;
             /** @description Its version, often a date. */
             version?: string | null;
+        };
+        /** @description Why a request is declined. */
+        DeclineItemRequest: {
+            /** @description Shown to the requester: up to 2000 characters. */
+            reason: string;
         };
         /**
          * @description What a worker can decrypt. Library and tool versions only: a worker never
@@ -4726,6 +4859,20 @@ export interface components {
              */
             scope: string;
         };
+        /** @description A page of requests, newest first. */
+        RequestPage: {
+            /** @description The requests. */
+            items: components["schemas"]["RequestView"][];
+            /** @description Cursor for the next page, or null when this is the last. */
+            next_cursor?: string | null;
+        };
+        /** @description Where an item was found. */
+        RequestRefView: {
+            /** @description The item's identifier there, such as `tt0083658` for IMDb. */
+            external_id: string;
+            /** @description `dat`, `musicbrainz`, `tmdb`, `igdb` or `imdb`. */
+            provider: string;
+        };
         /**
          * @description What an operator sends to rip the disc in a drive. Every field is
          *     optional: `{}` rips without decryption, a CD with the worker's best tool.
@@ -4751,6 +4898,56 @@ export interface components {
              *     the disc). Ignored without `decrypt`.
              */
             keep?: string | null;
+        };
+        /** @description A request for an item. */
+        RequestView: {
+            /** @description What fulfilled it. */
+            artifact_id?: string | null;
+            /** @description Whether the caller may approve it now. */
+            can_approve: boolean;
+            /** @description Whether the caller may withdraw it now. */
+            can_cancel: boolean;
+            /** @description Whether the caller may decline it now. */
+            can_decline: boolean;
+            /** @description When it was asked for. */
+            created_at: string;
+            /** @description When. */
+            decided_at?: string | null;
+            /** @description Who approved or declined it. */
+            decided_by?: string | null;
+            /** @description Why it was declined. */
+            decline_reason?: string | null;
+            /** @description Platform, year, region, edition and the like. */
+            details: {
+                [key: string]: string;
+            };
+            /** @description Why the last download failed, as a stable code. */
+            error_code?: string | null;
+            /** @description And in words. */
+            error_detail?: string | null;
+            /** @description Its id. */
+            id: string;
+            /** @description The import following the download. */
+            import_id?: string | null;
+            /** @description The download client a release went to. */
+            integration_id?: string | null;
+            /** @description `game`, `music`, `movie`, `television`, `software` or `other`. */
+            kind: string;
+            /** @description What the requester added. */
+            note?: string | null;
+            /** @description Where the item was found. */
+            refs: components["schemas"]["RequestRefView"][];
+            /** @description Who asked. */
+            requested_by: string;
+            /**
+             * @description `pending_approval`, `approved`, `declined`, `canceled`,
+             *     `downloading`, `fulfilled` or `failed`.
+             */
+            state: string;
+            /** @description The item, as a person sees it. */
+            title: string;
+            /** @description When it last changed. */
+            updated_at: string;
         };
         /** @description What a worker can rip with. */
         RipCapability: {
@@ -9100,6 +9297,252 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReportSettingsView"];
+                };
+            };
+        };
+    };
+    list_all_requests: {
+        parameters: {
+            query?: {
+                /** @description Maximum requests to return. Clamped. */
+                limit?: number | null;
+                /** @description Opaque cursor from a previous response's `next_cursor`. */
+                cursor?: string | null;
+                /** @description Only requests in this state. */
+                state?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of requests */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestPage"];
+                };
+            };
+            /** @description Malformed filter or cursor */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_one_request: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateItemRequest"];
+            };
+        };
+        responses: {
+            /** @description Asked for */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestView"];
+                };
+            };
+            /** @description Not attested (ATTESTATION_REQUIRED), or a field out of bounds (VALIDATION_FAILED) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many from this account for now */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_one_request: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Request identifier */
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestView"];
+                };
+            };
+            /** @description No such request */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    approve_one_request: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Request identifier */
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Approved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestView"];
+                };
+            };
+            /** @description No such request */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description It does not wait for approval */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    cancel_one_request: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Request identifier */
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Withdrawn */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestView"];
+                };
+            };
+            /** @description No such request */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description It is downloading or has ended */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    decline_one_request: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Request identifier */
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeclineItemRequest"];
+            };
+        };
+        responses: {
+            /** @description Declined */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestView"];
+                };
+            };
+            /** @description No such request */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description It is downloading or has ended */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No reason, or too long a one */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };

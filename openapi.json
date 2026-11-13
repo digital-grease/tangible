@@ -5321,6 +5321,379 @@
         ]
       }
     },
+    "/api/v1/requests": {
+      "get": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "Requests, newest first.",
+        "description": "Requests, newest first: a viewer's own, or everybody's for an operator or administrator.",
+        "operationId": "list_all_requests",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum requests to return. Clamped.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous response's `next_cursor`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "Only requests in this state.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed filter or cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "Ask for an item.",
+        "description": "Ask for an item. The requester attests, on every request, that they legally own the item and want a digital image of it (`attests_ownership: true`); the attestation is checked and not stored. A viewer's request waits for an operator or administrator to approve it; theirs is approved as made. At most 30 an hour per account.",
+        "operationId": "create_one_request",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateItemRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Asked for",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not attested (ATTESTATION_REQUIRED), or a field out of bounds (VALIDATION_FAILED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many from this account for now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/requests/{request_id}": {
+      "get": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "One request.",
+        "description": "One request. A viewer is answered only about their own.",
+        "operationId": "get_one_request",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "description": "Request identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/requests/{request_id}/approve": {
+      "post": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "Approve a request, so a release for it may be searched for.",
+        "description": "Approve a request that waits, so a release for it may be searched for. Operators and administrators.",
+        "operationId": "approve_one_request",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "description": "Request identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Approved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It does not wait for approval",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/requests/{request_id}/cancel": {
+      "post": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "Withdraw a request.",
+        "description": "Withdraw a request before its download starts, or after one failed. A viewer withdraws their own; operators and administrators, anybody's.",
+        "operationId": "cancel_one_request",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "description": "Request identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Withdrawn",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It is downloading or has ended",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/requests/{request_id}/decline": {
+      "post": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "Decline a request, saying why.",
+        "description": "Decline a request, waiting or approved, saying why; the requester sees the reason. Operators and administrators.",
+        "operationId": "decline_one_request",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "description": "Request identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeclineItemRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Declined",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It is downloading or has ended",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No reason, or too long a one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/rips": {
       "get": {
         "tags": [
@@ -9294,6 +9667,53 @@
         },
         "additionalProperties": false
       },
+      "CreateItemRequest": {
+        "type": "object",
+        "description": "What a person sends to ask for an item.",
+        "required": [
+          "kind",
+          "title"
+        ],
+        "properties": {
+          "attests_ownership": {
+            "type": "boolean",
+            "description": "That the requester legally owns the item and wants a digital image\nof it. Must be true; it is checked and not stored."
+          },
+          "details": {
+            "type": "object",
+            "description": "Platform, year, region, edition and the like: up to eight, each a\nname of lowercase letters, digits and underscores, and a value of up\nto 200 characters.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "kind": {
+            "type": "string",
+            "description": "`game`, `music`, `movie`, `television`, `software` or `other`."
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Anything else, up to 2000 characters."
+          },
+          "refs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RequestRefView"
+            },
+            "description": "Where the item was found, up to sixteen."
+          },
+          "title": {
+            "type": "string",
+            "description": "The item, as a person sees it: up to 300 characters."
+          }
+        },
+        "additionalProperties": false
+      },
       "CreateTitleRequest": {
         "type": "object",
         "description": "A new title.",
@@ -9901,6 +10321,20 @@
             "description": "Its version, often a date."
           }
         }
+      },
+      "DeclineItemRequest": {
+        "type": "object",
+        "description": "Why a request is declined.",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Shown to the requester: up to 2000 characters."
+          }
+        },
+        "additionalProperties": false
       },
       "DecryptionReport": {
         "type": "object",
@@ -13146,6 +13580,48 @@
         },
         "additionalProperties": false
       },
+      "RequestPage": {
+        "type": "object",
+        "description": "A page of requests, newest first.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RequestView"
+            },
+            "description": "The requests."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor for the next page, or null when this is the last."
+          }
+        }
+      },
+      "RequestRefView": {
+        "type": "object",
+        "description": "Where an item was found.",
+        "required": [
+          "provider",
+          "external_id"
+        ],
+        "properties": {
+          "external_id": {
+            "type": "string",
+            "description": "The item's identifier there, such as `tt0083658` for IMDb."
+          },
+          "provider": {
+            "type": "string",
+            "description": "`dat`, `musicbrainz`, `tmdb`, `igdb` or `imdb`."
+          }
+        },
+        "additionalProperties": false
+      },
       "RequestRip": {
         "type": "object",
         "description": "What an operator sends to rip the disc in a drive. Every field is\noptional: `{}` rips without decryption, a CD with the worker's best tool.",
@@ -13170,6 +13646,146 @@
           }
         },
         "additionalProperties": false
+      },
+      "RequestView": {
+        "type": "object",
+        "description": "A request for an item.",
+        "required": [
+          "id",
+          "requested_by",
+          "kind",
+          "title",
+          "details",
+          "refs",
+          "state",
+          "created_at",
+          "updated_at",
+          "can_approve",
+          "can_decline",
+          "can_cancel"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What fulfilled it."
+          },
+          "can_approve": {
+            "type": "boolean",
+            "description": "Whether the caller may approve it now."
+          },
+          "can_cancel": {
+            "type": "boolean",
+            "description": "Whether the caller may withdraw it now."
+          },
+          "can_decline": {
+            "type": "boolean",
+            "description": "Whether the caller may decline it now."
+          },
+          "created_at": {
+            "type": "string",
+            "description": "When it was asked for."
+          },
+          "decided_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When."
+          },
+          "decided_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who approved or declined it."
+          },
+          "decline_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it was declined."
+          },
+          "details": {
+            "type": "object",
+            "description": "Platform, year, region, edition and the like.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the last download failed, as a stable code."
+          },
+          "error_detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "And in words."
+          },
+          "id": {
+            "type": "string",
+            "description": "Its id."
+          },
+          "import_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The import following the download."
+          },
+          "integration_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The download client a release went to."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`game`, `music`, `movie`, `television`, `software` or `other`."
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the requester added."
+          },
+          "refs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RequestRefView"
+            },
+            "description": "Where the item was found."
+          },
+          "requested_by": {
+            "type": "string",
+            "description": "Who asked."
+          },
+          "state": {
+            "type": "string",
+            "description": "`pending_approval`, `approved`, `declined`, `canceled`,\n`downloading`, `fulfilled` or `failed`."
+          },
+          "title": {
+            "type": "string",
+            "description": "The item, as a person sees it."
+          },
+          "updated_at": {
+            "type": "string",
+            "description": "When it last changed."
+          }
+        }
       },
       "RipCapability": {
         "type": "object",
@@ -15166,6 +15782,10 @@
     {
       "name": "integrations",
       "description": "Download clients and other services, configured by administrators"
+    },
+    {
+      "name": "requests",
+      "description": "Items people ask for, approved before anything is searched for"
     },
     {
       "name": "events",

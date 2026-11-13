@@ -188,6 +188,12 @@ pub const API_BASE: &str = "/api/v1";
         routes::erasures::claim_drive_erasure,
         routes::erasures::complete_drive_erasure,
         routes::dashboard::dashboard,
+        routes::requests::create_one_request,
+        routes::requests::list_all_requests,
+        routes::requests::get_one_request,
+        routes::requests::approve_one_request,
+        routes::requests::decline_one_request,
+        routes::requests::cancel_one_request,
         events::event_stream,
         deletion::request_artifact_deletion,
         deletion::keep_pending_artifact,
@@ -359,6 +365,11 @@ pub const API_BASE: &str = "/api/v1";
         routes::dashboard::DashboardIntegrity,
         routes::dashboard::DashboardStorage,
         routes::dashboard::DashboardBurn,
+        routes::requests::RequestView,
+        routes::requests::RequestRefView,
+        routes::requests::RequestPage,
+        routes::requests::CreateItemRequest,
+        routes::requests::DeclineItemRequest,
         routes::audit::AuditEventView,
         routes::audit::AuditEventList,
         routes::worker_admin::WorkerView,
@@ -404,6 +415,7 @@ pub const API_BASE: &str = "/api/v1";
         (name = "diagnostics", description = "The deployment's state as a checklist, for administrators"),
         (name = "rips", description = "Ripping the disc in a drive into the library"),
         (name = "integrations", description = "Download clients and other services, configured by administrators"),
+        (name = "requests", description = "Items people ask for, approved before anything is searched for"),
         (name = "events", description = "What changes, as it changes: a server-sent event stream"),
     ),
 )]
@@ -575,6 +587,7 @@ pub fn router(state: ApiState) -> Router {
         .nest(API_BASE, routes::worker_admin::router())
         .nest(API_BASE, routes::audit::router())
         .nest(API_BASE, routes::dashboard::router())
+        .nest(API_BASE, routes::requests::router())
         .nest(API_BASE, routes::erasures::router())
         .nest(API_BASE, routes::integrations::router())
         .nest(API_BASE, routes::integrity::router())
@@ -764,6 +777,7 @@ mod tests {
             include_str!("routes/physical_copies.rs"),
             include_str!("routes/romm.rs"),
             include_str!("routes/reports.rs"),
+            include_str!("routes/requests.rs"),
             include_str!("routes/derivations.rs"),
             include_str!("routes/workers.rs"),
             include_str!("health.rs"),

@@ -131,6 +131,9 @@ pub enum ErrorCode {
     ArtifactInUse,
     /// The artifact has a retention lock, so it cannot be deleted.
     ArtifactRetained,
+    /// A request was made without its requester attesting to owning the item
+    /// (ADR 0021).
+    AttestationRequired,
     /// Anything unanticipated.
     Internal,
 }
@@ -176,6 +179,7 @@ impl ErrorCode {
             Self::ArtifactDeleted => "ARTIFACT_DELETED",
             Self::ArtifactInUse => "ARTIFACT_IN_USE",
             Self::ArtifactRetained => "ARTIFACT_RETAINED",
+            Self::AttestationRequired => "ATTESTATION_REQUIRED",
             Self::Internal => "INTERNAL",
         }
     }
@@ -202,7 +206,8 @@ impl ErrorCode {
             | Self::ReferenceNotFound
             | Self::ImportSsrfBlocked
             | Self::IntegrationAddressRefused
-            | Self::DatInvalid => StatusCode::UNPROCESSABLE_ENTITY,
+            | Self::DatInvalid
+            | Self::AttestationRequired => StatusCode::UNPROCESSABLE_ENTITY,
             // Worker routes only ever answer 401: they have no notion of an
             // authenticated-but-unauthorised caller. Operator routes answer
             // 403 when the account is known and its role is not enough.
@@ -277,6 +282,7 @@ impl ErrorCode {
             Self::ArtifactDeleted => "The artifact is deleted, or is being deleted",
             Self::ArtifactInUse => "The artifact is in use",
             Self::ArtifactRetained => "The artifact is retained",
+            Self::AttestationRequired => "Ownership was not attested",
             Self::Internal => "Internal error",
         }
     }
@@ -438,6 +444,7 @@ mod tests {
             ErrorCode::ArtifactDeleted,
             ErrorCode::ArtifactInUse,
             ErrorCode::ArtifactRetained,
+            ErrorCode::AttestationRequired,
             ErrorCode::IntegrationAddressRefused,
             ErrorCode::InsufficientSpace,
             ErrorCode::DatInvalid,

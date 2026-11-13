@@ -183,8 +183,8 @@ pub enum Access {
 
 use Access::{Public, Signed, SignedOrLeaseholder, Worker};
 use Permission::{
-    Burn, Catalog, DeleteArtifacts, Diagnose, Erase, Import, ImportUrl, MaintainStorage,
-    ManageDats, ManageIntegrations, ManageUsers, ManageWorkers, Read, ReadAudit,
+    Burn, Catalog, DecideRequests, DeleteArtifacts, Diagnose, Erase, Import, ImportUrl,
+    MaintainStorage, ManageDats, ManageIntegrations, ManageUsers, ManageWorkers, Read, ReadAudit,
 };
 
 /// Every operation the server answers, and what it requires.
@@ -521,6 +521,31 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
         "POST",
         "/api/v1/integrations/{integration_id}/jobs",
         Signed(Import),
+    ),
+    // Requests (ADR 0021): anybody signed in asks, and sees and withdraws
+    // their own; operators and administrators decide. Which requests a
+    // caller sees is the route's to narrow.
+    ("POST", "/api/v1/requests", Signed(Permission::Request)),
+    ("GET", "/api/v1/requests", Signed(Permission::Request)),
+    (
+        "GET",
+        "/api/v1/requests/{request_id}",
+        Signed(Permission::Request),
+    ),
+    (
+        "POST",
+        "/api/v1/requests/{request_id}/approve",
+        Signed(DecideRequests),
+    ),
+    (
+        "POST",
+        "/api/v1/requests/{request_id}/decline",
+        Signed(DecideRequests),
+    ),
+    (
+        "POST",
+        "/api/v1/requests/{request_id}/cancel",
+        Signed(Permission::Request),
     ),
     ("GET", "/api/v1/romm", Signed(Read)),
     ("GET", "/api/v1/editions/{edition_id}/romm", Signed(Read)),
@@ -1190,6 +1215,18 @@ impl ActionLimiter {
     #[must_use]
     pub fn uploads() -> Self {
         Self::new(UPLOADS_ALLOWED, URL_IMPORT_WINDOW)
+    }
+}
+
+/// Requests for items allowed per account within [`URL_IMPORT_WINDOW`]
+/// (docs/plans/requests.md).
+pub const REQUESTS_ALLOWED: u32 = 30;
+
+impl ActionLimiter {
+    /// The limiter for requests for items.
+    #[must_use]
+    pub fn requests() -> Self {
+        Self::new(REQUESTS_ALLOWED, URL_IMPORT_WINDOW)
     }
 }
 

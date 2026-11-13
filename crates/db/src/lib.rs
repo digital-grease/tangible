@@ -32,6 +32,7 @@ pub mod library;
 pub mod metrics;
 pub mod oidc;
 pub mod repositories;
+pub mod requests;
 pub mod restore;
 pub mod rips;
 pub mod romm;

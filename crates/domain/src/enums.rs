@@ -817,6 +817,79 @@ string_enum! {
     }
 }
 
+string_enum! {
+    /// What kind of item a request asks for (docs/plans/requests.md): the
+    /// catalog's own kinds, as far as a request needs them.
+    RequestKind {
+        /// A game, for a console or a computer.
+        Game => "game",
+        /// An audio CD.
+        Music => "music",
+        /// A film on a DVD or Blu-ray disc.
+        Movie => "movie",
+        /// A television series or season on discs.
+        Television => "television",
+        /// Software that is not a game: an operating system, an application.
+        Software => "software",
+        /// Anything else.
+        Other => "other",
+    }
+}
+
+string_enum! {
+    /// Where a request stands (docs/plans/requests.md, ADR 0021).
+    RequestState {
+        /// Asked for by a viewer, waiting for an operator or administrator.
+        PendingApproval => "pending_approval",
+        /// Approved: it may be searched for, and a release grabbed.
+        Approved => "approved",
+        /// Declined, saying why. Terminal.
+        Declined => "declined",
+        /// Withdrawn by its requester or an operator. Terminal.
+        Canceled => "canceled",
+        /// A release was handed to a download client; the import follows it.
+        Downloading => "downloading",
+        /// The import completed: the library has it. Terminal.
+        Fulfilled => "fulfilled",
+        /// The import ended without an artifact; another release may be
+        /// grabbed.
+        Failed => "failed",
+    }
+    default = PendingApproval
+}
+
+impl RequestState {
+    /// Whether the request is finished with, one way or another.
+    #[must_use]
+    pub const fn is_terminal(&self) -> bool {
+        matches!(self, Self::Declined | Self::Canceled | Self::Fulfilled)
+    }
+
+    /// Whether a request here may move to `next`. Nothing is searched for or
+    /// grabbed before approval; a download, once handed over, ends only by
+    /// its import, and a failed one may be grabbed again or withdrawn.
+    #[must_use]
+    pub const fn can_become(&self, next: Self) -> bool {
+        matches!(
+            (self, next),
+            (
+                Self::PendingApproval,
+                Self::Approved | Self::Declined | Self::Canceled
+            ) | (
+                Self::Approved,
+                Self::Downloading | Self::Declined | Self::Canceled
+            ) | (Self::Downloading, Self::Fulfilled | Self::Failed)
+                | (Self::Failed, Self::Downloading | Self::Canceled)
+        )
+    }
+
+    /// Whether a release may be searched for and grabbed for a request here.
+    #[must_use]
+    pub const fn may_grab(&self) -> bool {
+        matches!(self, Self::Approved | Self::Failed)
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {
@@ -876,7 +949,42 @@ mod tests {
             IntegrityState,
             IntegrityProblemKind,
             SourceRemovalState,
+            RequestKind,
+            RequestState,
         );
+    }
+
+    #[test]
+    fn a_request_is_searched_for_only_once_approved_and_nothing_leaves_an_end() {
+        use RequestState as S;
+        let allowed = [
+            (S::PendingApproval, S::Approved),
+            (S::PendingApproval, S::Declined),
+            (S::PendingApproval, S::Canceled),
+            (S::Approved, S::Downloading),
+            (S::Approved, S::Declined),
+            (S::Approved, S::Canceled),
+            (S::Downloading, S::Fulfilled),
+            (S::Downloading, S::Failed),
+            (S::Failed, S::Downloading),
+            (S::Failed, S::Canceled),
+        ];
+        for from in S::all() {
+            for to in S::all() {
+                assert_eq!(
+                    from.can_become(*to),
+                    allowed.contains(&(*from, *to)),
+                    "{from:?} -> {to:?}"
+                );
+            }
+            if from.is_terminal() {
+                assert!(S::all().iter().all(|to| !from.can_become(*to)), "{from:?}");
+            }
+        }
+        // A download cannot be withdrawn: the client has it.
+        assert!(!S::Downloading.can_become(S::Canceled));
+        assert!(S::Approved.may_grab() && S::Failed.may_grab());
+        assert!(!S::PendingApproval.may_grab() && !S::Downloading.may_grab());
     }
 
     #[test]
