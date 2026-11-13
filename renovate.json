@@ -1,26 +1,163 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "description": "Routine updates come once a week, a few grouped pull requests rather than one per dependency; each major version still gets its own, and security fixes come at once.",
+  "timezone": "America/Chicago",
+  "schedule": [
+    "before 6am on monday"
+  ],
   "minimumReleaseAge": "7 days",
   "internalChecksFilter": "strict",
   "dependencyDashboard": true,
-  "labels": ["dependencies"],
+  "labels": [
+    "dependencies"
+  ],
   "prConcurrentLimit": 0,
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": [
+      "before 6am on monday"
+    ],
+    "rebaseWhen": "behind-base-branch"
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "deploy/Dockerfile installs pnpm by version for the web build; web/package.json's packageManager names the same one for CI.",
+      "managerFilePatterns": [
+        "/^deploy/Dockerfile$/"
+      ],
+      "matchStrings": [
+        "npm install --global pnpm@(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "pnpm",
+      "datasourceTemplate": "npm"
+    }
+  ],
   "packageRules": [
     {
       "description": "The release workflow can push images and mint signing identities, so its actions stay pinned to commit digests; Renovate updates the digest and the version comment together.",
-      "matchManagers": ["github-actions"],
+      "matchManagers": [
+        "github-actions"
+      ],
       "pinDigests": true
     },
     {
       "description": "Base images are pinned by digest in deploy/Dockerfile so a release rebuilt from its tag uses the same bases.",
-      "matchManagers": ["dockerfile"],
+      "matchManagers": [
+        "dockerfile"
+      ],
       "pinDigests": true
     },
     {
+      "description": "Rust crates, minor and patch, in one pull request a week. A 0.x crate's minor version is a breaking one, so it is left to come on its own, as a major does.",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "matchCurrentVersion": "!/^v?0\\./",
+      "groupName": "Rust crates (non-major)",
+      "rebaseWhen": "behind-base-branch"
+    },
+    {
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchUpdateTypes": [
+        "patch"
+      ],
+      "groupName": "Rust crates (non-major)",
+      "rebaseWhen": "behind-base-branch"
+    },
+    {
+      "description": "The web UI's packages, minor and patch, in one pull request a week, 0.x minors excepted as for Rust.",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "matchCurrentVersion": "!/^v?0\\./",
+      "groupName": "web packages (non-major)",
+      "rebaseWhen": "behind-base-branch"
+    },
+    {
+      "matchManagers": [
+        "npm"
+      ],
+      "matchUpdateTypes": [
+        "patch"
+      ],
+      "groupName": "web packages (non-major)",
+      "rebaseWhen": "behind-base-branch"
+    },
+    {
+      "description": "GitHub Actions, short of a major, in one pull request a week.",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "digest",
+        "pinDigest"
+      ],
+      "groupName": "GitHub Actions (non-major)",
+      "rebaseWhen": "behind-base-branch"
+    },
+    {
+      "description": "Container images (the Dockerfile's bases, CI's service containers), short of a major, in one pull request a week.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "digest",
+        "pinDigest"
+      ],
+      "groupName": "container images (non-major)",
+      "rebaseWhen": "behind-base-branch"
+    },
+    {
+      "description": "The Rust toolchain moves rust-toolchain.toml, CI's container and the Dockerfile's build stage together, and a new one brings new lints, so it comes on its own.",
+      "matchPackageNames": [
+        "rust"
+      ],
+      "groupName": "Rust toolchain"
+    },
+    {
+      "description": "pnpm is named twice, by web/package.json for CI and by deploy/Dockerfile for the image, and the two move together.",
+      "matchPackageNames": [
+        "pnpm"
+      ],
+      "groupName": "pnpm"
+    },
+    {
+      "description": "The overrides in web/pnpm-workspace.yaml force a patched release of a dependency's own major, so a new major is never the fix there.",
+      "matchFileNames": [
+        "web/pnpm-workspace.yaml"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "enabled": false
+    },
+    {
       "description": "PostgreSQL major versions need a dump and restore, so they are never proposed as an ordinary update.",
-      "matchPackageNames": ["postgres"],
-      "matchUpdateTypes": ["major"],
+      "matchPackageNames": [
+        "postgres"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
       "enabled": false
     }
   ]
