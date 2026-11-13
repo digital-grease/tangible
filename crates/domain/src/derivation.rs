@@ -474,7 +474,7 @@ pub fn content_digest<'a>(
         hasher.update(path.as_bytes());
         hasher.update([0]);
         hasher.update(digest.as_bytes());
-        hasher.update([b'\n']);
+        hasher.update(b"\n");
     }
     Sha256Digest::from_bytes(hasher.finalize().into())
 }

@@ -144,7 +144,7 @@ fn classify_v6(address: Ipv6Addr) -> Option<Range> {
         |at: usize| Ipv4Addr::new(octets[at], octets[at + 1], octets[at + 2], octets[at + 3]);
     // ::ffff:a.b.c.d, and the deprecated IPv4-compatible ::a.b.c.d.
     if segments[..5] == [0; 5] && (segments[5] == 0xffff || segments[5] == 0) {
-        return classify_v4(embedded(12)).or(Some(Range::Reserved).filter(|_| segments[5] == 0));
+        return classify_v4(embedded(12)).or((segments[5] == 0).then_some(Range::Reserved));
     }
     // NAT64, 64:ff9b::/96: the IPv4 address it translates to decides.
     if segments[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {

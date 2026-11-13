@@ -312,7 +312,7 @@ fn tar_header(name: &str, kind: u8, size_field: &[u8]) -> Vec<u8> {
 fn a_huge_tar_extension_header_is_refused_before_it_is_read() {
     // A GNU long name declaring 8 GiB (octal 77777777777), with nothing
     // after: the reader would hold it whole in memory.
-    for kind in [b'L', b'K', b'x', b'g'] {
+    for kind in *b"LKxg" {
         let dir = TempDir::new().unwrap();
         let archive = dir.path().join("long.tar");
         std::fs::write(

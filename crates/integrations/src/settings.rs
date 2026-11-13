@@ -312,8 +312,7 @@ impl S3Settings {
         }
         if !settings.path_style
             && Url::parse(&endpoint)
-                .ok()
-                .is_some_and(|url| !matches!(url.host(), Some(url::Host::Domain(_))))
+                .is_ok_and(|url| !matches!(url.host(), Some(url::Host::Domain(_))))
         {
             return Err(refuse(
                 "an endpoint given as an address needs path_style: a bucket cannot be a \

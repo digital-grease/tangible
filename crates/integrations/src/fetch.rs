@@ -330,7 +330,7 @@ mod tests {
     use std::net::SocketAddr;
     use std::sync::{Arc, Mutex};
 
-    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    use tokio::io::AsyncReadExt as _;
 
     use super::*;
     use crate::outbound::OutboundPolicy;

@@ -1011,7 +1011,7 @@ async fn first_difference(
         if swapped {
             // Chunks are whole sectors' worth of even length, so samples
             // never straddle two reads.
-            for pair in buf_b[..want].chunks_exact_mut(2) {
+            for pair in buf_b[..want].as_chunks_mut::<2>().0 {
                 pair.swap(0, 1);
             }
         }

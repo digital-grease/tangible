@@ -806,11 +806,11 @@ fn raw_sectors(tag: &str, sectors: usize, subchannel: usize) -> (Vec<u8>, Vec<u8
     ]);
     main[15] = 1;
     main[16..16 + tag.len()].copy_from_slice(tag.as_bytes());
-    for (sector, bytes) in main.chunks_exact_mut(RAW).enumerate().skip(1) {
+    for (sector, bytes) in main.as_chunks_mut::<RAW>().0.iter_mut().enumerate().skip(1) {
         bytes[..8].copy_from_slice(&(sector as u64).to_le_bytes());
     }
     let mut interleaved = Vec::with_capacity((RAW + subchannel) * sectors);
-    for bytes in main.chunks_exact(RAW) {
+    for bytes in main.as_chunks::<RAW>().0 {
         interleaved.extend_from_slice(bytes);
         interleaved.resize(interleaved.len() + subchannel, 0xAA);
     }
