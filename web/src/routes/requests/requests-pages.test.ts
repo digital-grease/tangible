@@ -430,4 +430,72 @@ describe('A request', () => {
     render(RequestPage);
     expect(await screen.findByText('Could not load this request')).toBeTruthy();
   });
+
+  it('offers a decider a release search once it is approved, and nobody else', async () => {
+    const asked = server({
+      '/api/v1/requests/q1': {
+        status: 200,
+        body: request({ state: 'approved', decided_by: 'operator', can_search: true }),
+      },
+      '/api/v1/requests/q1/search': problem(404, 'NOT_FOUND', 'no search is held'),
+      '/api/v1/report-settings': SETTINGS,
+    });
+    const { container } = render(RequestPage);
+    expect(await screen.findByRole('heading', { name: 'Find a release' })).toBeTruthy();
+    expect(screen.getByRole('searchbox', { name: /Words to search for/ })).toBeTruthy();
+    // Nothing held is not a problem worth showing.
+    await vi.waitFor(() =>
+      expect(asked.map((call) => call.url)).toContain('/api/v1/requests/q1/search'),
+    );
+    expect(screen.queryByText('no search is held')).toBeNull();
+    expect(await axeViolations(container)).toEqual([]);
+  });
+
+  it('shows no release search to a requester', async () => {
+    server({
+      '/api/v1/requests/q1': {
+        status: 200,
+        body: request({ state: 'approved', decided_by: 'operator', can_search: false }),
+      },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    render(RequestPage);
+    expect(await screen.findByText(/finds a release for it next/)).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Find a release' })).toBeNull();
+  });
+
+  it("follows the download's progress while it downloads", async () => {
+    server({
+      '/api/v1/requests/q1': {
+        status: 200,
+        body: request({
+          state: 'downloading',
+          decided_by: 'operator',
+          integration_id: 'c1',
+          import_id: 'i1',
+          can_cancel: false,
+        }),
+      },
+      '/api/v1/imports/i1': {
+        status: 200,
+        body: {
+          id: 'i1',
+          state: 'acquiring',
+          source_kind: 'qbittorrent_job',
+          bytes_received: 150_000,
+          bytes_expected: 300_000,
+          error_code: null,
+        },
+      },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    const { container } = render(RequestPage);
+    const bar = await screen.findByRole('progressbar', { name: 'The download' });
+    expect(bar.getAttribute('aria-valuenow')).toBe('50');
+    expect(screen.getByText(/Downloading in qBittorrent: 146.5 KiB of 293.0 KiB/)).toBeTruthy();
+    expect(
+      screen.getByRole('link', { name: 'Follow the download on the Imports page' }),
+    ).toBeTruthy();
+    expect(await axeViolations(container)).toEqual([]);
+  });
 });

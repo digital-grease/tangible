@@ -228,16 +228,18 @@
 
 <PageHeader
   title="Integrations"
-  description="Download clients you already run, S3-compatible storage, the API of the RomM the export writes into, and the metadata providers requests are found through."
+  description="Download clients you already run, S3-compatible storage, the API of the RomM the export writes into, the Prowlarr requests are searched for in, and the metadata providers requests are found through."
 />
 
 <p class="lede">
   Tangible hands a client a torrent or an NZB and imports what it finishes; operators may import
-  objects from the storage; RomM is asked only to find and scan what the export wrote; a metadata
-  provider is asked only for the words somebody searched for, to find an item to ask for. Tangible
-  never searches for a download on its own, never asks a client to run a script, and never changes
-  anything in RomM. It removes what it imported from a client or bucket only where you choose that
-  below, and only once the library's copy has been checked.
+  objects from the storage; RomM is asked only to find and scan what the export wrote; Prowlarr is
+  searched only when an operator searches for an approved request, and a release goes to a client
+  only once they pick it; a metadata provider is asked only for the words somebody searched for, to
+  find an item to ask for. Tangible never searches for a download on its own, never asks a client to
+  run a script, and never changes anything in RomM or Prowlarr. It removes what it imported from a
+  client or bucket only where you choose that below, and only once the library's copy has been
+  checked.
 </p>
 
 <div>
@@ -570,6 +572,14 @@
                 scopes
                 <code>platforms.read</code>, <code>roms.read</code> and <code>tasks.run</code>, then
                 Test it here.
+              </p></Callout
+            >
+          {:else if form.kind === 'prowlarr'}
+            <Callout role="note"
+              ><p>
+                Prowlarr shows its API key under Settings, then General. Tangible searches the
+                indexers you added in Prowlarr, and adds or changes none. A release it finds is
+                fetched through Prowlarr and handed to one of the download clients here.
               </p></Callout
             >
           {:else}

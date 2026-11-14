@@ -17,6 +17,11 @@ export type CreateItemRequest = components['schemas']['CreateItemRequest'];
 export type MetadataSearchView = components['schemas']['MetadataSearchView'];
 export type MetadataCandidate = components['schemas']['MetadataCandidateView'];
 export type MetadataSource = components['schemas']['MetadataSourceView'];
+export type ReleaseSearchView = components['schemas']['ReleaseSearchView'];
+export type ReleaseView = components['schemas']['ReleaseView'];
+export type GrabView = components['schemas']['GrabView'];
+export type DownloadClientChoice = components['schemas']['DownloadClientChoiceView'];
+export type ImportView = components['schemas']['ImportView'];
 
 /** One choice of a select, as `Select` takes it. */
 export interface Choice {
@@ -319,6 +324,134 @@ export function requestRefusal(code: string): string | null {
       return 'Tick the box to say you own this item. A request cannot be made without it.';
     case 'RATE_LIMITED':
       return 'This account has made many requests in the last hour. Try again later.';
+    default:
+      return null;
+  }
+}
+
+// --- finding a release (ADR 0021, docs/plans/requests.md Q3 and Q4) ---------
+
+/**
+ * Search Prowlarr for an approved request's releases: by its title, or by
+ * `words` when a person gives them.
+ */
+export function searchReleases(
+  id: string,
+  words: string | null,
+  fetcher: typeof fetch = apiFetch,
+): Promise<Result<ReleaseSearchView>> {
+  const trimmed = words?.trim();
+  return apiCall(
+    fetcher,
+    `/api/v1/requests/${encodeURIComponent(id)}/search`,
+    'POST',
+    trimmed ? { query: trimmed } : {},
+  );
+}
+
+/** The search held for a request, for an hour after it was made. */
+export function loadReleaseSearch(
+  id: string,
+  fetcher: typeof fetch = apiFetch,
+): Promise<Result<ReleaseSearchView>> {
+  return apiCall(fetcher, `/api/v1/requests/${encodeURIComponent(id)}/search`);
+}
+
+/** Grab a release from the search held, for the client chosen or the only one. */
+export function grabRelease(
+  id: string,
+  resultId: string,
+  integrationId: string | null,
+  fetcher: typeof fetch = apiFetch,
+): Promise<Result<GrabView>> {
+  return apiCall(fetcher, `/api/v1/requests/${encodeURIComponent(id)}/grab`, 'POST', {
+    result_id: resultId,
+    ...(integrationId ? { integration_id: integrationId } : {}),
+  });
+}
+
+/** The import a request's download is followed by. */
+export function loadRequestImport(
+  importId: string,
+  fetcher: typeof fetch = apiFetch,
+): Promise<Result<ImportView>> {
+  return apiCall(fetcher, `/api/v1/imports/${encodeURIComponent(importId)}`);
+}
+
+/** How a release is fetched, in words. */
+export function protocolLabel(protocol: string): string {
+  switch (protocol) {
+    case 'torrent':
+      return 'Torrent';
+    case 'usenet':
+      return 'Usenet';
+    default:
+      return protocol;
+  }
+}
+
+/** How old something posted at `published` is, in words: days, months or years. */
+export function releaseAge(published: string | null | undefined, now = Date.now()): string {
+  if (!published) return 'Not said';
+  const at = Date.parse(published);
+  if (Number.isNaN(at)) return 'Not said';
+  const days = Math.max(0, Math.floor((now - at) / 86_400_000));
+  if (days === 0) return 'Today';
+  if (days === 1) return '1 day';
+  if (days < 60) return `${days} days`;
+  const months = Math.floor(days / 30.44);
+  if (months < 24) return `${months} months`;
+  return `${Math.floor(days / 365.25)} years`;
+}
+
+/** Who has a release: a torrent's seeders and leechers, or an NZB's grabs. */
+export function releasePeers(release: ReleaseView): string {
+  if (release.protocol === 'torrent') {
+    if (release.seeders == null) return 'Not said';
+    const leeching = release.leechers == null ? '' : `, ${release.leechers} leeching`;
+    return `${release.seeders} seeding${leeching}`;
+  }
+  return release.grabs == null ? 'Not said' : `${release.grabs} grabs`;
+}
+
+/** The download clients that take `protocol`. */
+export function clientsFor(
+  search: Pick<ReleaseSearchView, 'clients'>,
+  protocol: string,
+): DownloadClientChoice[] {
+  return search.clients.filter((client) => client.protocol === protocol);
+}
+
+/** What was searched for, in words. */
+export function searchedFor(search: Pick<ReleaseSearchView, 'searched_by' | 'query'>): string {
+  return search.searched_by === 'imdb_id'
+    ? `Searched by IMDb ID ${search.query}`
+    : `Searched for “${search.query}”`;
+}
+
+/** What a grab did, in words, naming the client it went to. */
+export function grabOutcome(grab: Pick<GrabView, 'outcome'>, client: string): string {
+  switch (grab.outcome) {
+    case 'resubmitted':
+      return `Handed to ${client} again: the earlier import of the same download ended without reaching the library.`;
+    case 'already_active':
+      return `${client} already has this download; the request follows it.`;
+    case 'already_imported':
+      return 'The library already holds what this release downloads, so the request is fulfilled.';
+    default:
+      return `Handed to ${client}. The request follows the download, and is fulfilled once it is in the library.`;
+  }
+}
+
+/** Why a search or grab was refused, in words to act on, where the detail will not do. */
+export function releaseRefusal(code: string): string | null {
+  switch (code) {
+    case 'SEARCH_EXPIRED':
+      return 'That search is over an hour old, or the server has restarted since. Search again, then pick a release.';
+    case 'RATE_LIMITED':
+      return 'This account has searched many times in the last hour. Try again later.';
+    case 'INTEGRATION_AUTH_FAILED':
+      return "Prowlarr refused the API key, or an indexer refused the release's link. An administrator can check the key on the Integrations page.";
     default:
       return null;
   }

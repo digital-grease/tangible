@@ -6,21 +6,33 @@ import {
   KINDS,
   STATE_FILTERS,
   candidateLine,
+  clientsFor,
   createRequest,
   declineRequest,
   detailsOf,
+  grabOutcome,
+  grabRelease,
   imdbId,
   kindLabel,
+  loadReleaseSearch,
+  loadRequestImport,
   loadRequests,
+  protocolLabel,
   providerLabel,
   refLabel,
+  releaseAge,
+  releasePeers,
+  releaseRefusal,
   requestFields,
   requestNext,
   requestRefusal,
   requestStateLabel,
   requestStateTone,
   searchMetadata,
+  searchReleases,
+  searchedFor,
   sourceNote,
+  type ReleaseView,
 } from './requests';
 
 function recorder() {
@@ -185,5 +197,73 @@ describe('requests', () => {
     expect(requestFields(null, {}, 'tt0083658').refs).toEqual([
       { provider: 'imdb', external_id: 'tt0083658' },
     ]);
+  });
+
+  it('searches, loads the search held and grabs, each at its route', async () => {
+    const { asked, fetcher } = recorder();
+    await searchReleases('r/1', '  big buck bunny  ', fetcher);
+    await searchReleases('r1', '   ', fetcher);
+    await loadReleaseSearch('r1', fetcher);
+    await grabRelease('r1', 'x1', null, fetcher);
+    await grabRelease('r1', 'x1', 'c1', fetcher);
+    await loadRequestImport('i/1', fetcher);
+    expect(asked).toEqual([
+      {
+        url: '/api/v1/requests/r%2F1/search',
+        method: 'POST',
+        body: '{"query":"big buck bunny"}',
+      },
+      { url: '/api/v1/requests/r1/search', method: 'POST', body: '{}' },
+      { url: '/api/v1/requests/r1/search', method: 'GET' },
+      { url: '/api/v1/requests/r1/grab', method: 'POST', body: '{"result_id":"x1"}' },
+      {
+        url: '/api/v1/requests/r1/grab',
+        method: 'POST',
+        body: '{"result_id":"x1","integration_id":"c1"}',
+      },
+      { url: '/api/v1/imports/i%2F1', method: 'GET' },
+    ]);
+  });
+
+  it('says a release in words: its protocol, age and who has it', () => {
+    expect(protocolLabel('torrent')).toBe('Torrent');
+    expect(protocolLabel('usenet')).toBe('Usenet');
+    const now = Date.parse('2026-11-13T12:00:00Z');
+    expect(releaseAge(null, now)).toBe('Not said');
+    expect(releaseAge('nonsense', now)).toBe('Not said');
+    expect(releaseAge('2026-11-13T08:00:00Z', now)).toBe('Today');
+    expect(releaseAge('2026-11-12T08:00:00Z', now)).toBe('1 day');
+    expect(releaseAge('2026-10-04T12:00:00Z', now)).toBe('40 days');
+    expect(releaseAge('2025-10-09T12:00:00Z', now)).toBe('13 months');
+    expect(releaseAge('2023-11-13T12:00:00Z', now)).toBe('3 years');
+    const torrent = { protocol: 'torrent', seeders: 48, leechers: 4 } as ReleaseView;
+    expect(releasePeers(torrent)).toBe('48 seeding, 4 leeching');
+    expect(releasePeers({ ...torrent, leechers: null })).toBe('48 seeding');
+    expect(releasePeers({ ...torrent, seeders: null })).toBe('Not said');
+    expect(releasePeers({ protocol: 'usenet', grabs: 7 } as ReleaseView)).toBe('7 grabs');
+    expect(releasePeers({ protocol: 'usenet' } as ReleaseView)).toBe('Not said');
+  });
+
+  it('says what was searched for, which clients take what, and what a grab did', () => {
+    expect(searchedFor({ searched_by: 'imdb_id', query: 'tt1254207' })).toBe(
+      'Searched by IMDb ID tt1254207',
+    );
+    expect(searchedFor({ searched_by: 'words', query: 'Big Buck Bunny' })).toBe(
+      'Searched for “Big Buck Bunny”',
+    );
+    const clients = [
+      { id: 'q', name: 'qBittorrent', protocol: 'torrent' },
+      { id: 's', name: 'SABnzbd', protocol: 'usenet' },
+      { id: 'n', name: 'NZBGet', protocol: 'usenet' },
+    ];
+    expect(clientsFor({ clients }, 'usenet').map((client) => client.id)).toEqual(['s', 'n']);
+    expect(grabOutcome({ outcome: 'created' }, 'qBittorrent')).toMatch(/^Handed to qBittorrent\./);
+    expect(grabOutcome({ outcome: 'already_active' }, 'qBittorrent')).toMatch(/already has/);
+    expect(grabOutcome({ outcome: 'already_imported' }, 'qBittorrent')).toMatch(/fulfilled/);
+    expect(grabOutcome({ outcome: 'resubmitted' }, 'qBittorrent')).toMatch(/again/);
+    expect(releaseRefusal('SEARCH_EXPIRED')).toMatch(/Search again/);
+    expect(releaseRefusal('RATE_LIMITED')).toMatch(/Try again later/);
+    expect(releaseRefusal('INTEGRATION_AUTH_FAILED')).toMatch(/API key/);
+    expect(releaseRefusal('CONFLICT')).toBeNull();
   });
 });

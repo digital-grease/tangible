@@ -3,17 +3,23 @@
 <script lang="ts">
   // One request (ADR 0021): what was asked for, by whom, where it stands,
   // and what the person looking may do to it, as the server says in its
-  // `can_*` fields. Declining asks why; the requester sees the reason.
+  // `can_*` fields. Declining asks why; the requester sees the reason. An
+  // operator or administrator finds a release for it here once it is
+  // approved, and anybody who may see it follows the download's progress.
   import { onDestroy, onMount } from 'svelte';
   import { names, watch } from '$lib/events';
   import { page } from '$app/state';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
+  import ReleaseSearch from '$lib/components/ReleaseSearch.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import Confirm from '$lib/components/ui/Confirm.svelte';
   import Field from '$lib/components/ui/Field.svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Panel from '$lib/components/ui/Panel.svelte';
+  import Progress from '$lib/components/ui/Progress.svelte';
   import StatusMark from '$lib/components/ui/StatusMark.svelte';
+  import { importStateLabel, transferFraction } from '$lib/imports';
+  import { formatBytes } from '$lib/library';
   import {
     approveRequest,
     cancelRequest,
@@ -21,10 +27,13 @@
     detailLabel,
     kindLabel,
     loadRequest,
+    loadRequestImport,
     refLabel,
     requestNext,
     requestStateLabel,
     requestStateTone,
+    type GrabView,
+    type ImportView,
     type RequestView,
   } from '$lib/requests';
   import type { Problem } from '$lib/session';
@@ -35,6 +44,8 @@
     | { kind: 'ready'; data: RequestView };
 
   let view = $state<View>({ kind: 'loading' });
+  /** The download's import, while the request follows one. */
+  let download = $state<ImportView | null>(null);
   let refusal = $state<{ problem: Problem; endpoint: string } | null>(null);
   let working = $state(false);
   let declining = $state(false);
@@ -51,18 +62,38 @@
 
   async function refresh() {
     const next = await loadRequest(id);
-    if (next.kind === 'ok') view = { kind: 'ready', data: next.data };
+    if (next.kind === 'ok') {
+      view = { kind: 'ready', data: next.data };
+      await follow(next.data);
+    }
     // A failed poll leaves what is on screen alone.
     else if (view.kind !== 'ready') view = { kind: 'error', problem: next.problem };
   }
 
+  /** Load the download's import while the request is downloading. */
+  async function follow(next: RequestView) {
+    if (next.state !== 'downloading' || !next.import_id) {
+      download = null;
+      return;
+    }
+    const result = await loadRequestImport(next.import_id);
+    // Progress is a nicety: an import that cannot be read leaves the link.
+    download = result.kind === 'ok' ? result.data : null;
+  }
+
   onMount(() => {
     void refresh();
-    stopWatching = watch(['requests'], () => void refresh(), {
+    stopWatching = watch(['requests', 'imports'], () => void refresh(), {
       fallbackMs: FALLBACK_MS,
-      relevant: (event) => names(event, id),
+      relevant: (event) =>
+        names(event, id) || (!!request?.import_id && names(event, request.import_id)),
     });
   });
+
+  function grabbed(grab: GrabView) {
+    view = { kind: 'ready', data: grab.request };
+    void follow(grab.request);
+  }
 
   onDestroy(() => stopWatching?.());
 
@@ -154,6 +185,20 @@
       <p><a href={`/library/${request.artifact_id}`}>Open it in the library</a></p>
     {/if}
     {#if request.import_id && request.state === 'downloading'}
+      {#if download}
+        {@const fraction = transferFraction(download)}
+        <div class="download">
+          <Progress value={fraction} label="The download" />
+          <p>
+            {importStateLabel(
+              download.state,
+              download.source_kind,
+              download.error_code,
+            )}{#if download.bytes_expected}:
+              {formatBytes(download.bytes_received)} of {formatBytes(download.bytes_expected)}{/if}.
+          </p>
+        </div>
+      {/if}
       <p><a href="/imports">Follow the download on the Imports page</a></p>
     {/if}
     {#if request.error_code}
@@ -212,6 +257,12 @@
 
   {#if refusal}
     <ErrorPanel problem={refusal.problem} area="other" endpoint={refusal.endpoint} refusal />
+  {/if}
+
+  {#if request.can_search}
+    <div class="releases">
+      <ReleaseSearch {request} ongrabbed={grabbed} />
+    </div>
   {/if}
 
   <Panel title="Details">
@@ -279,6 +330,13 @@
   .question {
     margin-bottom: var(--space-4);
     max-width: 75ch;
+  }
+  .releases {
+    margin-bottom: var(--space-4);
+  }
+  .download {
+    margin-top: var(--space-3);
+    max-width: 40rem;
   }
   .facts {
     display: grid;

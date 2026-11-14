@@ -442,6 +442,51 @@ describe('Integrations page', () => {
     expect((screen.getByLabelText('Client token') as HTMLInputElement).value).toBe('');
   });
 
+  it('adds a Prowlarr with its address and API key, and nothing else', async () => {
+    const prowlarr = nas({
+      id: 'p1',
+      kind: 'prowlarr',
+      name: 'Prowlarr',
+      settings: { base_url: 'http://192.168.1.13:9696/' },
+      secrets: [{ field: 'api_key', set: true }],
+    });
+    const asked = server({
+      'GET /api/v1/integrations': [list([]), list([prowlarr]), list([prowlarr])],
+      'GET /api/v1/import-sources': sources,
+      'POST /api/v1/integrations': { status: 201, body: prowlarr },
+      'POST /api/v1/integrations/p1/test': {
+        status: 200,
+        body: { ok: true, api_version: '2.7.0.5723', checks: [] },
+      },
+    });
+    const { container } = render(IntegrationsPage);
+    await screen.findByText(/No integrations yet/);
+    await fireEvent.change(screen.getByLabelText('Kind'), { target: { value: 'prowlarr' } });
+    expect(screen.getByText(/It never changes anything in Prowlarr/)).toBeTruthy();
+    expect(screen.getByText(/adds or changes none/)).toBeTruthy();
+    expect(screen.queryByLabelText('Category')).toBeNull();
+    expect(screen.queryByRole('group', { name: /After an import/ })).toBeNull();
+    expect(await axeViolations(container)).toEqual([]);
+    await fill('Name', 'Prowlarr');
+    await fill('Prowlarr address', 'http://192.168.1.13:9696/');
+    await fill('API key', 'the-key');
+    await fireEvent.click(screen.getByRole('button', { name: 'Add Prowlarr' }));
+    expect(await screen.findByText('Added Prowlarr.')).toBeTruthy();
+    expect(asked.find((a) => a.method === 'POST')?.body).toEqual({
+      kind: 'prowlarr',
+      name: 'Prowlarr',
+      enabled: true,
+      settings: { base_url: 'http://192.168.1.13:9696/' },
+      secrets: { api_key: 'the-key' },
+    });
+    expect((screen.getByLabelText('API key') as HTMLInputElement).value).toBe('');
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Test Prowlarr' }));
+    expect(
+      await screen.findByText(/answered as Prowlarr 2.7.0.5723; its indexers can be searched/),
+    ).toBeTruthy();
+  });
+
   it("tries RomM's API and lists what it checked, in words", async () => {
     const rommApi = nas({
       id: 'a1',

@@ -64,6 +64,8 @@ export function versionLabel(kind: string): string {
       return 'WebUI API';
     case 'romm_api':
       return 'RomM';
+    case 'prowlarr':
+      return 'Prowlarr';
     default:
       return 'version';
   }
@@ -75,6 +77,12 @@ export function testOutcome(name: string, test: IntegrationTestView, kind = 'qbi
     const version = test.api_version ? ` ${test.api_version}` : '';
     return test.ok
       ? `${name} answered as RomM${version}; exported games can be found.`
+      : `${name} will not do: ${test.detail ?? test.error_code ?? 'no reason given'}`;
+  }
+  if (kind === 'prowlarr') {
+    const version = test.api_version ? ` ${test.api_version}` : '';
+    return test.ok
+      ? `${name} answered as Prowlarr${version}; its indexers can be searched for approved requests.`
       : `${name} will not do: ${test.detail ?? test.error_code ?? 'no reason given'}`;
   }
   if (test.ok) {
@@ -104,6 +112,8 @@ export function kindLabel(kind: string): string {
       return 'TMDB';
     case 'igdb':
       return 'IGDB';
+    case 'prowlarr':
+      return 'Prowlarr';
     default:
       return kind;
   }
@@ -155,15 +165,29 @@ export function secretsLabel(view: Pick<IntegrationView, 'secrets'>): string {
 }
 
 function fieldLabel(field: string): string {
-  const words = field.replace(/_/g, ' ');
+  // Initialisms as they are written: "API key", "Client ID".
+  const words = field
+    .split('_')
+    .map((word) => (word === 'api' || word === 'id' ? word.toUpperCase() : word))
+    .join(' ');
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-/** The integrations an administrator can set up here: download clients, S3, and RomM's API. */
-export type ClientKind = 'qbittorrent' | 'sabnzbd' | 'nzbget' | 's3' | 'romm_api';
+/**
+ * The integrations an administrator can set up with this form: download
+ * clients, S3, RomM's API, and the Prowlarr requests are searched for in.
+ */
+export type ClientKind = 'qbittorrent' | 'sabnzbd' | 'nzbget' | 's3' | 'romm_api' | 'prowlarr';
 
 /** The kinds, in the order offered. */
-export const CLIENT_KINDS: ClientKind[] = ['qbittorrent', 'sabnzbd', 'nzbget', 's3', 'romm_api'];
+export const CLIENT_KINDS: ClientKind[] = [
+  'qbittorrent',
+  'sabnzbd',
+  'nzbget',
+  's3',
+  'romm_api',
+  'prowlarr',
+];
 
 /** Whether an integration's kind has a form here. */
 export function isClientKind(kind: string): kind is ClientKind {
@@ -257,6 +281,21 @@ export function clientWording(kind: ClientKind): ClientWording {
           'Finds exported games in RomM, links to their pages, and asks RomM to scan what the ' +
           'export changed. It never changes anything in RomM. There is one, for the one export.',
       };
+    case 'prowlarr':
+      return {
+        downloads: false,
+        secretField: 'api_key',
+        secretLabel: 'API key',
+        usernameLabel: null,
+        addressLabel: 'Prowlarr address',
+        addressExample: 'http://192.168.1.13:9696/',
+        folderExample: '',
+        takes: '',
+        purpose:
+          "Searched for an approved request's releases, when an operator asks; a release goes " +
+          'to one of the download clients here only once they pick it. It never changes ' +
+          'anything in Prowlarr. There is one.',
+      };
   }
 }
 
@@ -294,7 +333,7 @@ export type AfterImport = 'keep' | 'remove';
 
 /** Whether a kind can remove its sources after import. */
 export function removesAfterImport(kind: ClientKind): boolean {
-  return kind !== 'romm_api';
+  return kind !== 'romm_api' && kind !== 'prowlarr';
 }
 
 /** How the two choices read for a kind, and what removing takes. */
@@ -330,6 +369,7 @@ export function afterImportWording(kind: ClientKind): {
           's3:DeleteObject, and s3:DeleteObjectVersion for a versioned bucket.',
       };
     case 'romm_api':
+    case 'prowlarr':
       return { keep: '', remove: '', needs: '' };
   }
 }
@@ -411,6 +451,8 @@ export function parseBuckets(text: string): string[] {
 }
 
 function clientSettings(form: ClientForm): Record<string, unknown> {
+  // Prowlarr refuses a settings field it does not know.
+  if (form.kind === 'prowlarr') return { base_url: form.baseUrl.trim() };
   if (form.kind === 'romm_api') {
     const settings: Record<string, unknown> = {
       base_url: form.baseUrl.trim(),

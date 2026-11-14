@@ -131,7 +131,7 @@ describe('Metadata providers', () => {
     render(MetadataProviders, {
       props: { items: [provider('igdb')], onchanged: async () => {} },
     });
-    expect(screen.getByText('Client id set, Client secret set')).toBeTruthy();
+    expect(screen.getByText('Client ID set, Client secret set')).toBeTruthy();
 
     await fireEvent.click(screen.getByRole('button', { name: 'Test IGDB' }));
     expect(await screen.findByText('IGDB did not work: Twitch refused')).toBeTruthy();

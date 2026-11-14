@@ -65,7 +65,7 @@ describe('integration labels', () => {
       'Password not set',
     );
     expect(secretsLabel(qbittorrent({ secrets: [{ field: 'api_key', set: true }] }))).toBe(
-      'Api key set',
+      'API key set',
     );
     expect(secretsLabel(qbittorrent({ secrets: [] }))).toBe('None needed');
   });
@@ -267,6 +267,45 @@ describe('the download client form', () => {
     expect(updateClientRequest({ ...edited, clearSecret: true }).secrets).toEqual({ token: null });
   });
 
+  it('makes a Prowlarr with its address and API key alone', () => {
+    const form = {
+      ...emptyClientForm('prowlarr', ['downloads']),
+      name: 'Prowlarr',
+      baseUrl: ' http://prowlarr:9696/ ',
+      secret: 'the-key',
+    };
+    expect(createClientRequest(form)).toEqual({
+      kind: 'prowlarr',
+      name: 'Prowlarr',
+      enabled: true,
+      settings: { base_url: 'http://prowlarr:9696/' },
+      secrets: { api_key: 'the-key' },
+    });
+    expect(kindLabel('prowlarr')).toBe('Prowlarr');
+    expect(versionLabel('prowlarr')).toBe('Prowlarr');
+    expect(isClientKind('prowlarr')).toBe(true);
+    const edited = clientFormFrom({
+      ...qbittorrent({
+        kind: 'prowlarr',
+        settings: { base_url: 'http://prowlarr:9696/' },
+        secrets: [{ field: 'api_key', set: true }],
+      }),
+      kind: 'prowlarr',
+    });
+    expect(updateClientRequest(edited)).toEqual({
+      name: edited.name,
+      enabled: true,
+      settings: { base_url: 'http://prowlarr:9696/' },
+    });
+    expect(
+      testOutcome(
+        'Prowlarr',
+        { ok: false, error_code: 'X', detail: 'no indexer', checks: [] },
+        'prowlarr',
+      ),
+    ).toBe('Prowlarr will not do: no indexer');
+  });
+
   it('says what to do when the server has no key', () => {
     const problem = (code: string, detail: string): Problem => ({
       type: 'about:blank',
@@ -351,6 +390,7 @@ describe('removing after import', () => {
       expect(afterImportWording(kind).remove).not.toBe('');
     }
     expect(removesAfterImport('romm_api')).toBe(false);
+    expect(removesAfterImport('prowlarr')).toBe(false);
     expect(afterImportWording('sabnzbd').needs).toContain('TANGIBLE_REMOVABLE_ROOTS');
     expect(afterImportWording('s3').needs).toContain('s3:DeleteObject');
   });

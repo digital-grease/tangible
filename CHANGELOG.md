@@ -29,19 +29,20 @@ may change between minor versions, and the release notes say how.
   for, at public addresses only, kept to each provider's rate limit; a
   provider that fails is named and the rest still answer. Picking what was
   found fills in the request. Migration 0036 adds the provider kinds.
-- Finding a release for an approved request (ADR 0021), in the API: an
-  administrator adds their Prowlarr as an integration (its address and API
-  key), and an operator or administrator searches it for a request's
-  releases, by its title in the categories its kind suits, or a film by its
-  IMDb ID. What it finds is ranked by how well it matches, each saying why,
-  and held for an hour; a person picks one, and Tangible fetches its
+- Finding a release for an approved request (ADR 0021): an administrator
+  adds their Prowlarr on the Integrations page (its address and API key),
+  and an operator or administrator searches it from the request's page, by
+  the request's title in the categories its kind suits, a film by its IMDb
+  ID, or other words. What it finds is listed best first, each release
+  saying why it ranks there, and held for an hour; Grab on one asks first,
+  naming the download client it goes to, then Tangible fetches its
   .torrent, NZB or magnet link through Prowlarr, checks it, and hands it to
-  one of its own download clients, as a job handed over by hand is. The
-  request then follows the import, and is fulfilled with the artifact when
-  it completes, or failed when it does not, so another can be grabbed.
-  Nothing is searched for or grabbed on its own. Prowlarr's download links
-  carry its key, so they are never shown, logged or audited, and are held
-  only sealed. Migration 0037 adds the Prowlarr kind.
+  that client, as a job handed over by hand is. The request then follows
+  the import, its progress shown on its page, and is fulfilled with the
+  artifact when it completes, or failed when it does not, so another can be
+  grabbed. Nothing is searched for or grabbed on its own. Prowlarr's
+  download links carry its key, so they are never shown, logged or
+  audited, and are held only sealed. Migration 0037 adds the Prowlarr kind.
 - A "Buy me a coffee" link at the foot of the web UI's sidebar, under the
   source code link, and a button in the README, for anyone who wants to
   support Tangible's development. The link is plain text: the page loads
