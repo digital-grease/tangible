@@ -1328,9 +1328,10 @@ export interface paths {
          * @description Hand a job the operator already has to a download client, in its \
          *                        category: a magnet link or a .torrent file (base64) to qBittorrent, an NZB \
          *                        (base64) to SABnzbd. An import follows it and brings it into the library \
-         *                        when it finishes. Tangible never searches, never asks for a script, and \
-         *                        never removes the job or its data. Submitting the same again is safe: the \
-         *                        existing import is answered, and the client is not asked twice.
+         *                        when it finishes. No script is asked for, and the job and its data are \
+         *                        removed only once imported, where the integration is set to remove them. \
+         *                        Submitting the same again is safe: the existing import is answered, and the \
+         *                        client is not asked twice.
          */
         post: operations["submit_job"];
         delete?: never;
@@ -1655,6 +1656,61 @@ export interface paths {
          * @description Decline a request, waiting or approved, saying why; the requester sees the reason. Operators and administrators.
          */
         post: operations["decline_one_request"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/requests/{request_id}/grab": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Grab a release from the search held for a request.
+         * @description Grab a release a person picked from the search held for an approved \
+         *                        request: its .torrent, NZB or magnet link is fetched through Prowlarr, \
+         *                        checked as a submitted job is, and handed to a download client of its \
+         *                        protocol (the one named, or the only one there is) in Tangible's category. \
+         *                        The request then follows the import that brings it in, and is fulfilled \
+         *                        when that completes. Operators and administrators.
+         */
+        post: operations["grab_release"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/requests/{request_id}/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The search held for a request.
+         * @description The search held for a request, for an hour after it was made. Operators and \
+         *                        administrators.
+         */
+        get: operations["held_search"];
+        put?: never;
+        /**
+         * Search Prowlarr for a request's releases, ranked, and hold them.
+         * @description Search Prowlarr for an approved request's releases: by the request's title, \
+         *                        cleaned, in the categories its kind suits (a film by its IMDb ID first, \
+         *                        where it has one), or by the words given. The results are ranked by how well \
+         *                        they match, each saying why, and held for an hour for a person to pick one \
+         *                        to grab; nothing is grabbed here. A release's link is never answered. \
+         *                        Operators and administrators; at most 60 an hour per account.
+         */
+        post: operations["search_releases"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3669,6 +3725,15 @@ export interface components {
             /** @description The volume label read from an image of it. */
             volume_label?: string | null;
         };
+        /** @description A download client a release may be handed to. */
+        DownloadClientChoiceView: {
+            /** @description The integration. */
+            id: string;
+            /** @description Its name. */
+            name: string;
+            /** @description `torrent` or `usenet`: what it takes. */
+            protocol: string;
+        };
         /** @description A download client a torrent can be handed to. */
         DownloadClientView: {
             /** @description The integration's id. */
@@ -4180,6 +4245,37 @@ export interface components {
             /** @description Entries in the object tree that are not objects. Never collected. */
             unrecognized: components["schemas"]["Tally"];
         };
+        /**
+         * @description Which release to grab, and, when more than one client takes its
+         *     protocol, which client.
+         */
+        GrabReleaseRequest: {
+            /**
+             * @description The download client to hand it to; needed only when more than one
+             *     takes its protocol.
+             */
+            integration_id?: string | null;
+            /** @description A result's id, from the search held for the request. */
+            result_id: string;
+        };
+        /** @description A release grabbed: the request, now following the import. */
+        GrabView: {
+            /** @description The import that brings it in. */
+            import_id: string;
+            /** @description The download client it went to. */
+            integration_id: string;
+            /**
+             * @description `created`; `resubmitted` when an earlier import of the same job ended
+             *     without an artifact; `already_active` when one is still going;
+             *     `already_imported` when it is in the library.
+             */
+            outcome: string;
+            /**
+             * @description The request, downloading (or fulfilled, when the library already
+             *     had what the release holds).
+             */
+            request: components["schemas"]["RequestView"];
+        };
         /** @description CRC32, MD5 and SHA-1 of some bytes, as preservation databases list them. */
         HashesView: {
             /** @description CRC32, eight lowercase hex digits. */
@@ -4657,6 +4753,13 @@ export interface components {
              */
             password_sign_in: string;
         };
+        /** @description An indexer Prowlarr has paused after it failed. */
+        PausedIndexerView: {
+            /** @description Its name, in Prowlarr. */
+            name: string;
+            /** @description Until when. */
+            until?: string | null;
+        };
         /** @description A disc with its check history. */
         PhysicalCopyDetail: components["schemas"]["PhysicalCopyView"] & {
             /** @description Every check recorded, newest first. */
@@ -4828,6 +4931,77 @@ export interface components {
             /** @description Always false. Restarting a write is never a recovery action. */
             may_write: boolean;
         };
+        /** @description A search for a request's releases, held for a person to pick from. */
+        ReleaseSearchView: {
+            /** @description The download clients a release may go to. */
+            clients: components["schemas"]["DownloadClientChoiceView"][];
+            /** @description Until when a release may be grabbed from it; search again after. */
+            held_until: string;
+            /**
+             * Format: int32
+             * @description How many indexers Prowlarr has turned on, if it said.
+             */
+            indexers_enabled?: number | null;
+            /** @description Those it has paused after they failed: their releases are missing. */
+            indexers_paused: components["schemas"]["PausedIndexerView"][];
+            /** @description The words searched for, or the IMDb ID. */
+            query: string;
+            /** @description The request. */
+            request_id: string;
+            /** @description What was found, best first, at most 100. */
+            results: components["schemas"]["ReleaseView"][];
+            /** @description When. */
+            searched_at: string;
+            /** @description `words`, or `imdb_id` for a film found by its IMDb ID. */
+            searched_by: string;
+        };
+        /** @description A release found, as a person picks from it. Its link is never answered. */
+        ReleaseView: {
+            /**
+             * @description Whether a download client for its protocol is configured and turned
+             *     on, so it can be grabbed.
+             */
+            can_grab: boolean;
+            /** @description Its categories, by name, such as `Movies/DVD`. */
+            categories: string[];
+            /**
+             * Format: int32
+             * @description How often it was grabbed, where the indexer says.
+             */
+            grabs?: number | null;
+            /** @description The result's id, which a grab names. */
+            id: string;
+            /** @description The indexer that has it, as Prowlarr names it. */
+            indexer: string;
+            /**
+             * Format: int32
+             * @description A torrent's leechers.
+             */
+            leechers?: number | null;
+            /** @description `torrent` or `usenet`. */
+            protocol: string;
+            /** @description When it was posted. */
+            published_at?: string | null;
+            /** @description Why it scores as it does, in words. */
+            reasons: string[];
+            /**
+             * Format: int32
+             * @description How well it matches what was asked for: higher is better.
+             */
+            score: number;
+            /**
+             * Format: int32
+             * @description A torrent's seeders.
+             */
+            seeders?: number | null;
+            /**
+             * Format: int64
+             * @description Its size.
+             */
+            size_bytes?: number | null;
+            /** @description Its title, as the indexer gives it. */
+            title: string;
+        };
         /** @description What a worker sends to renew. */
         RenewRequest: {
             /** @description The lease token from the claim. */
@@ -4966,6 +5140,12 @@ export interface components {
             can_cancel: boolean;
             /** @description Whether the caller may decline it now. */
             can_decline: boolean;
+            /**
+             * @description Whether the caller may search for its releases, and grab one, now:
+             *     an operator or administrator, once it is approved or its download
+             *     failed.
+             */
+            can_search: boolean;
             /** @description When it was asked for. */
             created_at: string;
             /** @description When. */
@@ -5387,6 +5567,14 @@ export interface components {
             id: string;
             /** @description Its name. */
             name: string;
+        };
+        /** @description What to search for: the request's own title, unless words are given. */
+        SearchReleasesRequest: {
+            /**
+             * @description Words to search for instead of the request's title, up to 200
+             *     characters.
+             */
+            query?: string | null;
         };
         /** @description A secret an integration takes. */
         SecretFieldView: {
@@ -9644,6 +9832,176 @@ export interface operations {
             };
             /** @description No reason, or too long a one */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    grab_release: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Request identifier */
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrabReleaseRequest"];
+            };
+        };
+        responses: {
+            /** @description Handed over; the request follows its import */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrabView"];
+                };
+            };
+            /** @description No such request */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /**
+             * @description Not approved, or downloading or ended; the search \
+             *                                           expired (SEARCH_EXPIRED); or no client for it
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Ids that will not do, or a client to choose */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Prowlarr or the client failed, or gave what will not do */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    held_search: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Request identifier */
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What was found, held */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseSearchView"];
+                };
+            };
+            /** @description No such request, or no search held for it */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    search_releases: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Request identifier */
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SearchReleasesRequest"];
+            };
+        };
+        responses: {
+            /** @description What was found, held */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseSearchView"];
+                };
+            };
+            /** @description No such request */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not approved, or downloading or ended; or no Prowlarr */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Words that will not do */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many searches from this account for now */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Prowlarr failed */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

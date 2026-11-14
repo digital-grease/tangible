@@ -1,0 +1,41 @@
+[
+  {
+    "guid": "fake-torrent-3",
+    "age": 400,
+    "ageHours": 9613.951544948333,
+    "ageMinutes": 576837.09269691,
+    "size": 389120000,
+    "files": 0,
+    "grabs": 0,
+    "indexerId": 1,
+    "indexer": "Fake Torznab",
+    "title": "Big Buck Bunny Soundtrack (2008) [FLAC CD image]",
+    "sortTitle": "big buck bunny soundtrack 2008 flac cd image",
+    "imdbId": 0,
+    "tmdbId": 0,
+    "tvdbId": 0,
+    "tvMazeId": 0,
+    "publishDate": "2025-10-09T12:00:00Z",
+    "commentUrl": "http://127.0.0.1:18990/details/3",
+    "downloadUrl": "http://127.0.0.1:19696/1/download?apikey=REDACTED-API-KEY&link=UFgwNlluU081MEVVOThUdE9MZlNURUFxejc0cm1BWVRoc05icXBYRXYxaTVyOFByMDFuczlrdnRhVjFRM0VjK2tmMEFIWHZ0RFpiaGlIdGY1TFRCQXB5Z1I1NFArczhvU0VHRndjRjNvbUV0QVhlY1R5MHNaZXQwVFlUc1hqOUtxeDBCTTRVaXhYZWtTVGsySTVqRjJxejFsWnE2SU1MYVAwVWNLVFhaLzNXRXZiWmFFSWdnQysvQVA4L3YrZGd5&file=Big+Buck+Bunny+Soundtrack+(2008)+%5BFLAC+CD+image%5D",
+    "infoUrl": "http://127.0.0.1:18990/details/3",
+    "indexerFlags": [],
+    "categories": [
+      {
+        "id": 3040,
+        "name": "Audio/Lossless",
+        "subCategories": []
+      },
+      {
+        "id": 103040,
+        "subCategories": []
+      }
+    ],
+    "magnetUrl": "http://127.0.0.1:19696/1/download?apikey=REDACTED-API-KEY&link=T2luMlR1d1l1blFjVkpGbWhXUzlaN0llZ3pOU3N2SThRZnBaOGdnN2FQTHZST0s5ejRPWnFaL21ENlRIL0JVVFZxM1hXU1FyVER5UjNiT2djUjVGNlhBcTZrUUVtZjhaYlkxR2Fyc0dGeUVodFlTcGVMOVA2azJJUUk0NjhKWWtmcnEzcmJGS0pUeWdNd3pyVFMxWEJnUlBFZWwzR2hVeDlxL1Z6NXQ5aXNZY2RoSWFrRVRWLzFNUlpzenpEMlNz&file=Big+Buck+Bunny+Soundtrack+(2008)+%5BFLAC+CD+image%5D",
+    "infoHash": "ed0d831bcefc077847bc1fa808bd2ae5fd32ae9b",
+    "seeders": 2,
+    "leechers": 0,
+    "protocol": "torrent",
+    "fileName": "Big Buck Bunny Soundtrack (2008) [FLAC CD image].torrent"
+  }
+]

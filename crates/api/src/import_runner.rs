@@ -181,6 +181,7 @@ impl ImportRunner {
         .await?
         else {
             self.settle_rips().await;
+            self.settle_requests().await;
             self.expire_uploads().await;
             return Ok(false);
         };
@@ -188,6 +189,7 @@ impl ImportRunner {
         tracing::info!(import_id = %job.id, source = %job.source_kind, "import claimed");
         self.execute(job).await;
         self.settle_rips().await;
+        self.settle_requests().await;
         Ok(true)
     }
 
@@ -201,6 +203,19 @@ impl ImportRunner {
             }
             Ok(_) => {}
             Err(error) => tracing::warn!(error = ?error, "could not settle rips"),
+        }
+    }
+
+    /// Move requests on whose import has moved (ADR 0021): fulfilled when it
+    /// completed, failed when it ended without an artifact. Checked when
+    /// rips are, and for the same reason.
+    async fn settle_requests(&self) {
+        match tangible_db::requests::settle_requests(self.database.pool()).await {
+            Ok(moved) if !moved.is_empty() => {
+                tracing::info!(requests = ?moved, "requests followed their imports");
+            }
+            Ok(_) => {}
+            Err(error) => tracing::warn!(error = ?error, "could not settle requests"),
         }
     }
 

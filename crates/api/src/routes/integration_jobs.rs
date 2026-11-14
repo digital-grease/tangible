@@ -85,7 +85,7 @@ pub struct IntegrationJobView {
 }
 
 /// A submission, checked, with the bytes it carries.
-enum Submission {
+pub(crate) enum Submission {
     Magnet(String, Infohash),
     Torrent(Vec<u8>, Infohash),
     Nzb(Vec<u8>, Nzb),
@@ -103,6 +103,25 @@ fn base64(text: &str, what: &str) -> Result<Vec<u8>, Problem> {
 }
 
 impl Submission {
+    /// A magnet link, checked.
+    pub(crate) fn magnet(link: &str) -> Result<Self, String> {
+        let link = link.trim();
+        let hash = infohash_of_magnet(link).map_err(|error| error.to_string())?;
+        Ok(Self::Magnet(link.to_owned(), hash))
+    }
+
+    /// A `.torrent` file, checked.
+    pub(crate) fn torrent(bytes: Vec<u8>) -> Result<Self, String> {
+        let hash = infohash_of_torrent(&bytes).map_err(|error| error.to_string())?;
+        Ok(Self::Torrent(bytes, hash))
+    }
+
+    /// An NZB, checked.
+    pub(crate) fn nzb(bytes: Vec<u8>) -> Result<Self, String> {
+        let nzb = Nzb::check(&bytes).map_err(|error| error.to_string())?;
+        Ok(Self::Nzb(bytes, nzb))
+    }
+
     /// The submission a request makes for `client`, or why not.
     fn parse(request: &SubmitJobRequest, client: &DownloadClient) -> Result<Self, Problem> {
         let given = [&request.magnet, &request.torrent, &request.nzb]
@@ -124,33 +143,20 @@ impl Submission {
                     magnet: Some(magnet),
                     ..
                 },
-            ) => {
-                let magnet = magnet.trim();
-                let hash = infohash_of_magnet(magnet).map_err(|error| refuse(error.to_string()))?;
-                Ok(Self::Magnet(magnet.to_owned(), hash))
-            }
+            ) => Self::magnet(magnet).map_err(refuse),
             (
                 DownloadClient::Qbittorrent(_),
                 SubmitJobRequest {
                     torrent: Some(text),
                     ..
                 },
-            ) => {
-                let bytes = base64(text, "torrent")?;
-                let hash =
-                    infohash_of_torrent(&bytes).map_err(|error| refuse(error.to_string()))?;
-                Ok(Self::Torrent(bytes, hash))
-            }
+            ) => Self::torrent(base64(text, "torrent")?).map_err(refuse),
             (
                 DownloadClient::Sabnzbd(_) | DownloadClient::Nzbget(_),
                 SubmitJobRequest {
                     nzb: Some(text), ..
                 },
-            ) => {
-                let bytes = base64(text, "nzb")?;
-                let nzb = Nzb::check(&bytes).map_err(|error| refuse(error.to_string()))?;
-                Ok(Self::Nzb(bytes, nzb))
-            }
+            ) => Self::nzb(base64(text, "nzb")?).map_err(refuse),
             (DownloadClient::Qbittorrent(_), _) => Err(refuse(
                 "a qBittorrent takes a magnet link or a .torrent file, not an NZB",
             )),
@@ -325,9 +331,10 @@ fn respond(
     description = "Hand a job the operator already has to a download client, in its \\
                    category: a magnet link or a .torrent file (base64) to qBittorrent, an NZB \\
                    (base64) to SABnzbd. An import follows it and brings it into the library \\
-                   when it finishes. Tangible never searches, never asks for a script, and \\
-                   never removes the job or its data. Submitting the same again is safe: the \\
-                   existing import is answered, and the client is not asked twice.",
+                   when it finishes. No script is asked for, and the job and its data are \\
+                   removed only once imported, where the integration is set to remove them. \\
+                   Submitting the same again is safe: the existing import is answered, and the \\
+                   client is not asked twice.",
     params(("integration_id" = String, Path, description = "Integration identifier")),
     request_body = SubmitJobRequest,
     responses(
@@ -346,8 +353,7 @@ pub async fn submit_job(
     Json(request): Json<SubmitJobRequest>,
 ) -> Result<axum::response::Response, Problem> {
     let id = parse_id(&integration_id)?;
-    let pool = state.database().pool();
-    let record = get_integration(pool, id)
+    let record = get_integration(state.database().pool(), id)
         .await
         .map_err(unavailable("the integration could not be read"))?
         .ok_or_else(|| Problem::not_found("integration", &id.to_string()))?;
@@ -360,6 +366,46 @@ pub async fn submit_job(
     .await
     .map_err(|error| open_problem(&error))?;
     let submission = Submission::parse(&request, &client)?;
+    let delivered = deliver(
+        &state,
+        id,
+        &mut client,
+        &folders,
+        &submission,
+        &user.username,
+    )
+    .await?;
+    Ok(respond(
+        id,
+        delivered.identity,
+        delivered.client_job_id,
+        delivered.submitted,
+    ))
+}
+
+/// A job handed over, or found handed over before.
+pub(crate) struct Delivered {
+    /// How Tangible names the job.
+    pub identity: String,
+    /// The client's own id for it, when it was handed over now.
+    pub client_job_id: Option<String>,
+    /// The import following it, and how.
+    pub submitted: Submitted,
+}
+
+/// Hand `submission` to the download client `id`, opened as `client`, in
+/// its category, and record the import that follows it: what
+/// `POST /integrations/{id}/jobs` does, and a request's grab (ADR 0021). A
+/// job handed over before is found, and the client is not asked again.
+pub(crate) async fn deliver(
+    state: &ApiState,
+    id: uuid::Uuid,
+    client: &mut DownloadClient,
+    folders: &Folders,
+    submission: &Submission,
+    actor: &str,
+) -> Result<Delivered, Problem> {
+    let pool = state.database().pool();
     let identity = submission.identity();
 
     // Found before the client is asked: SABnzbd would add it again.
@@ -367,11 +413,15 @@ pub async fn submit_job(
         .await
         .map_err(unavailable("earlier submissions could not be read"))?
     {
-        return Ok(respond(id, identity, None, standing));
+        return Ok(Delivered {
+            identity,
+            client_job_id: None,
+            submitted: standing,
+        });
     }
 
-    let client_job_id = hand_over(&state, id, &mut client, &folders, &submission).await?;
-    note_health(&state, id, Ok(None)).await;
+    let client_job_id = hand_over(state, id, client, folders, submission).await?;
+    note_health(state, id, Ok(None)).await;
     let prefix = match client {
         DownloadClient::Qbittorrent(_) => "qbittorrent",
         DownloadClient::Sabnzbd(_) => "sabnzbd",
@@ -390,7 +440,7 @@ pub async fn submit_job(
             client_job_id: &identity,
             source_kind: client.source_kind(),
             descriptor: &descriptor,
-            actor: &user.username,
+            actor,
         },
     )
     .await
@@ -401,5 +451,9 @@ pub async fn submit_job(
         client_job_id = %client_job_id,
         "job handed to a download client"
     );
-    Ok(respond(id, identity, Some(client_job_id), submitted))
+    Ok(Delivered {
+        identity,
+        client_job_id: Some(client_job_id),
+        submitted,
+    })
 }

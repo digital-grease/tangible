@@ -49,6 +49,11 @@ struct Inner {
     request_limiter: ActionLimiter,
     /// Metadata searches per account (ADR 0021), likewise shared.
     metadata_limiter: ActionLimiter,
+    /// Release searches per account (ADR 0021), likewise shared.
+    release_limiter: ActionLimiter,
+    /// The release searches held while a person picks (ADR 0021),
+    /// likewise shared.
+    releases: crate::releases::Held,
     /// What reaches metadata providers, when this server reaches them.
     metadata: Option<crate::metadata::Metadata>,
     /// The built web UI, when this server serves one.
@@ -127,6 +132,8 @@ impl ApiState {
                 upload_limiter: ActionLimiter::uploads(),
                 request_limiter: ActionLimiter::requests(),
                 metadata_limiter: ActionLimiter::metadata_searches(),
+                release_limiter: ActionLimiter::release_searches(),
+                releases: crate::releases::Held::default(),
                 metadata: None,
                 web: None,
                 romm: None,
@@ -161,6 +168,8 @@ impl ApiState {
                 upload_limiter: ActionLimiter::uploads(),
                 request_limiter: ActionLimiter::requests(),
                 metadata_limiter: ActionLimiter::metadata_searches(),
+                release_limiter: ActionLimiter::release_searches(),
+                releases: crate::releases::Held::default(),
                 metadata: None,
                 web: None,
                 romm: None,
@@ -473,6 +482,18 @@ impl ApiState {
     #[must_use]
     pub fn metadata_limiter(&self) -> &ActionLimiter {
         &self.inner.metadata_limiter
+    }
+
+    /// Release searches per account.
+    #[must_use]
+    pub fn release_limiter(&self) -> &ActionLimiter {
+        &self.inner.release_limiter
+    }
+
+    /// The release searches held while a person picks.
+    #[must_use]
+    pub fn releases(&self) -> &crate::releases::Held {
+        &self.inner.releases
     }
 
     /// Reach metadata providers with `metadata`.

@@ -373,8 +373,8 @@ pub async fn create_one(
     let kind = ConfigurableKind::parse(&request.kind).ok_or_else(|| {
         Problem::new(
             ErrorCode::ValidationFailed,
-            "kind must be qbittorrent, sabnzbd, nzbget, s3, romm_api, musicbrainz, tmdb or \
-             igdb; others are not configurable yet",
+            "kind must be qbittorrent, sabnzbd, nzbget, s3, romm_api, musicbrainz, tmdb, igdb \
+             or prowlarr; others are not configurable yet",
         )
     })?;
     let name = checked_name(&request.name)?;
@@ -403,7 +403,7 @@ pub async fn create_one(
     .await
     .map_err(unavailable("the integration could not be stored"))?
     .map_err(|outcome| match outcome {
-        IntegrationOutcome::OnlyOne if kind.is_metadata_provider() => Problem::new(
+        IntegrationOutcome::OnlyOne if kind.is_single() => Problem::new(
             ErrorCode::Conflict,
             format!(
                 "there is a {} integration already, and it is one service; change that one",
@@ -668,6 +668,9 @@ pub async fn test_one(
     if ConfigurableKind::parse(&record.kind).is_some_and(ConfigurableKind::is_metadata_provider) {
         return test_metadata(&state, &record).await.map(Json);
     }
+    if record.kind == "prowlarr" {
+        return test_prowlarr(&state, &record).await.map(Json);
+    }
     let (mut client, folders) = open_client(
         state.database(),
         state.integration_client(),
@@ -715,6 +718,62 @@ pub async fn test_one(
         }
     };
     Ok(Json(view))
+}
+
+/// Try a Prowlarr: its version, and that it has an indexer turned on.
+async fn test_prowlarr(
+    state: &ApiState,
+    record: &tangible_db::integrations::IntegrationRecord,
+) -> Result<IntegrationTestView, Problem> {
+    let client = crate::download_clients::open_prowlarr(
+        state.database(),
+        state.integration_client(),
+        state.secret_key(),
+        record,
+    )
+    .await
+    .map_err(|error| open_problem(&error))?;
+    let failed = |code: &str, detail: String, version: Option<String>| IntegrationTestView {
+        ok: false,
+        api_version: version,
+        error_code: Some(code.to_owned()),
+        detail: Some(detail),
+        checks: Vec::new(),
+    };
+    let asked = match client.status().await {
+        Ok(status) => client
+            .indexers()
+            .await
+            .map(|indexers| (status.version, indexers)),
+        Err(error) => Err(error),
+    };
+    let view = match asked {
+        Ok((version, indexers)) if indexers.iter().any(|indexer| indexer.enabled) => {
+            note_health(state, record.id, Ok(Some(&version))).await;
+            IntegrationTestView {
+                ok: true,
+                api_version: Some(version),
+                error_code: None,
+                detail: None,
+                checks: Vec::new(),
+            }
+        }
+        Ok((version, _)) => {
+            note_health(state, record.id, Err("INTEGRATION_MISCONFIGURED")).await;
+            failed(
+                "INTEGRATION_MISCONFIGURED",
+                "it has no indexer turned on, so a search would find nothing; add one in \
+                 Prowlarr"
+                    .to_owned(),
+                Some(version),
+            )
+        }
+        Err(error) => {
+            note_health(state, record.id, Err(error.code())).await;
+            failed(error.code(), error.to_string(), None)
+        }
+    };
+    Ok(view)
 }
 
 /// Try a metadata provider: whether it answers, and takes its key.

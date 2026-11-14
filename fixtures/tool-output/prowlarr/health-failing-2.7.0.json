@@ -1,0 +1,8 @@
+[
+    {
+        "source": "IndexerStatusCheck",
+        "type": "error",
+        "message": "All indexers are unavailable due to failures",
+        "wikiUrl": "https://wiki.servarr.com/prowlarr/system#indexers-are-unavailable-due-to-failures"
+    }
+]

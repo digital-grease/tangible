@@ -533,6 +533,8 @@ pub struct OutboundClient {
     http: reqwest::Client,
     policy: Arc<OutboundPolicy>,
     lookup: Arc<dyn Lookup>,
+    user_agent: Arc<str>,
+    follows_redirects: bool,
 }
 
 impl fmt::Debug for OutboundClient {
@@ -564,19 +566,42 @@ impl OutboundClient {
         user_agent: &str,
         lookup: Arc<dyn Lookup>,
     ) -> Result<Self, OutboundError> {
-        let policy = Arc::new(policy);
+        Self::build(Arc::new(policy), Arc::from(user_agent), lookup, true)
+    }
+
+    /// The same client, under the same policy, that answers a redirect
+    /// rather than following it: for a caller that must see where a redirect
+    /// goes, such as to a `magnet:` link, which is not fetched. The caller
+    /// checks each hop as [`Self::get`] does and keeps to [`MAX_REDIRECTS`]
+    /// and the downgrade rule itself.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`].
+    pub fn without_redirects(&self) -> Result<Self, OutboundError> {
+        Self::build(
+            Arc::clone(&self.policy),
+            Arc::clone(&self.user_agent),
+            Arc::clone(&self.lookup),
+            false,
+        )
+    }
+
+    /// Whether this client follows redirects itself.
+    #[must_use]
+    pub const fn follows_redirects(&self) -> bool {
+        self.follows_redirects
+    }
+
+    fn build(
+        policy: Arc<OutboundPolicy>,
+        user_agent: Arc<str>,
+        lookup: Arc<dyn Lookup>,
+        follows_redirects: bool,
+    ) -> Result<Self, OutboundError> {
         let redirects = Arc::clone(&policy);
-        let mut builder = reqwest::Client::builder()
-            .user_agent(user_agent)
-            .connect_timeout(CONNECT_TIMEOUT)
-            .read_timeout(READ_TIMEOUT)
-            .https_only(!policy.allow_http)
-            .referer(false)
-            .dns_resolver(CheckingResolver::new(
-                Arc::clone(&policy),
-                Arc::clone(&lookup),
-            ))
-            .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+        let redirect = if follows_redirects {
+            reqwest::redirect::Policy::custom(move |attempt| {
                 if attempt.previous().len() > MAX_REDIRECTS {
                     return attempt.error(Refusal::TooManyRedirects);
                 }
@@ -592,7 +617,21 @@ impl OutboundClient {
                     Ok(()) => attempt.follow(),
                     Err(refusal) => attempt.error(refusal),
                 }
-            }));
+            })
+        } else {
+            reqwest::redirect::Policy::none()
+        };
+        let mut builder = reqwest::Client::builder()
+            .user_agent(&*user_agent)
+            .connect_timeout(CONNECT_TIMEOUT)
+            .read_timeout(READ_TIMEOUT)
+            .https_only(!policy.allow_http)
+            .referer(false)
+            .dns_resolver(CheckingResolver::new(
+                Arc::clone(&policy),
+                Arc::clone(&lookup),
+            ))
+            .redirect(redirect);
         builder = match &policy.proxy {
             // The environment's proxy settings would send requests around
             // the resolver; only a proxy the policy names is used.
@@ -605,6 +644,8 @@ impl OutboundClient {
             http,
             policy,
             lookup,
+            user_agent,
+            follows_redirects,
         })
     }
 
@@ -1028,6 +1069,37 @@ mod tests {
             "{result:?}"
         );
         assert_eq!(target_accepted.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_client_that_does_not_follow_answers_the_redirect_itself() {
+        let redirect = "HTTP/1.1 301 Moved Permanently\r\nlocation: magnet:?xt=urn:btih:\
+                        ed0d831bcefc077847bc1fa808bd2ae5fd32ae9b\r\ncontent-length: 0\r\n\
+                        connection: close\r\n\r\n";
+        let (first, accepted) = server(redirect.to_owned()).await;
+        let mut policy =
+            OutboundPolicy::for_operator_urls(true, vec!["127.0.0.1/32".parse().unwrap()], None);
+        policy.allow_any_port = true;
+        let following = client(policy, Vec::new());
+        let url = Url::parse(&format!("http://127.0.0.1:{}/", first.port())).unwrap();
+        let outbound = following.without_redirects().unwrap();
+        assert!(following.follows_redirects() && !outbound.follows_redirects());
+        let response = outbound.send(outbound.get(&url).unwrap()).await.unwrap();
+        assert_eq!(response.status(), 301);
+        assert!(
+            response.headers()["location"]
+                .to_str()
+                .unwrap()
+                .starts_with("magnet:")
+        );
+        assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // The policy is the same one: a refused address is still refused.
+        let refused = Url::parse(&format!("http://127.0.0.2:{}/", first.port())).unwrap();
+        let result = outbound.get(&refused).map(|_| ());
+        assert!(
+            matches!(result, Err(OutboundError::Refused(_))),
+            "{result:?}"
+        );
     }
 
     #[tokio::test]

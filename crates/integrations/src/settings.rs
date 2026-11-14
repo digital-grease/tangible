@@ -9,9 +9,10 @@
 //! settings: they are named here, entered separately, and stored sealed.
 //!
 //! qBittorrent (docs/plans/acquisition.md A4), SABnzbd and NZBGet (A5),
-//! S3-compatible storage (A6), RomM's API (docs/plans/romm-api.md M1), and
-//! the metadata providers requests are found through (ADR 0021):
-//! MusicBrainz, TMDB and IGDB, which take no settings, only secrets.
+//! S3-compatible storage (A6), RomM's API (docs/plans/romm-api.md M1), the
+//! metadata providers requests are found through (ADR 0021): MusicBrainz,
+//! TMDB and IGDB, which take no settings, only secrets; and the Prowlarr a
+//! request's releases are searched for in.
 
 use serde::{Deserialize, Serialize};
 
@@ -36,6 +37,8 @@ pub enum ConfigurableKind {
     Tmdb,
     /// IGDB, for games, through a Twitch application.
     Igdb,
+    /// The Prowlarr an approved request's releases are searched for in.
+    Prowlarr,
 }
 
 impl ConfigurableKind {
@@ -51,6 +54,7 @@ impl ConfigurableKind {
             "musicbrainz" => Some(Self::Musicbrainz),
             "tmdb" => Some(Self::Tmdb),
             "igdb" => Some(Self::Igdb),
+            "prowlarr" => Some(Self::Prowlarr),
             _ => None,
         }
     }
@@ -67,6 +71,7 @@ impl ConfigurableKind {
             Self::Musicbrainz => "musicbrainz",
             Self::Tmdb => "tmdb",
             Self::Igdb => "igdb",
+            Self::Prowlarr => "prowlarr",
         }
     }
 
@@ -75,7 +80,7 @@ impl ConfigurableKind {
     pub const fn secret_fields(self) -> &'static [&'static str] {
         match self {
             Self::Qbittorrent | Self::Nzbget => &["password"],
-            Self::Sabnzbd => &["api_key"],
+            Self::Sabnzbd | Self::Prowlarr => &["api_key"],
             Self::S3 => &["access_key_id", "secret_access_key"],
             Self::RommApi => &["token"],
             Self::Musicbrainz => &[],
@@ -89,6 +94,13 @@ impl ConfigurableKind {
     #[must_use]
     pub const fn is_metadata_provider(self) -> bool {
         matches!(self, Self::Musicbrainz | Self::Tmdb | Self::Igdb)
+    }
+
+    /// Whether there is at most one of it: a metadata provider is one
+    /// service, and requests are searched for in one Prowlarr.
+    #[must_use]
+    pub const fn is_single(self) -> bool {
+        self.is_metadata_provider() || matches!(self, Self::Prowlarr)
     }
 }
 
@@ -373,6 +385,33 @@ impl S3Settings {
     }
 }
 
+/// How the server reaches Prowlarr. Its API key is a secret, not a setting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProwlarrSettings {
+    /// Prowlarr's address, with any URL base it is served under, such as
+    /// `http://192.168.1.13:9696/` or `http://prowlarr:9696/`.
+    pub base_url: String,
+}
+
+impl ProwlarrSettings {
+    /// Check settings an administrator sent, answering them as they are
+    /// stored.
+    ///
+    /// # Errors
+    ///
+    /// [`SettingsError`] saying what will not do.
+    pub fn checked(
+        value: &serde_json::Value,
+        policy: &OutboundPolicy,
+    ) -> Result<Self, SettingsError> {
+        let settings: Self = parsed(value)?;
+        Ok(Self {
+            base_url: checked_base_url(&settings.base_url, policy)?,
+        })
+    }
+}
+
 /// How the server reaches RomM's API, and how a browser reaches RomM. Its
 /// client token is a secret, not a setting.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -569,6 +608,7 @@ pub fn checked_settings(
         ConfigurableKind::Nzbget => stored(&NzbgetSettings::checked(value, roots, policy)?),
         ConfigurableKind::S3 => stored(&S3Settings::checked(value, policy)?),
         ConfigurableKind::RommApi => stored(&RommApiSettings::checked(value, policy)?),
+        ConfigurableKind::Prowlarr => stored(&ProwlarrSettings::checked(value, policy)?),
         ConfigurableKind::Musicbrainz | ConfigurableKind::Tmdb | ConfigurableKind::Igdb => {
             // Absent is none.
             let value = if value.is_null() {
@@ -896,6 +936,45 @@ mod tests {
     }
 
     #[test]
+    fn prowlarr_takes_its_address_alone() {
+        let good = serde_json::json!({ "base_url": " http://192.168.1.13:9696/prowlarr " });
+        assert_eq!(
+            checked_settings(
+                ConfigurableKind::Prowlarr,
+                &good,
+                known(&roots()),
+                &policy()
+            )
+            .unwrap(),
+            serde_json::json!({ "base_url": "http://192.168.1.13:9696/prowlarr" })
+        );
+        for (settings, says) in [
+            (serde_json::json!({}), "base_url"),
+            (
+                serde_json::json!({ "base_url": "http://192.168.1.13:9696/?apikey=x" }),
+                "query",
+            ),
+            (
+                serde_json::json!({ "base_url": "http://192.168.1.13:9696/", "api_key": "x" }),
+                "unknown field",
+            ),
+            (
+                serde_json::json!({ "base_url": "ftp://192.168.1.13/" }),
+                "will not be reached",
+            ),
+        ] {
+            let error = checked_settings(
+                ConfigurableKind::Prowlarr,
+                &settings,
+                known(&roots()),
+                &policy(),
+            )
+            .expect_err("refused");
+            assert!(error.0.contains(says), "{settings}: {error}");
+        }
+    }
+
+    #[test]
     fn a_metadata_provider_takes_no_settings() {
         for kind in [
             ConfigurableKind::Musicbrainz,
@@ -954,6 +1033,14 @@ mod tests {
         );
         assert!(ConfigurableKind::Igdb.is_metadata_provider());
         assert!(!ConfigurableKind::Qbittorrent.is_metadata_provider());
+        assert_eq!(
+            ConfigurableKind::parse("prowlarr"),
+            Some(ConfigurableKind::Prowlarr)
+        );
+        assert_eq!(ConfigurableKind::Prowlarr.secret_fields(), ["api_key"]);
+        assert!(!ConfigurableKind::Prowlarr.is_metadata_provider());
+        assert!(ConfigurableKind::Prowlarr.is_single() && ConfigurableKind::Tmdb.is_single());
+        assert!(!ConfigurableKind::Sabnzbd.is_single());
         for other in ["romm", "webhook", "peer_instance", "metadata_provider", ""] {
             assert_eq!(ConfigurableKind::parse(other), None, "{other}");
         }

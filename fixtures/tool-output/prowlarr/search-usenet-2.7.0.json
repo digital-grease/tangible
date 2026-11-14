@@ -1,0 +1,108 @@
+[
+  {
+    "guid": "fake-usenet-u2",
+    "age": 2,
+    "ageHours": 61.952656381,
+    "ageMinutes": 3717.159382863333,
+    "size": 734003200,
+    "files": 0,
+    "grabs": 7,
+    "indexerId": 2,
+    "indexer": "Fake Newznab",
+    "title": "Homebrew.Disc.Collection.World.v1.0.ISO",
+    "sortTitle": "homebrew disc collection world v1 0 iso",
+    "imdbId": 0,
+    "tmdbId": 0,
+    "tvdbId": 0,
+    "tvMazeId": 0,
+    "publishDate": "2026-11-11T12:00:00Z",
+    "commentUrl": "http://127.0.0.1:18990/details/u2",
+    "downloadUrl": "http://127.0.0.1:19696/2/download?apikey=REDACTED-API-KEY&link=OFAvUEpWeS9RbG1VdzFqNk9Qdm15UlJ4cG5XMXFISG5oK3VUZDFWMmFWWUNlNHdqdko5aFhsNFYrTVc4SGlQSEtBbjU4ZjgwK2FlRWxJNUtUNWpVRXc9PQ&file=Homebrew.Disc.Collection.World.v1.0.ISO",
+    "infoUrl": "http://127.0.0.1:18990/details/u2",
+    "indexerFlags": [],
+    "categories": [
+      {
+        "id": 1000,
+        "name": "Console",
+        "subCategories": [
+          {
+            "id": 1010,
+            "name": "Console/NDS",
+            "subCategories": []
+          },
+          {
+            "id": 1020,
+            "name": "Console/PSP",
+            "subCategories": []
+          },
+          {
+            "id": 1030,
+            "name": "Console/Wii",
+            "subCategories": []
+          },
+          {
+            "id": 1040,
+            "name": "Console/XBox",
+            "subCategories": []
+          },
+          {
+            "id": 1050,
+            "name": "Console/XBox 360",
+            "subCategories": []
+          },
+          {
+            "id": 1060,
+            "name": "Console/Wiiware",
+            "subCategories": []
+          },
+          {
+            "id": 1070,
+            "name": "Console/XBox 360 DLC",
+            "subCategories": []
+          },
+          {
+            "id": 1080,
+            "name": "Console/PS3",
+            "subCategories": []
+          },
+          {
+            "id": 1090,
+            "name": "Console/Other",
+            "subCategories": []
+          },
+          {
+            "id": 1110,
+            "name": "Console/3DS",
+            "subCategories": []
+          },
+          {
+            "id": 1120,
+            "name": "Console/PS Vita",
+            "subCategories": []
+          },
+          {
+            "id": 1130,
+            "name": "Console/WiiU",
+            "subCategories": []
+          },
+          {
+            "id": 1140,
+            "name": "Console/XBox One",
+            "subCategories": []
+          },
+          {
+            "id": 1180,
+            "name": "Console/PS4",
+            "subCategories": []
+          }
+        ]
+      },
+      {
+        "id": 101000,
+        "subCategories": []
+      }
+    ],
+    "protocol": "usenet",
+    "fileName": "Homebrew.Disc.Collection.World.v1.0.ISO.nzb"
+  }
+]

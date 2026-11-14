@@ -1,0 +1,268 @@
+[
+  {
+    "guid": "fake-torrent-1",
+    "age": 3,
+    "ageHours": 85.94932451255555,
+    "ageMinutes": 5156.9594714,
+    "size": 23622320128,
+    "files": 0,
+    "grabs": 0,
+    "indexerId": 1,
+    "indexer": "Fake Torznab",
+    "title": "Big Buck Bunny (2008) [Blu-ray ISO]",
+    "sortTitle": "big buck bunny 2008 blu ray iso",
+    "imdbId": 0,
+    "tmdbId": 0,
+    "tvdbId": 0,
+    "tvMazeId": 0,
+    "publishDate": "2026-11-10T12:00:00Z",
+    "commentUrl": "http://127.0.0.1:18990/details/1",
+    "downloadUrl": "http://127.0.0.1:19696/1/download?apikey=REDACTED-API-KEY&link=cnRpbUxQdXhDOG0zR2FnZjdSUlZISE43Vm9BWGlIU0lKZnZVMDhwdmw4aUx1dmkxODF3ald5ODdSZXMyN3VCUlNNREV0eEhSaXlLeDgvUUh6cVFYeGcrR1AxamlwRW1Ga0hpc3NPUlZLOTQ9&file=Big+Buck+Bunny+(2008)+%5BBlu-ray+ISO%5D",
+    "infoUrl": "http://127.0.0.1:18990/details/1",
+    "indexerFlags": [],
+    "categories": [
+      {
+        "id": 2000,
+        "name": "Movies",
+        "subCategories": [
+          {
+            "id": 2010,
+            "name": "Movies/Foreign",
+            "subCategories": []
+          },
+          {
+            "id": 2020,
+            "name": "Movies/Other",
+            "subCategories": []
+          },
+          {
+            "id": 2030,
+            "name": "Movies/SD",
+            "subCategories": []
+          },
+          {
+            "id": 2040,
+            "name": "Movies/HD",
+            "subCategories": []
+          },
+          {
+            "id": 2045,
+            "name": "Movies/UHD",
+            "subCategories": []
+          },
+          {
+            "id": 2050,
+            "name": "Movies/BluRay",
+            "subCategories": []
+          },
+          {
+            "id": 2060,
+            "name": "Movies/3D",
+            "subCategories": []
+          },
+          {
+            "id": 2070,
+            "name": "Movies/DVD",
+            "subCategories": []
+          },
+          {
+            "id": 2080,
+            "name": "Movies/WEB-DL",
+            "subCategories": []
+          },
+          {
+            "id": 2090,
+            "name": "Movies/x265",
+            "subCategories": []
+          }
+        ]
+      },
+      {
+        "id": 102000,
+        "subCategories": []
+      }
+    ],
+    "magnetUrl": "http://127.0.0.1:19696/1/download?apikey=REDACTED-API-KEY&link=RU1uU3lERC9jWnRKNXM4MzBza0JNTmpWQzVvRkdtNkNXOVJ1S2RvMWpEQW5pOW1jNkVpcVRtL0syQ2ZROGRGSHVmVUI0dmRWL1NuYkRMWlpTWDkxdWlXaW9SMGxTVnhaYW1TRVE3anJ0dGlKZXNsT1ROTG81WkZCVWNyVWY2VUl3eFp4Vkp6NFN3S1NwcW1DMTB2MkxEVHlXb0dyVU9iU2FHV0l4eUgxN1E4PQ&file=Big+Buck+Bunny+(2008)+%5BBlu-ray+ISO%5D",
+    "infoHash": "15458c4d7d033b448e97218564b703e7791003c0",
+    "seeders": 48,
+    "leechers": 4,
+    "protocol": "torrent",
+    "fileName": "Big Buck Bunny (2008) [Blu-ray ISO].torrent"
+  },
+  {
+    "guid": "fake-torrent-2",
+    "age": 40,
+    "ageHours": 973.9493269247778,
+    "ageMinutes": 58436.95961549333,
+    "size": 4310695936,
+    "files": 0,
+    "grabs": 0,
+    "indexerId": 1,
+    "indexer": "Fake Torznab",
+    "title": "Big Buck Bunny (2008) [DVD ISO]",
+    "sortTitle": "big buck bunny 2008 dvd iso",
+    "imdbId": 0,
+    "tmdbId": 0,
+    "tvdbId": 0,
+    "tvMazeId": 0,
+    "publishDate": "2026-10-04T12:00:00Z",
+    "commentUrl": "http://127.0.0.1:18990/details/2",
+    "downloadUrl": "http://127.0.0.1:19696/1/download?apikey=REDACTED-API-KEY&link=ZVhXT0JsaUZXaDViWThFQjB0MG95M1V1TWtha0pRUktwbDFiSlpwaWZIMXFJenpxYTVVVnRtcFFndHZDSXMrWU5EMG9Rb3BXWFJBSVBNSVdBbGs5eUYydHZHUjY0RlFJeEdCdjdhT0JWRWs9&file=Big+Buck+Bunny+(2008)+%5BDVD+ISO%5D",
+    "infoUrl": "http://127.0.0.1:18990/details/2",
+    "indexerFlags": [],
+    "categories": [
+      {
+        "id": 2000,
+        "name": "Movies",
+        "subCategories": [
+          {
+            "id": 2010,
+            "name": "Movies/Foreign",
+            "subCategories": []
+          },
+          {
+            "id": 2020,
+            "name": "Movies/Other",
+            "subCategories": []
+          },
+          {
+            "id": 2030,
+            "name": "Movies/SD",
+            "subCategories": []
+          },
+          {
+            "id": 2040,
+            "name": "Movies/HD",
+            "subCategories": []
+          },
+          {
+            "id": 2045,
+            "name": "Movies/UHD",
+            "subCategories": []
+          },
+          {
+            "id": 2050,
+            "name": "Movies/BluRay",
+            "subCategories": []
+          },
+          {
+            "id": 2060,
+            "name": "Movies/3D",
+            "subCategories": []
+          },
+          {
+            "id": 2070,
+            "name": "Movies/DVD",
+            "subCategories": []
+          },
+          {
+            "id": 2080,
+            "name": "Movies/WEB-DL",
+            "subCategories": []
+          },
+          {
+            "id": 2090,
+            "name": "Movies/x265",
+            "subCategories": []
+          }
+        ]
+      },
+      {
+        "id": 102000,
+        "subCategories": []
+      }
+    ],
+    "magnetUrl": "http://127.0.0.1:19696/1/download?apikey=REDACTED-API-KEY&link=ekF2RUxURXNBRTlJLzExZ0NIcHhvNzFkM0NTS1JKSWVycmN0emZwSWorbW1pZzZTVzdaRVVoT0phelFkM2dOMnd4aHdZWG9SV0VNcldOYSt3bGIyK3dreFBWWFR5VHlkelJWZjUxcFQ4U1VVWUYwRktGYmRLUVNpemMwQTVwRVNwZjRqTmNMWVBCSkdnazVrUTVLTlNkTUorMGtrYUo2bzc5U0lMRU1JSXJRPQ&file=Big+Buck+Bunny+(2008)+%5BDVD+ISO%5D",
+    "infoHash": "556428d665581fcf91d740ec4bb7cd61cbf9681e",
+    "seeders": 9,
+    "leechers": 2,
+    "protocol": "torrent",
+    "fileName": "Big Buck Bunny (2008) [DVD ISO].torrent"
+  },
+  {
+    "guid": "fake-usenet-u1",
+    "age": 12,
+    "ageHours": 301.9493269611111,
+    "ageMinutes": 18116.959617668334,
+    "size": 4310695936,
+    "files": 0,
+    "grabs": 7,
+    "indexerId": 2,
+    "indexer": "Fake Newznab",
+    "title": "Big.Buck.Bunny.2008.DVD.ISO",
+    "sortTitle": "big buck bunny 2008 dvd iso",
+    "imdbId": 0,
+    "tmdbId": 0,
+    "tvdbId": 0,
+    "tvMazeId": 0,
+    "publishDate": "2026-11-01T12:00:00Z",
+    "commentUrl": "http://127.0.0.1:18990/details/u1",
+    "downloadUrl": "http://127.0.0.1:19696/2/download?apikey=REDACTED-API-KEY&link=WUxCTnhVQmtkVHFocm9VMjVIcllzZkJCazlPMVdBSitXeEcvYVhqSU5RaTVIZjZmMkVNWGZ2OHVCdk9TN2cxTmxZRzRUeHZHT2h0Q2NNV2tlRzZRVWc9PQ&file=Big.Buck.Bunny.2008.DVD.ISO",
+    "infoUrl": "http://127.0.0.1:18990/details/u1",
+    "indexerFlags": [],
+    "categories": [
+      {
+        "id": 2000,
+        "name": "Movies",
+        "subCategories": [
+          {
+            "id": 2010,
+            "name": "Movies/Foreign",
+            "subCategories": []
+          },
+          {
+            "id": 2020,
+            "name": "Movies/Other",
+            "subCategories": []
+          },
+          {
+            "id": 2030,
+            "name": "Movies/SD",
+            "subCategories": []
+          },
+          {
+            "id": 2040,
+            "name": "Movies/HD",
+            "subCategories": []
+          },
+          {
+            "id": 2045,
+            "name": "Movies/UHD",
+            "subCategories": []
+          },
+          {
+            "id": 2050,
+            "name": "Movies/BluRay",
+            "subCategories": []
+          },
+          {
+            "id": 2060,
+            "name": "Movies/3D",
+            "subCategories": []
+          },
+          {
+            "id": 2070,
+            "name": "Movies/DVD",
+            "subCategories": []
+          },
+          {
+            "id": 2080,
+            "name": "Movies/WEB-DL",
+            "subCategories": []
+          },
+          {
+            "id": 2090,
+            "name": "Movies/x265",
+            "subCategories": []
+          }
+        ]
+      },
+      {
+        "id": 102000,
+        "subCategories": []
+      }
+    ],
+    "protocol": "usenet",
+    "fileName": "Big.Buck.Bunny.2008.DVD.ISO.nzb"
+  }
+]

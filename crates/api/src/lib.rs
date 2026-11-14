@@ -30,6 +30,7 @@ pub mod metrics;
 pub mod oidc;
 pub mod pagination;
 pub mod problem;
+pub mod releases;
 pub mod report;
 pub mod request_id;
 pub mod restore_check;
@@ -195,6 +196,9 @@ pub const API_BASE: &str = "/api/v1";
         routes::requests::approve_one_request,
         routes::requests::decline_one_request,
         routes::requests::cancel_one_request,
+        routes::request_releases::search_releases,
+        routes::request_releases::held_search,
+        routes::request_releases::grab_release,
         routes::metadata::search_metadata,
         events::event_stream,
         deletion::request_artifact_deletion,
@@ -372,6 +376,13 @@ pub const API_BASE: &str = "/api/v1";
         routes::requests::RequestPage,
         routes::requests::CreateItemRequest,
         routes::requests::DeclineItemRequest,
+        routes::request_releases::SearchReleasesRequest,
+        routes::request_releases::ReleaseSearchView,
+        routes::request_releases::ReleaseView,
+        routes::request_releases::PausedIndexerView,
+        routes::request_releases::DownloadClientChoiceView,
+        routes::request_releases::GrabReleaseRequest,
+        routes::request_releases::GrabView,
         routes::metadata::MetadataSearchView,
         routes::metadata::MetadataCandidateView,
         routes::metadata::MetadataSourceView,
@@ -593,6 +604,7 @@ pub fn router(state: ApiState) -> Router {
         .nest(API_BASE, routes::audit::router())
         .nest(API_BASE, routes::dashboard::router())
         .nest(API_BASE, routes::requests::router())
+        .nest(API_BASE, routes::request_releases::router())
         .nest(API_BASE, routes::metadata::router())
         .nest(API_BASE, routes::erasures::router())
         .nest(API_BASE, routes::integrations::router())

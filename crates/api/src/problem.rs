@@ -134,6 +134,9 @@ pub enum ErrorCode {
     /// A request was made without its requester attesting to owning the item
     /// (ADR 0021).
     AttestationRequired,
+    /// A release was picked from a search no longer held: more than an hour
+    /// old, or made before the server restarted (ADR 0021).
+    SearchExpired,
     /// Anything unanticipated.
     Internal,
 }
@@ -180,6 +183,7 @@ impl ErrorCode {
             Self::ArtifactInUse => "ARTIFACT_IN_USE",
             Self::ArtifactRetained => "ARTIFACT_RETAINED",
             Self::AttestationRequired => "ATTESTATION_REQUIRED",
+            Self::SearchExpired => "SEARCH_EXPIRED",
             Self::Internal => "INTERNAL",
         }
     }
@@ -231,7 +235,8 @@ impl ErrorCode {
             | Self::IntegrationSecretUnreadable
             | Self::ArtifactDeleted
             | Self::ArtifactInUse
-            | Self::ArtifactRetained => StatusCode::CONFLICT,
+            | Self::ArtifactRetained
+            | Self::SearchExpired => StatusCode::CONFLICT,
             // The server is a gateway to the client here: the request was
             // fine, and what stands behind it failed.
             Self::IntegrationUnreachable
@@ -283,6 +288,7 @@ impl ErrorCode {
             Self::ArtifactInUse => "The artifact is in use",
             Self::ArtifactRetained => "The artifact is retained",
             Self::AttestationRequired => "Ownership was not attested",
+            Self::SearchExpired => "The search is no longer held",
             Self::Internal => "Internal error",
         }
     }
@@ -445,6 +451,7 @@ mod tests {
             ErrorCode::ArtifactInUse,
             ErrorCode::ArtifactRetained,
             ErrorCode::AttestationRequired,
+            ErrorCode::SearchExpired,
             ErrorCode::IntegrationAddressRefused,
             ErrorCode::InsufficientSpace,
             ErrorCode::DatInvalid,

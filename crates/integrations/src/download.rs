@@ -163,9 +163,24 @@ pub async fn read_text(
 /// As [`read_text`].
 pub async fn read_text_within(
     client: &'static str,
-    mut response: reqwest::Response,
+    response: reqwest::Response,
     max: usize,
 ) -> Result<String, ClientError> {
+    let body = read_bytes_within(client, response, max).await?;
+    String::from_utf8(body).map_err(|_| ClientError::bad(client, "the answer was not text"))
+}
+
+/// A response body as it is, read up to `max` bytes: a file a client or an
+/// indexer manager hands back, such as a `.torrent`.
+///
+/// # Errors
+///
+/// [`ClientError`] for a failed read or a body too large.
+pub async fn read_bytes_within(
+    client: &'static str,
+    mut response: reqwest::Response,
+    max: usize,
+) -> Result<Vec<u8>, ClientError> {
     let mut body = Vec::new();
     while let Some(chunk) = response
         .chunk()
@@ -183,7 +198,7 @@ pub async fn read_text_within(
         }
         body.extend_from_slice(&chunk);
     }
-    String::from_utf8(body).map_err(|_| ClientError::bad(client, "the answer was not text"))
+    Ok(body)
 }
 
 /// A `multipart/form-data` body: text `fields`, then one file part. Answers

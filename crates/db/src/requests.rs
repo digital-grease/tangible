@@ -372,3 +372,210 @@ pub async fn cancel_request(
     tx.commit().await.map_err(DbError::Query)?;
     Ok(Ok(record))
 }
+
+/// Record that a request was searched for, and how much was found; only a
+/// request a release may be grabbed for is searched for.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn record_search(
+    pool: &PgPool,
+    id: RequestId,
+    actor: &str,
+    query: &str,
+    found: usize,
+) -> Result<Result<RequestRecord, RequestRefusal>, DbError> {
+    let mut tx = pool.begin().await.map_err(DbError::Query)?;
+    let Some(state) = lock(&mut tx, id, None).await? else {
+        tx.rollback().await.map_err(DbError::Query)?;
+        return Ok(Err(RequestRefusal::NotFound));
+    };
+    if !state.may_grab() {
+        tx.rollback().await.map_err(DbError::Query)?;
+        return Ok(Err(RequestRefusal::Conflict(state)));
+    }
+    audit(
+        &mut tx,
+        actor,
+        "request.searched",
+        &id.to_string(),
+        serde_json::json!({ "query": query, "found": found }),
+    )
+    .await?;
+    let record = request_in(&mut tx, id).await?;
+    tx.commit().await.map_err(DbError::Query)?;
+    Ok(Ok(record))
+}
+
+/// A release handed to a download client for a request.
+#[derive(Debug, Clone)]
+pub struct Download<'a> {
+    /// Who grabbed it.
+    pub actor: &'a str,
+    /// The download client it went to.
+    pub integration_id: uuid::Uuid,
+    /// The import following it.
+    pub import_id: uuid::Uuid,
+    /// What was grabbed, for the audit log: its title, indexer and
+    /// protocol. Never its link.
+    pub release: Value,
+}
+
+/// Record that a request is downloading: a release was handed to a download
+/// client and an import follows it. An import that has already ended (the
+/// same release in the library already, say) settles the request at once.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn start_download(
+    pool: &PgPool,
+    id: RequestId,
+    download: &Download<'_>,
+) -> Result<Result<RequestRecord, RequestRefusal>, DbError> {
+    let mut tx = pool.begin().await.map_err(DbError::Query)?;
+    let Some(state) = lock(&mut tx, id, None).await? else {
+        tx.rollback().await.map_err(DbError::Query)?;
+        return Ok(Err(RequestRefusal::NotFound));
+    };
+    if !state.may_grab() || !state.can_become(RequestState::Downloading) {
+        tx.rollback().await.map_err(DbError::Query)?;
+        return Ok(Err(RequestRefusal::Conflict(state)));
+    }
+    sqlx::query(
+        "UPDATE requests
+         SET state = 'downloading', integration_id = $2, import_id = $3,
+             error_code = NULL, error_detail = NULL
+         WHERE id = $1",
+    )
+    .bind(id.as_uuid())
+    .bind(download.integration_id)
+    .bind(download.import_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
+    audit(
+        &mut tx,
+        download.actor,
+        "request.grabbed",
+        &id.to_string(),
+        download.release.clone(),
+    )
+    .await?;
+    settle_in(&mut tx, Some(id)).await?;
+    let record = request_in(&mut tx, id).await?;
+    tx.commit().await.map_err(DbError::Query)?;
+    Ok(Ok(record))
+}
+
+/// Move requests whose import has moved. Returns the requests that moved.
+///
+/// - The import completed: the request is fulfilled with its artifact.
+/// - The import failed for good, was canceled or was quarantined: the
+///   request failed, saying how, and another release may be grabbed.
+/// - The import of a failed request was retried: it is downloading again.
+///
+/// Checked by the import runner after every import and whenever its queue
+/// is empty, as rips are, so a server restarted mid-import still catches up.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn settle_requests(pool: &PgPool) -> Result<Vec<RequestId>, DbError> {
+    let mut tx = pool.begin().await.map_err(DbError::Query)?;
+    let moved = settle_in(&mut tx, None).await?;
+    tx.commit().await.map_err(DbError::Query)?;
+    Ok(moved)
+}
+
+/// The import states a request's download has failed in.
+const ENDED_BADLY: &str = "('failed_terminal', 'canceled', 'quarantined')";
+
+/// [`settle_requests`], for one request or all, in a transaction.
+async fn settle_in(
+    tx: &mut Transaction<'_, Postgres>,
+    only: Option<RequestId>,
+) -> Result<Vec<RequestId>, DbError> {
+    let only = only.map(|id| *id.as_uuid());
+    // Revived first, so one whose retried import has since completed is
+    // fulfilled below, through downloading, as the states require.
+    let revived: Vec<uuid::Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "UPDATE requests r
+         SET state = 'downloading', error_code = NULL, error_detail = NULL
+         FROM import_jobs i
+         WHERE i.id = r.import_id AND r.state = 'failed'
+           AND i.state NOT IN {ENDED_BADLY}
+           AND ($1::uuid IS NULL OR r.id = $1)
+         RETURNING r.id"
+    )))
+    .bind(only)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(DbError::Query)?;
+    let fulfilled: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "UPDATE requests r
+         SET state = 'fulfilled', artifact_id = i.artifact_id,
+             error_code = NULL, error_detail = NULL
+         FROM import_jobs i
+         WHERE i.id = r.import_id AND r.state = 'downloading'
+           AND i.state = 'complete' AND i.artifact_id IS NOT NULL
+           AND ($1::uuid IS NULL OR r.id = $1)
+         RETURNING r.id",
+    )
+    .bind(only)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(DbError::Query)?;
+    let failed: Vec<uuid::Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "UPDATE requests r
+         SET state = 'failed', error_code = 'IMPORT_FAILED',
+             error_detail = left('the download''s import ended as ' || i.state
+                 || COALESCE(' (' || i.error_code || ')', '')
+                 || '; search again and grab another release, or retry the import', 2000)
+         FROM import_jobs i
+         WHERE i.id = r.import_id AND r.state = 'downloading'
+           AND i.state IN {ENDED_BADLY}
+           AND ($1::uuid IS NULL OR r.id = $1)
+         RETURNING r.id"
+    )))
+    .bind(only)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(DbError::Query)?;
+    for (ids, action) in [
+        (&revived, "request.downloading"),
+        (&fulfilled, "request.fulfilled"),
+        (&failed, "request.failed"),
+    ] {
+        for id in ids {
+            system_audit(tx, action, *id).await?;
+        }
+    }
+    // A request revived and then fulfilled moved once.
+    let mut moved: Vec<uuid::Uuid> = revived.into_iter().chain(fulfilled).chain(failed).collect();
+    moved.sort_unstable();
+    moved.dedup();
+    Ok(moved.into_iter().map(RequestId::from_uuid).collect())
+}
+
+/// An audit row for what the import runner did to a request.
+async fn system_audit(
+    tx: &mut Transaction<'_, Postgres>,
+    action: &str,
+    id: uuid::Uuid,
+) -> Result<(), DbError> {
+    sqlx::query(
+        "INSERT INTO audit_events
+             (id, actor_type, actor_id, action, target_type, target_id, outcome, metadata)
+         VALUES ($1, 'system', 'import-runner', $2, 'request', $3,
+                 CASE WHEN $2 = 'request.failed' THEN 'failure' ELSE 'success' END, '{}'::jsonb)",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(action)
+    .bind(id.to_string())
+    .execute(&mut **tx)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(())
+}

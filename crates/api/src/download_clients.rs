@@ -5,7 +5,7 @@
 //! checked again as they are read, and its secret, opened with the server's
 //! key only for as long as the client needs it. Shared by the routes that
 //! submit and test, and by the import runner that follows a job to the end.
-//! S3 and RomM's API are opened the same way.
+//! S3, RomM's API and Prowlarr are opened the same way.
 
 use tangible_db::Database;
 use tangible_db::integrations::{IntegrationRecord, sealed_secret};
@@ -13,12 +13,14 @@ use tangible_domain::SecretString;
 use tangible_integrations::download::{ClientError, JobStatus};
 use tangible_integrations::nzbget::NzbgetClient;
 use tangible_integrations::outbound::{OutboundClient, Url};
+use tangible_integrations::prowlarr::ProwlarrClient;
 use tangible_integrations::qbittorrent::QbittorrentClient;
 use tangible_integrations::romm_api::RommClient;
 use tangible_integrations::s3::S3Client;
 use tangible_integrations::sabnzbd::SabnzbdClient;
 use tangible_integrations::settings::{
-    NzbgetSettings, QbittorrentSettings, RommApiSettings, S3Settings, SabnzbdSettings,
+    NzbgetSettings, ProwlarrSettings, QbittorrentSettings, RommApiSettings, S3Settings,
+    SabnzbdSettings,
 };
 use tangible_integrations::torrent::Infohash;
 
@@ -264,6 +266,39 @@ pub async fn open_romm(
     }
     .romm()
     .await
+}
+
+/// A configured Prowlarr's client, ready to use.
+///
+/// # Errors
+///
+/// As [`open_client`]; `INTEGRATION_MISCONFIGURED` too for one without its
+/// API key.
+pub async fn open_prowlarr(
+    database: &Database,
+    http: Option<&OutboundClient>,
+    key: Option<&SecretKey>,
+    record: &IntegrationRecord,
+) -> Result<ProwlarrClient, OpenError> {
+    if record.kind != "prowlarr" {
+        return Err(OpenError::new(
+            "INTEGRATION_OFF",
+            format!("{} is not a Prowlarr", record.name),
+        ));
+    }
+    let http = in_use(record, http)?;
+    let opener = Opener {
+        database,
+        http,
+        key,
+        record,
+    };
+    let settings: ProwlarrSettings = opener.settings()?;
+    Ok(ProwlarrClient::new(
+        http.clone(),
+        opener.url(&settings.base_url)?,
+        opener.required_secret("api_key", "API key").await?,
+    ))
 }
 
 /// The integrations client, for an integration that is turned on.

@@ -11,8 +11,8 @@
 //! they own it and want a digital image of it; the attestation is checked
 //! and not stored (the owner's choice). An operator or administrator
 //! approves or declines; their own requests are approved as made. Nothing is
-//! searched for or downloaded here: that is Q3, and only for an approved
-//! request.
+//! searched for or downloaded here: an approved request's releases are
+//! searched for, and one grabbed, in `request_releases` (Q3).
 //!
 //! A viewer sees and withdraws only their own requests; another's is
 //! answered as not found, so a viewer cannot learn what others asked for.
@@ -76,6 +76,9 @@ pub struct RequestRefView {
 }
 
 /// A request for an item.
+// The `can_*` flags are what the caller may do now, each decided on the
+// server (AGENTS.md 9): independent answers, not states of one machine.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct RequestView {
     /// Its id.
@@ -121,15 +124,19 @@ pub struct RequestView {
     pub can_decline: bool,
     /// Whether the caller may withdraw it now.
     pub can_cancel: bool,
+    /// Whether the caller may search for its releases, and grab one, now:
+    /// an operator or administrator, once it is approved or its download
+    /// failed.
+    pub can_search: bool,
 }
 
-fn rfc3339(at: time::OffsetDateTime) -> String {
+pub(crate) fn rfc3339(at: time::OffsetDateTime) -> String {
     at.format(&Rfc3339).unwrap_or_default()
 }
 
 impl RequestView {
     /// The request as `viewer` sees it, with what they may do to it.
-    fn of(record: RequestRecord, viewer: &CurrentUser) -> Self {
+    pub(crate) fn of(record: RequestRecord, viewer: &CurrentUser) -> Self {
         let decides = viewer.role.allows(Permission::DecideRequests);
         let own = record.requester_id == viewer.user_id;
         let details = record
@@ -165,6 +172,7 @@ impl RequestView {
             can_approve: decides && record.state.can_become(RequestState::Approved),
             can_decline: decides && record.state.can_become(RequestState::Declined),
             can_cancel: (decides || own) && record.state.can_become(RequestState::Canceled),
+            can_search: decides && record.state.may_grab(),
         }
     }
 }
@@ -222,7 +230,7 @@ pub struct RequestQuery {
     pub state: Option<String>,
 }
 
-fn unavailable(error: &tangible_db::DbError) -> Problem {
+pub(crate) fn unavailable(error: &tangible_db::DbError) -> Problem {
     tracing::error!(error = ?error, "requests could not be read or written");
     Problem::new(
         ErrorCode::StorageUnavailable,
@@ -230,12 +238,12 @@ fn unavailable(error: &tangible_db::DbError) -> Problem {
     )
 }
 
-fn parse_id(raw: &str) -> Result<RequestId, Problem> {
+pub(crate) fn parse_id(raw: &str) -> Result<RequestId, Problem> {
     raw.parse()
         .map_err(|_| Problem::invalid_parameter("request_id", "not a valid identifier"))
 }
 
-fn invalid(detail: impl Into<String>) -> Problem {
+pub(crate) fn invalid(detail: impl Into<String>) -> Problem {
     Problem::new(ErrorCode::ValidationFailed, detail)
 }
 
@@ -247,7 +255,7 @@ fn has_control(text: &str, allowed: &[char]) -> bool {
 
 /// A short single-line text, trimmed: present, bounded, no control
 /// characters.
-fn line(field: &str, raw: &str, max: usize) -> Result<String, Problem> {
+pub(crate) fn line(field: &str, raw: &str, max: usize) -> Result<String, Problem> {
     let text = raw.trim();
     if text.is_empty() {
         return Err(invalid(format!("{field} must not be empty")));
@@ -373,7 +381,7 @@ pub(crate) fn check(request: &CreateItemRequest) -> Result<Checked, Problem> {
     })
 }
 
-fn rate_limited(wait: std::time::Duration) -> Response {
+pub(crate) fn rate_limited(wait: std::time::Duration) -> Response {
     let mut response = Problem::new(
         ErrorCode::RateLimited,
         "too many requests from this account for now; try again later",
@@ -389,11 +397,11 @@ fn rate_limited(wait: std::time::Duration) -> Response {
 
 /// Whose requests `user` may see or withdraw: their own, or everybody's for
 /// somebody who decides them.
-fn scope_of(user: &CurrentUser) -> Option<uuid::Uuid> {
+pub(crate) fn scope_of(user: &CurrentUser) -> Option<uuid::Uuid> {
     (!user.role.allows(Permission::DecideRequests)).then_some(user.user_id)
 }
 
-fn refused(refusal: RequestRefusal, id: RequestId, doing: &str) -> Problem {
+pub(crate) fn refused(refusal: RequestRefusal, id: RequestId, doing: &str) -> Problem {
     match refusal {
         RequestRefusal::NotFound => Problem::not_found("request", &id.to_string()),
         RequestRefusal::Conflict(state) => Problem::new(

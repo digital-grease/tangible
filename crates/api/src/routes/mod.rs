@@ -23,6 +23,7 @@ pub mod metadata;
 pub mod oidc;
 pub mod physical_copies;
 pub mod reports;
+pub mod request_releases;
 pub mod requests;
 pub mod rips;
 pub mod romm;

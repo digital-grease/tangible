@@ -37,6 +37,9 @@ sha1 = "0.11.0"
 sha2 = "0.11.0"
 tangible-domain = { version = "0.2.1", path = "../domain" }
 thiserror = "2.0.19"
+# When Prowlarr says a release was posted, and until when it paused an
+# indexer: RFC 3339. The same version the domain crate uses.
+time = { version = "0.3.55", features = ["parsing"] }
 # time and sync pace metadata providers to their rate limits.
 tokio = { version = "1.53.1", features = ["net", "fs", "io-util", "time", "sync"] }
 tracing = "0.1.44"

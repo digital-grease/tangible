@@ -4590,7 +4590,7 @@
           "integrations"
         ],
         "summary": "Hand a job to a download client.",
-        "description": "Hand a job the operator already has to a download client, in its \\\n                   category: a magnet link or a .torrent file (base64) to qBittorrent, an NZB \\\n                   (base64) to SABnzbd. An import follows it and brings it into the library \\\n                   when it finishes. Tangible never searches, never asks for a script, and \\\n                   never removes the job or its data. Submitting the same again is safe: the \\\n                   existing import is answered, and the client is not asked twice.",
+        "description": "Hand a job the operator already has to a download client, in its \\\n                   category: a magnet link or a .torrent file (base64) to qBittorrent, an NZB \\\n                   (base64) to SABnzbd. An import follows it and brings it into the library \\\n                   when it finishes. No script is asked for, and the job and its data are \\\n                   removed only once imported, where the integration is set to remove them. \\\n                   Submitting the same again is safe: the existing import is answered, and the \\\n                   client is not asked twice.",
         "operationId": "submit_job",
         "parameters": [
           {
@@ -5748,6 +5748,238 @@
           },
           "422": {
             "description": "No reason, or too long a one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/requests/{request_id}/grab": {
+      "post": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "Grab a release from the search held for a request.",
+        "description": "Grab a release a person picked from the search held for an approved \\\n                   request: its .torrent, NZB or magnet link is fetched through Prowlarr, \\\n                   checked as a submitted job is, and handed to a download client of its \\\n                   protocol (the one named, or the only one there is) in Tangible's category. \\\n                   The request then follows the import that brings it in, and is fulfilled \\\n                   when that completes. Operators and administrators.",
+        "operationId": "grab_release",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "description": "Request identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrabReleaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Handed over; the request follows its import",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrabView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not approved, or downloading or ended; the search \\\n                                      expired (SEARCH_EXPIRED); or no client for it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Ids that will not do, or a client to choose",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Prowlarr or the client failed, or gave what will not do",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/requests/{request_id}/search": {
+      "get": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "The search held for a request.",
+        "description": "The search held for a request, for an hour after it was made. Operators and \\\n                   administrators.",
+        "operationId": "held_search",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "description": "Request identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What was found, held",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseSearchView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such request, or no search held for it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "Search Prowlarr for a request's releases, ranked, and hold them.",
+        "description": "Search Prowlarr for an approved request's releases: by the request's title, \\\n                   cleaned, in the categories its kind suits (a film by its IMDb ID first, \\\n                   where it has one), or by the words given. The results are ranked by how well \\\n                   they match, each saying why, and held for an hour for a person to pick one \\\n                   to grab; nothing is grabbed here. A release's link is never answered. \\\n                   Operators and administrators; at most 60 an hour per account.",
+        "operationId": "search_releases",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "description": "Request identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchReleasesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What was found, held",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseSearchView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not approved, or downloading or ended; or no Prowlarr",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Words that will not do",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many searches from this account for now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Prowlarr failed",
             "content": {
               "application/json": {
                 "schema": {
@@ -10972,6 +11204,29 @@
           }
         }
       },
+      "DownloadClientChoiceView": {
+        "type": "object",
+        "description": "A download client a release may be handed to.",
+        "required": [
+          "id",
+          "name",
+          "protocol"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The integration."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "protocol": {
+            "type": "string",
+            "description": "`torrent` or `usenet`: what it takes."
+          }
+        }
+      },
       "DownloadClientView": {
         "type": "object",
         "description": "A download client a torrent can be handed to.",
@@ -12113,6 +12368,55 @@
           }
         }
       },
+      "GrabReleaseRequest": {
+        "type": "object",
+        "description": "Which release to grab, and, when more than one client takes its\nprotocol, which client.",
+        "required": [
+          "result_id"
+        ],
+        "properties": {
+          "integration_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The download client to hand it to; needed only when more than one\ntakes its protocol."
+          },
+          "result_id": {
+            "type": "string",
+            "description": "A result's id, from the search held for the request."
+          }
+        },
+        "additionalProperties": false
+      },
+      "GrabView": {
+        "type": "object",
+        "description": "A release grabbed: the request, now following the import.",
+        "required": [
+          "request",
+          "outcome",
+          "integration_id",
+          "import_id"
+        ],
+        "properties": {
+          "import_id": {
+            "type": "string",
+            "description": "The import that brings it in."
+          },
+          "integration_id": {
+            "type": "string",
+            "description": "The download client it went to."
+          },
+          "outcome": {
+            "type": "string",
+            "description": "`created`; `resubmitted` when an earlier import of the same job ended\nwithout an artifact; `already_active` when one is still going;\n`already_imported` when it is in the library."
+          },
+          "request": {
+            "$ref": "#/components/schemas/RequestView",
+            "description": "The request, downloading (or fulfilled, when the library already\nhad what the release holds)."
+          }
+        }
+      },
       "HashesView": {
         "type": "object",
         "description": "CRC32, MD5 and SHA-1 of some bytes, as preservation databases list them.",
@@ -13203,6 +13507,26 @@
           }
         }
       },
+      "PausedIndexerView": {
+        "type": "object",
+        "description": "An indexer Prowlarr has paused after it failed.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Its name, in Prowlarr."
+          },
+          "until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Until when."
+          }
+        }
+      },
       "PhysicalCopyDetail": {
         "allOf": [
           {
@@ -13615,6 +13939,170 @@
           }
         }
       },
+      "ReleaseSearchView": {
+        "type": "object",
+        "description": "A search for a request's releases, held for a person to pick from.",
+        "required": [
+          "request_id",
+          "searched_by",
+          "query",
+          "searched_at",
+          "held_until",
+          "results",
+          "indexers_paused",
+          "clients"
+        ],
+        "properties": {
+          "clients": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DownloadClientChoiceView"
+            },
+            "description": "The download clients a release may go to."
+          },
+          "held_until": {
+            "type": "string",
+            "description": "Until when a release may be grabbed from it; search again after."
+          },
+          "indexers_enabled": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How many indexers Prowlarr has turned on, if it said.",
+            "minimum": 0
+          },
+          "indexers_paused": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PausedIndexerView"
+            },
+            "description": "Those it has paused after they failed: their releases are missing."
+          },
+          "query": {
+            "type": "string",
+            "description": "The words searched for, or the IMDb ID."
+          },
+          "request_id": {
+            "type": "string",
+            "description": "The request."
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReleaseView"
+            },
+            "description": "What was found, best first, at most 100."
+          },
+          "searched_at": {
+            "type": "string",
+            "description": "When."
+          },
+          "searched_by": {
+            "type": "string",
+            "description": "`words`, or `imdb_id` for a film found by its IMDb ID."
+          }
+        }
+      },
+      "ReleaseView": {
+        "type": "object",
+        "description": "A release found, as a person picks from it. Its link is never answered.",
+        "required": [
+          "id",
+          "title",
+          "indexer",
+          "protocol",
+          "categories",
+          "score",
+          "reasons",
+          "can_grab"
+        ],
+        "properties": {
+          "can_grab": {
+            "type": "boolean",
+            "description": "Whether a download client for its protocol is configured and turned\non, so it can be grabbed."
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Its categories, by name, such as `Movies/DVD`."
+          },
+          "grabs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How often it was grabbed, where the indexer says.",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string",
+            "description": "The result's id, which a grab names."
+          },
+          "indexer": {
+            "type": "string",
+            "description": "The indexer that has it, as Prowlarr names it."
+          },
+          "leechers": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "A torrent's leechers.",
+            "minimum": 0
+          },
+          "protocol": {
+            "type": "string",
+            "description": "`torrent` or `usenet`."
+          },
+          "published_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was posted."
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Why it scores as it does, in words."
+          },
+          "score": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How well it matches what was asked for: higher is better."
+          },
+          "seeders": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "A torrent's seeders.",
+            "minimum": 0
+          },
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Its size.",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string",
+            "description": "Its title, as the indexer gives it."
+          }
+        }
+      },
       "RenewRequest": {
         "type": "object",
         "description": "What a worker sends to renew.",
@@ -13843,7 +14331,8 @@
           "updated_at",
           "can_approve",
           "can_decline",
-          "can_cancel"
+          "can_cancel",
+          "can_search"
         ],
         "properties": {
           "artifact_id": {
@@ -13864,6 +14353,10 @@
           "can_decline": {
             "type": "boolean",
             "description": "Whether the caller may decline it now."
+          },
+          "can_search": {
+            "type": "boolean",
+            "description": "Whether the caller may search for its releases, and grab one, now:\nan operator or administrator, once it is approved or its download\nfailed."
           },
           "created_at": {
             "type": "string",
@@ -14921,6 +15414,20 @@
             "description": "Its name."
           }
         }
+      },
+      "SearchReleasesRequest": {
+        "type": "object",
+        "description": "What to search for: the request's own title, unless words are given.",
+        "properties": {
+          "query": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Words to search for instead of the request's title, up to 200\ncharacters."
+          }
+        },
+        "additionalProperties": false
       },
       "SecretFieldView": {
         "type": "object",

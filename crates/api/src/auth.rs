@@ -552,6 +552,23 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
         "/api/v1/requests/{request_id}/cancel",
         Signed(Permission::Request),
     ),
+    // Searching for an approved request's releases, and grabbing one, are
+    // for those who decide requests (docs/plans/requests.md, decision 2).
+    (
+        "POST",
+        "/api/v1/requests/{request_id}/search",
+        Signed(DecideRequests),
+    ),
+    (
+        "GET",
+        "/api/v1/requests/{request_id}/search",
+        Signed(DecideRequests),
+    ),
+    (
+        "POST",
+        "/api/v1/requests/{request_id}/grab",
+        Signed(DecideRequests),
+    ),
     ("GET", "/api/v1/romm", Signed(Read)),
     ("GET", "/api/v1/editions/{edition_id}/romm", Signed(Read)),
     ("PUT", "/api/v1/editions/{edition_id}/romm", Signed(Catalog)),
@@ -1231,6 +1248,10 @@ pub const REQUESTS_ALLOWED: u32 = 30;
 /// each may reach outside services, which keep their own limits.
 pub const METADATA_SEARCHES_ALLOWED: u32 = 300;
 
+/// Release searches allowed per account within [`URL_IMPORT_WINDOW`]: each
+/// asks every indexer in Prowlarr, and indexers keep their own limits.
+pub const RELEASE_SEARCHES_ALLOWED: u32 = 60;
+
 impl ActionLimiter {
     /// The limiter for requests for items.
     #[must_use]
@@ -1242,6 +1263,12 @@ impl ActionLimiter {
     #[must_use]
     pub fn metadata_searches() -> Self {
         Self::new(METADATA_SEARCHES_ALLOWED, URL_IMPORT_WINDOW)
+    }
+
+    /// The limiter for release searches.
+    #[must_use]
+    pub fn release_searches() -> Self {
+        Self::new(RELEASE_SEARCHES_ALLOWED, URL_IMPORT_WINDOW)
     }
 }
 
