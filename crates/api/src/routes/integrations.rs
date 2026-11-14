@@ -373,8 +373,8 @@ pub async fn create_one(
     let kind = ConfigurableKind::parse(&request.kind).ok_or_else(|| {
         Problem::new(
             ErrorCode::ValidationFailed,
-            "kind must be qbittorrent, sabnzbd, nzbget, s3 or romm_api; others are not \
-             configurable yet",
+            "kind must be qbittorrent, sabnzbd, nzbget, s3, romm_api, musicbrainz, tmdb or \
+             igdb; others are not configurable yet",
         )
     })?;
     let name = checked_name(&request.name)?;
@@ -402,7 +402,16 @@ pub async fn create_one(
     )
     .await
     .map_err(unavailable("the integration could not be stored"))?
-    .map_err(|outcome| outcome_problem(Some(id), &outcome))?;
+    .map_err(|outcome| match outcome {
+        IntegrationOutcome::OnlyOne if kind.is_metadata_provider() => Problem::new(
+            ErrorCode::Conflict,
+            format!(
+                "there is a {} integration already, and it is one service; change that one",
+                kind.as_str()
+            ),
+        ),
+        outcome => outcome_problem(Some(id), &outcome),
+    })?;
     tracing::info!(integration_id = %record.id, kind = %record.kind, "integration made");
     prompt_romm_sync(&state, &record.kind);
     Ok((StatusCode::CREATED, Json(IntegrationView::from(record))).into_response())
@@ -656,6 +665,9 @@ pub async fn test_one(
     if record.kind == "romm_api" {
         return test_romm(&state, &record).await.map(Json);
     }
+    if ConfigurableKind::parse(&record.kind).is_some_and(ConfigurableKind::is_metadata_provider) {
+        return test_metadata(&state, &record).await.map(Json);
+    }
     let (mut client, folders) = open_client(
         state.database(),
         state.integration_client(),
@@ -703,6 +715,46 @@ pub async fn test_one(
         }
     };
     Ok(Json(view))
+}
+
+/// Try a metadata provider: whether it answers, and takes its key.
+async fn test_metadata(
+    state: &ApiState,
+    record: &tangible_db::integrations::IntegrationRecord,
+) -> Result<IntegrationTestView, Problem> {
+    let metadata = state.metadata().ok_or_else(|| {
+        Problem::new(
+            ErrorCode::IntegrationOff,
+            "this server reaches no metadata providers",
+        )
+    })?;
+    let checked = metadata
+        .check(state.database(), state.secret_key(), record)
+        .await
+        .map_err(|error| open_problem(&error))?;
+    let view = match checked {
+        Ok(()) => {
+            note_health(state, record.id, Ok(None)).await;
+            IntegrationTestView {
+                ok: true,
+                api_version: None,
+                error_code: None,
+                detail: None,
+                checks: Vec::new(),
+            }
+        }
+        Err(error) => {
+            note_health(state, record.id, Err(error.code())).await;
+            IntegrationTestView {
+                ok: false,
+                api_version: None,
+                error_code: Some(error.code().to_owned()),
+                detail: Some(error.to_string()),
+                checks: Vec::new(),
+            }
+        }
+    };
+    Ok(view)
 }
 
 /// Try an S3 integration: every bucket it allows must be there and open to

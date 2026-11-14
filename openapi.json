@@ -4945,6 +4945,76 @@
         ]
       }
     },
+    "/api/v1/metadata/search": {
+      "get": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "Search metadata for an item.",
+        "description": "Search metadata for an item to request: loaded DATs, and MusicBrainz, TMDB and IGDB where an administrator configured them, each where it suits the kind. An IMDb ID or address is looked up through TMDB alone. A source that fails is named, with why, and the others still answer. At most 300 an hour per account.",
+        "operationId": "search_metadata",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Words of a title (and, for music, an artist), or an IMDb ID or\naddress. Up to 200 characters.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "`game`, `music`, `movie`, `television`, `software` or `other`; all\nsources when absent.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What was found, and how each source answered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetadataSearchView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No query, too long a one, or an unknown kind",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many from this account for now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/physical-copies": {
       "get": {
         "tags": [
@@ -12994,6 +13064,117 @@
           "writable": {
             "type": "boolean",
             "description": "Whether it could be written."
+          }
+        }
+      },
+      "MetadataCandidateView": {
+        "type": "object",
+        "description": "An item a source knows.",
+        "required": [
+          "provider",
+          "kind",
+          "title",
+          "details",
+          "refs"
+        ],
+        "properties": {
+          "details": {
+            "type": "object",
+            "description": "Platform, year, region and the like, as a request stores them.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "kind": {
+            "type": "string",
+            "description": "What kind of item it is."
+          },
+          "link": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its page at the provider, `https` and on the provider's own site."
+          },
+          "provider": {
+            "type": "string",
+            "description": "`dat`, `musicbrainz`, `tmdb` or `igdb`."
+          },
+          "refs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RequestRefView"
+            },
+            "description": "Where it was found, as a request stores it."
+          },
+          "title": {
+            "type": "string",
+            "description": "Its title."
+          }
+        }
+      },
+      "MetadataSearchView": {
+        "type": "object",
+        "description": "What a search found.",
+        "required": [
+          "candidates",
+          "sources"
+        ],
+        "properties": {
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetadataCandidateView"
+            },
+            "description": "The candidates: DATs' first, then each provider's in its order."
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetadataSourceView"
+            },
+            "description": "How each source asked answered."
+          }
+        }
+      },
+      "MetadataSourceView": {
+        "type": "object",
+        "description": "How one source answered.",
+        "required": [
+          "provider",
+          "state",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "description": "How many candidates it answered.",
+            "minimum": 0
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why, or what to do, in words."
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it failed, as a stable code."
+          },
+          "provider": {
+            "type": "string",
+            "description": "`dat`, `musicbrainz`, `tmdb` or `igdb`."
+          },
+          "state": {
+            "type": "string",
+            "description": "`answered`, `failed`, `unconfigured` or `off`."
           }
         }
       },

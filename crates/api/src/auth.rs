@@ -526,6 +526,11 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
     // their own; operators and administrators decide. Which requests a
     // caller sees is the route's to narrow.
     ("POST", "/api/v1/requests", Signed(Permission::Request)),
+    (
+        "GET",
+        "/api/v1/metadata/search",
+        Signed(Permission::Request),
+    ),
     ("GET", "/api/v1/requests", Signed(Permission::Request)),
     (
         "GET",
@@ -1222,11 +1227,21 @@ impl ActionLimiter {
 /// (docs/plans/requests.md).
 pub const REQUESTS_ALLOWED: u32 = 30;
 
+/// Metadata searches allowed per account within [`URL_IMPORT_WINDOW`]:
+/// each may reach outside services, which keep their own limits.
+pub const METADATA_SEARCHES_ALLOWED: u32 = 300;
+
 impl ActionLimiter {
     /// The limiter for requests for items.
     #[must_use]
     pub fn requests() -> Self {
         Self::new(REQUESTS_ALLOWED, URL_IMPORT_WINDOW)
+    }
+
+    /// The limiter for metadata searches.
+    #[must_use]
+    pub fn metadata_searches() -> Self {
+        Self::new(METADATA_SEARCHES_ALLOWED, URL_IMPORT_WINDOW)
     }
 }
 

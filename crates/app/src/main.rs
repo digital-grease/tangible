@@ -259,7 +259,8 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         Some(key) => state.with_secret_key(Arc::clone(key)),
         None => state,
     }
-    .with_integration_client(integrations.clone());
+    .with_integration_client(integrations.clone())
+    .with_metadata(metadata_providers(serve)?);
     let state = attach_web_ui(state, serve.web_root.as_deref()).await?;
     let (state, romm, romm_sync) = start_romm_export(
         state,
@@ -514,6 +515,24 @@ fn integration_client(
         concat!("tangible/", env!("CARGO_PKG_VERSION")),
     )
     .context("building the client integrations are reached with")
+}
+
+/// The client metadata providers are reached with (ADR 0021): their own
+/// public addresses, so `https`, ports 80 and 443 and public addresses only,
+/// plus the administrator's allowed blocks, as for a URL an operator gives.
+/// Never the private network the download clients are on. Its User-Agent
+/// names Tangible and where it is made, as MusicBrainz asks.
+fn metadata_providers(serve: &ServeConfig) -> Result<tangible_api::metadata::Metadata> {
+    use tangible_api::metadata::{Endpoints, Metadata, USER_AGENT};
+    use tangible_integrations::outbound::{OutboundClient, OutboundPolicy};
+
+    let (allowed, proxy) = outbound_settings(serve)?;
+    let client = OutboundClient::new(
+        OutboundPolicy::for_operator_urls(false, allowed, proxy),
+        USER_AGENT,
+    )
+    .context("building the client metadata providers are reached with")?;
+    Ok(Metadata::new(client, Endpoints::public()))
 }
 
 /// A background task rather than a separate process: one binary, one

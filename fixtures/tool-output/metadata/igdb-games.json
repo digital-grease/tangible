@@ -1,0 +1,28 @@
+[
+  {
+    "id": 1026,
+    "first_release_date": 690249600,
+    "name": "The Legend of Zelda: A Link to the Past",
+    "platforms": [
+      { "id": 19, "name": "Super Nintendo Entertainment System" },
+      { "id": 24, "name": "Game Boy Advance" }
+    ],
+    "slug": "the-legend-of-zelda-a-link-to-the-past",
+    "url": "https://www.igdb.com/games/the-legend-of-zelda-a-link-to-the-past"
+  },
+  {
+    "id": 1029,
+    "first_release_date": 880329600,
+    "name": "The Legend of Zelda: Ocarina of Time",
+    "platforms": [{ "id": 4, "name": "Nintendo 64" }],
+    "slug": "the-legend-of-zelda-ocarina-of-time",
+    "url": "https://www.igdb.com/games/the-legend-of-zelda-ocarina-of-time"
+  },
+  {
+    "id": 131913,
+    "name": "The Legend of Zelda: Collector's Edition",
+    "platforms": [{ "id": 21, "name": "Nintendo GameCube" }],
+    "slug": "the-legend-of-zelda-collectors-edition",
+    "url": "https://example.com/not-igdb"
+  }
+]

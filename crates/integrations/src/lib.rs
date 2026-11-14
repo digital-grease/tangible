@@ -13,6 +13,7 @@
 
 pub mod download;
 pub mod fetch;
+pub mod metadata;
 pub mod nzb;
 pub mod nzbget;
 pub mod oidc;

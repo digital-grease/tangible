@@ -9,7 +9,9 @@
 //! settings: they are named here, entered separately, and stored sealed.
 //!
 //! qBittorrent (docs/plans/acquisition.md A4), SABnzbd and NZBGet (A5),
-//! S3-compatible storage (A6), and RomM's API (docs/plans/romm-api.md M1).
+//! S3-compatible storage (A6), RomM's API (docs/plans/romm-api.md M1), and
+//! the metadata providers requests are found through (ADR 0021):
+//! MusicBrainz, TMDB and IGDB, which take no settings, only secrets.
 
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +30,12 @@ pub enum ConfigurableKind {
     S3,
     /// The API of the RomM the export writes into.
     RommApi,
+    /// MusicBrainz, for music (no key).
+    Musicbrainz,
+    /// TMDB, for films and television, and IMDb IDs.
+    Tmdb,
+    /// IGDB, for games, through a Twitch application.
+    Igdb,
 }
 
 impl ConfigurableKind {
@@ -40,6 +48,9 @@ impl ConfigurableKind {
             "nzbget" => Some(Self::Nzbget),
             "s3" => Some(Self::S3),
             "romm_api" => Some(Self::RommApi),
+            "musicbrainz" => Some(Self::Musicbrainz),
+            "tmdb" => Some(Self::Tmdb),
+            "igdb" => Some(Self::Igdb),
             _ => None,
         }
     }
@@ -53,6 +64,9 @@ impl ConfigurableKind {
             Self::Nzbget => "nzbget",
             Self::S3 => "s3",
             Self::RommApi => "romm_api",
+            Self::Musicbrainz => "musicbrainz",
+            Self::Tmdb => "tmdb",
+            Self::Igdb => "igdb",
         }
     }
 
@@ -64,9 +78,25 @@ impl ConfigurableKind {
             Self::Sabnzbd => &["api_key"],
             Self::S3 => &["access_key_id", "secret_access_key"],
             Self::RommApi => &["token"],
+            Self::Musicbrainz => &[],
+            Self::Tmdb => &["read_access_token"],
+            Self::Igdb => &["client_id", "client_secret"],
         }
     }
+
+    /// Whether it is a metadata provider: searched to find an item to
+    /// request, and never sent anything but a search.
+    #[must_use]
+    pub const fn is_metadata_provider(self) -> bool {
+        matches!(self, Self::Musicbrainz | Self::Tmdb | Self::Igdb)
+    }
 }
+
+/// A metadata provider's settings: none. It is reached at its own public
+/// address, which is not configurable, and its key is a secret.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderSettings {}
 
 /// How a qBittorrent integration reaches its client and its client's
 /// downloads.
@@ -539,6 +569,15 @@ pub fn checked_settings(
         ConfigurableKind::Nzbget => stored(&NzbgetSettings::checked(value, roots, policy)?),
         ConfigurableKind::S3 => stored(&S3Settings::checked(value, policy)?),
         ConfigurableKind::RommApi => stored(&RommApiSettings::checked(value, policy)?),
+        ConfigurableKind::Musicbrainz | ConfigurableKind::Tmdb | ConfigurableKind::Igdb => {
+            // Absent is none.
+            let value = if value.is_null() {
+                serde_json::json!({})
+            } else {
+                value.clone()
+            };
+            stored(&parsed::<ProviderSettings>(&value)?)
+        }
     }
 }
 
@@ -857,6 +896,24 @@ mod tests {
     }
 
     #[test]
+    fn a_metadata_provider_takes_no_settings() {
+        for kind in [
+            ConfigurableKind::Musicbrainz,
+            ConfigurableKind::Tmdb,
+            ConfigurableKind::Igdb,
+        ] {
+            for none in [serde_json::json!({}), serde_json::Value::Null] {
+                assert_eq!(
+                    checked_settings(kind, &none, known(&roots()), &policy()).unwrap(),
+                    serde_json::json!({})
+                );
+            }
+            let address = serde_json::json!({ "base_url": "http://10.0.0.5/" });
+            assert!(checked_settings(kind, &address, known(&roots()), &policy()).is_err());
+        }
+    }
+
+    #[test]
     fn only_known_kinds_are_configured_and_each_names_its_secrets() {
         assert_eq!(
             ConfigurableKind::parse("qbittorrent"),
@@ -882,7 +939,22 @@ mod tests {
             Some(ConfigurableKind::RommApi)
         );
         assert_eq!(ConfigurableKind::RommApi.secret_fields(), ["token"]);
-        for other in ["romm", "webhook", "peer_instance", ""] {
+        assert_eq!(
+            ConfigurableKind::parse("musicbrainz"),
+            Some(ConfigurableKind::Musicbrainz)
+        );
+        assert!(ConfigurableKind::Musicbrainz.secret_fields().is_empty());
+        assert_eq!(
+            ConfigurableKind::Tmdb.secret_fields(),
+            ["read_access_token"]
+        );
+        assert_eq!(
+            ConfigurableKind::Igdb.secret_fields(),
+            ["client_id", "client_secret"]
+        );
+        assert!(ConfigurableKind::Igdb.is_metadata_provider());
+        assert!(!ConfigurableKind::Qbittorrent.is_metadata_provider());
+        for other in ["romm", "webhook", "peer_instance", "metadata_provider", ""] {
             assert_eq!(ConfigurableKind::parse(other), None, "{other}");
         }
         assert_eq!(ConfigurableKind::Qbittorrent.secret_fields(), ["password"]);

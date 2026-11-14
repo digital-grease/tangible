@@ -636,3 +636,86 @@ pub async fn best_matches(
     }
     Ok(best)
 }
+
+/// A game a DAT lists, as a title search finds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GameHit {
+    /// The DAT's name, such as `Sony - PlayStation`: the system.
+    pub dat_name: String,
+    /// The game's name, such as `Final Fantasy VII (USA) (Disc 1)`.
+    pub name: String,
+    /// Its description, often the same.
+    pub description: Option<String>,
+}
+
+/// `word` for a `LIKE` pattern, its wildcards and the escape character
+/// matched as themselves (L13 of the 2026-11-12 sweep: an unescaped `%` or
+/// `_` in a title search matched everything).
+fn like_escaped(word: &str) -> String {
+    let mut out = String::with_capacity(word.len() + 2);
+    out.push('%');
+    for c in word.chars() {
+        if matches!(c, '%' | '_' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('%');
+    out
+}
+
+/// Most words of a query searched for.
+pub const MAX_SEARCH_WORDS: usize = 8;
+
+/// Games whose name or description holds every word of `query`, in any
+/// case, the shortest names first (the closest matches, usually), then by
+/// name. Nothing for a query with no words.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn search_games(pool: &PgPool, query: &str, limit: i64) -> Result<Vec<GameHit>, DbError> {
+    let words: Vec<String> = query
+        .split_whitespace()
+        .take(MAX_SEARCH_WORDS)
+        .map(like_escaped)
+        .collect();
+    if words.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query(
+        "SELECT f.name AS dat_name, g.name, g.description
+         FROM dat_games g JOIN dat_files f ON f.id = g.dat_id
+         WHERE (SELECT bool_and(g.name ILIKE w ESCAPE '\\'
+                                OR coalesce(g.description, '') ILIKE w ESCAPE '\\')
+                FROM unnest($1::text[]) AS w)
+         ORDER BY length(g.name), g.name, f.name
+         LIMIT $2",
+    )
+    .bind(&words)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| GameHit {
+            dat_name: row.get("dat_name"),
+            name: row.get("name"),
+            description: row.get("description"),
+        })
+        .collect())
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::like_escaped;
+
+    #[test]
+    fn a_wildcard_in_a_query_is_matched_as_itself() {
+        assert_eq!(like_escaped("zelda"), "%zelda%");
+        assert_eq!(like_escaped("100%"), "%100\\%%");
+        assert_eq!(like_escaped("a_b"), "%a\\_b%");
+        assert_eq!(like_escaped("c:\\"), "%c:\\\\%");
+    }
+}

@@ -1436,6 +1436,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/metadata/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search metadata for an item.
+         * @description Search metadata for an item to request: loaded DATs, and MusicBrainz, TMDB and IGDB where an administrator configured them, each where it suits the kind. An IMDb ID or address is looked up through TMDB alone. A source that fails is named, with why, and the others still answer. At most 300 an hour per account.
+         */
+        get: operations["search_metadata"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/physical-copies": {
         parameters: {
             query?: never;
@@ -4587,6 +4607,43 @@ export interface components {
             warnings: string[];
             /** @description Whether it could be written. */
             writable: boolean;
+        };
+        /** @description An item a source knows. */
+        MetadataCandidateView: {
+            /** @description Platform, year, region and the like, as a request stores them. */
+            details: {
+                [key: string]: string;
+            };
+            /** @description What kind of item it is. */
+            kind: string;
+            /** @description Its page at the provider, `https` and on the provider's own site. */
+            link?: string | null;
+            /** @description `dat`, `musicbrainz`, `tmdb` or `igdb`. */
+            provider: string;
+            /** @description Where it was found, as a request stores it. */
+            refs: components["schemas"]["RequestRefView"][];
+            /** @description Its title. */
+            title: string;
+        };
+        /** @description What a search found. */
+        MetadataSearchView: {
+            /** @description The candidates: DATs' first, then each provider's in its order. */
+            candidates: components["schemas"]["MetadataCandidateView"][];
+            /** @description How each source asked answered. */
+            sources: components["schemas"]["MetadataSourceView"][];
+        };
+        /** @description How one source answered. */
+        MetadataSourceView: {
+            /** @description How many candidates it answered. */
+            count: number;
+            /** @description Why, or what to do, in words. */
+            detail?: string | null;
+            /** @description Why it failed, as a stable code. */
+            error_code?: string | null;
+            /** @description `dat`, `musicbrainz`, `tmdb` or `igdb`. */
+            provider: string;
+            /** @description `answered`, `failed`, `unconfigured` or `off`. */
+            state: string;
         };
         /** @description Whether sign-in through a provider is offered. */
         OidcStatusView: {
@@ -9060,6 +9117,55 @@ export interface operations {
             };
             /** @description No such check */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    search_metadata: {
+        parameters: {
+            query: {
+                /**
+                 * @description Words of a title (and, for music, an artist), or an IMDb ID or
+                 *     address. Up to 200 characters.
+                 */
+                q: string;
+                /**
+                 * @description `game`, `music`, `movie`, `television`, `software` or `other`; all
+                 *     sources when absent.
+                 */
+                kind?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What was found, and how each source answered */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MetadataSearchView"];
+                };
+            };
+            /** @description No query, too long a one, or an unknown kind */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many from this account for now */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

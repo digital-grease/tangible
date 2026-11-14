@@ -1,0 +1,520 @@
+{
+  "created": "2026-11-13T04:14:53.318Z",
+  "count": 1500369,
+  "offset": 0,
+  "releases": [
+    {
+      "id": "c888fbd9-0754-457a-92b1-1c8f6e8b2424",
+      "score": 100,
+      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+      "packaging-id": "ec27701a-4a22-37f4-bfac-6616e0f9750a",
+      "artist-credit-id": "49ba1105-376c-4804-8f6e-cf55cc93a4a0",
+      "count": 1,
+      "title": "A Tribute to Pink Floyd’s Dark Side of the Moon",
+      "status": "Official",
+      "packaging": "Jewel Case",
+      "text-representation": {
+        "language": "eng",
+        "script": "Latn"
+      },
+      "artist-credit": [
+        {
+          "name": "E.S.P",
+          "artist": {
+            "id": "6140e50b-09c7-46af-89e5-801e816ab813",
+            "name": "E.S.P",
+            "sort-name": "E.S.P",
+            "disambiguation": "Pink Floyd tribute"
+          }
+        }
+      ],
+      "release-group": {
+        "id": "b4ad465f-6abf-4496-a881-c6764732c8a4",
+        "type-id": "dd2a21e1-0c00-3729-a7a0-de60b84eb5d1",
+        "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+        "title": "A Tribute to Pink Floyd’s Dark Side of the Moon",
+        "primary-type": "Album",
+        "secondary-types": [
+          "Compilation"
+        ],
+        "secondary-type-ids": [
+          "dd2a21e1-0c00-3729-a7a0-de60b84eb5d1"
+        ]
+      },
+      "date": "2003",
+      "country": "GB",
+      "release-events": [
+        {
+          "date": "2003",
+          "area": {
+            "id": "8a754a16-0027-3a29-b6d7-2b40ea0481ed",
+            "name": "United Kingdom",
+            "sort-name": "United Kingdom",
+            "iso-3166-1-codes": [
+              "GB"
+            ]
+          }
+        },
+        {
+          "date": "2003",
+          "area": {
+            "id": "89a675c2-3e37-3518-b83c-418bad59a85a",
+            "name": "Europe",
+            "sort-name": "Europe",
+            "iso-3166-1-codes": [
+              "XE"
+            ]
+          }
+        }
+      ],
+      "barcode": "5014293830928",
+      "label-info": [
+        {
+          "catalog-number": "PLATCV 8309",
+          "label": {
+            "id": "e34e8c43-e5d1-4d08-acfb-3f72615df787",
+            "name": "Prism Leisure"
+          }
+        }
+      ],
+      "track-count": 9,
+      "media": [
+        {
+          "id": "0869c55c-cdba-36ef-9a81-31b5574e9b5f",
+          "format": "CD",
+          "disc-count": 0,
+          "track-count": 9
+        }
+      ]
+    },
+    {
+      "id": "12ac832a-ffdb-49f2-90c0-9d4c8f828edd",
+      "score": 98,
+      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+      "artist-credit-id": "44a68101-cdbf-3562-ae0f-04b069859c02",
+      "count": 1,
+      "title": "VSQ Master Series: Pink Floyd’s Dark Side of the Moon",
+      "status": "Official",
+      "text-representation": {
+        "language": "eng",
+        "script": "Latn"
+      },
+      "artist-credit": [
+        {
+          "name": "Vitamin String Quartet",
+          "artist": {
+            "id": "56cfe6aa-b464-43d2-bec7-8ec52f313e7d",
+            "name": "Vitamin String Quartet",
+            "sort-name": "Vitamin String Quartet"
+          }
+        }
+      ],
+      "release-group": {
+        "id": "6d3d6885-651b-3d8e-a67b-7832248abb52",
+        "type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+        "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+        "title": "The String Quartet Tribute to Pink Floyd’s The Dark Side of the Moon",
+        "primary-type": "Album"
+      },
+      "asin": "B004404K5I",
+      "label-info": [
+        {
+          "label": {
+            "id": "88a12c3e-4dcf-440c-9a89-c2f4036cfba0",
+            "name": "Vitamin Records"
+          }
+        }
+      ],
+      "track-count": 9,
+      "media": [
+        {
+          "id": "9ed7fef5-a0bd-3013-95c2-4e2002f1be01",
+          "format": "Digital Media",
+          "disc-count": 0,
+          "track-count": 9
+        }
+      ]
+    },
+    {
+      "id": "e9e63904-9ada-47ee-93df-7b25a97774b9",
+      "score": 57,
+      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+      "packaging-id": "ec27701a-4a22-37f4-bfac-6616e0f9750a",
+      "artist-credit-id": "0b81ed37-abef-3a61-95a1-96078197007b",
+      "title": "Dark Side of the Moon",
+      "status": "Official",
+      "disambiguation": "printed in Italy",
+      "packaging": "Jewel Case",
+      "text-representation": {
+        "language": "eng",
+        "script": "Latn"
+      },
+      "artist-credit": [
+        {
+          "name": "Pink Floyd",
+          "artist": {
+            "id": "83d91898-7763-47d7-b03b-b92132375c47",
+            "name": "Pink Floyd",
+            "sort-name": "Pink Floyd"
+          }
+        }
+      ],
+      "release-group": {
+        "id": "f5093c06-23e3-404f-aeaa-40f72885ee3a",
+        "type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+        "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+        "title": "The Dark Side of the Moon",
+        "primary-type": "Album"
+      },
+      "date": "1994",
+      "country": "IT",
+      "release-events": [
+        {
+          "date": "1994",
+          "area": {
+            "id": "c6500277-9a3d-349b-bf30-41afdbf42add",
+            "name": "Italy",
+            "sort-name": "Italy",
+            "iso-3166-1-codes": [
+              "IT"
+            ]
+          }
+        }
+      ],
+      "barcode": "724382975229",
+      "label-info": [
+        {
+          "catalog-number": "7243 8 29752 2 9",
+          "label": {
+            "id": "8b74f0de-408c-4a31-ae4e-68b66c6bf83b",
+            "name": "EMI United Kingdom"
+          }
+        },
+        {
+          "catalog-number": "CDEMD 1064",
+          "label": {
+            "id": "8b74f0de-408c-4a31-ae4e-68b66c6bf83b",
+            "name": "EMI United Kingdom"
+          }
+        }
+      ]
+    },
+    {
+      "id": "eb8cf4db-003f-49d4-8dbd-fbaa41da8d3d",
+      "score": 57,
+      "status-id": "1156806e-d06a-38bd-83f0-cf2284a808b9",
+      "artist-credit-id": "0b81ed37-abef-3a61-95a1-96078197007b",
+      "count": 1,
+      "title": "Dark Side of the Moon",
+      "status": "Bootleg",
+      "disambiguation": "Alan Parsons Quad mix",
+      "text-representation": {
+        "language": "eng",
+        "script": "Latn"
+      },
+      "artist-credit": [
+        {
+          "name": "Pink Floyd",
+          "artist": {
+            "id": "83d91898-7763-47d7-b03b-b92132375c47",
+            "name": "Pink Floyd",
+            "sort-name": "Pink Floyd"
+          }
+        }
+      ],
+      "release-group": {
+        "id": "f5093c06-23e3-404f-aeaa-40f72885ee3a",
+        "type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+        "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+        "title": "The Dark Side of the Moon",
+        "primary-type": "Album"
+      },
+      "barcode": "",
+      "track-count": 10,
+      "media": [
+        {
+          "id": "5c5dc35f-a089-3c5d-a6a2-7fcaade9c419",
+          "format": "DVD-Audio",
+          "disc-count": 0,
+          "track-count": 10
+        }
+      ]
+    },
+    {
+      "id": "1dd9f622-b1f7-41c4-ae20-74fd46bd1b24",
+      "score": 57,
+      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+      "packaging-id": "ec27701a-4a22-37f4-bfac-6616e0f9750a",
+      "artist-credit-id": "0b81ed37-abef-3a61-95a1-96078197007b",
+      "count": 1,
+      "title": "Dark Side of the Moon",
+      "status": "Official",
+      "disambiguation": "EMI Uden pressing with Mould SID code",
+      "packaging": "Jewel Case",
+      "text-representation": {
+        "language": "eng",
+        "script": "Latn"
+      },
+      "artist-credit": [
+        {
+          "name": "Pink Floyd",
+          "artist": {
+            "id": "83d91898-7763-47d7-b03b-b92132375c47",
+            "name": "Pink Floyd",
+            "sort-name": "Pink Floyd"
+          }
+        }
+      ],
+      "release-group": {
+        "id": "f5093c06-23e3-404f-aeaa-40f72885ee3a",
+        "type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+        "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+        "title": "The Dark Side of the Moon",
+        "primary-type": "Album"
+      },
+      "date": "1994",
+      "country": "XE",
+      "release-events": [
+        {
+          "date": "1994",
+          "area": {
+            "id": "89a675c2-3e37-3518-b83c-418bad59a85a",
+            "name": "Europe",
+            "sort-name": "Europe",
+            "iso-3166-1-codes": [
+              "XE"
+            ]
+          }
+        }
+      ],
+      "barcode": "724382975229",
+      "label-info": [
+        {
+          "catalog-number": "CDEMD 1064",
+          "label": {
+            "id": "8b74f0de-408c-4a31-ae4e-68b66c6bf83b",
+            "name": "EMI United Kingdom"
+          }
+        },
+        {
+          "catalog-number": "7243 8 29752 2 9",
+          "label": {
+            "id": "8b74f0de-408c-4a31-ae4e-68b66c6bf83b",
+            "name": "EMI United Kingdom"
+          }
+        }
+      ],
+      "track-count": 9,
+      "media": [
+        {
+          "id": "d9cf2f36-f9c0-41f7-8210-36a98e0bdfce",
+          "format": "CD",
+          "disc-count": 1,
+          "track-count": 9
+        }
+      ]
+    },
+    {
+      "id": "b43cc743-04c3-45c1-87b3-ea1b1c447f8b",
+      "score": 57,
+      "status-id": "1156806e-d06a-38bd-83f0-cf2284a808b9",
+      "artist-credit-id": "0b81ed37-abef-3a61-95a1-96078197007b",
+      "count": 1,
+      "title": "Dark Side of the Moon",
+      "status": "Bootleg",
+      "disambiguation": "7.1 multichannel 192kHz/24bit high‐resolution audio",
+      "text-representation": {
+        "language": "eng",
+        "script": "Latn"
+      },
+      "artist-credit": [
+        {
+          "name": "Pink Floyd",
+          "artist": {
+            "id": "83d91898-7763-47d7-b03b-b92132375c47",
+            "name": "Pink Floyd",
+            "sort-name": "Pink Floyd"
+          }
+        }
+      ],
+      "release-group": {
+        "id": "f5093c06-23e3-404f-aeaa-40f72885ee3a",
+        "type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+        "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+        "title": "The Dark Side of the Moon",
+        "primary-type": "Album"
+      },
+      "date": "2019-11-27",
+      "country": "XW",
+      "release-events": [
+        {
+          "date": "2019-11-27",
+          "area": {
+            "id": "525d4e18-3d00-31b9-a58b-a146a916de8f",
+            "name": "[Worldwide]",
+            "sort-name": "[Worldwide]",
+            "iso-3166-1-codes": [
+              "XW"
+            ]
+          }
+        }
+      ],
+      "track-count": 9,
+      "media": [
+        {
+          "id": "c95cd8b7-dc4a-3f6c-9a21-1d21acf0d1f9",
+          "format": "Digital Media",
+          "disc-count": 0,
+          "track-count": 9
+        }
+      ]
+    },
+    {
+      "id": "ac496d60-9b3a-497c-b650-1810f0b730bf",
+      "score": 57,
+      "status-id": "1156806e-d06a-38bd-83f0-cf2284a808b9",
+      "artist-credit-id": "0b81ed37-abef-3a61-95a1-96078197007b",
+      "count": 1,
+      "title": "Dark Side of the Moon",
+      "status": "Bootleg",
+      "text-representation": {
+        "language": "eng",
+        "script": "Latn"
+      },
+      "artist-credit": [
+        {
+          "name": "Pink Floyd",
+          "artist": {
+            "id": "83d91898-7763-47d7-b03b-b92132375c47",
+            "name": "Pink Floyd",
+            "sort-name": "Pink Floyd"
+          }
+        }
+      ],
+      "release-group": {
+        "id": "f5093c06-23e3-404f-aeaa-40f72885ee3a",
+        "type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+        "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+        "title": "The Dark Side of the Moon",
+        "primary-type": "Album"
+      },
+      "date": "",
+      "country": "PL",
+      "release-events": [
+        {
+          "date": "",
+          "area": {
+            "id": "dd7f80c8-f017-3d01-8608-2a8c9c32b954",
+            "name": "Poland",
+            "sort-name": "Poland",
+            "iso-3166-1-codes": [
+              "PL"
+            ]
+          }
+        }
+      ],
+      "label-info": [
+        {
+          "catalog-number": "XCD 035",
+          "label": {
+            "id": "faf65a10-fd9e-424d-a71a-49ce2506410d",
+            "name": "Takt Music"
+          }
+        }
+      ],
+      "track-count": 9,
+      "media": [
+        {
+          "id": "017f915c-7f35-3ee7-ab57-d59ad92c3455",
+          "format": "Cassette",
+          "disc-count": 0,
+          "track-count": 9
+        }
+      ]
+    },
+    {
+      "id": "c712a2bc-1e57-46c1-9432-8b9a33dc4159",
+      "score": 57,
+      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+      "packaging-id": "ec27701a-4a22-37f4-bfac-6616e0f9750a",
+      "artist-credit-id": "0b81ed37-abef-3a61-95a1-96078197007b",
+      "count": 1,
+      "title": "Dark Side of the Moon",
+      "status": "Official",
+      "packaging": "Jewel Case",
+      "text-representation": {
+        "language": "eng",
+        "script": "Latn"
+      },
+      "artist-credit": [
+        {
+          "name": "Pink Floyd",
+          "artist": {
+            "id": "83d91898-7763-47d7-b03b-b92132375c47",
+            "name": "Pink Floyd",
+            "sort-name": "Pink Floyd"
+          }
+        }
+      ],
+      "release-group": {
+        "id": "f5093c06-23e3-404f-aeaa-40f72885ee3a",
+        "type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+        "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+        "title": "The Dark Side of the Moon",
+        "primary-type": "Album"
+      },
+      "date": "1994-07-25",
+      "country": "GB",
+      "release-events": [
+        {
+          "date": "1994-07-25",
+          "area": {
+            "id": "8a754a16-0027-3a29-b6d7-2b40ea0481ed",
+            "name": "United Kingdom",
+            "sort-name": "United Kingdom",
+            "iso-3166-1-codes": [
+              "GB"
+            ]
+          }
+        },
+        {
+          "date": "1994-08",
+          "area": {
+            "id": "89a675c2-3e37-3518-b83c-418bad59a85a",
+            "name": "Europe",
+            "sort-name": "Europe",
+            "iso-3166-1-codes": [
+              "XE"
+            ]
+          }
+        }
+      ],
+      "barcode": "724382975229",
+      "label-info": [
+        {
+          "catalog-number": "CDEMD 1064",
+          "label": {
+            "id": "8b74f0de-408c-4a31-ae4e-68b66c6bf83b",
+            "name": "EMI United Kingdom"
+          }
+        },
+        {
+          "catalog-number": "7243 8 29752 2 9",
+          "label": {
+            "id": "8b74f0de-408c-4a31-ae4e-68b66c6bf83b",
+            "name": "EMI United Kingdom"
+          }
+        }
+      ],
+      "track-count": 9,
+      "media": [
+        {
+          "id": "48bb6a2a-8ada-3a53-9fe6-b53f7c1b806c",
+          "format": "CD",
+          "disc-count": 1,
+          "track-count": 9
+        }
+      ]
+    }
+  ]
+}

@@ -25,6 +25,7 @@ pub mod identification;
 pub mod import;
 pub mod import_runner;
 pub mod integrity;
+pub mod metadata;
 pub mod metrics;
 pub mod oidc;
 pub mod pagination;
@@ -194,6 +195,7 @@ pub const API_BASE: &str = "/api/v1";
         routes::requests::approve_one_request,
         routes::requests::decline_one_request,
         routes::requests::cancel_one_request,
+        routes::metadata::search_metadata,
         events::event_stream,
         deletion::request_artifact_deletion,
         deletion::keep_pending_artifact,
@@ -370,6 +372,9 @@ pub const API_BASE: &str = "/api/v1";
         routes::requests::RequestPage,
         routes::requests::CreateItemRequest,
         routes::requests::DeclineItemRequest,
+        routes::metadata::MetadataSearchView,
+        routes::metadata::MetadataCandidateView,
+        routes::metadata::MetadataSourceView,
         routes::audit::AuditEventView,
         routes::audit::AuditEventList,
         routes::worker_admin::WorkerView,
@@ -588,6 +593,7 @@ pub fn router(state: ApiState) -> Router {
         .nest(API_BASE, routes::audit::router())
         .nest(API_BASE, routes::dashboard::router())
         .nest(API_BASE, routes::requests::router())
+        .nest(API_BASE, routes::metadata::router())
         .nest(API_BASE, routes::erasures::router())
         .nest(API_BASE, routes::integrations::router())
         .nest(API_BASE, routes::integrity::router())
@@ -778,6 +784,7 @@ mod tests {
             include_str!("routes/romm.rs"),
             include_str!("routes/reports.rs"),
             include_str!("routes/requests.rs"),
+            include_str!("routes/metadata.rs"),
             include_str!("routes/derivations.rs"),
             include_str!("routes/workers.rs"),
             include_str!("health.rs"),

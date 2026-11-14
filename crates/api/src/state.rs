@@ -47,6 +47,10 @@ struct Inner {
     upload_limiter: ActionLimiter,
     /// Requests for items per account (ADR 0021), likewise shared.
     request_limiter: ActionLimiter,
+    /// Metadata searches per account (ADR 0021), likewise shared.
+    metadata_limiter: ActionLimiter,
+    /// What reaches metadata providers, when this server reaches them.
+    metadata: Option<crate::metadata::Metadata>,
     /// The built web UI, when this server serves one.
     web: Option<WebUi>,
     /// The RomM export, when an export root is configured.
@@ -122,6 +126,8 @@ impl ApiState {
                 url_import_limiter: ActionLimiter::url_imports(),
                 upload_limiter: ActionLimiter::uploads(),
                 request_limiter: ActionLimiter::requests(),
+                metadata_limiter: ActionLimiter::metadata_searches(),
+                metadata: None,
                 web: None,
                 romm: None,
                 derivations: None,
@@ -154,6 +160,8 @@ impl ApiState {
                 url_import_limiter: ActionLimiter::url_imports(),
                 upload_limiter: ActionLimiter::uploads(),
                 request_limiter: ActionLimiter::requests(),
+                metadata_limiter: ActionLimiter::metadata_searches(),
+                metadata: None,
                 web: None,
                 romm: None,
                 derivations: None,
@@ -459,6 +467,28 @@ impl ApiState {
     #[must_use]
     pub fn request_limiter(&self) -> &ActionLimiter {
         &self.inner.request_limiter
+    }
+
+    /// Metadata searches per account.
+    #[must_use]
+    pub fn metadata_limiter(&self) -> &ActionLimiter {
+        &self.inner.metadata_limiter
+    }
+
+    /// Reach metadata providers with `metadata`.
+    #[must_use]
+    pub fn with_metadata(self, metadata: crate::metadata::Metadata) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.metadata = Some(metadata);
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// What reaches metadata providers, when this server reaches them.
+    #[must_use]
+    pub fn metadata(&self) -> Option<&crate::metadata::Metadata> {
+        self.inner.metadata.as_ref()
     }
 
     /// The manifest store, when a library root is configured.

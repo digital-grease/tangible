@@ -1,0 +1,25 @@
+{
+  "movie_results": [
+    {
+      "adult": false,
+      "backdrop_path": "/sAtoMqDVhNDQBc3QJL3RF6hlhGq.jpg",
+      "id": 78,
+      "title": "Blade Runner",
+      "original_language": "en",
+      "original_title": "Blade Runner",
+      "overview": "In the smog-choked dystopian Los Angeles of 2019, blade runner Rick Deckard is called out of retirement to terminate a quartet of replicants.",
+      "poster_path": "/63N9uy8nd9j7Eog2axPQ8lbr3Wj.jpg",
+      "media_type": "movie",
+      "genre_ids": [878, 18, 53],
+      "popularity": 38.87,
+      "release_date": "1982-06-25",
+      "video": false,
+      "vote_average": 7.9,
+      "vote_count": 14321
+    }
+  ],
+  "person_results": [],
+  "tv_results": [],
+  "tv_episode_results": [],
+  "tv_season_results": []
+}

@@ -281,7 +281,7 @@ fn paragraph(field: &str, raw: &str) -> Result<Option<String>, Problem> {
 
 /// A request's fields, checked: what the database stores.
 #[derive(Debug, PartialEq)]
-struct Checked {
+pub(crate) struct Checked {
     kind: RequestKind,
     title: String,
     details: serde_json::Value,
@@ -289,7 +289,12 @@ struct Checked {
     note: Option<String>,
 }
 
-fn check(request: &CreateItemRequest) -> Result<Checked, Problem> {
+/// A request's fields, checked as asking for one checks them.
+///
+/// # Errors
+///
+/// The problem asking would answer.
+pub(crate) fn check(request: &CreateItemRequest) -> Result<Checked, Problem> {
     if !request.attests_ownership {
         return Err(Problem::new(
             ErrorCode::AttestationRequired,

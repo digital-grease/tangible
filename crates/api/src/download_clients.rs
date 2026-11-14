@@ -408,7 +408,7 @@ const fn folders(category: String, client_path: String, local_root: String) -> F
 }
 
 /// An integration's secret `field`, opened, if one is stored.
-async fn secret(
+pub(crate) async fn secret(
     database: &Database,
     key: Option<&SecretKey>,
     record: &IntegrationRecord,
