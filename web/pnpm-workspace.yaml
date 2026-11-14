@@ -22,10 +22,13 @@ allowBuilds:
 # API description, pins exactly 4.3.1, affected by GHSA-2883-xcg3-v3hh; 4.3.2
 # is the patch release that fixes it.
 #
-# minimatch: @typescript-eslint/typescript-estree asks for ^10.2.2, affected by
-# GHSA-g3hv-75wg-m249, which only 11.0.1 and later fix. The parser calls one
-# function, minimatch(), on its allowDefaultProject patterns at lint time, and
-# 11 keeps both the function and a CommonJS entry; lint is unchanged by it.
+# minimatch 10: @typescript-eslint/typescript-estree (^10.2.2), and eslint
+# 10.14 and @eslint/config-array 0.23.5 (^10.2.4), are affected by
+# GHSA-g3hv-75wg-m249, which only 11.0.1 and later fix. They call minimatch()
+# and the Minimatch class on lint patterns at lint time, and 11 keeps both and
+# a CommonJS entry; lint is unchanged by it. eslint 10.15 and config-array
+# 0.23.6 ask for ^11.0.5 themselves: once they are taken, only
+# typescript-estree needs this.
 overrides:
   js-yaml@4.3.1: 4.3.2
-  '@typescript-eslint/typescript-estree>minimatch': ^11.0.8
+  minimatch@^10: ^11.0.8
