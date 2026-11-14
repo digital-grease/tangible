@@ -202,6 +202,114 @@ describe('Asking for an item', () => {
   });
 });
 
+const FOUND = {
+  candidates: [
+    {
+      provider: 'musicbrainz',
+      kind: 'music',
+      title: 'Dark Side of the Moon',
+      details: { artist: 'Pink Floyd', year: '1994', region: 'GB', format: 'CD' },
+      refs: [{ provider: 'musicbrainz', external_id: '8a2b...' }],
+      link: 'https://musicbrainz.org/release/8a2b',
+    },
+  ],
+  sources: [{ provider: 'musicbrainz', state: 'answered', count: 1 }],
+};
+
+describe('Finding an item to ask for', () => {
+  it('searches, fills the request from what is picked, and asks with it', async () => {
+    const asked = server({
+      '/api/v1/metadata/search?q=dark+side&kind=music': { status: 200, body: FOUND },
+      'POST /api/v1/requests': { status: 201, body: request({ kind: 'music' }) },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    const { container } = render(NewRequestPage);
+    await fireEvent.change(screen.getByRole('combobox', { name: 'Kind' }), {
+      target: { value: 'music' },
+    });
+    const search = screen.getByRole('searchbox', { name: /Find it/ });
+    await fireEvent.input(search, { target: { value: 'dark side' } });
+    // Enter searches; it does not ask.
+    await fireEvent.keyDown(search, { key: 'Enter' });
+    expect(await screen.findByText('Dark Side of the Moon')).toBeTruthy();
+    expect(screen.getByText('MusicBrainz · Pink Floyd · 1994 · GB · CD')).toBeTruthy();
+    expect(asked.filter((call) => call.method === 'POST')).toEqual([]);
+    const link = screen.getByRole('link', { name: /See it at MusicBrainz/ });
+    expect(link.getAttribute('href')).toBe('https://musicbrainz.org/release/8a2b');
+    expect(link.getAttribute('rel')).toContain('noopener');
+    expect(await axeViolations(container)).toEqual([]);
+
+    await fireEvent.click(screen.getByRole('button', { name: /^Use this: Dark Side of the Moon/ }));
+    expect((screen.getByRole('textbox', { name: /Title/ }) as HTMLInputElement).value).toBe(
+      'Dark Side of the Moon',
+    );
+    expect((screen.getByRole('textbox', { name: /Year/ }) as HTMLInputElement).value).toBe('1994');
+    expect(screen.getByText('Pink Floyd')).toBeTruthy();
+    expect(await axeViolations(container)).toEqual([]);
+
+    await fireEvent.click(screen.getByRole('checkbox', { name: /I legally own this item/ }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Ask for this item' }));
+    await vi.waitFor(() => expect(goto).toHaveBeenCalledWith('/requests/q1'));
+    const sent = JSON.parse(asked.find((call) => call.method === 'POST')?.body ?? '{}');
+    expect(sent).toMatchObject({
+      kind: 'music',
+      title: 'Dark Side of the Moon',
+      details: { artist: 'Pink Floyd', format: 'CD', year: '1994', region: 'GB' },
+      refs: [{ provider: 'musicbrainz', external_id: '8a2b...' }],
+      attests_ownership: true,
+    });
+  });
+
+  it('says which sources did not answer, and that nothing was found', async () => {
+    server({
+      '/api/v1/metadata/search?q=nothing&kind=game': {
+        status: 200,
+        body: {
+          candidates: [],
+          sources: [
+            { provider: 'dat', state: 'answered', count: 0 },
+            {
+              provider: 'igdb',
+              state: 'unconfigured',
+              count: 0,
+              detail:
+                'IGDB is not configured; an administrator can add it on the Integrations page',
+            },
+          ],
+        },
+      },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    render(NewRequestPage);
+    await fireEvent.input(screen.getByRole('searchbox', { name: /Find it/ }), {
+      target: { value: 'nothing' },
+    });
+    await fireEvent.click(screen.getByRole('button', { name: /^Search/ }));
+    expect(await screen.findByText(/Nothing was found/)).toBeTruthy();
+    expect(screen.getByText(/IGDB is not configured/)).toBeTruthy();
+  });
+
+  it('searches an IMDb address whatever the kind', async () => {
+    const asked = server({
+      '/api/v1/metadata/search?q=https%3A%2F%2Fwww.imdb.com%2Ftitle%2Ftt0083658%2F': {
+        status: 200,
+        body: { candidates: [], sources: [{ provider: 'tmdb', state: 'answered', count: 0 }] },
+      },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    render(NewRequestPage);
+    await fireEvent.input(screen.getByRole('searchbox', { name: /Find it/ }), {
+      target: { value: 'https://www.imdb.com/title/tt0083658/' },
+    });
+    await fireEvent.click(screen.getByRole('button', { name: /^Search/ }));
+    await vi.waitFor(() =>
+      expect(asked.map((call) => call.url)).toContain(
+        '/api/v1/metadata/search?q=https%3A%2F%2Fwww.imdb.com%2Ftitle%2Ftt0083658%2F',
+      ),
+    );
+  });
+});
+
 describe('A request', () => {
   it('shows a requester what they asked for and lets them withdraw it', async () => {
     const asked = server({

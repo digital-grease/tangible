@@ -19,6 +19,16 @@ may change between minor versions, and the release notes say how.
   downloaded yet: finding a release for an approved request comes later.
   Migration 0035 adds the requests table; the previous version neither
   reads nor writes it.
+- Finding an item to ask for (ADR 0021): Ask for an item searches the
+  loaded DATs, and MusicBrainz (music), TMDB (films and television, and
+  IMDb IDs or addresses, which TMDB looks up) and IGDB (games) where an
+  administrator has added them on the Integrations page, under Metadata
+  providers. MusicBrainz needs no key; TMDB takes an API Read Access Token;
+  IGDB a Twitch application's client ID and secret, kept sealed like every
+  integration secret. A search sends a provider only the words searched
+  for, at public addresses only, kept to each provider's rate limit; a
+  provider that fails is named and the rest still answer. Picking what was
+  found fills in the request. Migration 0036 adds the provider kinds.
 - A "Buy me a coffee" link at the foot of the web UI's sidebar, under the
   source code link, and a button in the README, for anyone who wants to
   support Tangible's development. The link is plain text: the page loads

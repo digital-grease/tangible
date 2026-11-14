@@ -98,6 +98,12 @@ export function kindLabel(kind: string): string {
       return 'NZBGet';
     case 's3':
       return 'S3-compatible storage';
+    case 'musicbrainz':
+      return 'MusicBrainz';
+    case 'tmdb':
+      return 'TMDB';
+    case 'igdb':
+      return 'IGDB';
     default:
       return kind;
   }
@@ -489,4 +495,120 @@ export function integrationRefusal(problem: Problem): string {
     );
   }
   return problem.detail;
+}
+
+/**
+ * The metadata providers people search to find an item to ask for (ADR
+ * 0021). Each is one service at its own public address, so it takes no
+ * settings, only its key; there is at most one of each.
+ */
+export type ProviderKind = 'musicbrainz' | 'tmdb' | 'igdb';
+
+/** The providers, in the order offered. */
+export const PROVIDER_KINDS: ProviderKind[] = ['musicbrainz', 'tmdb', 'igdb'];
+
+/** Whether an integration is a metadata provider. */
+export function isProviderKind(kind: string): kind is ProviderKind {
+  return (PROVIDER_KINDS as string[]).includes(kind);
+}
+
+/** A secret a provider takes, as its form asks for it. */
+export interface ProviderSecret {
+  field: string;
+  label: string;
+  hint: string;
+}
+
+/** What the form says about a provider. */
+export interface ProviderWording {
+  label: string;
+  /** What it is searched for. */
+  covers: string;
+  /** Where its key comes from, in words; empty for none. */
+  getting: string;
+  secrets: ProviderSecret[];
+}
+
+/** The words for a provider. */
+export function providerWording(kind: ProviderKind): ProviderWording {
+  switch (kind) {
+    case 'musicbrainz':
+      return {
+        label: 'MusicBrainz',
+        covers:
+          'Music: CD releases, with their artist, year, country, catalogue number and barcode.',
+        getting:
+          'No key. Searches are kept to one a second, as MusicBrainz asks, and name Tangible to it.',
+        secrets: [],
+      };
+    case 'tmdb':
+      return {
+        label: 'TMDB',
+        covers: 'Films and television, and IMDb IDs, which TMDB looks up.',
+        getting:
+          'An API Read Access Token, the long one, from your TMDB account settings (API). Not the short API key.',
+        secrets: [
+          {
+            field: 'read_access_token',
+            label: 'API Read Access Token',
+            hint: 'Sent as a bearer token, never in an address.',
+          },
+        ],
+      };
+    case 'igdb':
+      return {
+        label: 'IGDB',
+        covers: 'Games, with their platforms and year.',
+        getting:
+          'A Twitch application: its client ID and a client secret, from the Twitch developer console. Tangible asks Twitch for a token with them.',
+        secrets: [
+          { field: 'client_id', label: 'Client ID', hint: '' },
+          {
+            field: 'client_secret',
+            label: 'Client secret',
+            hint: 'Sent to Twitch only, in the body of a token request.',
+          },
+        ],
+      };
+  }
+}
+
+/** The secrets typed, without the empty ones. */
+function typed(secrets: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(secrets)
+      .map(([field, value]) => [field, value.trim()] as const)
+      .filter(([, value]) => value !== ''),
+  );
+}
+
+/** What adds a provider, named after itself. */
+export function createProviderRequest(
+  kind: ProviderKind,
+  secrets: Record<string, string>,
+): CreateIntegrationRequest {
+  return {
+    kind,
+    name: providerWording(kind).label,
+    enabled: true,
+    settings: {},
+    secrets: typed(secrets),
+  };
+}
+
+/** What replaces a provider's key: only the fields typed. */
+export function updateProviderRequest(secrets: Record<string, string>): UpdateIntegrationRequest {
+  return { secrets: typed(secrets) };
+}
+
+/** Whether every secret a provider takes is set. */
+export function providerReady(view: Pick<IntegrationView, 'secrets'>): boolean {
+  return view.secrets.every((secret) => secret.set);
+}
+
+/** How trying a provider went, in words. */
+export function providerTestOutcome(name: string, test: IntegrationTestView): string {
+  return test.ok
+    ? `${name} answered a search.`
+    : `${name} did not work: ${test.detail ?? test.error_code ?? 'no reason given'}`;
 }

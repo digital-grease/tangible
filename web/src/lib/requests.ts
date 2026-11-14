@@ -14,6 +14,9 @@ export type RequestView = components['schemas']['RequestView'];
 export type RequestPage = components['schemas']['RequestPage'];
 export type RequestRef = components['schemas']['RequestRefView'];
 export type CreateItemRequest = components['schemas']['CreateItemRequest'];
+export type MetadataSearchView = components['schemas']['MetadataSearchView'];
+export type MetadataCandidate = components['schemas']['MetadataCandidateView'];
+export type MetadataSource = components['schemas']['MetadataSourceView'];
 
 /** One choice of a select, as `Select` takes it. */
 export interface Choice {
@@ -115,9 +118,101 @@ export function detailsOf(values: Partial<Record<DetailName, string>>): Record<s
   return details;
 }
 
+/** Details a provider names that the form has no field for, in words. */
+const OTHER_DETAILS: Record<string, string> = {
+  artist: 'Artist',
+  format: 'Format',
+  catalog_number: 'Catalogue number',
+  barcode: 'Barcode',
+  original_title: 'Original title',
+  description: 'Description',
+};
+
 /** A detail's name, in words. */
 export function detailLabel(name: string): string {
-  return DETAIL_FIELDS.find((field) => field.name === name)?.label ?? name;
+  return (
+    DETAIL_FIELDS.find((field) => field.name === name)?.label ??
+    OTHER_DETAILS[name] ??
+    name.replace(/_/g, ' ')
+  );
+}
+
+/** Whether the form has a field for a detail. */
+export function isFormDetail(name: string): name is DetailName {
+  return DETAIL_FIELDS.some((field) => field.name === name);
+}
+
+/** A source of metadata, in words. */
+export function providerLabel(provider: string): string {
+  switch (provider) {
+    case 'dat':
+      return 'DATs';
+    case 'musicbrainz':
+      return 'MusicBrainz';
+    case 'tmdb':
+      return 'TMDB';
+    case 'igdb':
+      return 'IGDB';
+    case 'imdb':
+      return 'IMDb';
+    default:
+      return provider;
+  }
+}
+
+/** What to say about a source that did not answer; nothing for one that did. */
+export function sourceNote(source: MetadataSource): string | null {
+  if (source.state === 'answered') return null;
+  const name = providerLabel(source.provider);
+  switch (source.state) {
+    case 'unconfigured':
+      return source.detail ?? `${name} is not configured.`;
+    case 'off':
+      return `${name} is turned off.`;
+    default:
+      return `${name} did not answer: ${source.detail ?? source.error_code ?? 'no reason given'}`;
+  }
+}
+
+/** A candidate's details, in words, for a line under its title. */
+export function candidateLine(candidate: MetadataCandidate): string {
+  const order = ['artist', 'platform', 'year', 'region', 'format', 'catalog_number'];
+  const shown = order
+    .map((name) => candidate.details[name])
+    .filter((value): value is string => !!value);
+  return [providerLabel(candidate.provider), ...shown].join(' · ');
+}
+
+/** Search metadata for an item, by words or an IMDb ID or address. */
+export function searchMetadata(
+  query: string,
+  kind: string | null,
+  fetcher: typeof fetch = apiFetch,
+): Promise<Result<MetadataSearchView>> {
+  const params = new URLSearchParams({ q: query });
+  if (kind) params.set('kind', kind);
+  return apiCall(fetcher, `/api/v1/metadata/search?${params.toString()}`);
+}
+
+/**
+ * The details and references a request is made with: the picked
+ * candidate's, what the form's fields say over them, and an IMDb ID typed.
+ */
+export function requestFields(
+  picked: Pick<MetadataCandidate, 'details' | 'refs'> | null,
+  form: Partial<Record<DetailName, string>>,
+  imdb: string | null,
+): { details: Record<string, string>; refs: RequestRef[] } {
+  const details: Record<string, string> = {};
+  for (const [name, value] of Object.entries(picked?.details ?? {})) {
+    if (!isFormDetail(name)) details[name] = value;
+  }
+  Object.assign(details, detailsOf(form));
+  const refs: RequestRef[] = [...(picked?.refs ?? [])];
+  if (imdb && !refs.some((ref) => ref.provider === 'imdb' && ref.external_id === imdb)) {
+    refs.push({ provider: 'imdb', external_id: imdb });
+  }
+  return { details, refs };
 }
 
 /**

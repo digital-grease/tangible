@@ -10,6 +10,7 @@
   // list, and takes the keyboard to the question.
   import Confirm from '$lib/components/ui/Confirm.svelte';
   import Callout from '$lib/components/ui/Callout.svelte';
+  import MetadataProviders from '$lib/components/MetadataProviders.svelte';
   import { onMount, tick } from 'svelte';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import Button from '$lib/components/ui/Button.svelte';
@@ -35,6 +36,7 @@
     integrationStatusLabel,
     integrationStatusTone,
     isClientKind,
+    isProviderKind,
     kindLabel,
     loadIntegrations,
     removalBlocked,
@@ -226,15 +228,16 @@
 
 <PageHeader
   title="Integrations"
-  description="Download clients you already run, S3-compatible storage, and the API of the RomM the export writes into."
+  description="Download clients you already run, S3-compatible storage, the API of the RomM the export writes into, and the metadata providers requests are found through."
 />
 
 <p class="lede">
   Tangible hands a client a torrent or an NZB and imports what it finishes; operators may import
-  objects from the storage; RomM is asked only to find and scan what the export wrote. Tangible
-  never searches for anything, never asks a client to run a script, and never changes anything in
-  RomM. It removes what it imported from a client or bucket only where you choose that below, and
-  only once the library's copy has been checked.
+  objects from the storage; RomM is asked only to find and scan what the export wrote; a metadata
+  provider is asked only for the words somebody searched for, to find an item to ask for. Tangible
+  never searches for a download on its own, never asks a client to run a script, and never changes
+  anything in RomM. It removes what it imported from a client or bucket only where you choose that
+  below, and only once the library's copy has been checked.
 </p>
 
 <div>
@@ -263,8 +266,9 @@
           </p>
         </Callout>
       {/if}
-      <Panel title="Configured" aside={`${view.items.length}`} flush>
-        {#if view.items.length === 0}
+      {@const clients = view.items.filter((item) => !isProviderKind(item.kind))}
+      <Panel title="Configured" aside={`${clients.length}`} flush>
+        {#if clients.length === 0}
           <EmptyState inset level={3} title="No integrations yet" icon="integration">
             <p>Add one with the form below.</p>
           </EmptyState>
@@ -281,7 +285,7 @@
               </tr>
             </thead>
             <tbody>
-              {#each view.items as item (item.id)}
+              {#each clients as item (item.id)}
                 <tr>
                   <th scope="row">{item.name}</th>
                   <td>{kindLabel(item.kind)}</td>
@@ -678,9 +682,18 @@
       </div>
     </section>
   {/if}
+
+  {#if view.kind === 'ready'}
+    <div class="providers">
+      <MetadataProviders items={view.items} onchanged={refresh} />
+    </div>
+  {/if}
 </div>
 
 <style>
+  .providers {
+    margin-top: var(--space-5);
+  }
   .lede {
     margin: 0 0 var(--space-5);
     max-width: 85ch;

@@ -5,17 +5,22 @@ import {
   ATTESTATION,
   KINDS,
   STATE_FILTERS,
+  candidateLine,
   createRequest,
   declineRequest,
   detailsOf,
   imdbId,
   kindLabel,
   loadRequests,
+  providerLabel,
   refLabel,
+  requestFields,
   requestNext,
   requestRefusal,
   requestStateLabel,
   requestStateTone,
+  searchMetadata,
+  sourceNote,
 } from './requests';
 
 function recorder() {
@@ -127,5 +132,58 @@ describe('requests', () => {
     expect(requestRefusal('ATTESTATION_REQUIRED')).toMatch(/Tick the box/);
     expect(requestRefusal('RATE_LIMITED')).toMatch(/Try again later/);
     expect(requestRefusal('CONFLICT')).toBeNull();
+  });
+
+  it('searches with the words and the kind, and without a kind for none', async () => {
+    const { asked, fetcher } = recorder();
+    await searchMetadata('blade runner', 'movie', fetcher);
+    await searchMetadata('tt0083658', null, fetcher);
+    expect(asked.map((call) => call.url)).toEqual([
+      '/api/v1/metadata/search?q=blade+runner&kind=movie',
+      '/api/v1/metadata/search?q=tt0083658',
+    ]);
+  });
+
+  it('says what a source that did not answer means', () => {
+    const base = { provider: 'igdb', count: 0 };
+    expect(sourceNote({ ...base, state: 'answered', count: 3 })).toBeNull();
+    expect(sourceNote({ ...base, state: 'unconfigured', detail: 'add it' })).toBe('add it');
+    expect(sourceNote({ ...base, state: 'off' })).toBe('IGDB is turned off.');
+    expect(
+      sourceNote({ ...base, state: 'failed', error_code: 'INTEGRATION_AUTH_FAILED', detail: 'no' }),
+    ).toBe('IGDB did not answer: no');
+    expect(providerLabel('dat')).toBe('DATs');
+  });
+
+  it('puts what a candidate says in a line', () => {
+    expect(
+      candidateLine({
+        provider: 'musicbrainz',
+        kind: 'music',
+        title: 'Dark Side of the Moon',
+        details: { artist: 'Pink Floyd', year: '1994', region: 'GB', format: 'CD', barcode: '1' },
+        refs: [],
+      }),
+    ).toBe('MusicBrainz · Pink Floyd · 1994 · GB · CD');
+  });
+
+  it('makes a request from what was picked, the form over it', () => {
+    const picked = {
+      details: { artist: 'Pink Floyd', year: '1994', format: 'CD' },
+      refs: [{ provider: 'musicbrainz', external_id: 'a' }],
+    };
+    // The year changed in the form; the artist has no field and is kept.
+    expect(requestFields(picked, { year: '1973', region: '' }, null)).toEqual({
+      details: { artist: 'Pink Floyd', format: 'CD', year: '1973' },
+      refs: [{ provider: 'musicbrainz', external_id: 'a' }],
+    });
+    // A year cleared in the form is cleared.
+    expect(requestFields(picked, { year: '' }, null).details.year).toBeUndefined();
+    // An IMDb ID typed is added once.
+    const film = { details: {}, refs: [{ provider: 'imdb', external_id: 'tt0083658' }] };
+    expect(requestFields(film, {}, 'tt0083658').refs).toHaveLength(1);
+    expect(requestFields(null, {}, 'tt0083658').refs).toEqual([
+      { provider: 'imdb', external_id: 'tt0083658' },
+    ]);
   });
 });
