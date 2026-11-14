@@ -727,7 +727,8 @@ fn seven_zip_index_fits(
     loop {
         match cursor.byte()? {
             0x00 => return Ok(()),
-            // PackInfo: where the packed header is, and its sizes.
+            // PackInfo: where the packed header is, its sizes, and their
+            // CRCs, which some writers (sevenz-rust2's) give.
             0x06 => {
                 cursor.number()?;
                 let streams = cursor.count()?;
@@ -739,6 +740,7 @@ fn seven_zip_index_fits(
                                 cursor.number()?;
                             }
                         }
+                        0x0A => seven_zip_digests(&mut cursor, streams)?,
                         _ => return Err(header_unreadable()),
                     }
                 }
@@ -749,6 +751,20 @@ fn seven_zip_index_fits(
             _ => return Err(header_unreadable()),
         }
     }
+}
+
+/// A list of `count` CRCs: all defined, or a bit for each saying which are,
+/// then four bytes for each that is.
+fn seven_zip_digests(cursor: &mut HeaderCursor<'_>, count: u64) -> Result<(), ArchiveError> {
+    let defined = if cursor.byte()? == 0 {
+        let bits =
+            cursor.take(usize::try_from(count.div_ceil(8)).map_err(|_| header_unreadable())?)?;
+        bits.iter().map(|byte| u64::from(byte.count_ones())).sum()
+    } else {
+        count
+    };
+    cursor.take(usize::try_from(defined * 4).map_err(|_| header_unreadable())?)?;
+    Ok(())
 }
 
 /// An encoded header's UnpackInfo: each folder's coders checked, and every
@@ -897,9 +913,25 @@ fn dictionary_bytes(method: &[u8], properties: &[u8]) -> Option<u64> {
     }
 }
 
+/// The memory, in KiB, the 7z reader may give a header or a decoder: the
+/// larger of the dictionary limit and the header cap, so the reader's own
+/// check backs up the ones made here and never refuses what they allow.
+fn seven_zip_memory_kb(limits: &ArchiveLimits) -> usize {
+    let bytes = limits
+        .max_dictionary_bytes
+        .max(MAX_SEVEN_ZIP_HEADER_BYTES)
+        .div_ceil(1024);
+    usize::try_from(bytes).unwrap_or(usize::MAX)
+}
+
 fn unpack_seven_zip(file: fs::File, writer: &mut Writer<'_>) -> Result<(), ArchiveError> {
-    let mut reader = sevenz_rust2::ArchiveReader::new(file, sevenz_rust2::Password::empty())
-        .map_err(|error| seven_zip_error(&error))?;
+    let limit = writer.limits.max_dictionary_bytes;
+    let mut reader = sevenz_rust2::ArchiveReader::new_with_memory_limit(
+        file,
+        sevenz_rust2::Password::empty(),
+        seven_zip_memory_kb(writer.limits),
+    )
+    .map_err(|error| seven_zip_error(&error, limit))?;
     let archive = reader.archive();
     if archive.files.len() as u64 > writer.limits.max_entries {
         return Err(ArchiveError::TooManyEntries(writer.limits.max_entries));
@@ -937,26 +969,39 @@ fn unpack_seven_zip(file: fs::File, writer: &mut Writer<'_>) -> Result<(), Archi
         }
     }
     let mut failure: Option<ArchiveError> = None;
+    // A refused entry stops the whole archive. (`for_each_entries`
+    // returning false skips only the rest of a block since sevenz-rust2
+    // 0.25, and the next block's entries would still be written.)
     reader
-        .for_each_entries(|entry, data| {
+        .for_each_entries_with_decision(|entry, data| {
             let outcome = if entry.is_directory {
                 writer.folder(&entry.name)
             } else {
                 writer.file(&entry.name, data)
             };
             match outcome {
-                Ok(()) => Ok(true),
+                Ok(()) => Ok(sevenz_rust2::EntryDecision::Continue),
                 Err(error) => {
                     failure = Some(error);
-                    Ok(false)
+                    Ok(sevenz_rust2::EntryDecision::Stop)
                 }
             }
         })
-        .map_err(|error| seven_zip_error(&error))?;
+        .map_err(|error| seven_zip_error(&error, limit))?;
     failure.map_or(Ok(()), Err)
 }
 
-fn seven_zip_error(error: &sevenz_rust2::Error) -> ArchiveError {
+/// A 7z reader's error as an archive error; `limit` is the dictionary
+/// limit, said when the reader's own memory check refused.
+fn seven_zip_error(error: &sevenz_rust2::Error, limit: u64) -> ArchiveError {
+    if let sevenz_rust2::Error::MaxMemLimited { actaul_kb, .. } = error {
+        return ArchiveError::Dictionary {
+            needed: u64::try_from(*actaul_kb)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(1024),
+            limit,
+        };
+    }
     let text = error.to_string();
     let lower = text.to_ascii_lowercase();
     if lower.contains("password") || lower.contains("encrypt") || lower.contains("aes") {
@@ -1273,5 +1318,24 @@ mod tests {
         properties.extend_from_slice(&(1_u32 << 24).to_le_bytes());
         assert_eq!(dictionary_bytes(lzma, &properties), Some(1 << 24));
         assert_eq!(dictionary_bytes(&[0x00], &[]), None);
+    }
+
+    #[test]
+    fn a_list_of_crcs_is_read_past_whether_all_or_some_are_given() {
+        let read = |bytes: &[u8], count: u64| {
+            let mut cursor = HeaderCursor { bytes, at: 0 };
+            seven_zip_digests(&mut cursor, count).map(|()| cursor.at)
+        };
+        // All defined: a flag, then four bytes for each.
+        assert_eq!(read(&[1, 1, 2, 3, 4, 5, 6, 7, 8], 2).unwrap(), 9);
+        // Some: a bit for each (the first and the third of three), then
+        // four bytes for each that is.
+        assert_eq!(
+            read(&[0, 0b1010_0000, 1, 2, 3, 4, 5, 6, 7, 8], 3).unwrap(),
+            10
+        );
+        // Fewer bytes than the bits say is unreadable, not a panic.
+        assert!(read(&[0, 0b1110_0000, 1, 2, 3, 4], 3).is_err());
+        assert!(read(&[1, 1, 2], 1).is_err());
     }
 }

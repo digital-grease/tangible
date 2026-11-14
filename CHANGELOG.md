@@ -48,6 +48,10 @@ may change between minor versions, and the release notes say how.
 
 ### Changed
 
+- 7z and xz archives are read with sevenz-rust2 and lzma-rust2 0.25, which
+  check each entry's size and checksum more strictly. An archive with an
+  entry Tangible refuses still stops at that entry, every later one left
+  unwritten, and the 7z reader keeps to the same memory limits as before.
 - What Tangible says it will and will not do. It used to say it never
   searches for anything; for an approved request, an operator may now search
   the Prowlarr you configure and grab a release. The README's "Legal and
@@ -55,6 +59,12 @@ may change between minor versions, and the release notes say how.
   does not do: Tangible still ships and configures no indexer, searches only
   when an operator does it, and cannot check a requester's statement that
   they own an item.
+
+### Fixed
+
+- A 7z archive whose packed header lists its checksum, as tools built on
+  the sevenz-rust2 library write it, was refused as unreadable ("its header
+  could not be read"). It is now read, its header checked as before.
 
 ## 0.2.1 (2026-11-12)
 

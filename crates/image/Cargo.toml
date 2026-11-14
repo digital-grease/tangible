@@ -22,8 +22,8 @@ serde = { version = "1.0.229", features = ["derive"] }
 # bzip2, tar without extended attributes, gzip and xz for compressed tars.
 # No RAR: its decoder is not free software.
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
-lzma-rust2 = { version = "0.23.0", default-features = false, features = ["std", "xz"] }
-sevenz-rust2 = { version = "0.24.2", default-features = false }
+lzma-rust2 = { version = "0.25.0", default-features = false, features = ["std", "xz"] }
+sevenz-rust2 = { version = "0.25.0", default-features = false }
 tar = { version = "0.4.46", default-features = false }
 zip = { version = "9.3.0", default-features = false, features = ["deflate-flate2"] }
 # A DVD CHD's ISO is checked against the CHD's data SHA-1
@@ -36,6 +36,9 @@ tokio = { version = "1.53.1", features = ["fs", "io-util", "process", "time", "m
 tracing = "0.1.44"
 
 [dev-dependencies]
+# The 7z writer, to make an archive of several blocks in a test: the same
+# version as above, with its encoder.
+sevenz-rust2 = { version = "0.25.0", default-features = false, features = ["compress"] }
 tempfile = "3.27.0"
 tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
 

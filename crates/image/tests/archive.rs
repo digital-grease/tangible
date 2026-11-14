@@ -141,6 +141,89 @@ fn a_name_twice_is_refused_and_nothing_is_overwritten() {
     assert_eq!(out.files.len(), 1);
 }
 
+/// A 7z of `entries` as sevenz-rust2 writes it: each entry in a block of
+/// its own, and its packed header with a CRC (which 7-Zip's does not have).
+fn written_7z(dir: &std::path::Path, entries: &[(&str, &[u8])]) -> PathBuf {
+    let path = dir.join("written.7z");
+    let mut writer =
+        sevenz_rust2::ArchiveWriter::new(std::fs::File::create(&path).unwrap()).unwrap();
+    for (name, body) in entries {
+        writer
+            .push_archive_entry(sevenz_rust2::ArchiveEntry::new_file(name), Some(*body))
+            .unwrap();
+    }
+    writer.finish().unwrap();
+    path
+}
+
+#[test]
+fn a_7z_from_another_writer_unpacks() {
+    let dir = TempDir::new().unwrap();
+    let bin = bin();
+    let path = written_7z(
+        dir.path(),
+        &[("Game/game.bin", &bin), ("Game/notes.txt", b"hi")],
+    );
+    let out = TempDir::new().unwrap();
+    let unpacked = unpack(&path, ArchiveKind::SevenZip, out.path(), &limits()).unwrap();
+    assert_eq!(unpacked.files.len(), 2);
+    let mut names = walk(out.path());
+    names.sort();
+    assert!(
+        names[0].ends_with("game.bin") && names[1].ends_with("notes.txt"),
+        "{names:?}"
+    );
+}
+
+#[test]
+fn a_refused_7z_entry_stops_every_later_block() {
+    // Each entry in a block of its own; the second is refused, its name
+    // the first's. Since sevenz-rust2 0.25 a callback's `false` skips only
+    // the rest of its block, so the third block must be stopped outright.
+    let dir = TempDir::new().unwrap();
+    let path = written_7z(
+        dir.path(),
+        &[
+            ("x.bin", b"first"),
+            ("x.bin", b"second"),
+            ("later.bin", b"third"),
+        ],
+    );
+
+    let out = TempDir::new().unwrap();
+    let error = unpack(&path, ArchiveKind::SevenZip, out.path(), &limits()).unwrap_err();
+    assert!(matches!(error, ArchiveError::Duplicate(_)), "{error}");
+    let written: Vec<_> = walk(out.path());
+    assert!(
+        !written.iter().any(|name| name.ends_with("later.bin")),
+        "{written:?}"
+    );
+}
+
+/// Every file beneath `root`, as paths relative to it.
+fn walk(root: &std::path::Path) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(at) = stack.pop() {
+        for entry in std::fs::read_dir(&at).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                stack.push(entry.path());
+            } else {
+                found.push(
+                    entry
+                        .path()
+                        .strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+        }
+    }
+    found
+}
+
 #[test]
 fn encrypted_archives_are_refused() {
     for name in ["encrypted.zip", "encrypted.7z"] {
