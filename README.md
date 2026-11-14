@@ -38,8 +38,8 @@ Existing media managers usually center on playable video files, episodes, songs,
 - Imports by upload (in resumable parts for large files), from watched folders
   an administrator configures, from a URL, from qBittorrent, SABnzbd and
   NZBGet, and from S3-compatible storage; a folder holding a disc's files
-  imports as one artifact, and ZIP, 7z and tar archives are unpacked. It never
-  searches for anything: every import is one an operator asked for.
+  imports as one artifact, and ZIP, 7z and tar archives are unpacked. Every
+  import is one a person asked for.
 - Recognises ISO 9660 and UDF images, CUE/BIN, cdrdao TOC/BIN, CloneCD
   CCD/IMG/SUB (keeping its subchannel), Alcohol 120% MDS/MDF, CHD, and
   DVD-Video `VIDEO_TS` folders, by their structure rather than their file
@@ -51,6 +51,18 @@ Existing media managers usually center on playable video files, episodes, songs,
 - Computes preservation hashes (CRC32, MD5, SHA-1) of every file and CD track,
   and matches them against the Logiqx DATs you load, such as Redump's.
 - Catalogues titles, editions, disc sets and discs, and links images to discs.
+
+**Requests**
+
+- Anybody signed in may ask for an item, found among loaded DATs, MusicBrainz,
+  TMDB (and IMDb IDs, which TMDB looks up) or IGDB, or described by hand,
+  stating on every request that they legally own it and want a digital image
+  of it.
+- An operator or administrator approves or declines. For an approved request
+  they may search the Prowlarr you run and pick a release, which Tangible
+  fetches through Prowlarr and hands to one of your download clients; the
+  import that follows fulfils the request. Nothing is searched for or grabbed
+  on its own; see "Legal and content boundary" below.
 
 **Ripping**
 
@@ -193,7 +205,9 @@ or a real drive, and fuzzing.
 
 ## Legal and content boundary
 
-Tangible is neutral infrastructure for content the operator is authorized to acquire, preserve, transform, and reproduce. The project will not bundle release indexers or decryption keys, and will not fetch or derive keys.
+Tangible is infrastructure for content the operator is authorized to acquire, preserve, transform, and reproduce. The project will not bundle release indexers or decryption keys, and will not fetch or derive keys.
+
+Requests search only the Prowlarr an administrator configures, with the indexers the operator added to it; Tangible ships and configures none. A search is made by an operator or administrator, for a request they approved, and a release is grabbed only when they pick it. Each request carries the requester's statement that they legally own the item and want a digital image of it; Tangible requires it but cannot check it. Which indexers you search, and whether downloading a release is lawful where you are, is yours to determine.
 
 Ripping discs in a worker's drive follows the arrangement VideoLAN and the Linux distributions use: the published images contain no decryption code. An operator who wants to rip encrypted DVDs builds a worker image locally from `deploy/decryption/Dockerfile`, which compiles VideoLAN's libdvdcss from its source release, and supplies any key files themselves. Decryption stays off until an administrator enables it. Whether ripping a particular disc is lawful where you are is yours to determine.
 

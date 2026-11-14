@@ -560,8 +560,9 @@ URL imports are on and how far they reach.
 
 Tangible can hand a torrent you already have (a `.torrent` file or a magnet
 link) to a qBittorrent you run, and import it when it finishes. It adds the
-torrent to one category and nothing else, never searches for anything, and
-never asks qBittorrent to run a script. Seeding and cleaning up stay
+torrent to one category and nothing else, and never asks qBittorrent to run a
+script. It looks for a torrent only when an operator searches Prowlarr for a
+request and picks one (Requests, below). Seeding and cleaning up stay
 qBittorrent's business, unless you set the integration to remove each torrent
 once it is in the library (below).
 
@@ -629,8 +630,9 @@ removal is in the audit log (`integration.source_deleted`).
 ## Sending NZBs to SABnzbd
 
 Tangible can hand an NZB you already have to a SABnzbd you run, and import
-the download when it completes. It never searches for anything and asks for
-no script. It removes a download only where you set it to (below).
+the download when it completes. It asks for no script, and looks for an NZB
+only when an operator searches Prowlarr for a request and picks one (Requests,
+below). It removes a download only where you set it to (below).
 
 1. In SABnzbd, add a category (Config, Categories), `tangible` by default,
    with its own folder. SABnzbd files a category it does not know under its
@@ -752,13 +754,51 @@ The credentials then need `s3:DeleteObject`, and `s3:DeleteObjectVersion`
 for a versioned bucket. Without them each removal waits, saying the
 endpoint refused, and is tried again.
 
+## Requests
+
+Anybody signed in, viewers included, can ask for an item on the Requests
+page: described by hand, or found among the DATs loaded here and the
+metadata providers an administrator has added. Every request carries the
+requester's statement, ticked on the form, that they legally own the item
+and want a digital image of it; Tangible requires it, does not keep it, and
+cannot check it. An operator or administrator approves or declines each
+request; theirs are approved as made. Each request and decision is in the
+audit log.
+
+To find items, add metadata providers on the Integrations page, under
+Metadata providers. MusicBrainz takes no key. TMDB takes an API Read Access
+Token (the long one, from your TMDB account's API settings, not the short API
+key). IGDB takes a Twitch application's client ID and secret, from the Twitch
+developer console. A search sends a provider only the words searched for,
+over https to its public address; a proxy in `TANGIBLE_OUTBOUND_PROXY` is
+used if set.
+
+To find a release for an approved request, add your Prowlarr on the
+Integrations page: its address as the server reaches it (a LAN address is
+fine; a loopback one needs `TANGIBLE_OUTBOUND_ALLOW`) and its API key, from
+Prowlarr's Settings, General. Tangible searches the indexers you added in
+Prowlarr, and adds or changes nothing there. On the request's page, Find a
+release searches by the request's title (a film by its IMDb ID first), or by
+other words; the releases found are listed best first, each saying why. Grab
+on one asks first, then fetches its `.torrent`, NZB or magnet link through
+Prowlarr and hands it to one of the download clients set up above, in its
+category, as a job handed over by hand is. The request follows the import,
+and is in the library when it completes. Nothing is searched for or grabbed
+unless an operator does it, for an approved request.
+
+Prowlarr's download links carry its API key: Tangible never shows, logs or
+audits them, and holds a search's links sealed with the secret key below,
+for the hour a release may be picked. A restart forgets them; search again.
+Which indexers you search, and whether downloading a release is lawful where
+you are, is yours to determine.
+
 ## Integration secrets
 
-Download clients (qBittorrent, and SABnzbd and NZBGet later) sign in with a
-password. You enter it once, as an administrator, and Tangible stores it
-sealed with a key kept outside the database; nobody can read it back, through
-the web UI or the API. Without a key the server runs, and an integration
-cannot be given a password.
+Download clients, S3, RomM's API, Prowlarr and the metadata providers sign in
+with a password or a key. You enter it once, as an administrator, and
+Tangible stores it sealed with a key kept outside the database; nobody can
+read it back, through the web UI or the API. Without a key the server runs,
+and an integration cannot be given a password.
 
 Make the key once, readable only by the server's user (10001 in the image):
 

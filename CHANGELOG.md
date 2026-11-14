@@ -8,45 +8,53 @@ may change between minor versions, and the release notes say how.
 
 ### Added
 
-- Requests (ADR 0021, the first part): anybody signed in, viewers
-  included, may ask for an item on the new Requests page, describing it
-  and ticking a box to attest, on every request, that they legally own it
-  and want a digital image of it. The server refuses a request without the
-  attestation and does not keep it. An operator or administrator approves
-  or declines each request, saying why when declining; their own requests
-  are approved as made. A viewer sees and withdraws only their own. Each
-  request and decision is in the audit log. Nothing is searched for or
-  downloaded yet: finding a release for an approved request comes later.
-  Migration 0035 adds the requests table; the previous version neither
-  reads nor writes it.
-- Finding an item to ask for (ADR 0021): Ask for an item searches the
-  loaded DATs, and MusicBrainz (music), TMDB (films and television, and
-  IMDb IDs or addresses, which TMDB looks up) and IGDB (games) where an
-  administrator has added them on the Integrations page, under Metadata
-  providers. MusicBrainz needs no key; TMDB takes an API Read Access Token;
-  IGDB a Twitch application's client ID and secret, kept sealed like every
-  integration secret. A search sends a provider only the words searched
-  for, at public addresses only, kept to each provider's rate limit; a
-  provider that fails is named and the rest still answer. Picking what was
-  found fills in the request. Migration 0036 adds the provider kinds.
-- Finding a release for an approved request (ADR 0021): an administrator
-  adds their Prowlarr on the Integrations page (its address and API key),
-  and an operator or administrator searches it from the request's page, by
-  the request's title in the categories its kind suits, a film by its IMDb
-  ID, or other words. What it finds is listed best first, each release
-  saying why it ranks there, and held for an hour; Grab on one asks first,
-  naming the download client it goes to, then Tangible fetches its
-  .torrent, NZB or magnet link through Prowlarr, checks it, and hands it to
-  that client, as a job handed over by hand is. The request then follows
-  the import, its progress shown on its page, and is fulfilled with the
-  artifact when it completes, or failed when it does not, so another can be
-  grabbed. Nothing is searched for or grabbed on its own. Prowlarr's
-  download links carry its key, so they are never shown, logged or
-  audited, and are held only sealed. Migration 0037 adds the Prowlarr kind.
+- Requests: anybody signed in, viewers included, may ask for an item on the
+  new Requests page, describing it and ticking a box to attest, on every
+  request, that they legally own it and want a digital image of it. The
+  server refuses a request without the attestation and does not keep it. An
+  operator or administrator approves or declines each request, saying why
+  when declining; their own requests are approved as made. A viewer sees and
+  withdraws only their own. Each request and decision is in the audit log.
+  Migration 0035 adds the requests table; the previous version neither reads
+  nor writes it.
+- Finding an item to ask for: Ask for an item searches the loaded DATs, and
+  MusicBrainz (music), TMDB (films and television, and IMDb IDs or
+  addresses, which TMDB looks up) and IGDB (games) where an administrator
+  has added them on the Integrations page, under Metadata providers.
+  MusicBrainz needs no key; TMDB takes an API Read Access Token; IGDB a
+  Twitch application's client ID and secret, kept sealed like every
+  integration secret. A search sends a provider only the words searched for,
+  at public addresses only, kept to each provider's rate limit; a provider
+  that fails is named and the rest still answer. Picking what was found
+  fills in the request. Migration 0036 adds the provider kinds.
+- Finding a release for an approved request: an administrator adds their
+  Prowlarr on the Integrations page (its address and API key), and an
+  operator or administrator searches it from the request's page, by the
+  request's title in the categories its kind suits, a film by its IMDb ID,
+  or other words. What it finds is listed best first, each release saying
+  why it ranks there, and held for an hour; Grab on one asks first, naming
+  the download client it goes to, then Tangible fetches its .torrent, NZB or
+  magnet link through Prowlarr, checks it, and hands it to that client, as a
+  job handed over by hand is. The request then follows the import, its
+  progress shown on its page, and is fulfilled with the artifact when it
+  completes, or failed when it does not, so another can be grabbed. Nothing
+  is searched for or grabbed on its own. Prowlarr's download links carry its
+  key, so they are never shown, logged or audited, and are held only sealed.
+  Migration 0037 adds the Prowlarr kind.
 - A "Buy me a coffee" link at the foot of the web UI's sidebar, under the
   source code link, and a button in the README, for anyone who wants to
   support Tangible's development. The link is plain text: the page loads
   nothing from elsewhere, and nothing is fetched unless it is followed.
+
+### Changed
+
+- What Tangible says it will and will not do. It used to say it never
+  searches for anything; for an approved request, an operator may now search
+  the Prowlarr you configure and grab a release. The README's "Legal and
+  content boundary" and the deploy guide's "Requests" say what that does and
+  does not do: Tangible still ships and configures no indexer, searches only
+  when an operator does it, and cannot check a requester's statement that
+  they own an item.
 
 ## 0.2.1 (2026-11-12)
 
