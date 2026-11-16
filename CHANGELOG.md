@@ -92,6 +92,9 @@ may change between minor versions, and the release notes say how.
   which a download seldom is: answering the question confirms it. The
   API still needs `confirm_original` for an original; its refusal without
   it says Tangible cannot make an original again.
+- A fulfilled request whose artifact is deleted goes back to approved, so
+  it no longer says the item is in the library and another release can be
+  found for it. Audited as `request.reopened`.
 - A request whose download turns out not to be a disc image Tangible
   recognises, such as a video file, fails ("not a disc image") rather than
   being fulfilled by it, so another release can be grabbed. What it

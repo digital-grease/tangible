@@ -473,6 +473,85 @@ async fn a_download_that_is_not_a_disc_image_fails_its_request_and_stays_failed(
     assert_eq!(record.artifact_id, Some(disc));
 }
 
+/// Make `artifact` a tombstone, as the deletion runner leaves one.
+async fn tombstone(pool: &PgPool, artifact: uuid::Uuid) {
+    sqlx::query(
+        "UPDATE artifacts SET deletion_requested_at = now(), deletion_requested_by = 'admin',
+             pending_deletion = FALSE, deleted_at = now()
+         WHERE id = $1",
+    )
+    .bind(artifact)
+    .execute(pool)
+    .await
+    .expect("a tombstone");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_request_whose_artifact_is_deleted_is_approved_again() {
+    let pool = pool().await;
+    let operator = account(&pool, Role::Operator).await;
+
+    // Fulfilled, then what fulfilled it is deleted.
+    let film = ask(&pool, &operator, true).await;
+    let (integration, import) = client_and_import(&pool, "acquiring").await;
+    start_download(&pool, rid(film), &grabbed(&operator.1, integration, import))
+        .await
+        .unwrap()
+        .unwrap();
+    let disc = complete(&pool, import).await;
+    settle_requests(&pool).await.unwrap();
+    let record = get_request(&pool, rid(film)).await.unwrap().unwrap();
+    assert_eq!(record.state, RequestState::Fulfilled);
+    tombstone(&pool, disc).await;
+    settle_requests(&pool).await.unwrap();
+    let record = get_request(&pool, rid(film)).await.unwrap().unwrap();
+    assert_eq!(record.state, RequestState::Approved);
+    assert_eq!(record.artifact_id, None);
+    assert!(audit_actions(&pool, film).await.ends_with(&[
+        "request.fulfilled".to_owned(),
+        "request.reopened".to_owned()
+    ]));
+    // Approved again, another release may be grabbed.
+    let (_, again) = client_and_import(&pool, "acquiring").await;
+    let record = start_download(&pool, rid(film), &grabbed(&operator.1, integration, again))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.state, RequestState::Downloading);
+
+    // A failed request naming what it downloaded stays failed, naming
+    // nothing once that is deleted.
+    let video_request = ask(&pool, &operator, true).await;
+    let (_, video_import) = client_and_import(&pool, "acquiring").await;
+    start_download(
+        &pool,
+        rid(video_request),
+        &grabbed(&operator.1, integration, video_import),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let video = complete_as(&pool, video_import, "unknown").await;
+    settle_requests(&pool).await.unwrap();
+    assert_eq!(
+        get_request(&pool, rid(video_request))
+            .await
+            .unwrap()
+            .unwrap()
+            .artifact_id,
+        Some(video)
+    );
+    tombstone(&pool, video).await;
+    settle_requests(&pool).await.unwrap();
+    let record = get_request(&pool, rid(video_request))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.state, RequestState::Failed);
+    assert_eq!(record.artifact_id, None);
+}
+
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
 async fn a_request_follows_its_import_to_the_end() {

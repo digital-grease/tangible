@@ -555,6 +555,9 @@ pub async fn start_download(
 /// - The import failed for good, was canceled or was quarantined: the
 ///   request failed, saying how, and another release may be grabbed.
 /// - The import of a failed request was retried: it is downloading again.
+/// - What fulfilled a request was deleted (ADR 0020): it is approved again,
+///   so another release may be found, and audited as `request.reopened`. A
+///   failed request naming a deleted artifact no longer names it.
 ///
 /// Checked by the import runner after every import and whenever its queue
 /// is empty, as rips are, so a server restarted mid-import still catches up.
@@ -648,7 +651,9 @@ async fn settle_in(
     .fetch_all(&mut **tx)
     .await
     .map_err(DbError::Query)?;
+    let reopened = reopen_deleted(tx, only).await?;
     for (ids, action) in [
+        (&reopened, "request.reopened"),
         (&revived, "request.downloading"),
         (&fulfilled, "request.fulfilled"),
         (&not_disc_images, "request.failed"),
@@ -661,6 +666,7 @@ async fn settle_in(
     // A request revived and then fulfilled moved once.
     let mut moved: Vec<uuid::Uuid> = revived
         .into_iter()
+        .chain(reopened)
         .chain(fulfilled)
         .chain(not_disc_images)
         .chain(failed)
@@ -668,6 +674,39 @@ async fn settle_in(
     moved.sort_unstable();
     moved.dedup();
     Ok(moved.into_iter().map(RequestId::from_uuid).collect())
+}
+
+/// Requests whose artifact is deleted: a fulfilled one approved again, as
+/// an operator or administrator approved it, for another release; a failed
+/// one no longer naming it. Answers those approved again.
+async fn reopen_deleted(
+    tx: &mut Transaction<'_, Postgres>,
+    only: Option<uuid::Uuid>,
+) -> Result<Vec<uuid::Uuid>, DbError> {
+    let reopened: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "UPDATE requests r
+         SET state = 'approved', artifact_id = NULL
+         FROM artifacts a
+         WHERE a.id = r.artifact_id AND r.state = 'fulfilled' AND a.deleted_at IS NOT NULL
+           AND ($1::uuid IS NULL OR r.id = $1)
+         RETURNING r.id",
+    )
+    .bind(only)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(DbError::Query)?;
+    sqlx::query(
+        "UPDATE requests r
+         SET artifact_id = NULL
+         FROM artifacts a
+         WHERE a.id = r.artifact_id AND r.state = 'failed' AND a.deleted_at IS NOT NULL
+           AND ($1::uuid IS NULL OR r.id = $1)",
+    )
+    .bind(only)
+    .execute(&mut **tx)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(reopened)
 }
 
 /// An audit row for what the import runner did to a request.

@@ -849,7 +849,8 @@ string_enum! {
         Canceled => "canceled",
         /// A release was handed to a download client; the import follows it.
         Downloading => "downloading",
-        /// The import completed: the library has it. Terminal.
+        /// The import completed: the library has it. Back to approved if
+        /// what fulfilled it is deleted, so it may be found again.
         Fulfilled => "fulfilled",
         /// The import ended without an artifact; another release may be
         /// grabbed.
@@ -859,15 +860,18 @@ string_enum! {
 }
 
 impl RequestState {
-    /// Whether the request is finished with, one way or another.
+    /// Whether the request is finished with, one way or another. A
+    /// fulfilled request is not: the library may lose what fulfilled it.
     #[must_use]
     pub const fn is_terminal(&self) -> bool {
-        matches!(self, Self::Declined | Self::Canceled | Self::Fulfilled)
+        matches!(self, Self::Declined | Self::Canceled)
     }
 
     /// Whether a request here may move to `next`. Nothing is searched for or
     /// grabbed before approval; a download, once handed over, ends only by
-    /// its import, and a failed one may be grabbed again or withdrawn.
+    /// its import, and a failed one may be grabbed again or withdrawn. A
+    /// fulfilled one goes back to approved when what fulfilled it is
+    /// deleted, still approved, so another release may be found.
     #[must_use]
     pub const fn can_become(&self, next: Self) -> bool {
         matches!(
@@ -880,6 +884,7 @@ impl RequestState {
                 Self::Downloading | Self::Declined | Self::Canceled
             ) | (Self::Downloading, Self::Fulfilled | Self::Failed)
                 | (Self::Failed, Self::Downloading | Self::Canceled)
+                | (Self::Fulfilled, Self::Approved)
         )
     }
 
@@ -968,6 +973,7 @@ mod tests {
             (S::Downloading, S::Failed),
             (S::Failed, S::Downloading),
             (S::Failed, S::Canceled),
+            (S::Fulfilled, S::Approved),
         ];
         for from in S::all() {
             for to in S::all() {
