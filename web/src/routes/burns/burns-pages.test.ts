@@ -144,7 +144,7 @@ describe('Burn page', () => {
   it('shows a burn writing: its state, progress, drawing, and that it cannot be cancelled', async () => {
     server({
       '/api/v1/burn-jobs/j1': { status: 200, body: { ...job(), attempts: [attempt] } },
-      '/api/v1/burn-attempts/t1/events': { status: 200, body: { items: [] } },
+      '/api/v1/burn-attempts/t1/events?order=newest': { status: 200, body: { items: [] } },
       '/api/v1/burn-attempts/t1': { status: 200, body: { ...attempt, medium: null } },
       '/api/v1/artifacts/a1': {
         status: 200,
@@ -165,6 +165,59 @@ describe('Burn page', () => {
     expect(await axeViolations(container)).toEqual([]);
   });
 
+  it('shows the newest events first, and earlier ones on request', async () => {
+    const event = (sequence: number, code: string, fraction: number | null = null) => ({
+      sequence,
+      stage: 'writing',
+      code,
+      fraction,
+      data: {},
+      observed_at: at,
+    });
+    const asked = server({
+      '/api/v1/burn-jobs/j1': { status: 200, body: { ...job(), attempts: [attempt] } },
+      '/api/v1/burn-attempts/t1/events?order=newest': {
+        status: 200,
+        body: {
+          items: [event(52, 'WRITE_PROGRESS', 0.43), event(51, 'WRITE_PROGRESS', 0.42)],
+          next_after: null,
+          next_before: 51,
+        },
+      },
+      '/api/v1/burn-attempts/t1/events?order=newest&before=51': {
+        status: 200,
+        body: {
+          items: [event(2, 'STAGING_COMPLETE'), event(1, 'STAGING_STARTED')],
+          next_before: null,
+        },
+      },
+      '/api/v1/burn-attempts/t1': { status: 200, body: { ...attempt, medium: null } },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    render(BurnPage);
+    const panel = (await screen.findByRole('heading', { name: 'Latest attempt timeline' })).closest(
+      'section',
+    )!;
+    const codes = () =>
+      within(panel)
+        .getAllByRole('listitem')
+        .map((item) => item.querySelector('code')?.textContent);
+    await vi.waitFor(() => expect(codes()).toEqual(['WRITE_PROGRESS', 'WRITE_PROGRESS']));
+    expect(within(panel).getByText('43%', { exact: false })).toBeTruthy();
+    await fireEvent.click(within(panel).getByRole('button', { name: 'Show earlier events' }));
+    await vi.waitFor(() =>
+      expect(codes()).toEqual([
+        'WRITE_PROGRESS',
+        'WRITE_PROGRESS',
+        'STAGING_COMPLETE',
+        'STAGING_STARTED',
+      ]),
+    );
+    expect(asked).toContain('/api/v1/burn-attempts/t1/events?order=newest&before=51');
+    // Nothing earlier than the first event.
+    expect(within(panel).queryByRole('button', { name: 'Show earlier events' })).toBeNull();
+  });
+
   it('asks for a disc, drawn as an empty tray, and offers to cancel before writing', async () => {
     const asked = server({
       '/api/v1/burn-jobs/j1': {
@@ -174,7 +227,7 @@ describe('Burn page', () => {
           attempts: [{ ...attempt, state: 'preflighting', consumed_media: false }],
         },
       },
-      '/api/v1/burn-attempts/t1/events': { status: 200, body: { items: [] } },
+      '/api/v1/burn-attempts/t1/events?order=newest': { status: 200, body: { items: [] } },
       '/api/v1/burn-attempts/t1': { status: 200, body: { ...attempt, medium: null } },
       'POST /api/v1/burn-jobs/j1/cancel': {
         status: 200,

@@ -100,13 +100,20 @@ export async function loadBurnJob(
   return { kind: 'ready', data: result };
 }
 
-/** Fetch the events one attempt reported, oldest first. */
+/**
+ * Fetch the events one attempt reported: oldest first, or with `newest` the
+ * latest first, reading further back from `before`.
+ */
 export async function loadAttemptEvents(
   attemptId: string,
+  page: { newest?: boolean; before?: number | null; after?: number | null } = {},
   fetcher: typeof fetch = apiFetch,
-  after?: number,
 ): Promise<LoadState<BurnEventPage>> {
-  const query = after === undefined ? '' : `?after=${after}`;
+  const params = new URLSearchParams();
+  if (page.newest) params.set('order', 'newest');
+  if (page.before != null) params.set('before', String(page.before));
+  if (page.after != null) params.set('after', String(page.after));
+  const query = params.size > 0 ? `?${params.toString()}` : '';
   const result = await request<BurnEventPage>(
     fetcher,
     `/api/v1/burn-attempts/${encodeURIComponent(attemptId)}/events${query}`,

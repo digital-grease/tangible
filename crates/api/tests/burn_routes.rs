@@ -1073,6 +1073,57 @@ async fn events_are_read_back_in_sequence_and_page_forwards() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
+async fn the_latest_events_come_first_when_asked_and_page_backwards() {
+    // A page following a long burn wants where it is now, not how it began.
+    let harness = harness().await;
+    drain_queue(&harness.pool).await;
+    let world = seed(&harness.pool).await;
+    let job = queue_claimable(&harness, &world).await;
+    let (worker_id, credential, drive) = worker(&harness).await;
+    let (attempt, _lease) = claim(&harness, &worker_id, &credential, &drive, &job).await;
+    for (sequence, stage) in [(1, "staging"), (2, "preflighting"), (3, "writing")] {
+        report(&harness, &credential, &attempt, sequence, stage).await;
+    }
+
+    let (status, page) = harness
+        .get(&format!(
+            "/api/v1/burn-attempts/{attempt}/events?order=newest&limit=2"
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["items"][0]["sequence"], 3);
+    assert_eq!(page["items"][1]["sequence"], 2);
+    assert_eq!(page["next_before"], 2);
+    assert!(page["next_after"].is_null());
+
+    let (_, rest) = harness
+        .get(&format!(
+            "/api/v1/burn-attempts/{attempt}/events?order=newest&before=2&limit=2"
+        ))
+        .await;
+    assert_eq!(rest["items"].as_array().map(Vec::len), Some(1));
+    assert_eq!(rest["items"][0]["sequence"], 1);
+    assert!(rest["next_before"].is_null());
+
+    // Oldest first says nothing of going back.
+    let (_, oldest) = harness
+        .get(&format!("/api/v1/burn-attempts/{attempt}/events?limit=2"))
+        .await;
+    assert!(oldest["next_before"].is_null());
+
+    // A cursor for the other order, or an order this server does not know,
+    // is refused rather than ignored.
+    for query in ["order=newest&after=1", "before=3", "order=sideways"] {
+        let (status, refused) = harness
+            .get(&format!("/api/v1/burn-attempts/{attempt}/events?{query}"))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}: {refused}");
+        assert_eq!(refused["code"], "INVALID_PARAMETER");
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn events_for_an_unknown_attempt_are_not_an_empty_timeline() {
     let harness = harness().await;
     let missing = uuid::Uuid::now_v7();

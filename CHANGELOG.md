@@ -138,6 +138,10 @@ may change between minor versions, and the release notes say how.
 
 ### Fixed
 
+- A burn's timeline showed its first fifty events, oldest first, so a long
+  write stopped at a few percent. It now shows the latest first, read again
+  as the burn goes, with "Show earlier events" for the rest; the events
+  route takes `order=newest` and `before`.
 - A burn whose drive could not be reached when it was checked, as when a
   USB drive had dropped off its bus, failed saying "a previous attempt
   needs a person before this worker can continue". It now says the drive

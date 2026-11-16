@@ -1421,7 +1421,7 @@
           "burns"
         ],
         "summary": "The events recorded for one attempt, in sequence order.",
-        "description": "List the events a worker reported for an attempt, in sequence order. Pass the response's `next_after` as `after` to continue.",
+        "description": "List the events a worker reported for an attempt, in sequence order. Pass the response's `next_after` as `after` to continue. With `order=newest`, the latest events come first, and `next_before` passed as `before` reads further back; `after` and `before` belong to their own order.",
         "operationId": "list_events",
         "parameters": [
           {
@@ -1436,7 +1436,7 @@
           {
             "name": "after",
             "in": "query",
-            "description": "Return only events after this sequence.",
+            "description": "Return only events after this sequence (oldest first).",
             "required": false,
             "schema": {
               "type": [
@@ -1444,6 +1444,31 @@
                 "null"
               ],
               "format": "int64"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Return only events before this sequence (newest first).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "`oldest` first, the default, or `newest` first: the latest events,\nas a page following a burn shows them.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           {
@@ -9557,7 +9582,7 @@
             "items": {
               "$ref": "#/components/schemas/BurnEventView"
             },
-            "description": "The events, in sequence order."
+            "description": "The events, in sequence order, or newest first when asked."
           },
           "next_after": {
             "type": [
@@ -9566,6 +9591,14 @@
             ],
             "format": "int64",
             "description": "Sequence to pass as `after` to continue, or null at the end.\n\nA sequence rather than an opaque cursor: sequences are already the\ncurrency of this timeline (the worker numbers events with them and\nthe server acknowledges them), so hiding them here would be a\ndifferent vocabulary for the same thing."
+          },
+          "next_before": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Newest first: the sequence to pass as `before` for older events, or\nnull when there are none. Null oldest first."
           }
         }
       },

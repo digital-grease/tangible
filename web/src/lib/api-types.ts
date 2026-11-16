@@ -423,7 +423,7 @@ export interface paths {
         };
         /**
          * The events recorded for one attempt, in sequence order.
-         * @description List the events a worker reported for an attempt, in sequence order. Pass the response's `next_after` as `after` to continue.
+         * @description List the events a worker reported for an attempt, in sequence order. Pass the response's `next_after` as `after` to continue. With `order=newest`, the latest events come first, and `next_before` passed as `before` reads further back; `after` and `before` belong to their own order.
          */
         get: operations["list_events"];
         put?: never;
@@ -2882,7 +2882,7 @@ export interface components {
         };
         /** @description A page of events. */
         BurnEventPage: {
-            /** @description The events, in sequence order. */
+            /** @description The events, in sequence order, or newest first when asked. */
             items: components["schemas"]["BurnEventView"][];
             /**
              * Format: int64
@@ -2894,6 +2894,12 @@ export interface components {
              *     different vocabulary for the same thing.
              */
             next_after?: number | null;
+            /**
+             * Format: int64
+             * @description Newest first: the sequence to pass as `before` for older events, or
+             *     null when there are none. Null oldest first.
+             */
+            next_before?: number | null;
         };
         /** @description One recorded event. */
         BurnEventView: {
@@ -7239,8 +7245,15 @@ export interface operations {
     list_events: {
         parameters: {
             query?: {
-                /** @description Return only events after this sequence. */
+                /** @description Return only events after this sequence (oldest first). */
                 after?: number | null;
+                /** @description Return only events before this sequence (newest first). */
+                before?: number | null;
+                /**
+                 * @description `oldest` first, the default, or `newest` first: the latest events,
+                 *     as a page following a burn shows them.
+                 */
+                order?: string | null;
                 /** @description Maximum events to return. Clamped. */
                 limit?: number | null;
             };

@@ -1986,20 +1986,53 @@ pub async fn list_burn_events(
     .await
     .map_err(DbError::Query)?;
 
-    rows.iter()
-        .map(|row| {
-            Ok(BurnEventRecord {
-                sequence: row.try_get("sequence").map_err(DbError::Query)?,
-                event_type: row.try_get("event_type").map_err(DbError::Query)?,
-                stage: row.try_get("stage").map_err(DbError::Query)?,
-                progress: row.try_get("progress_fraction").map_err(DbError::Query)?,
-                message_code: row.try_get("message_code").map_err(DbError::Query)?,
-                data: row.try_get("data_json").map_err(DbError::Query)?,
-                worker_timestamp: row.try_get("worker_timestamp").map_err(DbError::Query)?,
-                server_received_at: row.try_get("server_received_at").map_err(DbError::Query)?,
-            })
-        })
-        .collect()
+    rows.iter().map(burn_event_from_row).collect()
+}
+
+/// The latest events for an attempt, newest first: those before
+/// `before_sequence` when it is given, to read further back.
+///
+/// For a page showing a burn as it goes, whose newest events are what an
+/// operator looks for: a write reports its progress often, and the first
+/// events of a long burn are the least interesting.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn list_latest_burn_events(
+    pool: &PgPool,
+    attempt_id: BurnAttemptId,
+    before_sequence: Option<i64>,
+    limit: i64,
+) -> Result<Vec<BurnEventRecord>, DbError> {
+    let rows = sqlx::query(
+        "SELECT sequence, event_type, stage, progress_fraction, message_code,
+                data_json, worker_timestamp, server_received_at
+         FROM burn_events
+         WHERE attempt_id = $1 AND ($2::bigint IS NULL OR sequence < $2)
+         ORDER BY sequence DESC
+         LIMIT $3",
+    )
+    .bind(attempt_id.as_uuid())
+    .bind(before_sequence)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(DbError::Query)?;
+    rows.iter().map(burn_event_from_row).collect()
+}
+
+fn burn_event_from_row(row: &sqlx::postgres::PgRow) -> Result<BurnEventRecord, DbError> {
+    Ok(BurnEventRecord {
+        sequence: row.try_get("sequence").map_err(DbError::Query)?,
+        event_type: row.try_get("event_type").map_err(DbError::Query)?,
+        stage: row.try_get("stage").map_err(DbError::Query)?,
+        progress: row.try_get("progress_fraction").map_err(DbError::Query)?,
+        message_code: row.try_get("message_code").map_err(DbError::Query)?,
+        data: row.try_get("data_json").map_err(DbError::Query)?,
+        worker_timestamp: row.try_get("worker_timestamp").map_err(DbError::Query)?,
+        server_received_at: row.try_get("server_received_at").map_err(DbError::Query)?,
+    })
 }
 
 /// The data of the latest event with `message_code` for an attempt, if any.

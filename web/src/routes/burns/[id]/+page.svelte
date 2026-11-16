@@ -43,7 +43,20 @@
   import { loadReportSettings, type ReportSettings } from '$lib/report';
 
   let view = $state<LoadState<BurnJobDetail>>({ kind: 'loading' });
+  /** The latest attempt's newest events, newest first, as last read. */
   let events = $state<BurnEventView[]>([]);
+  /** Earlier events, read on request, newest first. */
+  let older = $state<BurnEventView[]>([]);
+  /** Where the earlier events go on from; null when there are no more. */
+  let olderBefore = $state<number | null>(null);
+  let readingOlder = $state(false);
+  /** The attempt the timeline is of, so a new attempt starts it afresh. */
+  let timelineOf = '';
+  /** Every event shown, newest first, each once. */
+  const timeline = $derived.by(() => {
+    const oldestShown = events.at(-1)?.sequence ?? Number.POSITIVE_INFINITY;
+    return [...events, ...older.filter((event) => event.sequence < oldestShown)];
+  });
   /** The latest attempt in full: what preflight found in the tray. */
   let latestDetail = $state<BurnAttemptDetail | null>(null);
   /** The disc the burn's artifact describes, for the drawing; read once. */
@@ -94,11 +107,21 @@
 
     const attempt = next.kind === 'ready' ? next.data.attempts.at(-1) : undefined;
     if (attempt) {
-      const [timeline, detail] = await Promise.all([
-        loadAttemptEvents(attempt.id),
+      if (attempt.id !== timelineOf) {
+        timelineOf = attempt.id;
+        older = [];
+        olderBefore = null;
+      }
+      // Newest first: a long burn reports often, and where it is now is
+      // what this page is for.
+      const [latest, detail] = await Promise.all([
+        loadAttemptEvents(attempt.id, { newest: true }),
         loadAttempt(attempt.id),
       ]);
-      if (timeline.kind === 'ready') events = timeline.data.items;
+      if (latest.kind === 'ready') {
+        events = latest.data.items;
+        if (older.length === 0) olderBefore = latest.data.next_before ?? null;
+      }
       if (detail.kind === 'ready') latestDetail = detail.data;
     }
 
@@ -106,6 +129,17 @@
       // Nothing further will change on its own.
       stopWatchingNow();
     }
+  }
+
+  /** Read the events before those shown. */
+  async function showOlder() {
+    if (readingOlder || olderBefore === null || !timelineOf) return;
+    readingOlder = true;
+    const page = await loadAttemptEvents(timelineOf, { newest: true, before: olderBefore });
+    readingOlder = false;
+    if (page.kind !== 'ready') return;
+    older = [...older, ...page.data.items];
+    olderBefore = page.data.next_before ?? null;
   }
 
   onMount(async () => {
@@ -303,11 +337,12 @@
 
         {#if latestAttempt}
           <Panel title="Latest attempt timeline">
-            {#if events.length === 0}
+            {#if timeline.length === 0}
               <p class="quiet">The worker has not reported anything yet.</p>
             {:else}
-              <ol class="timeline">
-                {#each events as event (event.sequence)}
+              <p class="quiet small order">Newest first.</p>
+              <ol class="timeline" reversed>
+                {#each timeline as event (event.sequence)}
                   <li>
                     <time datetime={event.observed_at}
                       >{new Date(event.observed_at).toLocaleTimeString()}</time
@@ -325,6 +360,13 @@
                   </li>
                 {/each}
               </ol>
+              {#if olderBefore !== null}
+                <p class="older">
+                  <Button size="sm" onclick={showOlder} disabled={readingOlder}>
+                    {readingOlder ? 'Reading…' : 'Show earlier events'}
+                  </Button>
+                </p>
+              {/if}
             {/if}
           </Panel>
 
@@ -536,6 +578,12 @@
   }
   .timeline time {
     color: var(--text-muted);
+  }
+  .order {
+    margin: 0 0 var(--space-1);
+  }
+  .older {
+    margin: var(--space-2) 0 0;
   }
   .message {
     grid-column: 1 / -1;

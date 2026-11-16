@@ -40,8 +40,8 @@ use tangible_db::repositories::{
     ArtifactBurnFacts, BurnAttemptRecord, BurnEventRecord, BurnJobFilter, BurnJobRecord,
     CancelOutcome, CreateJobOutcome, NewBurnJob, RetryOutcome, artifact_burn_facts,
     cancel_burn_job, create_burn_job, get_burn_attempt, get_burn_job, latest_burn_event_data,
-    list_burn_attempts, list_burn_events, list_burn_jobs, resolve_burn_job_attention,
-    retry_burn_job,
+    list_burn_attempts, list_burn_events, list_burn_jobs, list_latest_burn_events,
+    resolve_burn_job_attention, retry_burn_job,
 };
 use tangible_domain::{
     ArtifactId, BurnAttemptId, BurnJobId, BurnJobState, DiscId, EjectPolicy, VerificationStep,
@@ -367,7 +367,7 @@ impl From<BurnEventRecord> for BurnEventView {
 /// A page of events.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct BurnEventPage {
-    /// The events, in sequence order.
+    /// The events, in sequence order, or newest first when asked.
     pub items: Vec<BurnEventView>,
     /// Sequence to pass as `after` to continue, or null at the end.
     ///
@@ -376,6 +376,9 @@ pub struct BurnEventPage {
     /// the server acknowledges them), so hiding them here would be a
     /// different vocabulary for the same thing.
     pub next_after: Option<i64>,
+    /// Newest first: the sequence to pass as `before` for older events, or
+    /// null when there are none. Null oldest first.
+    pub next_before: Option<i64>,
 }
 
 // --- requests ------------------------------------------------------------------
@@ -1185,8 +1188,13 @@ pub async fn get_attempt(
 /// Query parameters for an event listing.
 #[derive(Debug, Clone, Default, Deserialize, IntoParams)]
 pub struct EventQuery {
-    /// Return only events after this sequence.
+    /// Return only events after this sequence (oldest first).
     pub after: Option<i64>,
+    /// Return only events before this sequence (newest first).
+    pub before: Option<i64>,
+    /// `oldest` first, the default, or `newest` first: the latest events,
+    /// as a page following a burn shows them.
+    pub order: Option<String>,
     /// Maximum events to return. Clamped.
     pub limit: Option<usize>,
 }
@@ -1202,7 +1210,9 @@ pub struct EventQuery {
     tag = "burns",
     description = "List the events a worker reported for an attempt, in \
                    sequence order. Pass the response's `next_after` as `after` \
-                   to continue.",
+                   to continue. With `order=newest`, the latest events come \
+                   first, and `next_before` passed as `before` reads further \
+                   back; `after` and `before` belong to their own order.",
     params(
         ("attempt_id" = String, Path, description = "Attempt identifier"),
         EventQuery,
@@ -1219,6 +1229,19 @@ pub async fn list_events(
 ) -> Result<Json<BurnEventPage>, Problem> {
     let id = parse_attempt(&attempt_id)?;
     let limit = limit_of(query.limit);
+    let newest = match query.order.as_deref() {
+        None | Some("oldest") => false,
+        Some("newest") => true,
+        Some(_) => {
+            return Err(Problem::invalid_parameter("order", "oldest or newest"));
+        }
+    };
+    if (newest && query.after.is_some()) || (!newest && query.before.is_some()) {
+        return Err(Problem::invalid_parameter(
+            if newest { "after" } else { "before" },
+            "after reads oldest first, and before newest first",
+        ));
+    }
 
     // Confirm the attempt exists so an unknown identifier is a 404 rather
     // than an empty timeline, which would read as a burn that reported
@@ -1233,22 +1256,23 @@ pub async fn list_events(
         return Err(Problem::not_found("burn attempt", &id.to_string()));
     }
 
-    let events = list_burn_events(state.database().pool(), id, query.after, as_i64(limit))
-        .await
-        .map_err(|error| {
-            tracing::error!(error = ?error, "could not read burn events");
-            unavailable("the burn events could not be read")
-        })?;
-
-    let next_after = if events.len() < limit {
-        None
+    let pool = state.database().pool();
+    let events = if newest {
+        list_latest_burn_events(pool, id, query.before, as_i64(limit)).await
     } else {
-        events.last().map(|event| event.sequence)
-    };
+        list_burn_events(pool, id, query.after, as_i64(limit)).await
+    }
+    .map_err(|error| {
+        tracing::error!(error = ?error, "could not read burn events");
+        unavailable("the burn events could not be read")
+    })?;
 
+    let more = events.len() >= limit;
+    let last = events.last().map(|event| event.sequence);
     Ok(Json(BurnEventPage {
         items: events.into_iter().map(BurnEventView::from).collect(),
-        next_after,
+        next_after: if more && !newest { last } else { None },
+        next_before: if more && newest { last } else { None },
     }))
 }
 
