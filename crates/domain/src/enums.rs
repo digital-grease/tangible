@@ -888,6 +888,14 @@ impl RequestState {
         )
     }
 
+    /// Whether a person may approve a request here: only one waiting for
+    /// approval. A fulfilled request becomes approved again only when what
+    /// fulfilled it is deleted, by the system, never by a person's approval.
+    #[must_use]
+    pub const fn may_approve(&self) -> bool {
+        matches!(self, Self::PendingApproval)
+    }
+
     /// Whether a release may be searched for and grabbed for a request here.
     #[must_use]
     pub const fn may_grab(&self) -> bool {
@@ -990,6 +998,15 @@ mod tests {
         // A download cannot be withdrawn: the client has it.
         assert!(!S::Downloading.can_become(S::Canceled));
         assert!(S::Approved.may_grab() && S::Failed.may_grab());
+        // Approved by a person only while it waits; the system reopens a
+        // fulfilled one.
+        for state in S::all() {
+            assert_eq!(
+                state.may_approve(),
+                *state == S::PendingApproval,
+                "{state:?}"
+            );
+        }
         assert!(!S::PendingApproval.may_grab() && !S::Downloading.may_grab());
     }
 

@@ -503,6 +503,14 @@ async fn a_request_whose_artifact_is_deleted_is_approved_again() {
     settle_requests(&pool).await.unwrap();
     let record = get_request(&pool, rid(film)).await.unwrap().unwrap();
     assert_eq!(record.state, RequestState::Fulfilled);
+    // Fulfilled, it cannot be approved by hand back to approved: only the
+    // library losing what fulfilled it reopens it.
+    assert!(matches!(
+        decide_request(&pool, rid(film), &operator.1, Decision::Approve)
+            .await
+            .unwrap(),
+        Err(RequestRefusal::Conflict(RequestState::Fulfilled))
+    ));
     tombstone(&pool, disc).await;
     settle_requests(&pool).await.unwrap();
     let record = get_request(&pool, rid(film)).await.unwrap().unwrap();

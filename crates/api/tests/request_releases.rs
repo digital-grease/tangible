@@ -786,6 +786,10 @@ async fn a_request_is_searched_for_grabbed_and_fulfilled_by_its_import() {
     harness.drain().await;
     let request = harness.request(&id).await;
     assert_eq!(request["state"], "fulfilled", "{request}");
+    assert_eq!(
+        request["can_approve"], false,
+        "nothing to approve once fulfilled"
+    );
     let (_, import, _) = harness
         .send(
             &harness.admin,

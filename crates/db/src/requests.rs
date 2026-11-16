@@ -387,7 +387,13 @@ pub async fn decide_request(
         Decision::Approve => (RequestState::Approved, None, "request.approved"),
         Decision::Decline(reason) => (RequestState::Declined, Some(reason), "request.declined"),
     };
-    if !state.can_become(next) {
+    // Approval is a person's, for a request waiting for it; the system's
+    // reopening of a fulfilled one is not.
+    let allowed = match decision {
+        Decision::Approve => state.may_approve(),
+        Decision::Decline(_) => state.can_become(next),
+    };
+    if !allowed {
         tx.rollback().await.map_err(DbError::Query)?;
         return Ok(Err(RequestRefusal::Conflict(state)));
     }

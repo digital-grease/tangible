@@ -194,7 +194,7 @@ impl RequestView {
             error_detail: record.error_detail,
             created_at: rfc3339(record.created_at),
             updated_at: rfc3339(record.updated_at),
-            can_approve: decides && record.state.can_become(RequestState::Approved),
+            can_approve: decides && record.state.may_approve(),
             can_decline: decides && record.state.can_become(RequestState::Declined),
             can_cancel: (decides || own) && record.state.can_become(RequestState::Canceled),
             can_search: decides && record.state.may_grab(),
