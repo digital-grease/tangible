@@ -1127,6 +1127,63 @@ async fn a_worker_that_produces_a_bad_disc_says_so() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
+async fn a_worker_whose_drive_is_gone_says_so_rather_than_asking_for_a_person() {
+    // The drive dropped off its bus: its device is there in name only, and
+    // preflight cannot reach it. The attempt fails before writing with the
+    // engine's code, and the worker, which needs no person, carries on.
+    let _queue = exclusive_queue().await;
+    let mut server = server().await;
+    server.drain_queue().await;
+
+    let artifact = server.import(&iso_image("DROPPED", 20)).await;
+    let disc = server.seed_disc().await;
+    let job = server.queue_burn(&disc, &artifact).await;
+
+    let worker_dir = TempDir::new().expect("temp dir");
+    let token = server.enrollment_token().await;
+    let settings = settings(&server, worker_dir.path().to_path_buf(), token);
+    let engine = FakeEngine::new(settings.state_dir.join("media")).with_behaviour(FakeBehaviour {
+        drive_unavailable: true,
+        ..FakeBehaviour::default()
+    });
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let worker = tokio::spawn(async move {
+        let mut runtime = WorkerRuntime::new(settings, engine).expect("runtime");
+        runtime
+            .run(async {
+                let _ = stopped.await;
+            })
+            .await
+    });
+
+    let settled = server.await_settled(&job).await;
+    assert!(
+        still_running(&worker).await,
+        "a worker whose drive could not be reached is not one that needs a person"
+    );
+    let _ = stop.send(());
+    let outcome = worker.await.expect("the worker task");
+    assert!(outcome.is_ok(), "the worker exited badly: {outcome:?}");
+
+    assert_eq!(settled["state"], "failed", "{settled}");
+    let attempt = &settled["attempts"][0];
+    assert_eq!(attempt["state"], "failed_before_write", "{settled}");
+    assert_eq!(
+        attempt["error_code"], "ENGINE_DRIVE_UNAVAILABLE",
+        "{settled}"
+    );
+    let detail = attempt["error_detail"].as_str().unwrap_or_default();
+    assert!(
+        detail.contains("could not be checked before writing") && detail.contains("unavailable"),
+        "{detail}"
+    );
+    assert!(!detail.contains("needs a person"), "{detail}");
+    assert!(attempt["physical_copy_id"].is_null(), "{settled}");
+    server.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn a_worker_with_no_disc_waits_and_then_reports_no_media() {
     // The drive is empty and stays empty. The worker must ask for a disc,
     // wait, and then finish without inventing one: no write, no physical

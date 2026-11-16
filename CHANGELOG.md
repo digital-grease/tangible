@@ -138,6 +138,11 @@ may change between minor versions, and the release notes say how.
 
 ### Fixed
 
+- A burn whose drive could not be reached when it was checked, as when a
+  USB drive had dropped off its bus, failed saying "a previous attempt
+  needs a person before this worker can continue". It now says the drive
+  could not be checked before writing, with the code
+  `ENGINE_DRIVE_UNAVAILABLE`.
 - An ISO downloaded with its release's `.nfo` (or any other file) had no
   file marked as its image: burning it staged both files and failed once a
   disc was in the drive, and it could not be exported to RomM or converted.

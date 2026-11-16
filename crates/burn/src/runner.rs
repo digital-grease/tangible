@@ -176,6 +176,14 @@ pub enum RunnerError {
     #[error("the drive could not be claimed")]
     Drive(#[from] DeviceLockError),
 
+    /// The engine could not check the drive and the disc, so nothing was
+    /// written: most often the drive could not be reached, as when it has
+    /// dropped off its bus. Reported with the engine's code, such as
+    /// `ENGINE_DRIVE_UNAVAILABLE`, rather than as a worker that needs a
+    /// person, which it does not.
+    #[error("the drive could not be checked before writing: {0}")]
+    Preflight(#[source] EngineError),
+
     /// An attempt was in flight and its outcome cannot be established here.
     ///
     /// Terminal on purpose. The worker stops taking work and waits for a
@@ -1209,7 +1217,11 @@ impl<E: BurnEngine> WorkerRuntime<E> {
                         serial: None,
                     },
                     failure: Some(FailureBody {
-                        code: "WORKER_ERROR".to_owned(),
+                        code: match &error {
+                            RunnerError::Preflight(engine) => engine_failure_code(engine),
+                            _ => "WORKER_ERROR",
+                        }
+                        .to_owned(),
                         detail: Some(error.to_string()),
                     }),
                 }
@@ -1626,7 +1638,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             note(buffer, WorkerStage::Preflighting, "PREFLIGHT_STARTED");
             let report = self.engine.preflight(&*plan).await.map_err(|error| {
                 tracing::error!(error = ?error, "preflight could not run");
-                RunnerError::NeedsAttention
+                RunnerError::Preflight(error)
             })?;
             // What was in the tray, each time it is a different disc: a burn
             // report describes the media from this, and an event is durable
