@@ -375,6 +375,8 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
         "/api/v1/artifacts/{artifact_id}/deletion-requests",
         Signed(DeleteArtifacts),
     ),
+    // Cover art (ADR 0023): what anyone who can read the library sees.
+    ("GET", "/api/v1/artwork/{artwork_id}", Signed(Read)),
     // Deleting a pending artifact now (ADR 0022).
     (
         "POST",

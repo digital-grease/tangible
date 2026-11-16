@@ -8,6 +8,7 @@
 //! the generation step is verifiable in CI before there is anything to
 //! generate.
 
+pub mod artwork;
 pub mod auth;
 pub mod background;
 pub mod burn_report;
@@ -205,6 +206,7 @@ pub const API_BASE: &str = "/api/v1";
         deletion::request_artifact_deletion,
         deletion::keep_pending_artifact,
         deletion::delete_artifact_now,
+        artwork::get_artwork,
         routes::audit::list_audit_log,
         routes::audit::get_audit_log_event,
         routes::worker_admin::list_all_workers,
@@ -385,6 +387,7 @@ pub const API_BASE: &str = "/api/v1";
         routes::request_releases::ReleaseView,
         routes::request_releases::PausedIndexerView,
         routes::request_releases::LargestDiscView,
+        artwork::CoverView,
         routes::request_releases::DownloadClientChoiceView,
         routes::request_releases::GrabReleaseRequest,
         routes::request_releases::GrabView,
@@ -598,6 +601,7 @@ pub fn router(state: ApiState) -> Router {
         .nest(API_BASE, routes::accounts::router())
         .nest(API_BASE, events::router())
         .nest(API_BASE, deletion::router())
+        .nest(API_BASE, artwork::router())
         .nest(API_BASE, routes::artifacts::router())
         .nest(API_BASE, routes::burns::router())
         .nest(API_BASE, routes::imports::router())

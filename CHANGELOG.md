@@ -63,6 +63,13 @@ may change between minor versions, and the release notes say how.
   pane at the top, however long ago it started; "Recent imports" at the
   foot holds those that have finished. The imports list takes `settled`
   (`true` or `false`) to ask for either.
+- Cover art for requests, and for what they bring into the library: TMDB's
+  poster, the Cover Art Archive's front for a MusicBrainz release, or IGDB's
+  cover, by the provider the request was found with. The server fetches
+  each once, keeps it only if it is a JPEG, PNG or WebP of at most 2 MiB,
+  and serves it itself (`GET /api/v1/artwork/{id}`); the browser never
+  contacts a provider. `TANGIBLE_ARTWORK=false` turns fetching off.
+  Migration 0038 adds the covers' table (ADR 0023).
 - "Report an issue" at the foot of the sidebar, where reports are on:
   GitHub's bug form, filled in by the server with the build and the page
   you were on, shown for review before it is opened, as other reports are

@@ -132,6 +132,8 @@ pub struct RequestLink {
     pub title: String,
     /// What kind of item.
     pub kind: RequestKind,
+    /// Where it was found (`[{provider, external_id}]`), for its cover.
+    pub refs: Value,
 }
 
 fn link_from_row(row: &sqlx::postgres::PgRow) -> Result<RequestLink, DbError> {
@@ -140,6 +142,7 @@ fn link_from_row(row: &sqlx::postgres::PgRow) -> Result<RequestLink, DbError> {
         id: RequestId::from_uuid(row.try_get("id").map_err(DbError::Query)?),
         title: row.try_get("title").map_err(DbError::Query)?,
         kind: parse("kind", &kind)?,
+        refs: row.try_get("refs").map_err(DbError::Query)?,
     })
 }
 
@@ -155,12 +158,13 @@ pub async fn requests_of_imports(
     pool: &PgPool,
     import_ids: &[uuid::Uuid],
 ) -> Result<HashMap<uuid::Uuid, RequestLink>, DbError> {
-    let rows =
-        sqlx::query("SELECT import_id, id, title, kind FROM requests WHERE import_id = ANY($1)")
-            .bind(import_ids)
-            .fetch_all(pool)
-            .await
-            .map_err(DbError::Query)?;
+    let rows = sqlx::query(
+        "SELECT import_id, id, title, kind, refs FROM requests WHERE import_id = ANY($1)",
+    )
+    .bind(import_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(DbError::Query)?;
     rows.iter()
         .map(|row| {
             let import: uuid::Uuid = row.try_get("import_id").map_err(DbError::Query)?;
@@ -180,7 +184,7 @@ pub async fn requests_of_artifacts(
     artifact_ids: &[uuid::Uuid],
 ) -> Result<HashMap<uuid::Uuid, RequestLink>, DbError> {
     let rows = sqlx::query(
-        "SELECT DISTINCT ON (artifact_id) artifact_id, id, title, kind
+        "SELECT DISTINCT ON (artifact_id) artifact_id, id, title, kind, refs
          FROM requests
          WHERE artifact_id = ANY($1)
          ORDER BY artifact_id, created_at, id",

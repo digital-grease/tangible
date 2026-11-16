@@ -238,6 +238,31 @@ impl IgdbClient {
         parse_games(&self.query("games", &body).await?)
     }
 
+    /// The image IGDB keeps as `game`'s cover, by its image id; none when
+    /// the game has no cover, or `game` is not a game's id.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`].
+    pub async fn cover(&self, game: &str) -> Result<Option<String>, ClientError> {
+        if game.is_empty() || game.len() > 20 || !game.bytes().all(|b| b.is_ascii_digit()) {
+            return Ok(None);
+        }
+        let text = self
+            .query(
+                "covers",
+                &format!("fields image_id; where game = {game}; limit 1;"),
+            )
+            .await?;
+        let covers: Vec<Cover> = serde_json::from_str(&text)
+            .map_err(|_| ClientError::bad(CLIENT, "the answer was not covers"))?;
+        Ok(covers.into_iter().find_map(|cover| {
+            cover.image_id.filter(|id| {
+                !id.is_empty() && id.len() <= 40 && id.bytes().all(|b| b.is_ascii_alphanumeric())
+            })
+        }))
+    }
+
     /// Whether Twitch issues a token and IGDB takes it, for an
     /// administrator trying the integration.
     ///
@@ -250,6 +275,13 @@ impl IgdbClient {
             .map(|_| ())
             .map_err(|_| ClientError::bad(CLIENT, "the answer was not IGDB's"))
     }
+}
+
+/// A game's cover, for its image id.
+#[derive(Deserialize)]
+struct Cover {
+    #[serde(default)]
+    image_id: Option<String>,
 }
 
 #[derive(Deserialize)]

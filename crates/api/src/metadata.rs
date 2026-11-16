@@ -58,6 +58,8 @@ pub struct Endpoints {
     pub tmdb: Url,
     /// IGDB's API and Twitch's token endpoint.
     pub igdb: igdb::Endpoints,
+    /// Where the providers keep their covers (ADR 0023).
+    pub artwork: tangible_integrations::artwork::Endpoints,
 }
 
 impl Endpoints {
@@ -77,6 +79,7 @@ impl Endpoints {
                 api: url(igdb::API_BASE),
                 token: url(igdb::TOKEN_URL),
             },
+            artwork: tangible_integrations::artwork::Endpoints::public(),
         }
     }
 }
@@ -231,6 +234,15 @@ const fn named(provider: &str) -> &'static str {
         b"igdb" => "IGDB",
         _ => "This provider",
     }
+}
+
+/// Why a cover's address could not be found (ADR 0023).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoverLookup {
+    /// The provider is not configured, or is off: try again later.
+    Unavailable(String),
+    /// It did not answer as it should.
+    Failed(String),
 }
 
 fn open_failed(provider: &'static str, error: &OpenError) -> SourceOutcome {
@@ -394,6 +406,73 @@ impl Metadata {
             found.candidates.extend(candidates);
         }
         found
+    }
+
+    /// The outbound client covers are fetched through.
+    #[must_use]
+    pub fn http(&self) -> &OutboundClient {
+        &self.inner.http
+    }
+
+    /// Where the provider `source` keeps the cover of the item it calls
+    /// `external_id` (ADR 0023): TMDB's poster, for a TMDB or IMDb id; the
+    /// Cover Art Archive's front, for a MusicBrainz release; IGDB's cover,
+    /// for a game. `Ok(None)` when it has none, or the id is not one.
+    ///
+    /// # Errors
+    ///
+    /// [`CoverLookup::Unavailable`] when the provider is not configured or
+    /// is off, [`CoverLookup::Failed`] when it did not answer as it should.
+    pub async fn cover_url(
+        &self,
+        database: &Database,
+        key: Option<&SecretKey>,
+        source: &str,
+        external_id: &str,
+    ) -> Result<Option<Url>, CoverLookup> {
+        let integrations = list_integrations(database.pool())
+            .await
+            .map_err(|_| CoverLookup::Failed("the integrations could not be read".to_owned()))?;
+        let configured = |kind: &str| integrations.iter().find(|record| record.kind == kind);
+        let context = Context {
+            database,
+            key,
+            query: "",
+        };
+        let unavailable = |outcome: SourceOutcome| {
+            CoverLookup::Unavailable(outcome.detail.unwrap_or_else(|| "not available".to_owned()))
+        };
+        let failed = |error: ClientError| CoverLookup::Failed(error.to_string());
+        let at = &self.inner.endpoints.artwork;
+        match source {
+            "tmdb" | "imdb" => {
+                let client = self
+                    .tmdb_client(&context, configured("tmdb"))
+                    .await
+                    .map_err(unavailable)?;
+                let poster = if source == "tmdb" {
+                    client.poster(external_id).await
+                } else {
+                    client.poster_for_imdb(external_id).await
+                }
+                .map_err(failed)?;
+                Ok(poster.and_then(|path| at.tmdb_poster(&path)))
+            }
+            "musicbrainz" => {
+                Self::usable(musicbrainz::PROVIDER, configured("musicbrainz"))
+                    .map_err(unavailable)?;
+                Ok(at.release_front(external_id))
+            }
+            "igdb" => {
+                let client = self
+                    .igdb_client(&context, configured("igdb"))
+                    .await
+                    .map_err(unavailable)?;
+                let image = client.cover(external_id).await.map_err(failed)?;
+                Ok(image.and_then(|id| at.igdb_cover(&id)))
+            }
+            _ => Ok(None),
+        }
     }
 
     /// The integration for `provider`, ready to use, or why not.

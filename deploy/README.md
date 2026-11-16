@@ -792,6 +792,12 @@ writes when it starts, so a worker older than the server lists nothing until
 it is updated, and the search then says sizes are not checked. The mark is a
 warning: a release may unpack smaller, or hold a set of discs.
 
+Requests, and what they bring into the library, show cover art: TMDB's
+poster, the Cover Art Archive's front for a MusicBrainz release, IGDB's
+cover. The server fetches each once through the same providers, checks it
+is an image, and serves it itself; your browser never contacts a provider.
+`TANGIBLE_ARTWORK=false` stops fetching (ADR 0023).
+
 Prowlarr's download links carry its API key: Tangible never shows, logs or
 audits them, and holds a search's links sealed with the secret key below,
 for the hour a release may be picked. A restart forgets them; search again.

@@ -11,10 +11,11 @@
 //!
 //! In place: exporting games to a RomM library as a managed folder view,
 //! RomM's API for what it made of them, the download clients, S3, the
-//! metadata providers a request is found through, Prowlarr, and the
-//! outbound client every fetch of an address somebody supplied goes through
+//! metadata providers a request is found through and their cover art,
+//! Prowlarr, and the outbound client every fetch of an address somebody supplied goes through
 //! (ADR 0016).
 
+pub mod artwork;
 pub mod download;
 pub mod fetch;
 pub mod metadata;

@@ -14,6 +14,7 @@
 //! `sqlx::AssertSqlSafe`, and each use here is that promise: keep it.
 
 pub mod accounts;
+pub mod artwork;
 pub mod audit;
 pub mod catalog_edits;
 pub mod changes;

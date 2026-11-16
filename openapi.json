@@ -976,6 +976,50 @@
         ]
       }
     },
+    "/api/v1/artwork/{artwork_id}": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "A cover, as fetched and checked.",
+        "description": "A cover, as Tangible fetched it from a provider and checked it to be a \\\n                   JPEG, PNG or WebP (ADR 0023). Served as its checked type and never sniffed; \\\n                   its address changes when it is fetched again, so it is kept as long as a \\\n                   browser likes. Anyone signed in.",
+        "operationId": "get_artwork",
+        "parameters": [
+          {
+            "name": "artwork_id",
+            "in": "path",
+            "description": "Artwork identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The image",
+            "content": {
+              "image/jpeg": {}
+            }
+          },
+          "404": {
+            "description": "No such cover",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/audit-events": {
       "get": {
         "tags": [
@@ -8893,6 +8937,17 @@
             "description": "Number of files.",
             "minimum": 0
           },
+          "cover": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CoverView",
+                "description": "Its cover, once fetched (ADR 0023): the cover of the request it\nfulfilled. Null without one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "deletion": {
             "oneOf": [
               {
@@ -9911,6 +9966,24 @@
           "sha256": {
             "type": "string",
             "description": "Content digest, as lowercase hex."
+          }
+        }
+      },
+      "CoverView": {
+        "type": "object",
+        "description": "A cover, as a page shows it.",
+        "required": [
+          "url",
+          "source"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": "The provider it came from: `tmdb`, `imdb`, `musicbrainz`, `igdb` or\n`libretro`."
+          },
+          "url": {
+            "type": "string",
+            "description": "Where Tangible serves it: `/api/v1/artwork/{id}?v=` and the start of\nits digest, so a cover fetched again is a new address."
           }
         }
       },
@@ -14605,6 +14678,17 @@
           "can_search": {
             "type": "boolean",
             "description": "Whether the caller may search for its releases, and grab one, now:\nan operator or administrator, once it is approved or its download\nfailed."
+          },
+          "cover": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CoverView",
+                "description": "Its cover, once fetched, from the provider it was found with (ADR\n0023); null until then, or without one."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "created_at": {
             "type": "string",

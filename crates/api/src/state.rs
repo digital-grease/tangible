@@ -93,6 +93,8 @@ struct Inner {
     /// Wakes the deletion runner, as "delete now" does (ADR 0022). Every
     /// clone of this state shares it.
     deletion_nudge: Arc<tokio::sync::Notify>,
+    /// Wakes the artwork runner, as a new request does (ADR 0023).
+    artwork_nudge: Arc<tokio::sync::Notify>,
 }
 
 /// How long a worker credential is used before rotation, unless configured.
@@ -153,6 +155,7 @@ impl ApiState {
                 events: crate::events::EventHub::new(),
                 deletion_grace_days: crate::deletion::DEFAULT_GRACE_DAYS,
                 deletion_nudge: Arc::new(tokio::sync::Notify::new()),
+                artwork_nudge: Arc::new(tokio::sync::Notify::new()),
             }),
         }
     }
@@ -190,6 +193,7 @@ impl ApiState {
                 events: crate::events::EventHub::new(),
                 deletion_grace_days: crate::deletion::DEFAULT_GRACE_DAYS,
                 deletion_nudge: Arc::new(tokio::sync::Notify::new()),
+                artwork_nudge: Arc::new(tokio::sync::Notify::new()),
             }),
         }
     }
@@ -290,6 +294,12 @@ impl ApiState {
     #[must_use]
     pub fn deletion_grace_days(&self) -> u32 {
         self.inner.deletion_grace_days
+    }
+
+    /// What wakes the artwork runner, when something wants a cover.
+    #[must_use]
+    pub fn artwork_nudge(&self) -> Arc<tokio::sync::Notify> {
+        Arc::clone(&self.inner.artwork_nudge)
     }
 
     /// What wakes the deletion runner: given to it when it starts, and

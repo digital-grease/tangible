@@ -182,6 +182,7 @@ async fn harness() -> Harness {
                 api: base("/v4/"),
                 token: base("/oauth2/token"),
             },
+            artwork: tangible_integrations::artwork::Endpoints::public(),
         },
     );
     let key = SecretKey::from_base64(&SecretKey::generate().unwrap()).unwrap();

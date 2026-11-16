@@ -285,6 +285,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/artwork/{artwork_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A cover, as fetched and checked.
+         * @description A cover, as Tangible fetched it from a provider and checked it to be a \
+         *                        JPEG, PNG or WebP (ADR 0023). Served as its checked type and never sniffed; \
+         *                        its address changes when it is fetched again, so it is kept as long as a \
+         *                        browser likes. Anyone signed in.
+         */
+        get: operations["get_artwork"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/audit-events": {
         parameters: {
             query?: never;
@@ -2638,6 +2661,7 @@ export interface components {
             best_match?: components["schemas"]["BestMatchView"] | null;
             /** @description Number of files. */
             component_count: number;
+            cover?: components["schemas"]["CoverView"] | null;
             deletion?: components["schemas"]["ArtifactDeletionView"] | null;
             /**
              * @description The disc it describes, as far as its manifest says, for a drawing of
@@ -3106,6 +3130,19 @@ export interface components {
             role: string;
             /** @description Content digest, as lowercase hex. */
             sha256: string;
+        };
+        /** @description A cover, as a page shows it. */
+        CoverView: {
+            /**
+             * @description The provider it came from: `tmdb`, `imdb`, `musicbrainz`, `igdb` or
+             *     `libretro`.
+             */
+            source: string;
+            /**
+             * @description Where Tangible serves it: `/api/v1/artwork/{id}?v=` and the start of
+             *     its digest, so a cover fetched again is a new address.
+             */
+            url: string;
         };
         /** @description What an operator sends to queue a burn. */
         CreateBurnJobRequest: {
@@ -5255,6 +5292,7 @@ export interface components {
              *     failed.
              */
             can_search: boolean;
+            cover?: components["schemas"]["CoverView"] | null;
             /** @description When it was asked for. */
             created_at: string;
             /** @description When. */
@@ -6783,6 +6821,38 @@ export interface operations {
             };
             /** @description The artifact is deleted (ARTIFACT_DELETED) */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_artwork: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Artwork identifier */
+                artwork_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The image */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": unknown;
+                };
+            };
+            /** @description No such cover */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

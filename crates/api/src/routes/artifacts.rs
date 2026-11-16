@@ -66,6 +66,9 @@ pub struct ArtifactSummary {
     /// The request it fulfilled, if it fulfilled one: what the item is, as
     /// its requester named it.
     pub request: Option<RequestLinkView>,
+    /// Its cover, once fetched (ADR 0023): the cover of the request it
+    /// fulfilled. Null without one.
+    pub cover: Option<crate::artwork::CoverView>,
     /// Whether anything structural is worth an operator's attention.
     ///
     /// Surfaced in the summary so a damaged artifact is visible in a list
@@ -217,6 +220,7 @@ impl From<&ArtifactManifest> for ArtifactSummary {
             source_filename: manifest.origin.source_filename.clone(),
             source_name: manifest.origin.source_filename.clone(),
             request: None,
+            cover: None,
             has_warnings: !manifest.validation.validators.is_empty(),
             integrity_state: "unchecked".to_owned(),
             integrity_checked_at: None,
@@ -283,11 +287,21 @@ async fn with_integrity(state: &ApiState, summaries: &mut [ArtifactSummary]) {
     }
     match tangible_db::requests::requests_of_artifacts(state.database().pool(), &ids).await {
         Ok(mut found) => {
+            let mut wanted = Vec::with_capacity(summaries.len());
             for summary in summaries.iter_mut() {
-                summary.request = uuid::Uuid::parse_str(&summary.id)
+                let link = uuid::Uuid::parse_str(&summary.id)
                     .ok()
-                    .and_then(|id| found.remove(&id))
-                    .map(RequestLinkView::from);
+                    .and_then(|id| found.remove(&id));
+                wanted.push(
+                    link.as_ref()
+                        .and_then(|link| crate::artwork::preferred(&link.refs)),
+                );
+                summary.request = link.map(RequestLinkView::from);
+            }
+            let keys: Vec<(String, String)> = wanted.iter().flatten().cloned().collect();
+            let covers = crate::artwork::covers_for(state, &keys).await;
+            for (summary, key) in summaries.iter_mut().zip(wanted) {
+                summary.cover = key.and_then(|key| covers.get(&key).cloned());
             }
         }
         Err(error) => tracing::warn!(error = ?error, "requests could not be read"),

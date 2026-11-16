@@ -304,6 +304,17 @@ pub struct ServeConfig {
     )]
     pub worker_credential_max_age_days: u32,
 
+    /// Whether covers are fetched from the metadata providers and libretro
+    /// (ADR 0023). `false` fetches nothing; covers already fetched are still
+    /// shown.
+    #[arg(
+        long,
+        env = "TANGIBLE_ARTWORK",
+        default_value_t = true,
+        action = clap::ArgAction::Set
+    )]
+    pub artwork: bool,
+
     /// Days an artifact asked to be deleted stays pending, and can be kept,
     /// before its bytes are removed, up to 3650 (ADR 0020). 0 removes them
     /// at the next pass, within a quarter of an hour.
@@ -682,6 +693,7 @@ mod tests {
         assert_eq!(parse().scrub_interval_days, 0);
         assert_eq!(parse().worker_credential_max_age_days, 90);
         assert_eq!(parse().deletion_grace_days, 7);
+        assert!(parse().artwork, "covers are fetched unless turned off");
         let cli = TestCli::try_parse_from(["tangible", "--scrub-interval-days", "30"])
             .expect("a month parses");
         assert_eq!(cli.serve.scrub_interval_days, 30);

@@ -307,7 +307,7 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         .into_iter()
         .flatten()
         .chain(readers)
-        .chain(start_deletions(&state))
+        .chain(start_upkeep(&state, serve))
         .collect();
     serve_until_shutdown(serve, state, runners).await
 }
@@ -588,6 +588,30 @@ fn with_policies(state: ApiState, serve: &ServeConfig) -> ApiState {
         .with_decryption_allowed(serve.allow_decryption)
         .with_worker_credential_max_age_days(serve.worker_credential_max_age_days)
         .with_deletion_grace_days(serve.deletion_grace_days)
+}
+
+/// Start the runners that keep the library tidy and dressed: deletions
+/// (ADR 0020) and cover art (ADR 0023).
+fn start_upkeep(state: &ApiState, serve: &ServeConfig) -> impl Iterator<Item = Stoppable> {
+    start_deletions(state)
+        .into_iter()
+        .chain(start_artwork(state, serve.artwork))
+}
+
+/// Start the runner that fetches covers (ADR 0023), unless
+/// `TANGIBLE_ARTWORK=false`; covers already fetched are served either way.
+fn start_artwork(state: &ApiState, enabled: bool) -> Option<Stoppable> {
+    if !enabled {
+        tracing::info!("cover art is not fetched (TANGIBLE_ARTWORK=false)");
+        return None;
+    }
+    state.metadata()?;
+    let runner = tangible_api::artwork::ArtworkRunner::new(state.clone());
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(runner.run(async {
+        let _ = stopped.await;
+    }));
+    Some((stop, task))
 }
 
 /// Start the runner that makes artifacts due for deletion into tombstones
@@ -1504,6 +1528,7 @@ mod tests {
     /// Every other variable, each one looked at and found not to be secret.
     const PUBLIC_ENV: &[&str] = &[
         "TANGIBLE_ALLOW_DECRYPTION",
+        "TANGIBLE_ARTWORK",
         "TANGIBLE_BIND",
         "TANGIBLE_BLOCK_DEVICE",
         "TANGIBLE_BUILD_REVISION",

@@ -81,6 +81,16 @@ impl TmdbClient {
     }
 
     async fn get(&self, path: &str, query: &[(&str, &str)]) -> Result<String, ClientError> {
+        let (status, text) = self.send(path, query).await?;
+        match status {
+            200 => Ok(text),
+            code => Err(ClientError::bad(CLIENT, format!("{path} answered {code}"))),
+        }
+    }
+
+    /// `path`'s answer and its status, 200 or 404; anything else is an
+    /// error, a wrong token or being asked to slow down said so.
+    async fn send(&self, path: &str, query: &[(&str, &str)]) -> Result<(u16, String), ClientError> {
         let mut url = self
             .base
             .join(path)
@@ -101,7 +111,7 @@ impl TmdbClient {
         let status = response.status().as_u16();
         let text = read_text_within(CLIENT, response, MAX_ANSWER_BYTES).await?;
         match status {
-            200 => Ok(text),
+            200 | 404 => Ok((status, text)),
             401 => Err(ClientError::Auth {
                 client: CLIENT,
                 reason: "the read access token is wrong or revoked (it is the long API Read \
@@ -167,6 +177,58 @@ impl TmdbClient {
         parse_find(&text, &imdb)
     }
 
+    /// The poster TMDB keeps for `reference` (`movie/<id>` or `tv/<id>`),
+    /// as its image service names it (`/abc.jpg`). None when TMDB has no
+    /// such title or no poster for it, or the reference is not one.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`].
+    pub async fn poster(&self, reference: &str) -> Result<Option<String>, ClientError> {
+        let Some((kind, id)) = reference.split_once('/') else {
+            return Ok(None);
+        };
+        if !matches!(kind, "movie" | "tv")
+            || id.is_empty()
+            || !id.bytes().all(|b| b.is_ascii_digit())
+        {
+            return Ok(None);
+        }
+        let (status, text) = self.send(&format!("{kind}/{id}"), &[]).await?;
+        if status == 404 {
+            return Ok(None);
+        }
+        let titled: Titled = serde_json::from_str(&text)
+            .map_err(|_| ClientError::bad(CLIENT, "the answer was not a title's"))?;
+        Ok(titled.poster_path.filter(|path| is_image_path(path)))
+    }
+
+    /// The poster of what an IMDb title ID names, a film before a series.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`].
+    pub async fn poster_for_imdb(&self, imdb: &str) -> Result<Option<String>, ClientError> {
+        let Some(imdb) = imdb_id(imdb) else {
+            return Ok(None);
+        };
+        let text = self
+            .get(&format!("find/{imdb}"), &[("external_source", "imdb_id")])
+            .await?;
+        let found: Found = serde_json::from_str(&text).map_err(|_| unreadable())?;
+        Ok(found
+            .movie_results
+            .iter()
+            .filter_map(|movie| movie.poster_path.clone())
+            .chain(
+                found
+                    .tv_results
+                    .iter()
+                    .filter_map(|show| show.poster_path.clone()),
+            )
+            .find(|path| is_image_path(path)))
+    }
+
     /// Whether the token opens TMDB, for an administrator trying the
     /// integration.
     ///
@@ -189,9 +251,28 @@ struct Page<T> {
     results: Vec<T>,
 }
 
+/// A poster path as TMDB's image service names one: `/` and a file name.
+fn is_image_path(path: &str) -> bool {
+    path.len() > 1
+        && path.len() <= 100
+        && path.starts_with('/')
+        && path[1..]
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
+}
+
+/// A film or a series, for its poster.
+#[derive(Deserialize)]
+struct Titled {
+    #[serde(default)]
+    poster_path: Option<String>,
+}
+
 #[derive(Deserialize)]
 struct Movie {
     id: u64,
+    #[serde(default)]
+    poster_path: Option<String>,
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
@@ -203,6 +284,8 @@ struct Movie {
 #[derive(Deserialize)]
 struct Show {
     id: u64,
+    #[serde(default)]
+    poster_path: Option<String>,
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]

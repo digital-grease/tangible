@@ -150,6 +150,9 @@ pub struct RequestView {
     /// an operator or administrator, once it is approved or its download
     /// failed.
     pub can_search: bool,
+    /// Its cover, once fetched, from the provider it was found with (ADR
+    /// 0023); null until then, or without one.
+    pub cover: Option<crate::artwork::CoverView>,
 }
 
 pub(crate) fn rfc3339(at: time::OffsetDateTime) -> String {
@@ -195,6 +198,7 @@ impl RequestView {
             can_decline: decides && record.state.can_become(RequestState::Declined),
             can_cancel: (decides || own) && record.state.can_become(RequestState::Canceled),
             can_search: decides && record.state.may_grab(),
+            cover: None,
         }
     }
 }
@@ -490,6 +494,8 @@ pub async fn create_one_request(
         by = %user.username,
         "item requested"
     );
+    // Its cover, if what it was found with has one (ADR 0023).
+    state.artwork_nudge().notify_one();
     Ok((StatusCode::CREATED, Json(RequestView::of(record, &user))).into_response())
 }
 
@@ -549,13 +555,12 @@ pub async fn list_all_requests(
             .last()
             .map(|record| encode_cursor(&record.id.to_string()))
     };
-    Ok(Json(RequestPage {
-        items: records
-            .into_iter()
-            .map(|record| RequestView::of(record, &user))
-            .collect(),
-        next_cursor,
-    }))
+    let mut items: Vec<RequestView> = records
+        .into_iter()
+        .map(|record| RequestView::of(record, &user))
+        .collect();
+    crate::artwork::with_request_covers(&state, &mut items).await;
+    Ok(Json(RequestPage { items, next_cursor }))
 }
 
 /// One request.
@@ -585,7 +590,10 @@ pub async fn get_one_request(
         .map_err(|error| unavailable(&error))?
         .filter(|record| scope_of(&user).is_none_or(|own| record.requester_id == own))
         .ok_or_else(|| Problem::not_found("request", &id.to_string()))?;
-    Ok(Json(RequestView::of(record, &user)))
+    let mut view = [RequestView::of(record, &user)];
+    crate::artwork::with_request_covers(&state, &mut view).await;
+    let [view] = view;
+    Ok(Json(view))
 }
 
 /// Approve a request, so a release for it may be searched for.
