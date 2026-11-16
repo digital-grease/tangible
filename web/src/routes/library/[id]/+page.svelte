@@ -15,6 +15,7 @@
   import Integrity from '$lib/components/Integrity.svelte';
   import Lineage from '$lib/components/Lineage.svelte';
   import Badge from '$lib/components/ui/Badge.svelte';
+  import Cover from '$lib/components/ui/Cover.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import Disc from '$lib/components/ui/Disc.svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
@@ -115,7 +116,11 @@
     {@const refusal = notBurnedAsItIs(artifact)}
     {@const burnable = !deleted && !pending && !refusal}
 
+    {#snippet coverArt()}
+      {#if artifact.cover}<Cover url={artifact.cover.url} size="large" />{/if}
+    {/snippet}
     <PageHeader
+      art={artifact.cover ? coverArt : undefined}
       title={artifactName(artifact) ?? 'Artifact'}
       crumbs={[
         { label: 'Library', href: '/library' },

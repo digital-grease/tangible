@@ -7,6 +7,7 @@
   // describes (from its disc shape; a plain disc where that is not known).
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import Button from '$lib/components/ui/Button.svelte';
+  import Cover from '$lib/components/ui/Cover.svelte';
   import Disc from '$lib/components/ui/Disc.svelte';
   import EmptyState from '$lib/components/ui/EmptyState.svelte';
   import Icon from '$lib/components/ui/Icon.svelte';
@@ -233,7 +234,11 @@
             <tr>
               <th scope="row">
                 <div class="artifact">
-                  <Disc shape={artifact.disc_shape} size={28} hole="var(--surface)" />
+                  {#if artifact.cover}
+                    <Cover url={artifact.cover.url} />
+                  {:else}
+                    <Disc shape={artifact.disc_shape} size={28} hole="var(--surface)" />
+                  {/if}
                   <div class="names">
                     <a href={`/library/${artifact.id}`}
                       >{artifactName(artifact) ?? `Artifact ${shortId(artifact.id)}`}</a

@@ -8,6 +8,7 @@
   import { watch } from '$lib/events';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import Button from '$lib/components/ui/Button.svelte';
+  import Cover from '$lib/components/ui/Cover.svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Panel from '$lib/components/ui/Panel.svelte';
   import Select from '$lib/components/ui/Select.svelte';
@@ -127,8 +128,13 @@
           {#each view.items as request (request.id)}
             <tr>
               <th scope="row">
-                <a href={`/requests/${request.id}`}>{request.title}</a>
-                <span class="sub">{detailLine(request)}</span>
+                <div class="item">
+                  {#if request.cover}<Cover url={request.cover.url} />{/if}
+                  <div>
+                    <a href={`/requests/${request.id}`}>{request.title}</a>
+                    <span class="sub">{detailLine(request)}</span>
+                  </div>
+                </div>
               </th>
               <td>{request.requested_by}</td>
               <td>
@@ -163,6 +169,11 @@
   .filters {
     max-width: 18rem;
     margin-bottom: var(--space-4);
+  }
+  .item {
+    display: flex;
+    gap: var(--space-2);
+    align-items: center;
   }
   .sub {
     display: block;

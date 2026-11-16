@@ -12,6 +12,7 @@
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import ReleaseSearch from '$lib/components/ReleaseSearch.svelte';
   import Button from '$lib/components/ui/Button.svelte';
+  import Cover from '$lib/components/ui/Cover.svelte';
   import Confirm from '$lib/components/ui/Confirm.svelte';
   import Field from '$lib/components/ui/Field.svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
@@ -152,7 +153,11 @@
     level={1}
   />
 {:else if request}
+  {#snippet coverArt()}
+    {#if request.cover}<Cover url={request.cover.url} size="large" />{/if}
+  {/snippet}
   <PageHeader
+    art={request.cover ? coverArt : undefined}
     title={request.title}
     crumbs={[{ label: 'Requests', href: '/requests' }, { label: request.title }]}
   >

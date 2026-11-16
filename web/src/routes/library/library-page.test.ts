@@ -109,6 +109,39 @@ describe('Library page, naming artifacts', () => {
   });
 });
 
+describe('Library page, covers', () => {
+  it('shows a cover where there is one, and the disc drawing where not', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          ({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              items: [
+                summary('covered', {
+                  source_filename: 'hackers.iso',
+                  cover: { url: '/api/v1/artwork/a1?v=abcdef012345', source: 'tmdb' },
+                }),
+                summary('bare', { source_filename: 'debian.iso' }),
+              ],
+              next_cursor: null,
+            }),
+            headers: new Headers(),
+          }) as Response,
+      ),
+    );
+    const { container } = render(LibraryPage);
+    await screen.findByRole('link', { name: 'hackers.iso' });
+    const covers = container.querySelectorAll('img.cover');
+    expect(covers.length).toBe(1);
+    expect(covers[0]?.getAttribute('src')).toBe('/api/v1/artwork/a1?v=abcdef012345');
+    // Beside its name, so said once: no alt text of its own.
+    expect(covers[0]?.getAttribute('alt')).toBe('');
+  });
+});
+
 describe('Library filters', () => {
   function server(pages: Record<string, unknown[]>): string[] {
     const asked: string[] = [];

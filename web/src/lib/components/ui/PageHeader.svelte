@@ -20,6 +20,7 @@
     description,
     actions,
     badges,
+    art,
   }: {
     title: string;
     crumbs?: Crumb[];
@@ -27,6 +28,8 @@
     actions?: Snippet;
     /** Marks and badges under the title, such as a state. */
     badges?: Snippet;
+    /** An image beside the title, such as a cover. */
+    art?: Snippet;
   } = $props();
 </script>
 
@@ -44,12 +47,17 @@
       </ol>
     </nav>
   {/if}
-  <div class="row">
-    <h1>{title}</h1>
-    {#if actions}<div class="actions">{@render actions()}</div>{/if}
+  <div class:with-art={!!art}>
+    {#if art}<div class="art">{@render art()}</div>{/if}
+    <div class="text">
+      <div class="row">
+        <h1>{title}</h1>
+        {#if actions}<div class="actions">{@render actions()}</div>{/if}
+      </div>
+      {#if badges}<div class="badges">{@render badges()}</div>{/if}
+      {#if description}<p class="description">{description}</p>{/if}
+    </div>
   </div>
-  {#if badges}<div class="badges">{@render badges()}</div>{/if}
-  {#if description}<p class="description">{description}</p>{/if}
 </header>
 
 <style>
@@ -72,6 +80,15 @@
   }
   li a {
     color: var(--text-muted);
+  }
+  .with-art {
+    display: flex;
+    gap: var(--space-4);
+    align-items: flex-start;
+  }
+  .with-art .text {
+    flex: 1;
+    min-width: 0;
   }
   .row {
     display: flex;

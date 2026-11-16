@@ -310,6 +310,36 @@ describe('Finding an item to ask for', () => {
   });
 });
 
+describe('Request covers', () => {
+  const COVER = { url: '/api/v1/artwork/c1?v=abcdef012345', source: 'tmdb' };
+
+  it("shows a request's cover in the list", async () => {
+    server({
+      '/api/v1/requests?limit=50': {
+        status: 200,
+        body: { items: [request({ cover: COVER }), request({ id: 'q2', title: 'Other' })] },
+      },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    const { container } = render(RequestsPage);
+    await screen.findByRole('link', { name: 'Some Game' });
+    const covers = container.querySelectorAll('img.cover');
+    expect(covers.length).toBe(1);
+    expect(covers[0]?.getAttribute('src')).toBe(COVER.url);
+    expect(await axeViolations(container)).toEqual([]);
+  });
+
+  it("shows it large beside the title on the request's page", async () => {
+    server({
+      '/api/v1/requests/q1': { status: 200, body: request({ cover: COVER }) },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    const { container } = render(RequestPage);
+    expect(await screen.findByRole('heading', { level: 1, name: 'Some Game' })).toBeTruthy();
+    expect(container.querySelector('header img.cover.large')?.getAttribute('src')).toBe(COVER.url);
+  });
+});
+
 describe('A request', () => {
   it('shows a requester what they asked for and lets them withdraw it', async () => {
     const asked = server({

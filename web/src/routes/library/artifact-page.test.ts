@@ -182,6 +182,27 @@ describe('Artifact page', () => {
     expect(screen.queryByText('Requested as')).toBeNull();
   });
 
+  it('shows its cover beside its name, and none where it has none', async () => {
+    serve(
+      artifact({
+        request: { id: 'q9', title: 'Hackers', kind: 'movie' },
+        cover: { url: '/api/v1/artwork/c1?v=abcdef012345', source: 'tmdb' },
+      }),
+    );
+    const { container } = render(ArtifactPage);
+    expect(await screen.findByRole('heading', { level: 1, name: 'Hackers' })).toBeTruthy();
+    const cover = container.querySelector('header img.cover.large');
+    expect(cover?.getAttribute('src')).toBe('/api/v1/artwork/c1?v=abcdef012345');
+  });
+
+  it('shows no cover space for an artifact without one', async () => {
+    serve(artifact());
+    const { container } = render(ArtifactPage);
+    await screen.findByRole('heading', { name: 'Summary' });
+    expect(container.querySelector('header img.cover')).toBeNull();
+    expect(container.querySelector('header .art')).toBeNull();
+  });
+
   it('says nothing about ripping for an upload', async () => {
     serve(artifact({ source_kind: 'upload' }));
     render(ArtifactPage);
