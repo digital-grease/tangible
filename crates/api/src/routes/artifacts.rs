@@ -67,7 +67,8 @@ pub struct ArtifactSummary {
     /// its requester named it.
     pub request: Option<RequestLinkView>,
     /// Its cover, once fetched (ADR 0023): one picked by hand, or else the
-    /// cover of the request it fulfilled. Null without one.
+    /// cover of the request it fulfilled, or else, for a game a loaded DAT
+    /// matches exactly, libretro's box art. Null without one.
     pub cover: Option<crate::artwork::CoverView>,
     /// Whether its cover was picked by hand, and so can be removed.
     pub cover_picked: bool,
@@ -234,6 +235,56 @@ impl From<&ArtifactManifest> for ArtifactSummary {
     }
 }
 
+/// Fill in the request each artifact fulfilled, and its cover (ADR 0023):
+/// one picked by hand, or else its request's, or else, for a game a loaded
+/// DAT matches exactly, libretro's box art. Needs the best matches filled.
+async fn with_requests_and_covers(
+    state: &ApiState,
+    summaries: &mut [ArtifactSummary],
+    ids: &[uuid::Uuid],
+) {
+    let pool = state.database().pool();
+    let mut requests = tangible_db::requests::requests_of_artifacts(pool, ids)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(error = ?error, "requests could not be read");
+            std::collections::HashMap::new()
+        });
+    let picked = tangible_db::artwork::picked_artwork(pool, ids)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(error = ?error, "picked covers could not be read");
+            std::collections::HashMap::new()
+        });
+    let mut wanted = Vec::with_capacity(summaries.len());
+    for summary in summaries.iter_mut() {
+        let id = uuid::Uuid::parse_str(&summary.id).ok();
+        let link = id.and_then(|id| requests.remove(&id));
+        let from_request = link
+            .as_ref()
+            .and_then(|link| crate::artwork::preferred(&link.refs));
+        summary.request = link.map(RequestLinkView::from);
+        let pick = id.and_then(|id| picked.get(&id)).cloned();
+        summary.cover_picked = pick.is_some();
+        let box_art = || {
+            summary
+                .best_match
+                .as_ref()
+                .filter(|best| best.kind == "exact")
+                .and_then(|best| {
+                    tangible_integrations::artwork::libretro_key(&best.dat_name, &best.game_name)
+                })
+                .map(|key| ("libretro".to_owned(), key))
+        };
+        wanted.push(pick.or(from_request).or_else(box_art));
+    }
+    let keys: Vec<(String, String)> = wanted.iter().flatten().cloned().collect();
+    let covers = crate::artwork::covers_for(state, &keys).await;
+    for (summary, key) in summaries.iter_mut().zip(wanted) {
+        summary.cover = key.and_then(|key| covers.get(&key).cloned());
+    }
+}
+
 /// Fill in what integrity checks found, the best DAT match, what its import
 /// called it and the request it fulfilled, from the catalogue. A database
 /// that cannot answer leaves them unchecked, unmatched and unnamed rather
@@ -288,43 +339,7 @@ async fn with_integrity(state: &ApiState, summaries: &mut [ArtifactSummary]) {
         }
         Err(error) => tracing::warn!(error = ?error, "import names could not be read"),
     }
-    match tangible_db::requests::requests_of_artifacts(state.database().pool(), &ids).await {
-        Ok(mut found) => {
-            let mut wanted = Vec::with_capacity(summaries.len());
-            for summary in summaries.iter_mut() {
-                let link = uuid::Uuid::parse_str(&summary.id)
-                    .ok()
-                    .and_then(|id| found.remove(&id));
-                wanted.push(
-                    link.as_ref()
-                        .and_then(|link| crate::artwork::preferred(&link.refs)),
-                );
-                summary.request = link.map(RequestLinkView::from);
-            }
-            // A cover picked by hand comes first.
-            let picked = tangible_db::artwork::picked_artwork(state.database().pool(), &ids)
-                .await
-                .unwrap_or_else(|error| {
-                    tracing::warn!(error = ?error, "picked covers could not be read");
-                    std::collections::HashMap::new()
-                });
-            for (summary, key) in summaries.iter_mut().zip(wanted.iter_mut()) {
-                if let Some(pick) = uuid::Uuid::parse_str(&summary.id)
-                    .ok()
-                    .and_then(|id| picked.get(&id))
-                {
-                    summary.cover_picked = true;
-                    *key = Some(pick.clone());
-                }
-            }
-            let keys: Vec<(String, String)> = wanted.iter().flatten().cloned().collect();
-            let covers = crate::artwork::covers_for(state, &keys).await;
-            for (summary, key) in summaries.iter_mut().zip(wanted) {
-                summary.cover = key.and_then(|key| covers.get(&key).cloned());
-            }
-        }
-        Err(error) => tracing::warn!(error = ?error, "requests could not be read"),
-    }
+    with_requests_and_covers(state, summaries, &ids).await;
     match tangible_db::library::deletions_of(state.database().pool(), &ids).await {
         Ok(mut found) => {
             for summary in summaries {

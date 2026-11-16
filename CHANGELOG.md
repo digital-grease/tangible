@@ -73,7 +73,9 @@ may change between minor versions, and the release notes say how.
   pages and request pages show them. Any other artifact's cover can be
   picked on its page ("Find cover art…") from the metadata providers'
   search, by an operator or administrator (`PUT` and `DELETE
-  /api/v1/artifacts/{id}/artwork`); migration 0039 keeps the picks.
+  /api/v1/artifacts/{id}/artwork`); migration 0039 keeps the picks. A game
+  a loaded DAT matches exactly gets libretro's box art, by the DAT's system
+  and game names, with no key.
 - "Report an issue" at the foot of the sidebar, where reports are on:
   GitHub's bug form, filled in by the server with the build and the page
   you were on, shown for review before it is opened, as other reports are

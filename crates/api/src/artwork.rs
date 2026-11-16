@@ -28,9 +28,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use tangible_db::artwork::{
     DueArtwork, Picked, ReadyArtwork, artwork_image, artwork_not_fetched, artwork_ready,
-    due_artwork, pick_artwork, ready_artwork, requests_references, unpick_artwork, want_artwork,
+    due_artwork, exact_dat_games, pick_artwork, ready_artwork, requests_references, unpick_artwork,
+    want_artwork,
 };
-use tangible_integrations::artwork::{ArtworkError, fetch_image};
+use tangible_integrations::artwork::{ArtworkError, fetch_image, libretro_key};
 use tokio::sync::Notify;
 use utoipa::ToSchema;
 
@@ -223,8 +224,8 @@ impl ArtworkRunner {
         }
     }
 
-    /// One pass: want the covers requests name, then fetch a batch of those
-    /// due.
+    /// One pass: want the covers requests name and the box art of games
+    /// DATs match exactly, then fetch a batch of those due.
     ///
     /// # Errors
     ///
@@ -232,11 +233,19 @@ impl ArtworkRunner {
     pub async fn pass(&self) -> Result<ArtworkPass, tangible_db::DbError> {
         let pool = self.state.database().pool();
         let mut pass = ArtworkPass::default();
-        let wanted: Vec<(String, String)> = requests_references(pool)
+        let mut wanted: Vec<(String, String)> = requests_references(pool)
             .await?
             .iter()
             .filter_map(preferred)
             .collect();
+        // The box art of every game a loaded DAT matches exactly.
+        wanted.extend(
+            exact_dat_games(pool)
+                .await?
+                .iter()
+                .filter_map(|(system, game)| libretro_key(system, game))
+                .map(|key| ("libretro".to_owned(), key)),
+        );
         pass.wanted = want_artwork(pool, &wanted).await?;
         let Some(metadata) = self.state.metadata() else {
             return Ok(pass);

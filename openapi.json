@@ -9039,7 +9039,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/CoverView",
-                "description": "Its cover, once fetched (ADR 0023): one picked by hand, or else the\ncover of the request it fulfilled. Null without one."
+                "description": "Its cover, once fetched (ADR 0023): one picked by hand, or else the\ncover of the request it fulfilled, or else, for a game a loaded DAT\nmatches exactly, libretro's box art. Null without one."
               },
               {
                 "type": "null"

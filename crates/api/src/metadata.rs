@@ -417,7 +417,7 @@ impl Metadata {
     /// Where the provider `source` keeps the cover of the item it calls
     /// `external_id` (ADR 0023): TMDB's poster, for a TMDB or IMDb id; the
     /// Cover Art Archive's front, for a MusicBrainz release; IGDB's cover,
-    /// for a game. `Ok(None)` when it has none, or the id is not one.
+    /// for a game; libretro's box art, for a DAT's game. `Ok(None)` when it has none, or the id is not one.
     ///
     /// # Errors
     ///
@@ -471,6 +471,8 @@ impl Metadata {
                 let image = client.cover(external_id).await.map_err(failed)?;
                 Ok(image.and_then(|id| at.igdb_cover(&id)))
             }
+            // A DAT game's box art: no configuration, and nothing to look up.
+            "libretro" => Ok(at.libretro_box_art(external_id)),
             _ => Ok(None),
         }
     }

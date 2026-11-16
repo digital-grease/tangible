@@ -372,3 +372,23 @@ pub async fn picked_artwork(
         .map(|(artifact, source, external_id)| (artifact, (source, external_id)))
         .collect())
 }
+
+/// Every exact DAT match's DAT and game names, each pair once: the box art
+/// libretro keeps for them (ADR 0023 A4).
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn exact_dat_games(pool: &PgPool) -> Result<Vec<(String, String)>, DbError> {
+    sqlx::query_as(
+        "SELECT DISTINCT d.name, g.name
+         FROM artifact_dat_matches m
+         JOIN dat_games g ON g.id = m.game_id
+         JOIN dat_files d ON d.id = g.dat_id
+         JOIN artifacts a ON a.id = m.artifact_id
+         WHERE m.kind = 'exact' AND a.deleted_at IS NULL",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(DbError::Query)
+}

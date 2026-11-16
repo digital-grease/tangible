@@ -796,6 +796,9 @@ Requests, and what they bring into the library, show cover art: TMDB's
 poster, the Cover Art Archive's front for a MusicBrainz release, IGDB's
 cover. The server fetches each once through the same providers, checks it
 is an image, and serves it itself; your browser never contacts a provider.
+An artifact's cover can also be picked on its page ("Find cover art…"), and
+a game a loaded DAT matches exactly gets libretro's box art from
+`thumbnails.libretro.com`, which needs no key but learns the games' names.
 `TANGIBLE_ARTWORK=false` stops fetching (ADR 0023).
 
 Prowlarr's download links carry its API key: Tangible never shows, logs or

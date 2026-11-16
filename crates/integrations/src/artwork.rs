@@ -70,6 +70,24 @@ impl Endpoints {
             .ok()
     }
 
+    /// libretro's box art for the key [`libretro_key`] made:
+    /// `<system>/Named_Boxarts/<name>.png`, each part percent-encoded.
+    #[must_use]
+    pub fn libretro_box_art(&self, key: &str) -> Option<Url> {
+        let (system, name) = key.split_once('/')?;
+        if system.is_empty() || name.is_empty() {
+            return None;
+        }
+        let mut url = self.libretro.clone();
+        url.path_segments_mut()
+            .ok()?
+            .pop_if_empty()
+            .push(system)
+            .push("Named_Boxarts")
+            .push(&format!("{name}.png"));
+        Some(url)
+    }
+
     /// IGDB's cover image `image_id`, at its cover size.
     #[must_use]
     pub fn igdb_cover(&self, image_id: &str) -> Option<Url> {
@@ -80,6 +98,31 @@ impl Endpoints {
             .join(&format!("t_cover_big/{image_id}.jpg"))
             .ok()
     }
+}
+
+/// A game's name as libretro names its thumbnail file: each of
+/// `&*/:\`<>?\|"` replaced by `_`, as libretro's thumbnail repositories do.
+#[must_use]
+pub fn libretro_name(game: &str) -> String {
+    game.chars()
+        .map(|c| if "&*/:`<>?\\|\"".contains(c) { '_' } else { c })
+        .collect()
+}
+
+/// The artwork key for a DAT game's box art: its DAT's name (libretro's
+/// system, such as `Sony - PlayStation`), `/`, and the game's libretro
+/// name. None when either is empty, carries a control character, or the
+/// key would be over 500 characters.
+#[must_use]
+pub fn libretro_key(system: &str, game: &str) -> Option<String> {
+    let system = system.trim();
+    let name = libretro_name(game.trim());
+    let clean = |text: &str| !text.is_empty() && !text.chars().any(char::is_control);
+    if !clean(system) || system.contains('/') || !clean(&name) {
+        return None;
+    }
+    let key = format!("{system}/{name}");
+    (key.chars().count() <= 500).then_some(key)
 }
 
 /// A MusicBrainz id, lowercased: 36 characters, hex digits with hyphens
@@ -252,4 +295,30 @@ mod tests {
         assert!(at.igdb_cover("").is_none());
     }
 
+    #[test]
+    fn a_dat_game_has_its_box_art_where_libretro_keeps_it() {
+        assert_eq!(
+            libretro_name("Tom & Jerry: Fists of Furry? <USA> \"Rev 1\" a/b\\c|d*e`f"),
+            "Tom _ Jerry_ Fists of Furry_ _USA_ _Rev 1_ a_b_c_d_e_f"
+        );
+        let key = libretro_key("Sony - PlayStation", "Crash Bandicoot (USA)").unwrap();
+        assert_eq!(key, "Sony - PlayStation/Crash Bandicoot (USA)");
+        assert_eq!(
+            Endpoints::public().libretro_box_art(&key).unwrap().as_str(),
+            "https://thumbnails.libretro.com/Sony%20-%20PlayStation/Named_Boxarts/Crash%20Bandicoot%20(USA).png"
+        );
+        // A name's own slash cannot become a path.
+        let slashed = libretro_key("Nintendo - Game Boy", "A/B (World)").unwrap();
+        assert!(
+            Endpoints::public()
+                .libretro_box_art(&slashed)
+                .unwrap()
+                .as_str()
+                .ends_with("/Named_Boxarts/A_B%20(World).png")
+        );
+        for (system, game) in [("", "x"), ("Sony", ""), ("A/B", "x"), ("Sony", "x\ny")] {
+            assert_eq!(libretro_key(system, game), None, "{system:?} {game:?}");
+        }
+        assert_eq!(libretro_key("S", &"x".repeat(600)), None);
+    }
 }

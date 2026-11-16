@@ -87,6 +87,10 @@ async fn answer(uri: Uri, headers: axum::http::HeaderMap) -> axum::response::Res
         )
             .into_response();
     }
+    // libretro's box art, by system and game.
+    if path.starts_with("/libretro/") && path.contains("/Named_Boxarts/") {
+        return (StatusCode::OK, [("content-type", "image/png")], PNG).into_response();
+    }
     if path == "/archive/front.jpg" {
         return (StatusCode::OK, [("content-type", "image/jpeg")], JPEG).into_response();
     }
@@ -486,4 +490,65 @@ async fn a_cover_is_picked_by_hand_fetched_and_removed() {
     .unwrap();
     assert_eq!(actions, ["artifact.cover_picked", "artifact.cover_removed"]);
     remove_providers(&harness.pool).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_game_a_dat_matches_exactly_gets_its_box_art() {
+    let harness = Harness::new().await;
+    let n = uuid::Uuid::now_v7().simple().to_string();
+    let (dat, game, artifact) = (
+        uuid::Uuid::now_v7(),
+        uuid::Uuid::now_v7(),
+        uuid::Uuid::now_v7(),
+    );
+    let system = format!("Test System {n}");
+    let name = format!("Crash Bandicoot {n} (USA)");
+    for statement in [
+        format!(
+            "INSERT INTO dat_files (id, name, source_sha256, game_count, rom_count, loaded_by)
+             VALUES ('{dat}', '{system}', '{}', 1, 1, 'admin')",
+            "ab".repeat(32)
+        ),
+        format!("INSERT INTO dat_games (id, dat_id, name) VALUES ('{game}', '{dat}', '{name}')"),
+        format!(
+            "INSERT INTO artifacts (id, origin, manifest_version, total_bytes, component_count,
+                 validation_state)
+             VALUES ('{artifact}', 'imported_original', 'v1alpha1', 1, 1, 'valid')"
+        ),
+        format!(
+            "INSERT INTO artifact_dat_matches (artifact_id, game_id, kind, roms_matched, roms_total)
+             VALUES ('{artifact}', '{game}', 'exact', 1, 1)"
+        ),
+    ] {
+        sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+            .execute(&harness.pool)
+            .await
+            .unwrap();
+    }
+    // No integration is needed: libretro takes no key.
+    let key = format!("{system}/{name}");
+    let runner = ArtworkRunner::new(harness.state.clone());
+    for _ in 0..30 {
+        runner.pass().await.unwrap();
+        if harness.state_of("libretro", &key).await.as_deref() != Some("pending") {
+            break;
+        }
+    }
+    assert_eq!(
+        harness.state_of("libretro", &key).await.as_deref(),
+        Some("ready")
+    );
+    // Leave the shared database as found: later passes would want it too.
+    for statement in [
+        format!("DELETE FROM artifact_dat_matches WHERE artifact_id = '{artifact}'"),
+        format!("DELETE FROM dat_games WHERE id = '{game}'"),
+        format!("DELETE FROM dat_files WHERE id = '{dat}'"),
+        format!("DELETE FROM artifacts WHERE id = '{artifact}'"),
+    ] {
+        sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+            .execute(&harness.pool)
+            .await
+            .unwrap();
+    }
 }
