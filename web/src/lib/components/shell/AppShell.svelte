@@ -10,6 +10,19 @@
   // a screen reader, unless expanded; above, it can be collapsed to icons
   // (lib/sidebar.ts, remembered in the browser). Below 900 it becomes a
   // drawer behind a menu button.
+  //
+  // Its foot offers "Report an issue" where this server offers reports:
+  // the bug form, filled by the server with its build and the page, shown
+  // for review before anything is opened (ADR 0014).
+  import ReportPreview from '$lib/components/ReportPreview.svelte';
+  import {
+    draftFromReport,
+    issueReportRequest,
+    prepareIssueReport,
+    reportSettingsOnce,
+    type ReportDraft,
+    type ReportSettings,
+  } from '$lib/report';
   import { onMount, type Snippet } from 'svelte';
   import Icon from '$lib/components/ui/Icon.svelte';
   import Menu from '$lib/components/ui/Menu.svelte';
@@ -62,6 +75,27 @@
   }
   let menuButton = $state<HTMLButtonElement | null>(null);
 
+  let reportSettings = $state<ReportSettings | null>(null);
+  let reportDraft = $state<ReportDraft | null>(null);
+  let reportOpen = $state(false);
+  let preparingReport = $state(false);
+  let reportStatus = $state('');
+  const reportsOffered = $derived(reportSettings?.enabled === true && !!reportSettings.issues_url);
+
+  async function reportIssue() {
+    if (preparingReport) return;
+    preparingReport = true;
+    reportStatus = '';
+    const result = await prepareIssueReport(issueReportRequest(pathname));
+    preparingReport = false;
+    if (result.kind === 'error') {
+      reportStatus = `The report could not be prepared: ${result.problem.detail}`;
+      return;
+    }
+    reportDraft = draftFromReport(result.data);
+    reportOpen = true;
+  }
+
   const newItems = [
     { label: 'Import a file or a URL', href: '/imports', icon: 'import' as const },
     { label: 'Rip a disc', href: '/rips', icon: 'rip' as const },
@@ -75,6 +109,9 @@
 
   onMount(() => {
     void refreshCounts();
+    void reportSettingsOnce().then((loaded) => {
+      reportSettings = loaded;
+    });
     return watch(['imports', 'burns'], refreshCounts);
   });
 
@@ -177,6 +214,23 @@
       <p class="source label">
         <a href={SUPPORT_URL} rel="noreferrer">Buy me a coffee</a>
       </p>
+      {#if reportsOffered}
+        <p class="source label">
+          <button type="button" class="link-button" onclick={reportIssue} disabled={preparingReport}
+            >{preparingReport ? 'Preparing…' : 'Report an issue'}</button
+          >
+        </p>
+        <button
+          type="button"
+          class="icon-button report-icon"
+          onclick={reportIssue}
+          disabled={preparingReport}
+          title="Report an issue"
+        >
+          <Icon name="flag" label="Report an issue" />
+        </button>
+      {/if}
+      {#if reportStatus}<p class="source label" role="status">{reportStatus}</p>{/if}
       <a class="icon-button source-icon" href={SOURCE_URL} rel="noreferrer" title="Source code">
         <Icon name="source" label="Source code, {LICENSE_NAME}" />
       </a>
@@ -229,6 +283,14 @@
       {@render children()}
     </main>
   </div>
+  {#if reportDraft && reportSettings?.issues_url}
+    <ReportPreview
+      draft={reportDraft}
+      issuesUrl={reportSettings.issues_url}
+      bind:open={reportOpen}
+      heading="Review this bug report"
+    />
+  {/if}
 </div>
 
 <style>
@@ -364,9 +426,31 @@
   }
   .theme-step,
   .source-icon,
+  .report-icon,
   .menu-button,
   .scrim {
     display: none;
+  }
+  /* A button that reads as the links beside it. */
+  .link-button {
+    display: inline;
+    min-height: 0;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: none;
+    font: inherit;
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+  }
+  .link-button:hover:not(:disabled) {
+    background: none;
+  }
+  .link-button:disabled {
+    color: var(--text-muted);
+    cursor: default;
   }
 
   /* --- main column -------------------------------------------------------- */
@@ -456,7 +540,8 @@
     display: none;
   }
   .compact .theme-step,
-  .compact .source-icon {
+  .compact .source-icon,
+  .compact .report-icon {
     display: inline-flex;
   }
 

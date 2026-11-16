@@ -30,7 +30,7 @@ use utoipa::{IntoParams, ToSchema};
 use crate::burn_report::{
     BurnFacts, BurnReportKind, BurnReportRefusal, DriveFacts, EventLine, burn_report,
 };
-use crate::error_report::{ErrorFacts, error_report};
+use crate::error_report::{ErrorFacts, IssueFacts, error_report, is_route, issue_report};
 use crate::format_report::{
     ComponentFacts, FormatFacts, HEAD_BYTES, directories_in, format_report, plain_extension,
     worth_reporting,
@@ -176,6 +176,70 @@ pub struct ErrorReportRequest {
     /// `api`, `deployment` or `other`. Anything else is left for the person.
     #[serde(default)]
     pub area: Option<String>,
+}
+
+/// A report a person starts from "Report an issue", with where they were.
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IssueReportRequest {
+    /// The page, as a route with its identifiers taken out, such as
+    /// `/library/{id}`: at most 300 characters, starting with `/`, of
+    /// lowercase letters, digits, `/`, `_`, `-`, `.`, `{` and `}`.
+    #[serde(default)]
+    pub page: Option<String>,
+    /// The part of Tangible: `import`, `library`, `catalog`, `romm`, `web`,
+    /// `api`, `deployment` or `other`. Anything else is left for the person.
+    #[serde(default)]
+    pub area: Option<String>,
+}
+
+/// A bug report a person starts themselves, prepared for review.
+///
+/// # Errors
+///
+/// `CONFLICT` when reports are turned off; `VALIDATION_FAILED` for a page
+/// that is not a path, or too long.
+#[utoipa::path(
+    post,
+    path = "/api/v1/issue-reports",
+    tag = "reports",
+    description = "Prepare a bug report a person starts themselves (\"Report an issue\"): the \
+                   bug form filled with this server's build, whether it is a release image, \
+                   the page they were on and its area, the rest left for them. Scrubbed and \
+                   returned for review; nothing is sent. Anyone signed in.",
+    request_body = IssueReportRequest,
+    responses(
+        (status = 200, description = "The report, scrubbed, for review", body = IssueReport),
+        (status = 409, description = "Reports are off", body = Problem),
+        (status = 422, description = "The page is not a route", body = Problem),
+    ),
+)]
+pub async fn prepare_issue_report(
+    State(state): State<ApiState>,
+    Json(request): Json<IssueReportRequest>,
+) -> Result<Json<IssueReport>, Problem> {
+    let reports = state.reports();
+    if !reports.enabled() {
+        return Err(Problem::new(
+            ErrorCode::Conflict,
+            "issue reports are turned off on this server (TANGIBLE_REPORT_ISSUES_URL is empty)",
+        ));
+    }
+    if let Some(page) = &request.page
+        && !is_route(page)
+    {
+        return Err(Problem::new(
+            ErrorCode::ValidationFailed,
+            "page must be a route of at most 300 characters, such as /library/{id}: \
+             lowercase letters, digits, and / _ - . { }",
+        ));
+    }
+    let facts = IssueFacts {
+        build: reports.build().clone(),
+        page: request.page,
+        area: request.area.filter(|area| area.len() <= 32),
+    };
+    Ok(Json(issue_report(&facts, reports.scrub_context())))
 }
 
 /// Bounds on what the browser sends: a problem document is short, and none
@@ -550,6 +614,7 @@ pub fn router() -> Router<ApiState> {
     Router::new()
         .route("/report-settings", get(report_settings))
         .route("/error-reports", post(prepare_error_report))
+        .route("/issue-reports", post(prepare_issue_report))
         .route(
             "/artifacts/{artifact_id}/format-report",
             get(artifact_format_report),

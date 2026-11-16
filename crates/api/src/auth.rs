@@ -472,6 +472,7 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
     // Anyone signed in may report an error they were shown; it changes
     // nothing, and the text is theirs and scrubbed.
     ("POST", "/api/v1/error-reports", Signed(Read)),
+    ("POST", "/api/v1/issue-reports", Signed(Read)),
     // Operators, as importing is theirs: a format report describes how an
     // import was read.
     (
@@ -1483,11 +1484,12 @@ mod tests {
     #[test]
     fn mutations_need_more_than_read() {
         // The exceptions change nothing a viewer should not: signing oneself
-        // out, and asking for an error one was shown to be written up as a
-        // report, which only prepares text.
+        // out, and asking for an error one was shown, or a report one starts
+        // oneself, to be written up, which only prepares text.
         let exceptions = [
             ("DELETE", "/api/v1/session"),
             ("POST", "/api/v1/error-reports"),
+            ("POST", "/api/v1/issue-reports"),
         ];
         for (method, path, access) in ACCESS_RULES {
             if *method != "GET" && *access == Signed(Read) {

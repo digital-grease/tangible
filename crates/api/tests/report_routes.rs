@@ -214,3 +214,75 @@ async fn a_server_with_reports_off_writes_no_error_report() {
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{reply}");
 }
+
+async fn post_issue(
+    router: axum::Router,
+    session: &support::Session,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let mut request = Request::post("/api/v1/issue-reports")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .expect("request");
+    session.apply(&mut request);
+    let response = router.oneshot(request).await.expect("route the request");
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .expect("body");
+    let body = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    (status, body)
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_viewer_can_start_a_report_from_anywhere() {
+    let database = support::database().await;
+    let viewer = support::sign_in(database.pool(), Role::Viewer).await;
+    let app = configured(database);
+    let (status, report) = post_issue(
+        app.clone(),
+        &viewer,
+        serde_json::json!({ "page": "/library/{id}", "area": "library" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    assert_eq!(report["template"], "bug_report.yml");
+    assert_eq!(field(&report, "version"), "v0.1.0 (76fa515)");
+    assert_eq!(field(&report, "area"), "library");
+    assert_eq!(field(&report, "steps"), "1. On the page /library/{id}: \n");
+    assert_eq!(field(&report, "what_happened"), "");
+
+    // Nothing at all is a report too: the form, with the build.
+    let (status, report) = post_issue(app.clone(), &viewer, serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    assert_eq!(field(&report, "steps"), "");
+
+    // A page that is not a route is refused, not repeated.
+    for page in [
+        "library",
+        "/x?token=secret",
+        "/home/someone/Films/Hackers.iso",
+    ] {
+        let (status, reply) =
+            post_issue(app.clone(), &viewer, serde_json::json!({ "page": page })).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{page}: {reply}");
+        assert_eq!(reply["code"], "VALIDATION_FAILED");
+    }
+    let (status, _) = post_issue(app, &viewer, serde_json::json!({ "extra": 1 })).await;
+    assert!(status.is_client_error(), "an unknown field is refused");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_server_with_reports_off_starts_no_report() {
+    let database = support::database().await;
+    let viewer = support::sign_in(database.pool(), Role::Viewer).await;
+    let (status, reply) = post_issue(
+        router(ApiState::new(database)),
+        &viewer,
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{reply}");
+}

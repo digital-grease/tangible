@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 digitalgrease
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! An error the web UI showed, written up as a bug report.
+//! An error the web UI showed, written up as a bug report; and a report a
+//! person starts themselves, from "Report an issue".
 //!
 //! The browser sends what it was shown: the problem document's code, title,
 //! detail and request id, which API call failed, and which part of the UI it
@@ -51,6 +52,68 @@ pub struct ErrorFacts {
     pub endpoint: Option<String>,
     /// The part of the UI, one of [`AREAS`], if the browser named one.
     pub area: Option<String>,
+}
+
+/// Where a person was when they chose "Report an issue".
+#[derive(Debug, Clone)]
+pub struct IssueFacts {
+    /// The server's build.
+    pub build: BuildIdentity,
+    /// The page, as a route with its identifiers taken out:
+    /// `/library/{id}`.
+    pub page: Option<String>,
+    /// The part of Tangible, one of [`AREAS`], if the browser named one.
+    pub area: Option<String>,
+}
+
+/// Whether `page` is a web UI route with its identifiers taken out, as
+/// the browser sends it: `/` and at most 300 of lowercase letters, digits,
+/// `/`, `_`, `-`, `.`, `{` and `}`. Nothing else is repeated into a report.
+#[must_use]
+pub fn is_route(page: &str) -> bool {
+    page.starts_with('/')
+        && page.len() <= 300
+        && page
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "/_-.{}".contains(c))
+}
+
+/// Fill in the bug form for a report a person starts themselves: what
+/// Tangible knows (its build, whether it is a release image, the page and
+/// its area), and the rest left for them, as fauxx's form leaves it.
+#[must_use]
+pub fn issue_report(facts: &IssueFacts, context: ScrubContext) -> IssueReport {
+    let mut writer = Writer::new(context);
+    writer.plain("version", "Tangible version", &facts.build.describe());
+    writer.plain(
+        "deployment",
+        "Deployment",
+        if facts.build.release.is_some() {
+            RELEASE_IMAGE
+        } else {
+            ""
+        },
+    );
+    writer.plain("host", "Host", "");
+    let area = facts
+        .area
+        .as_deref()
+        .filter(|area| AREAS.contains(area))
+        .unwrap_or("");
+    writer.plain("area", "Area", area);
+    writer.plain("what_happened", "What happened?", "");
+    writer.plain("what_expected", "What did you expect to happen?", "");
+    // Not scrubbed, which would take a page for a host path: the route
+    // checks it is one, in the few characters a route has.
+    let steps = facts
+        .page
+        .as_deref()
+        .filter(|page| is_route(page))
+        .map(|page| format!("1. On the page {page}: \n"))
+        .unwrap_or_default();
+    writer.plain("steps", "Steps to reproduce", &steps);
+    writer.plain("logs", "Logs", "");
+    writer.finish(BUG_TEMPLATE, None, None)
 }
 
 /// Fill in the bug form from `facts`, scrubbing with `context`.
@@ -196,5 +259,46 @@ mod tests {
             facts.area = Some(area.to_owned());
             assert_fits(&error_report(&facts, ScrubContext::new()), &bug());
         }
+    }
+
+    #[test]
+    fn a_report_started_by_a_person_says_what_tangible_knows_and_leaves_the_rest() {
+        let facts = IssueFacts {
+            build: BuildIdentity::current(
+                Some("v0.1.0"),
+                Some("76fa5157aea012aae85461e694082d553071a606"),
+            ),
+            page: Some("/library/{id}".to_owned()),
+            area: Some("library".to_owned()),
+        };
+        let report = issue_report(&facts, ScrubContext::new());
+        assert_eq!(report.template, BUG_TEMPLATE);
+        assert_eq!(report.title, None, "the form's own title");
+        assert_eq!(report.long_field, None);
+        assert_eq!(field(&report, "version"), "v0.1.0 (76fa515)");
+        assert_eq!(field(&report, "deployment"), RELEASE_IMAGE);
+        assert_eq!(field(&report, "area"), "library");
+        assert_eq!(field(&report, "steps"), "1. On the page /library/{id}: \n");
+        for left in ["host", "what_happened", "what_expected", "logs"] {
+            assert_eq!(field(&report, left), "", "{left}");
+        }
+        assert_fits(&report, &bug());
+
+        // From a local build, on no page in particular, in no known area.
+        let local = IssueFacts {
+            build: BuildIdentity::current(None, None),
+            page: None,
+            area: Some("kitchen".to_owned()),
+        };
+        let report = issue_report(&local, ScrubContext::new());
+        assert!(is_route("/requests/{id}") && is_route("/"));
+        for not in ["library", "/Library", "/a b", "/x?y=1", "/x\u{7}", ""] {
+            assert!(!is_route(not), "{not:?}");
+        }
+        assert!(!is_route(&format!("/{}", "a".repeat(300))));
+        assert_eq!(field(&report, "deployment"), "");
+        assert_eq!(field(&report, "area"), "");
+        assert_eq!(field(&report, "steps"), "");
+        assert_fits(&report, &bug());
     }
 }

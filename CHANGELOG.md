@@ -63,6 +63,10 @@ may change between minor versions, and the release notes say how.
   pane at the top, however long ago it started; "Recent imports" at the
   foot holds those that have finished. The imports list takes `settled`
   (`true` or `false`) to ask for either.
+- "Report an issue" at the foot of the sidebar, where reports are on:
+  GitHub's bug form, filled in by the server with the build and the page
+  you were on, shown for review before it is opened, as other reports are
+  (ADR 0014). New route `POST /api/v1/issue-reports`.
 - A request's release search says what each release holds by its name:
   a disc image, a video file (encoded or remuxed, without the disc's
   menus) or audio files. Video and audio files are marked and rank well

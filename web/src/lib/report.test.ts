@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  areaOfPage,
+  issueReportRequest,
   MAX_ISSUE_URL_LENGTH,
   SHORTENED_MARKER,
   copyText,
@@ -393,5 +395,22 @@ describe('format reports', () => {
       '/api/v1/artifacts/a%2F1/format-report',
       expect.anything(),
     );
+  });
+});
+
+describe('reporting an issue from anywhere', () => {
+  it('names the page as a route, and its area where it can tell', () => {
+    expect(issueReportRequest('/library/01a1e1bc-5e71-74f2-b979-0130a78da3b6')).toEqual({
+      page: '/library/{id}',
+      area: 'library',
+    });
+    expect(issueReportRequest('/imports?x=1')).toEqual({ page: '/imports', area: 'import' });
+    expect(issueReportRequest('/discs')).toEqual({ page: '/discs', area: 'catalog' });
+    expect(issueReportRequest('/requests/q1')).toEqual({ page: '/requests/q1', area: null });
+    expect(issueReportRequest('/')).toEqual({ page: '/', area: null });
+    // What is not a route is not sent.
+    expect(issueReportRequest('/a b')).toEqual({ page: null, area: null });
+    expect(areaOfPage('/catalog/x')).toBe('catalog');
+    expect(areaOfPage('/workers')).toBeNull();
   });
 });

@@ -5015,6 +5015,63 @@
         ]
       }
     },
+    "/api/v1/issue-reports": {
+      "post": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "A bug report a person starts themselves, prepared for review.",
+        "description": "Prepare a bug report a person starts themselves (\"Report an issue\"): the bug form filled with this server's build, whether it is a release image, the page they were on and its area, the rest left for them. Scrubbed and returned for review; nothing is sent. Anyone signed in.",
+        "operationId": "prepare_issue_report",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The report, scrubbed, for review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueReport"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Reports are off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The page is not a route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/metadata/search": {
       "get": {
         "tags": [
@@ -13289,6 +13346,27 @@
             "description": "Its text, already scrubbed. Empty means left for the person."
           }
         }
+      },
+      "IssueReportRequest": {
+        "type": "object",
+        "description": "A report a person starts from \"Report an issue\", with where they were.",
+        "properties": {
+          "area": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The part of Tangible: `import`, `library`, `catalog`, `romm`, `web`,\n`api`, `deployment` or `other`. Anything else is left for the person."
+          },
+          "page": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The page, as a route with its identifiers taken out, such as\n`/library/{id}`: at most 300 characters, starting with `/`, of\nlowercase letters, digits, `/`, `_`, `-`, `.`, `{` and `}`."
+          }
+        },
+        "additionalProperties": false
       },
       "IssuedEnrollment": {
         "type": "object",

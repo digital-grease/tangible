@@ -52,6 +52,7 @@ export const ICONS = {
   refresh:
     'M4 12a8 8 0 0 1 13.7-5.7L20 8.5M20 4v4.5h-4.5M20 12a8 8 0 0 1-13.7 5.7L4 15.5M4 20v-4.5h4.5',
   source: 'm8 7-5 5 5 5m8-10 5 5-5 5',
+  flag: 'M5 21V4m0 0h12l-2.5 4.5L17 13H5',
 } as const;
 
 export type IconName = keyof typeof ICONS;

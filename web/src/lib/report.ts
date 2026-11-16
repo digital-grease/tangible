@@ -145,6 +145,42 @@ export function prepareErrorReport(
 }
 
 export type IssueReport = components['schemas']['IssueReport'];
+export type IssueReportRequest = components['schemas']['IssueReportRequest'];
+
+/** The bug form's Area for a page, by where it is, or null to leave it. */
+export function areaOfPage(path: string): ReportArea | null {
+  const top = path.split(/[?#]/, 1)[0]?.split('/')[1] ?? '';
+  switch (top) {
+    case 'imports':
+      return 'import';
+    case 'library':
+      return 'library';
+    case 'catalog':
+    case 'discs':
+      return 'catalog';
+    default:
+      return null;
+  }
+}
+
+/**
+ * What "Report an issue" sends: the page as a route, lowercased and with
+ * its identifiers taken out, which is all the server will repeat, and its
+ * area.
+ */
+export function issueReportRequest(path: string): IssueReportRequest {
+  const route = routeTemplate(path).toLowerCase();
+  const page = /^\/[a-z0-9/_\-.{}]{0,299}$/.test(route) ? route : null;
+  return { page, area: areaOfPage(path) };
+}
+
+/** A bug report a person starts themselves, prepared by the server, scrubbed. */
+export function prepareIssueReport(
+  request: IssueReportRequest,
+  fetcher: typeof fetch = apiFetch,
+): Promise<Result<IssueReport>> {
+  return apiCall(fetcher, '/api/v1/issue-reports', 'POST', request);
+}
 
 /** Which report a burn attempt becomes: a problem, or hardware that worked. */
 export type BurnReportKind = 'problem' | 'worked';

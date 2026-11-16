@@ -1458,6 +1458,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/issue-reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * A bug report a person starts themselves, prepared for review.
+         * @description Prepare a bug report a person starts themselves ("Report an issue"): the bug form filled with this server's build, whether it is a release image, the page they were on and its area, the rest left for them. Scrubbed and returned for review; nothing is sent. Anyone signed in.
+         */
+        post: operations["prepare_issue_report"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/metadata/search": {
         parameters: {
             query?: never;
@@ -4657,6 +4677,20 @@ export interface components {
             label: string;
             /** @description Its text, already scrubbed. Empty means left for the person. */
             value: string;
+        };
+        /** @description A report a person starts from "Report an issue", with where they were. */
+        IssueReportRequest: {
+            /**
+             * @description The part of Tangible: `import`, `library`, `catalog`, `romm`, `web`,
+             *     `api`, `deployment` or `other`. Anything else is left for the person.
+             */
+            area?: string | null;
+            /**
+             * @description The page, as a route with its identifiers taken out, such as
+             *     `/library/{id}`: at most 300 characters, starting with `/`, of
+             *     lowercase letters, digits, `/`, `_`, `-`, `.`, `{` and `}`.
+             */
+            page?: string | null;
         };
         /** @description A newly issued enrollment token. */
         IssuedEnrollment: {
@@ -9435,6 +9469,48 @@ export interface operations {
             };
             /** @description No such check */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    prepare_issue_report: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IssueReportRequest"];
+            };
+        };
+        responses: {
+            /** @description The report, scrubbed, for review */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssueReport"];
+                };
+            };
+            /** @description Reports are off */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The page is not a route */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -3,7 +3,8 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen, within } from '@testing-library/svelte';
 import { createRawSnippet } from 'svelte';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { forgetReportSettings } from '$lib/report';
 import { axeViolations } from '$lib/testing/axe';
 import { DASHBOARD, server } from './testing';
 
@@ -12,6 +13,7 @@ const { default: AppShell } = await import('./AppShell.svelte');
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  forgetReportSettings();
 });
 
 const page = createRawSnippet(() => ({ render: () => '<h1>Library</h1>' }));
@@ -128,5 +130,101 @@ describe('the shell', () => {
     expect(screen.getByRole('link', { name: 'Create a burn job' }).getAttribute('href')).toBe(
       '/burns/new',
     );
+  });
+});
+
+describe('Reporting an issue', () => {
+  // jsdom has no modal dialogs; see ReportPreview.test.ts.
+  beforeAll(() => {
+    HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
+      this.setAttribute('open', '');
+    };
+    HTMLDialogElement.prototype.close = function (this: HTMLDialogElement) {
+      if (!this.hasAttribute('open')) return;
+      this.removeAttribute('open');
+      this.dispatchEvent(new Event('close'));
+    };
+  });
+
+  const ISSUES = 'https://github.com/digital-grease/tangible/issues/new';
+  const REPORT = {
+    template: 'bug_report.yml',
+    title: null,
+    fields: [
+      { id: 'version', label: 'Tangible version', value: 'v0.2.1 (fc4dc51)' },
+      { id: 'area', label: 'Area', value: 'library' },
+      { id: 'steps', label: 'Steps to reproduce', value: '1. On the page /library/{id}: \n' },
+    ],
+    long_field: null,
+    removed: {},
+    truncated: false,
+  };
+
+  /** A server with reports on or off; answers what "Report an issue" sent. */
+  function reporting(enabled: boolean) {
+    const sent: { url: string; method: string; body: unknown }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? 'GET';
+        if (method === 'POST') {
+          sent.push({ url, method, body: JSON.parse(String(init?.body ?? 'null')) });
+        }
+        const body =
+          url === '/api/v1/report-settings'
+            ? { enabled, issues_url: enabled ? ISSUES : null, version: '0.2.1', build: 'fc4dc51' }
+            : url === '/api/v1/issue-reports'
+              ? REPORT
+              : url === '/api/v1/dashboard'
+                ? DASHBOARD
+                : { items: [] };
+        return {
+          ok: true,
+          status: 200,
+          json: async () => body,
+          headers: new Headers(),
+        } as Response;
+      }),
+    );
+    render(AppShell, {
+      session: {
+        username: 'ada',
+        role: 'viewer',
+        csrf_token: 't',
+        expires_at: '2026-11-12T00:00:00Z',
+      },
+      pathname: '/library/01a1e1bc-5e71-74f2-b979-0130a78da3b6',
+      theme: 'system',
+      onTheme: vi.fn(),
+      onSignOut: vi.fn(),
+      children: page,
+    });
+    return sent;
+  }
+
+  it('prepares the bug form for the page, and shows it for review first', async () => {
+    const sent = reporting(true);
+    const [button] = await screen.findAllByRole('button', { name: 'Report an issue' });
+    await fireEvent.click(button as HTMLElement);
+    // The page as a route, its identifier taken out, and its area.
+    await vi.waitFor(() =>
+      expect(sent).toEqual([
+        {
+          url: '/api/v1/issue-reports',
+          method: 'POST',
+          body: { page: '/library/{id}', area: 'library' },
+        },
+      ]),
+    );
+    expect(await screen.findByRole('heading', { name: 'Review this bug report' })).toBeTruthy();
+    expect(screen.getByText('v0.2.1 (fc4dc51)')).toBeTruthy();
+  });
+
+  it('offers nothing where reports are off', async () => {
+    reporting(false);
+    expect(await screen.findByRole('link', { name: 'Buy me a coffee' })).toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(screen.queryByRole('button', { name: 'Report an issue' })).toBeNull();
   });
 });
