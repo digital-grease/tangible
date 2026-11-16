@@ -66,9 +66,11 @@ pub struct ArtifactSummary {
     /// The request it fulfilled, if it fulfilled one: what the item is, as
     /// its requester named it.
     pub request: Option<RequestLinkView>,
-    /// Its cover, once fetched (ADR 0023): the cover of the request it
-    /// fulfilled. Null without one.
+    /// Its cover, once fetched (ADR 0023): one picked by hand, or else the
+    /// cover of the request it fulfilled. Null without one.
     pub cover: Option<crate::artwork::CoverView>,
+    /// Whether its cover was picked by hand, and so can be removed.
+    pub cover_picked: bool,
     /// Whether anything structural is worth an operator's attention.
     ///
     /// Surfaced in the summary so a damaged artifact is visible in a list
@@ -221,6 +223,7 @@ impl From<&ArtifactManifest> for ArtifactSummary {
             source_name: manifest.origin.source_filename.clone(),
             request: None,
             cover: None,
+            cover_picked: false,
             has_warnings: !manifest.validation.validators.is_empty(),
             integrity_state: "unchecked".to_owned(),
             integrity_checked_at: None,
@@ -297,6 +300,22 @@ async fn with_integrity(state: &ApiState, summaries: &mut [ArtifactSummary]) {
                         .and_then(|link| crate::artwork::preferred(&link.refs)),
                 );
                 summary.request = link.map(RequestLinkView::from);
+            }
+            // A cover picked by hand comes first.
+            let picked = tangible_db::artwork::picked_artwork(state.database().pool(), &ids)
+                .await
+                .unwrap_or_else(|error| {
+                    tracing::warn!(error = ?error, "picked covers could not be read");
+                    std::collections::HashMap::new()
+                });
+            for (summary, key) in summaries.iter_mut().zip(wanted.iter_mut()) {
+                if let Some(pick) = uuid::Uuid::parse_str(&summary.id)
+                    .ok()
+                    .and_then(|id| picked.get(&id))
+                {
+                    summary.cover_picked = true;
+                    *key = Some(pick.clone());
+                }
             }
             let keys: Vec<(String, String)> = wanted.iter().flatten().cloned().collect();
             let covers = crate::artwork::covers_for(state, &keys).await;

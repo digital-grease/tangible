@@ -8,6 +8,7 @@
   // the page.
   import Callout from '$lib/components/ui/Callout.svelte';
   import { shortDigest } from '$lib/ids';
+  import CoverPicker from '$lib/components/CoverPicker.svelte';
   import Deletion from '$lib/components/Deletion.svelte';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import FormatReport from '$lib/components/FormatReport.svelte';
@@ -242,6 +243,16 @@
                 </div>
               {/if}
             </dl>
+
+            {#if !deleted}
+              <CoverPicker
+                artifactId={artifact.id}
+                name={artifactName(artifact) ?? ''}
+                cover={artifact.cover}
+                picked={artifact.cover_picked}
+                onchanged={reload}
+              />
+            {/if}
 
             <!-- Every imported original is immutable, and saying so is the
                  point of the tool rather than an implementation note. -->

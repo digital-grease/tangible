@@ -452,6 +452,46 @@ export function deleteNow(
   );
 }
 
+export type CoverView = components['schemas']['CoverView'];
+export type ArtworkRef = components['schemas']['ArtworkRef'];
+
+/** Where a cover came from, in words. */
+export function coverSourceLabel(source: string): string {
+  switch (source) {
+    case 'tmdb':
+      return 'TMDB';
+    case 'imdb':
+      return 'TMDB, by its IMDb ID';
+    case 'musicbrainz':
+      return 'the Cover Art Archive (MusicBrainz)';
+    case 'igdb':
+      return 'IGDB';
+    case 'libretro':
+      return "libretro's box art";
+    default:
+      return source;
+  }
+}
+
+/**
+ * Pick an artifact's cover from a metadata search candidate's references
+ * (ADR 0023): the server takes the one it fetches covers by.
+ */
+export function pickArtwork(
+  id: string,
+  refs: ArtworkRef[],
+  fetcher: typeof fetch = apiFetch,
+): Promise<Result<components['schemas']['PickedArtworkView']>> {
+  return apiCall(fetcher, `/api/v1/artifacts/${encodeURIComponent(id)}/artwork`, 'PUT', {
+    refs,
+  });
+}
+
+/** Remove the cover picked for an artifact. */
+export function unpickArtwork(id: string, fetcher: typeof fetch = apiFetch): Promise<Result<null>> {
+  return apiCall(fetcher, `/api/v1/artifacts/${encodeURIComponent(id)}/artwork`, 'DELETE');
+}
+
 export type UnpackedFromView = components['schemas']['UnpackedFromView'];
 
 /** An archive format's name, as people know it. */

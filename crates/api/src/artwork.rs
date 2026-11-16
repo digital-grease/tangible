@@ -18,21 +18,23 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::Json;
 use axum::Router;
 use axum::extract::{Path, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
-use serde::Serialize;
+use axum::routing::{get, put};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use tangible_db::artwork::{
-    DueArtwork, ReadyArtwork, artwork_image, artwork_not_fetched, artwork_ready, due_artwork,
-    ready_artwork, requests_references, want_artwork,
+    DueArtwork, Picked, ReadyArtwork, artwork_image, artwork_not_fetched, artwork_ready,
+    due_artwork, pick_artwork, ready_artwork, requests_references, unpick_artwork, want_artwork,
 };
 use tangible_integrations::artwork::{ArtworkError, fetch_image};
 use tokio::sync::Notify;
 use utoipa::ToSchema;
 
+use crate::auth::SignedIn;
 use crate::metadata::CoverLookup;
 use crate::problem::{ErrorCode, Problem};
 use crate::state::ApiState;
@@ -372,9 +374,151 @@ pub async fn get_artwork(
     Ok(response)
 }
 
+/// One reference to an item at a provider, as a metadata search's candidate
+/// carries it.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ArtworkRef {
+    /// `tmdb`, `imdb`, `musicbrainz`, `igdb`, or another the search named.
+    pub provider: String,
+    /// The provider's id for the item.
+    pub external_id: String,
+}
+
+/// A cover to pick for an artifact: a metadata search candidate's
+/// references, from which Tangible takes the one it fetches covers by.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PickArtworkRequest {
+    /// The candidate's references, at most 16.
+    pub refs: Vec<ArtworkRef>,
+}
+
+/// The cover picked: the reference it is fetched by.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PickedArtworkView {
+    /// `tmdb`, `imdb`, `musicbrainz` or `igdb`.
+    pub source: String,
+    /// The provider's id for the item.
+    pub external_id: String,
+}
+
+fn artifact_id(raw: &str) -> Result<uuid::Uuid, Problem> {
+    uuid::Uuid::parse_str(raw)
+        .map_err(|_| Problem::invalid_parameter("artifact_id", "not a valid identifier"))
+}
+
+/// Pick an artifact's cover from a metadata search candidate.
+///
+/// # Errors
+///
+/// `NOT_FOUND`; `VALIDATION_FAILED` for references none of which has a
+/// cover Tangible fetches.
+#[utoipa::path(
+    put,
+    path = "/api/v1/artifacts/{artifact_id}/artwork",
+    tag = "library",
+    description = "Pick an artifact's cover from a metadata search candidate (ADR 0023): \
+                   Tangible takes the candidate's best reference for a cover (TMDB, then \
+                   IMDb, then MusicBrainz, then IGDB), fetches it in the background, and shows \
+                   it before the cover of the request the artifact fulfilled. Picking again \
+                   replaces it. Needs the catalog permission; audited.",
+    params(("artifact_id" = String, Path, description = "Artifact identifier")),
+    request_body = PickArtworkRequest,
+    responses(
+        (status = 202, description = "Picked; fetched shortly", body = PickedArtworkView),
+        (status = 404, description = "No such artifact", body = Problem),
+        (status = 422, description = "No reference Tangible fetches covers by", body = Problem),
+    ),
+)]
+pub async fn pick_artifact_artwork(
+    State(state): State<ApiState>,
+    SignedIn(user): SignedIn,
+    Path(raw): Path<String>,
+    Json(request): Json<PickArtworkRequest>,
+) -> Result<(StatusCode, Json<PickedArtworkView>), Problem> {
+    let id = artifact_id(&raw)?;
+    if request.refs.len() > 16 {
+        return Err(Problem::new(
+            ErrorCode::ValidationFailed,
+            "at most 16 references",
+        ));
+    }
+    let pairs: Vec<(&str, &str)> = request
+        .refs
+        .iter()
+        .map(|reference| (reference.provider.as_str(), reference.external_id.as_str()))
+        .collect();
+    let (source, external_id) = preferred_of(&pairs).ok_or_else(|| {
+        Problem::new(
+            ErrorCode::ValidationFailed,
+            "none of these has a cover Tangible fetches: it needs a TMDB, IMDb, MusicBrainz or \
+             IGDB reference",
+        )
+    })?;
+    match pick_artwork(
+        state.database().pool(),
+        id,
+        &source,
+        &external_id,
+        &user.username,
+    )
+    .await
+    .map_err(|error| {
+        tracing::error!(error = ?error, "a cover could not be picked");
+        Problem::storage_unavailable()
+    })? {
+        Picked::Done => {}
+        Picked::NoArtifact => return Err(Problem::not_found("artifact", &raw)),
+    }
+    state.artwork_nudge().notify_one();
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(PickedArtworkView {
+            source,
+            external_id,
+        }),
+    ))
+}
+
+/// Remove the cover picked for an artifact.
+///
+/// # Errors
+///
+/// `INVALID_PARAMETER` for a malformed identifier.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/artifacts/{artifact_id}/artwork",
+    tag = "library",
+    description = "Remove the cover picked for an artifact: it shows its request's cover \
+                   again, or none. Answers 204 whether or not one was picked. Needs the \
+                   catalog permission; audited.",
+    params(("artifact_id" = String, Path, description = "Artifact identifier")),
+    responses((status = 204, description = "No cover picked")),
+)]
+pub async fn unpick_artifact_artwork(
+    State(state): State<ApiState>,
+    SignedIn(user): SignedIn,
+    Path(raw): Path<String>,
+) -> Result<StatusCode, Problem> {
+    let id = artifact_id(&raw)?;
+    unpick_artwork(state.database().pool(), id, &user.username)
+        .await
+        .map_err(|error| {
+            tracing::error!(error = ?error, "a cover could not be removed");
+            Problem::storage_unavailable()
+        })?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// The artwork routes.
 pub fn router() -> Router<ApiState> {
-    Router::new().route("/artwork/{artwork_id}", get(get_artwork))
+    Router::new()
+        .route("/artwork/{artwork_id}", get(get_artwork))
+        .route(
+            "/artifacts/{artifact_id}/artwork",
+            put(pick_artifact_artwork).delete(unpick_artifact_artwork),
+        )
 }
 
 #[cfg(test)]

@@ -399,3 +399,91 @@ async fn a_provider_not_configured_is_tried_again_later() {
     assert!(later, "an hour from now, not at once");
 }
 
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_cover_is_picked_by_hand_fetched_and_removed() {
+    let harness = Harness::new().await;
+    harness
+        .provider("tmdb", json!({ "read_access_token": TMDB_TOKEN }))
+        .await;
+    let artifact = uuid::Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO artifacts (id, origin, manifest_version, total_bytes, component_count,
+             validation_state)
+         VALUES ($1, 'imported_original', 'v1alpha1', 1, 1, 'valid')",
+    )
+    .bind(artifact)
+    .execute(&harness.pool)
+    .await
+    .unwrap();
+    let uri = format!("/api/v1/artifacts/{artifact}/artwork");
+    let n = uuid::Uuid::now_v7().as_u128() % 1_000_000_000;
+    let poster = format!("movie/1{n}");
+
+    // A candidate's references: the best one Tangible fetches covers by.
+    let (status, picked) = harness
+        .send(
+            Method::PUT,
+            &uri,
+            Some(json!({ "refs": [
+                { "provider": "dat", "external_id": "Some Game (USA)" },
+                { "provider": "imdb", "external_id": "tt0113243" },
+                { "provider": "tmdb", "external_id": poster },
+            ] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{picked}");
+    assert_eq!(picked["source"], "tmdb");
+    assert_eq!(picked["external_id"], poster.as_str());
+    let runner = ArtworkRunner::new(harness.state.clone());
+    for _ in 0..30 {
+        runner.pass().await.unwrap();
+        if harness.state_of("tmdb", &poster).await.as_deref() != Some("pending") {
+            break;
+        }
+    }
+    assert_eq!(
+        harness.state_of("tmdb", &poster).await.as_deref(),
+        Some("ready")
+    );
+
+    // Nothing a cover can be fetched by, or no such artifact, is refused.
+    let (status, refused) = harness
+        .send(
+            Method::PUT,
+            &uri,
+            Some(json!({ "refs": [{ "provider": "dat", "external_id": "x" }] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    let (status, _) = harness
+        .send(
+            Method::PUT,
+            &format!("/api/v1/artifacts/{}/artwork", uuid::Uuid::now_v7()),
+            Some(json!({ "refs": [{ "provider": "tmdb", "external_id": poster }] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Removed, and removing again is the same.
+    for _ in 0..2 {
+        let (status, _) = harness.send(Method::DELETE, &uri, None).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+    }
+    let left: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM artifact_artwork WHERE artifact_id = $1")
+            .bind(artifact)
+            .fetch_one(&harness.pool)
+            .await
+            .unwrap();
+    assert_eq!(left, 0);
+    let actions: Vec<String> = sqlx::query_scalar(
+        "SELECT action FROM audit_events WHERE target_id = $1 ORDER BY created_at, id",
+    )
+    .bind(artifact.to_string())
+    .fetch_all(&harness.pool)
+    .await
+    .unwrap();
+    assert_eq!(actions, ["artifact.cover_picked", "artifact.cover_removed"]);
+    remove_providers(&harness.pool).await;
+}

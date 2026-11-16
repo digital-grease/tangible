@@ -44,6 +44,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/artifacts/{artifact_id}/artwork": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Pick an artifact's cover from a metadata search candidate.
+         * @description Pick an artifact's cover from a metadata search candidate (ADR 0023): Tangible takes the candidate's best reference for a cover (TMDB, then IMDb, then MusicBrainz, then IGDB), fetches it in the background, and shows it before the cover of the request the artifact fulfilled. Picking again replaces it. Needs the catalog permission; audited.
+         */
+        put: operations["pick_artifact_artwork"];
+        post?: never;
+        /**
+         * Remove the cover picked for an artifact.
+         * @description Remove the cover picked for an artifact: it shows its request's cover again, or none. Answers 204 whether or not one was picked. Needs the catalog permission; audited.
+         */
+        delete: operations["unpick_artifact_artwork"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/artifacts/{artifact_id}/components": {
         parameters: {
             query?: never;
@@ -2662,6 +2686,8 @@ export interface components {
             /** @description Number of files. */
             component_count: number;
             cover?: components["schemas"]["CoverView"] | null;
+            /** @description Whether its cover was picked by hand, and so can be removed. */
+            cover_picked: boolean;
             deletion?: components["schemas"]["ArtifactDeletionView"] | null;
             /**
              * @description The disc it describes, as far as its manifest says, for a drawing of
@@ -2721,6 +2747,16 @@ export interface components {
             items: components["schemas"]["ArtifactSummary"][];
             /** @description Cursor for the next page, or null when this is the last. */
             next_cursor?: string | null;
+        };
+        /**
+         * @description One reference to an item at a provider, as a metadata search's candidate
+         *     carries it.
+         */
+        ArtworkRef: {
+            /** @description The provider's id for the item. */
+            external_id: string;
+            /** @description `tmdb`, `imdb`, `musicbrainz`, `igdb`, or another the search named. */
+            provider: string;
         };
         /** @description A page of audit events. */
         AuditEventList: {
@@ -4950,6 +4986,21 @@ export interface components {
             /** @description Media serial, when the drive reported one. */
             serial?: string | null;
         };
+        /**
+         * @description A cover to pick for an artifact: a metadata search candidate's
+         *     references, from which Tangible takes the one it fetches covers by.
+         */
+        PickArtworkRequest: {
+            /** @description The candidate's references, at most 16. */
+            refs: components["schemas"]["ArtworkRef"][];
+        };
+        /** @description The cover picked: the reference it is fetched by. */
+        PickedArtworkView: {
+            /** @description The provider's id for the item. */
+            external_id: string;
+            /** @description `tmdb`, `imdb`, `musicbrainz` or `igdb`. */
+            source: string;
+        };
         /** @description A platform a game can be exported to. */
         PlatformView: {
             /**
@@ -6321,6 +6372,72 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Problem"];
                 };
+            };
+        };
+    };
+    pick_artifact_artwork: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Artifact identifier */
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PickArtworkRequest"];
+            };
+        };
+        responses: {
+            /** @description Picked; fetched shortly */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PickedArtworkView"];
+                };
+            };
+            /** @description No such artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No reference Tangible fetches covers by */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    unpick_artifact_artwork: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Artifact identifier */
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No cover picked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

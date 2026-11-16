@@ -250,6 +250,103 @@
         ]
       }
     },
+    "/api/v1/artifacts/{artifact_id}/artwork": {
+      "put": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Pick an artifact's cover from a metadata search candidate.",
+        "description": "Pick an artifact's cover from a metadata search candidate (ADR 0023): Tangible takes the candidate's best reference for a cover (TMDB, then IMDb, then MusicBrainz, then IGDB), fetches it in the background, and shows it before the cover of the request the artifact fulfilled. Picking again replaces it. Needs the catalog permission; audited.",
+        "operationId": "pick_artifact_artwork",
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "description": "Artifact identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PickArtworkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Picked; fetched shortly",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PickedArtworkView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No reference Tangible fetches covers by",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Remove the cover picked for an artifact.",
+        "description": "Remove the cover picked for an artifact: it shows its request's cover again, or none. Answers 204 whether or not one was picked. Needs the catalog permission; audited.",
+        "operationId": "unpick_artifact_artwork",
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "description": "Artifact identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No cover picked"
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/artifacts/{artifact_id}/components": {
       "get": {
         "tags": [
@@ -8912,6 +9009,7 @@
           "validation_state",
           "component_count",
           "total_bytes",
+          "cover_picked",
           "has_warnings",
           "integrity_state",
           "disc_shape"
@@ -8941,12 +9039,16 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/CoverView",
-                "description": "Its cover, once fetched (ADR 0023): the cover of the request it\nfulfilled. Null without one."
+                "description": "Its cover, once fetched (ADR 0023): one picked by hand, or else the\ncover of the request it fulfilled. Null without one."
               },
               {
                 "type": "null"
               }
             ]
+          },
+          "cover_picked": {
+            "type": "boolean",
+            "description": "Whether its cover was picked by hand, and so can be removed."
           },
           "deletion": {
             "oneOf": [
@@ -9049,6 +9151,25 @@
             "description": "Cursor for the next page, or null when this is the last."
           }
         }
+      },
+      "ArtworkRef": {
+        "type": "object",
+        "description": "One reference to an item at a provider, as a metadata search's candidate\ncarries it.",
+        "required": [
+          "provider",
+          "external_id"
+        ],
+        "properties": {
+          "external_id": {
+            "type": "string",
+            "description": "The provider's id for the item."
+          },
+          "provider": {
+            "type": "string",
+            "description": "`tmdb`, `imdb`, `musicbrainz`, `igdb`, or another the search named."
+          }
+        },
+        "additionalProperties": false
       },
       "AuditEventList": {
         "type": "object",
@@ -13991,6 +14112,41 @@
               "null"
             ],
             "description": "Media serial, when the drive reported one."
+          }
+        }
+      },
+      "PickArtworkRequest": {
+        "type": "object",
+        "description": "A cover to pick for an artifact: a metadata search candidate's\nreferences, from which Tangible takes the one it fetches covers by.",
+        "required": [
+          "refs"
+        ],
+        "properties": {
+          "refs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtworkRef"
+            },
+            "description": "The candidate's references, at most 16."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PickedArtworkView": {
+        "type": "object",
+        "description": "The cover picked: the reference it is fetched by.",
+        "required": [
+          "source",
+          "external_id"
+        ],
+        "properties": {
+          "external_id": {
+            "type": "string",
+            "description": "The provider's id for the item."
+          },
+          "source": {
+            "type": "string",
+            "description": "`tmdb`, `imdb`, `musicbrainz` or `igdb`."
           }
         }
       },

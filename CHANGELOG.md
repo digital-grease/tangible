@@ -69,7 +69,11 @@ may change between minor versions, and the release notes say how.
   each once, keeps it only if it is a JPEG, PNG or WebP of at most 2 MiB,
   and serves it itself (`GET /api/v1/artwork/{id}`); the browser never
   contacts a provider. `TANGIBLE_ARTWORK=false` turns fetching off.
-  Migration 0038 adds the covers' table (ADR 0023).
+  Migration 0038 adds the covers' table (ADR 0023). The library, artifact
+  pages and request pages show them. Any other artifact's cover can be
+  picked on its page ("Find cover art…") from the metadata providers'
+  search, by an operator or administrator (`PUT` and `DELETE
+  /api/v1/artifacts/{id}/artwork`); migration 0039 keeps the picks.
 - "Report an issue" at the foot of the sidebar, where reports are on:
   GitHub's bug form, filled in by the server with the build and the page
   you were on, shown for review before it is opened, as other reports are

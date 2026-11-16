@@ -251,3 +251,124 @@ pub async fn requests_references(pool: &PgPool) -> Result<Vec<serde_json::Value>
     .map_err(DbError::Query)
 }
 
+/// What happened to a cover picked by hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Picked {
+    /// Done.
+    Done,
+    /// No such artifact.
+    NoArtifact,
+}
+
+/// Pick `source`'s `external_id` as `artifact`'s cover, by `actor` (ADR
+/// 0023 A3), wanting that cover; audited.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn pick_artwork(
+    pool: &PgPool,
+    artifact: uuid::Uuid,
+    source: &str,
+    external_id: &str,
+    actor: &str,
+) -> Result<Picked, DbError> {
+    let mut tx = pool.begin().await.map_err(DbError::Query)?;
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM artifacts WHERE id = $1)")
+        .bind(artifact)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(DbError::Query)?;
+    if !exists {
+        tx.rollback().await.map_err(DbError::Query)?;
+        return Ok(Picked::NoArtifact);
+    }
+    sqlx::query(
+        "INSERT INTO artifact_artwork (artifact_id, source, external_id, chosen_by)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (artifact_id) DO UPDATE
+         SET source = EXCLUDED.source, external_id = EXCLUDED.external_id,
+             chosen_by = EXCLUDED.chosen_by, chosen_at = now()",
+    )
+    .bind(artifact)
+    .bind(source)
+    .bind(external_id)
+    .bind(actor)
+    .execute(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
+    sqlx::query(
+        "INSERT INTO artwork (id, source, external_id) VALUES ($1, $2, $3)
+         ON CONFLICT (source, external_id) DO NOTHING",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(source)
+    .bind(external_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
+    crate::accounts::audit(
+        &mut tx,
+        actor,
+        "artifact.cover_picked",
+        &artifact.to_string(),
+        serde_json::json!({ "source": source, "external_id": external_id }),
+    )
+    .await?;
+    tx.commit().await.map_err(DbError::Query)?;
+    Ok(Picked::Done)
+}
+
+/// Remove the cover picked for `artifact`, by `actor`; audited. Answers
+/// whether there was one.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn unpick_artwork(
+    pool: &PgPool,
+    artifact: uuid::Uuid,
+    actor: &str,
+) -> Result<bool, DbError> {
+    let mut tx = pool.begin().await.map_err(DbError::Query)?;
+    let removed = sqlx::query("DELETE FROM artifact_artwork WHERE artifact_id = $1")
+        .bind(artifact)
+        .execute(&mut *tx)
+        .await
+        .map_err(DbError::Query)?
+        .rows_affected();
+    if removed > 0 {
+        crate::accounts::audit(
+            &mut tx,
+            actor,
+            "artifact.cover_removed",
+            &artifact.to_string(),
+            serde_json::json!({}),
+        )
+        .await?;
+    }
+    tx.commit().await.map_err(DbError::Query)?;
+    Ok(removed > 0)
+}
+
+/// The covers picked for `artifacts`, by artifact: (source, external id).
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn picked_artwork(
+    pool: &PgPool,
+    artifacts: &[uuid::Uuid],
+) -> Result<HashMap<uuid::Uuid, (String, String)>, DbError> {
+    let rows: Vec<(uuid::Uuid, String, String)> = sqlx::query_as(
+        "SELECT artifact_id, source, external_id FROM artifact_artwork WHERE artifact_id = ANY($1)",
+    )
+    .bind(artifacts)
+    .fetch_all(pool)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(rows
+        .into_iter()
+        .map(|(artifact, source, external_id)| (artifact, (source, external_id)))
+        .collect())
+}
