@@ -326,11 +326,10 @@
     </div>
   </section>
 
-  <section aria-labelledby="attest-heading" class="panel">
-    <h2 id="attest-heading">Before you ask</h2>
+  <section class="panel unheaded">
     <Callout tone="info">
-      Whether making a copy of an item is lawful where you are is for you to determine. Tangible
-      does not check what you attest.
+      Make sure copying this item is legal where you live. Tangible takes your word that you own it
+      and does not check.
     </Callout>
     <div class="attest" class:invalid={!!attestError}>
       <Checkbox label={ATTESTATION} bind:checked={attests} />
@@ -366,6 +365,9 @@
     background: var(--surface);
     border: 1px solid var(--line);
     border-radius: var(--radius-lg);
+  }
+  .panel.unheaded {
+    padding-top: var(--space-4);
   }
   .panel h2 {
     margin: 0;
