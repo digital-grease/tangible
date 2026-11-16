@@ -194,8 +194,60 @@ describe('Burn page', () => {
   });
 });
 
+/** A catalog disc, as the picker is answered. */
+function place(extra: Record<string, unknown> = {}) {
+  return {
+    disc: {
+      id: 'd1',
+      disc_set_id: 's1',
+      sequence_number: 1,
+      display_name: null,
+      media_family: 'dvd',
+      compatibility_claim: 'unknown',
+      artifact_count: 0,
+      copy_count: 0,
+      created_at: at,
+      version: 1,
+    },
+    title_id: 't1',
+    title: 'Hackers',
+    title_kind: 'movie',
+    release_year: 1995,
+    edition_id: 'e1',
+    edition: 'NTSC DVD',
+    disc_set: 'Single disc',
+    disc_count_expected: 1,
+    linked: false,
+    ...extra,
+  };
+}
+
+const HACKERS = {
+  id: 'a1',
+  source_filename: 'hackers.img',
+  format: 'iso',
+  total_bytes: 4_381_129_111,
+  validation_state: 'valid',
+  request: { id: 'r1', title: 'Hackers', kind: 'movie', year: '1995' },
+  disc_shape: { media_family: null, sector_count: 2_139_218, tracks: [] },
+};
+
+const QUEUED = {
+  status: 201,
+  body: { ...job({ state: 'queued', progress: null }), warnings: [] },
+};
+
+/** What the form posted to queue the burn. */
+function posted(sent: ReturnType<typeof vi.fn>, url: string): unknown {
+  const call = sent.mock.calls.find(
+    ([input, init]) =>
+      String(input) === url && (init as RequestInit | undefined)?.method === 'POST',
+  );
+  return call ? JSON.parse(String((call[1] as RequestInit).body)) : undefined;
+}
+
 describe('Create burn job', () => {
-  it('shows the artifact it will write, and queues with the policy chosen', async () => {
+  it('shows the artifact and the disc it was opened with, and queues with the policy chosen', async () => {
     where.search = '?artifact=a1&disc=d1';
     const asked = server({
       '/api/v1/artifacts/a1': {
@@ -209,6 +261,13 @@ describe('Create burn job', () => {
           disc_shape: { media_family: 'cd', sector_count: 368_000, tracks: [] },
         },
       },
+      '/api/v1/discs?artifact=a1&id=d1': {
+        status: 200,
+        body: {
+          items: [place({ title: 'Debian', release_year: 2025, edition: 'netinst' })],
+          more: false,
+        },
+      },
       'POST /api/v1/burn-jobs': {
         status: 201,
         body: {
@@ -219,7 +278,7 @@ describe('Create burn job', () => {
     });
     const { container } = render(NewBurnPage);
     expect(await screen.findByText('debian.iso')).toBeTruthy();
-    expect((screen.getByLabelText('Disc identifier') as HTMLInputElement).value).toBe('d1');
+    expect(await screen.findByText('Debian (2025) · netinst · Disc 1')).toBeTruthy();
     expect(container.querySelector('svg.disc')).not.toBeNull();
     expect(await axeViolations(container)).toEqual([]);
     await fireEvent.change(screen.getByLabelText('Verification'), {
@@ -231,5 +290,145 @@ describe('Create burn job', () => {
     expect(screen.getByRole('link', { name: 'Follow this burn' }).getAttribute('href')).toBe(
       '/burns/j1',
     );
+  });
+
+  it('chooses the one disc already linked to the artifact', async () => {
+    where.search = '?artifact=a1';
+    server({
+      '/api/v1/artifacts/a1': { status: 200, body: HACKERS },
+      '/api/v1/discs?artifact=a1&limit=5': {
+        status: 200,
+        body: { items: [place({ linked: true })], more: false },
+      },
+      'POST /api/v1/burn-jobs': QUEUED,
+    });
+    render(NewBurnPage);
+    expect(await screen.findByText('Hackers (1995) · NTSC DVD · Disc 1')).toBeTruthy();
+    expect(screen.getByText('Linked to this artifact')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Choose another disc' })).toBeTruthy();
+  });
+
+  it('finds the disc by what the artifact is, and queues a burn of it', async () => {
+    where.search = '?artifact=a1';
+    const two = place({
+      disc: { ...place().disc, id: 'd2', sequence_number: 2 },
+      disc_count_expected: 2,
+      disc_set: 'Two-disc set',
+    });
+    server({
+      '/api/v1/artifacts/a1': { status: 200, body: HACKERS },
+      '/api/v1/discs?artifact=a1&limit=5': { status: 200, body: { items: [], more: false } },
+      '/api/v1/discs?search=Hackers&artifact=a1&limit=20': {
+        status: 200,
+        body: { items: [place(), two], more: true },
+      },
+      'POST /api/v1/burn-jobs': QUEUED,
+    });
+    const sent = vi.mocked(fetch);
+    const { container } = render(NewBurnPage);
+    const list = await screen.findByRole('list', { name: 'Discs found' });
+    // Searched by the request's title, not the file's name.
+    expect(
+      (screen.getByRole('searchbox', { name: /Find it in the catalog/ }) as HTMLInputElement).value,
+    ).toBe('Hackers');
+    expect(within(list).getAllByRole('listitem').length).toBe(2);
+    expect(
+      within(list).getByText('Hackers (1995) · NTSC DVD · Two-disc set · Disc 2'),
+    ).toBeTruthy();
+    expect(screen.getByText(/More discs match/)).toBeTruthy();
+    expect(await axeViolations(container)).toEqual([]);
+    // Nothing to queue until a disc is chosen.
+    const queue = screen.getByRole('button', { name: 'Queue this burn' }) as HTMLButtonElement;
+    expect(queue.disabled).toBe(true);
+    await fireEvent.click(
+      screen.getByRole('button', { name: 'Use Hackers (1995) · NTSC DVD · Two-disc set · Disc 2' }),
+    );
+    expect(queue.disabled).toBe(false);
+    await fireEvent.click(queue);
+    expect(await screen.findByRole('heading', { name: 'Queued' })).toBeTruthy();
+    expect(posted(sent, '/api/v1/burn-jobs')).toMatchObject({ artifact_id: 'a1', disc_id: 'd2' });
+  });
+
+  it('searches on Enter without queueing anything', async () => {
+    where.search = '?artifact=a1';
+    const asked = server({
+      '/api/v1/artifacts/a1': { status: 200, body: HACKERS },
+      '/api/v1/discs?artifact=a1&limit=5': { status: 200, body: { items: [], more: false } },
+      '/api/v1/discs?search=Hackers&artifact=a1&limit=20': {
+        status: 200,
+        body: { items: [], more: false },
+      },
+      '/api/v1/discs?search=Hackers+1995&artifact=a1&limit=20': {
+        status: 200,
+        body: { items: [place()], more: false },
+      },
+    });
+    render(NewBurnPage);
+    expect(await screen.findByText('No disc in the catalog matches.')).toBeTruthy();
+    const box = screen.getByRole('searchbox', { name: /Find it in the catalog/ });
+    await fireEvent.input(box, { target: { value: 'Hackers 1995' } });
+    await fireEvent.keyDown(box, { key: 'Enter' });
+    expect(await screen.findByRole('list', { name: 'Discs found' })).toBeTruthy();
+    expect(asked.some((key) => key.startsWith('POST'))).toBe(false);
+  });
+
+  it('catalogues a new disc from the request, linked to the artifact, and uses it', async () => {
+    where.search = '?artifact=a1';
+    server({
+      '/api/v1/artifacts/a1': { status: 200, body: HACKERS },
+      '/api/v1/discs?artifact=a1&limit=5': { status: 200, body: { items: [], more: false } },
+      '/api/v1/discs?search=Hackers&artifact=a1&limit=20': {
+        status: 200,
+        body: { items: [], more: false },
+      },
+      'POST /api/v1/discs': { status: 201, body: place({ edition: 'DVD', linked: true }) },
+      'POST /api/v1/burn-jobs': QUEUED,
+    });
+    const sent = vi.mocked(fetch);
+    const { container } = render(NewBurnPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Catalogue a new disc…' }));
+    // Started from the request and the artifact's size: a film of 1995 on a DVD.
+    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('Hackers');
+    expect((screen.getByLabelText('Kind of work') as HTMLSelectElement).value).toBe('movie');
+    expect((screen.getByLabelText('Year') as HTMLInputElement).value).toBe('1995');
+    expect((screen.getByLabelText('Medium') as HTMLSelectElement).value).toBe('dvd');
+    expect((screen.getByLabelText(/^Edition/) as HTMLInputElement).value).toBe('DVD');
+    expect(await axeViolations(container)).toEqual([]);
+    await fireEvent.click(screen.getByRole('button', { name: 'Catalogue and use this disc' }));
+    expect(await screen.findByText('Hackers (1995) · DVD · Disc 1')).toBeTruthy();
+    expect(posted(sent, '/api/v1/discs')).toEqual({
+      title: 'Hackers',
+      kind: 'movie',
+      release_year: 1995,
+      edition: 'DVD',
+      media_family: 'dvd',
+      artifact_id: 'a1',
+    });
+    await fireEvent.click(screen.getByRole('button', { name: 'Queue this burn' }));
+    expect(await screen.findByRole('heading', { name: 'Queued' })).toBeTruthy();
+    expect(posted(sent, '/api/v1/burn-jobs')).toMatchObject({ artifact_id: 'a1', disc_id: 'd1' });
+  });
+
+  it('opened from the catalog with a disc, offers the artifacts linked to it', async () => {
+    where.search = '?disc=d1';
+    server({
+      '/api/v1/discs?id=d1': { status: 200, body: { items: [place()], more: false } },
+      '/api/v1/discs/d1/artifacts': {
+        status: 200,
+        body: [{ artifact_id: 'a1', relationship: 'representation_of', confidence: 1 }],
+      },
+      '/api/v1/artifacts/a1': { status: 200, body: HACKERS },
+      '/api/v1/discs?artifact=a1&id=d1': {
+        status: 200,
+        body: { items: [place({ linked: true })], more: false },
+      },
+    });
+    render(NewBurnPage);
+    expect(await screen.findByText('Hackers (1995) · NTSC DVD · Disc 1')).toBeTruthy();
+    const offered = await screen.findByRole('group', { name: 'Artifacts linked to this disc' });
+    await fireEvent.click(within(offered).getByRole('button', { name: 'Use Hackers' }));
+    expect((screen.getByLabelText('Artifact identifier') as HTMLInputElement).value).toBe('a1');
+    expect(await screen.findByText('Linked to this artifact')).toBeTruthy();
+    expect(screen.queryByRole('group', { name: 'Artifacts linked to this disc' })).toBeNull();
   });
 });

@@ -102,6 +102,14 @@ may change between minor versions, and the release notes say how.
 
 ### Changed
 
+- Queueing a burn asked for a catalog disc's identifier, typed by hand.
+  The form now chooses the disc: the one already linked to the artifact,
+  or a search of the catalog by the request's title, or a single-disc
+  release catalogued there in one step from the request's title, kind and
+  year and the artifact's medium, linked to the artifact. Opened from the
+  catalog with only a disc, it offers the disc's linked artifacts. New
+  routes: `GET /api/v1/discs` (search) and `POST /api/v1/discs` (catalogue
+  in one step, audited); a request link now carries its `year`.
 - Deleting an artifact asks one short question ("Are you sure you want to
   delete this artifact? Once its grace period ends, its files are removed
   and can't be recovered.") in place of a paragraph, and an original no

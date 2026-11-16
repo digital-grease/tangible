@@ -25,6 +25,9 @@ export type EditTitleRequest = components['schemas']['EditTitleRequest'];
 export type EditEditionRequest = components['schemas']['EditEditionRequest'];
 export type EditDiscSetRequest = components['schemas']['EditDiscSetRequest'];
 export type EditDiscRequest = components['schemas']['EditDiscRequest'];
+export type CatalogDiscView = components['schemas']['CatalogDiscView'];
+export type CatalogDiscPage = components['schemas']['CatalogDiscPage'];
+export type CatalogueDiscRequest = components['schemas']['CatalogueDiscRequest'];
 
 function isProblem(value: unknown): value is Problem {
   return typeof value === 'object' && value !== null && 'code' in value && 'detail' in value;
@@ -256,6 +259,119 @@ export async function linkArtifact(
     `/api/v1/discs/${encodeURIComponent(discId)}/artifact-links`,
     { artifact_id: artifactId },
   );
+}
+
+/**
+ * Find discs to burn to: each word of `search` must be in where a disc
+ * sits (its title, edition, set, name, label or year). Discs linked to
+ * `artifact` come first; `id` finds only that disc.
+ */
+export async function findDiscs(
+  query: { search?: string; artifact?: string; id?: string; limit?: number },
+  fetcher: typeof fetch = apiFetch,
+): Promise<CommandResult<CatalogDiscPage>> {
+  const params = new URLSearchParams();
+  if (query.search?.trim()) params.set('search', query.search.trim());
+  if (query.artifact) params.set('artifact', query.artifact);
+  if (query.id) params.set('id', query.id);
+  if (query.limit) params.set('limit', String(query.limit));
+  const result = await request<CatalogDiscPage>(fetcher, `/api/v1/discs?${params.toString()}`);
+  if (isProblem(result)) return { kind: 'error', problem: result };
+  return { kind: 'ready', data: result };
+}
+
+/** The artifacts linked to a disc. */
+export async function discArtifacts(
+  discId: string,
+  fetcher: typeof fetch = apiFetch,
+): Promise<CommandResult<DiscArtifactView[]>> {
+  const result = await request<DiscArtifactView[]>(
+    fetcher,
+    `/api/v1/discs/${encodeURIComponent(discId)}/artifacts`,
+  );
+  if (isProblem(result)) return { kind: 'error', problem: result };
+  return { kind: 'ready', data: result };
+}
+
+/**
+ * Catalogue a single-disc release in one step, linked to the artifact a
+ * burn is for: the title (or the one already catalogued by that name, kind
+ * and year), a new edition, a set of one disc, and disc 1.
+ */
+export async function catalogueDisc(
+  body: CatalogueDiscRequest,
+  fetcher: typeof fetch = apiFetch,
+): Promise<CommandResult<CatalogDiscView>> {
+  return post<CatalogDiscView>(fetcher, '/api/v1/discs', body);
+}
+
+/** The kinds of work, as a form offers them. */
+export const TITLE_KINDS: readonly { value: string; label: string }[] = [
+  'movie',
+  'television',
+  'game',
+  'software',
+  'operating_system',
+  'music',
+  'data_archive',
+  'training',
+  'unknown',
+].map((value) => ({ value, label: titleKindLabel(value) }));
+
+/** The media a disc can be, as a form offers them. */
+export const MEDIA_FAMILIES: readonly { value: string; label: string }[] = [
+  'cd',
+  'dvd',
+  'bluray',
+  'uhd_bluray',
+  'gd_rom',
+  'unknown',
+].map((value) => ({ value, label: mediaFamilyLabel(value) }));
+
+/** Where a disc sits, in a line: "Hackers (1995) · NTSC DVD · Disc 1". */
+export function discPlace(found: CatalogDiscView): string {
+  const title = found.release_year ? `${found.title} (${found.release_year})` : found.title;
+  // A set of one disc says nothing its edition does not.
+  const set = found.disc_count_expected === 1 ? [] : [found.disc_set];
+  return [title, found.edition, ...set, discName(found.disc)].join(' · ');
+}
+
+/** The kind of work a request's kind of item is. */
+export function titleKindOfRequest(kind: string | null | undefined): string {
+  switch (kind) {
+    case 'game':
+    case 'music':
+    case 'movie':
+    case 'television':
+    case 'software':
+      return kind;
+    default:
+      return 'unknown';
+  }
+}
+
+/** The largest image a CD holds, about 807 MiB. */
+const CD_BYTES = 846_364_848;
+/** The largest image a dual-layer DVD holds. */
+const DVD_DL_BYTES = 8_547_991_552;
+
+/**
+ * The medium an artifact most likely was, to start a new disc with: what its
+ * manifest says, else a CD for a layout of tracks, else by its size. The
+ * person cataloguing it sees it and can change it.
+ */
+export function likelyMedium(artifact: {
+  format: string;
+  total_bytes: number;
+  disc_shape?: { media_family?: string | null } | null;
+}): string {
+  const said = artifact.disc_shape?.media_family;
+  if (said && said !== 'unknown') return said;
+  if (['cue_bin', 'toc_bin', 'ccd_img_sub'].includes(artifact.format)) return 'cd';
+  if (artifact.format === 'bdmv_directory') return 'bluray';
+  if (artifact.format === 'video_ts_directory') return 'dvd';
+  if (artifact.total_bytes <= CD_BYTES) return 'cd';
+  return artifact.total_bytes <= DVD_DL_BYTES ? 'dvd' : 'bluray';
 }
 
 // --- labels ---------------------------------------------------------------

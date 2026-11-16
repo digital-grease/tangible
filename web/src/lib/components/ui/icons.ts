@@ -27,6 +27,7 @@ export const ICONS = {
   diagnostics: 'M3 12h4l2-6 4 12 2-6h6',
   search: 'M4 11a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M20 20l-4-4',
   plus: 'M12 5v14M5 12h14',
+  link: 'M9 15l6-6M11 6l.5-.5a4.95 4.95 0 0 1 7 7l-.5.5M13 18l-.5.5a4.95 4.95 0 0 1-7-7l.5-.5',
   lock: 'M7 11h10a2 2 0 0 1 2 2v6a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2v-6a2 2 0 0 1 2 -2zM8 11V8a4 4 0 0 1 8 0v3',
   filter: 'M4 5h16l-6 7.5V19l-4 2v-8.5z',
   'arrow-right': 'M5 12h14m-5-5 5 5-5 5',

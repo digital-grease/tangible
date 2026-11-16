@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
+  import DiscPicker from '$lib/components/DiscPicker.svelte';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import Disc from '$lib/components/ui/Disc.svelte';
@@ -9,7 +10,9 @@
   import { onMount } from 'svelte';
   import { page } from '$app/state';
   import { createBurnJob, newIdempotencyKey, type BurnJobCreated } from '$lib/burns';
+  import { discArtifacts } from '$lib/catalog';
   import {
+    artifactName,
     formatBytes,
     formatLabel,
     loadArtifact,
@@ -27,6 +30,12 @@
   let priority = $state(0);
 
   let artifact = $state<LoadState<ArtifactDetail> | null>(null);
+  /** Whether what the address named has been read, so the picker starts from it. */
+  let ready = $state(false);
+  /** Started again whenever the artifact changes, to search by the new one. */
+  let pickerRun = $state(0);
+  /** A chosen disc's artifacts, offered while no artifact is chosen. */
+  let linked = $state<ArtifactDetail[]>([]);
   let created = $state<BurnJobCreated | null>(null);
   let problem = $state<Problem | null>(null);
   let submitting = $state(false);
@@ -47,6 +56,45 @@
     // two-disc edition", not a UUID somebody remembered.
     discId = page.url.searchParams.get('disc') ?? '';
     if (artifactId) artifact = await loadArtifact(artifactId);
+    ready = true;
+  });
+
+  /** Read the artifact typed or pasted, and search for its disc again. */
+  async function changeArtifact() {
+    const id = artifactId.trim();
+    artifact = id ? await loadArtifact(id) : null;
+    pickerRun += 1;
+  }
+
+  function useArtifact(chosen: ArtifactDetail) {
+    artifactId = chosen.id;
+    artifact = { kind: 'ready', data: chosen };
+    linked = [];
+    pickerRun += 1;
+  }
+
+  // Arriving from the catalog with a disc and no artifact: offer what is
+  // linked to that disc, so its identifier need not be found elsewhere.
+  $effect(() => {
+    const disc = discId;
+    if (!disc || artifactId.trim()) {
+      linked = [];
+      return;
+    }
+    let current = true;
+    void (async () => {
+      const links = await discArtifacts(disc);
+      if (links.kind !== 'ready') return;
+      const read = await Promise.all(
+        links.data.slice(0, 5).map((link) => loadArtifact(link.artifact_id)),
+      );
+      if (current) {
+        linked = read.flatMap((state) => (state.kind === 'ready' ? [state.data] : []));
+      }
+    })();
+    return () => {
+      current = false;
+    };
   });
 
   async function submit(event: SubmitEvent) {
@@ -111,13 +159,40 @@
         <div class="what">
           <div class="fields">
             <label for="artifact">Artifact identifier</label>
-            <input id="artifact" name="artifact" bind:value={artifactId} required />
+            <input
+              id="artifact"
+              name="artifact"
+              bind:value={artifactId}
+              onchange={changeArtifact}
+              required
+            />
+            {#if linked.length > 0}
+              <div class="linked" role="group" aria-label="Artifacts linked to this disc">
+                <p class="hint">Linked to this disc:</p>
+                <ul>
+                  {#each linked as candidate (candidate.id)}
+                    <li>
+                      <span class="name">{artifactName(candidate) ?? candidate.id}</span>
+                      <span class="hint"
+                        >{formatLabel(candidate.format)}, {formatBytes(candidate.total_bytes)}</span
+                      >
+                      <Button
+                        size="sm"
+                        onclick={() => useArtifact(candidate)}
+                        label={`Use ${artifactName(candidate) ?? candidate.id}`}
+                        >Use this artifact</Button
+                      >
+                    </li>
+                  {/each}
+                </ul>
+              </div>
+            {/if}
 
             {#if artifact?.kind === 'ready'}
               <dl class="facts">
                 <div>
                   <dt>Name</dt>
-                  <dd>{artifact.data.source_filename ?? artifact.data.id}</dd>
+                  <dd>{artifactName(artifact.data) ?? artifact.data.id}</dd>
                 </div>
                 <div>
                   <dt>Format</dt>
@@ -141,19 +216,15 @@
               <p class="refused">That artifact could not be read: {artifact.problem.detail}</p>
             {/if}
 
-            <label for="disc">Disc identifier</label>
-            <input
-              id="disc"
-              name="disc"
-              bind:value={discId}
-              required
-              aria-describedby="disc-hint"
-            />
-            <p class="hint" id="disc-hint">
-              The catalog entry this copy represents.
-              <a href="/catalog">Find it in the catalog</a> and choose "Burn to this disc", or paste an
-              identifier.
-            </p>
+            {#if ready}
+              {#key pickerRun}
+                <DiscPicker
+                  artifactId={artifact?.kind === 'ready' ? artifact.data.id : ''}
+                  artifact={artifact?.kind === 'ready' ? artifact.data : null}
+                  bind:discId
+                />
+              {/key}
+            {/if}
           </div>
           {#if artifact?.kind === 'ready'}
             <Disc shape={artifact.data.disc_shape} size={120} hole="var(--surface)" />
@@ -221,7 +292,18 @@
         <ErrorPanel {problem} area="other" endpoint="POST /api/v1/burn-jobs" level={3} refusal />
       {/if}
 
-      <Button type="submit" variant="primary" icon="burn" disabled={submitting}>
+      {#if !artifactId.trim() || !discId}
+        <p class="hint missing">
+          {!artifactId.trim() ? 'Choose the artifact to write' : 'Choose the disc it is a copy of'} to
+          queue this burn.
+        </p>
+      {/if}
+      <Button
+        type="submit"
+        variant="primary"
+        icon="burn"
+        disabled={submitting || !artifactId.trim() || !discId}
+      >
         {submitting ? 'Queueing…' : 'Queue this burn'}
       </Button>
     </section>
@@ -305,6 +387,26 @@
   }
   .refused {
     color: var(--bad);
+  }
+  .linked ul {
+    list-style: none;
+    margin: var(--space-1) 0 0;
+    padding: 0;
+    display: grid;
+    gap: var(--space-1);
+  }
+  .linked li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1) var(--space-3);
+  }
+  .linked .name {
+    font-weight: var(--weight-medium);
+    overflow-wrap: anywhere;
+  }
+  .missing {
+    margin-bottom: var(--space-2);
   }
   .queued {
     padding: var(--space-4);
