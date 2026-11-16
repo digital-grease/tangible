@@ -5078,7 +5078,9 @@ export interface components {
         RequestDeletion: {
             /**
              * @description Required, true, to delete an original: an imported original or a
-             *     disc dump, which may be somebody's only copy.
+             *     disc dump, which Tangible cannot make again as it can a derivative.
+             *     Having it again means importing it again from its source, or ripping
+             *     the disc again.
              */
             confirm_original?: boolean;
         };

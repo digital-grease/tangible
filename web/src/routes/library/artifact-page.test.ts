@@ -305,10 +305,23 @@ describe('Deleting an artifact', () => {
     expect(await axeViolations(container)).toEqual([]);
     const submit = screen.getByRole('button', { name: 'Delete VIDEO_TS' });
     expect((submit as HTMLButtonElement).disabled).toBe(true);
+    // Not that it is the only copy: that Tangible cannot make it again, and
+    // how it could be had again.
+    expect(screen.getByLabelText(/an original, which Tangible cannot make again/)).toBeTruthy();
+    expect(screen.getByText(/imported again from where it came from/)).toBeTruthy();
+    expect(screen.queryByText(/only copy/)).toBeNull();
     await fireEvent.click(screen.getByLabelText(/this is an original/));
     expect((submit as HTMLButtonElement).disabled).toBe(false);
     await fireEvent.click(submit);
     await vi.waitFor(() => expect(asked).toContain('POST /api/v1/artifacts/a1/deletion-requests'));
+  });
+
+  it('says a rip could be had again only by ripping the disc again', async () => {
+    serve(artifact({ origin: 'physical_dump', deletion: null }));
+    render(ArtifactPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Delete this artifact…' }));
+    expect(screen.getByText(/the disc would have to be ripped again/)).toBeTruthy();
+    expect(screen.getByLabelText(/this is an original/)).toBeTruthy();
   });
 
   it('asks for a derivative without the original confirmation', async () => {
@@ -316,6 +329,7 @@ describe('Deleting an artifact', () => {
     render(ArtifactPage);
     await fireEvent.click(await screen.findByRole('button', { name: 'Delete this artifact…' }));
     expect(screen.queryByLabelText(/this is an original/)).toBeNull();
+    expect(screen.queryByText(/would have to be/)).toBeNull();
     expect(
       (screen.getByRole('button', { name: 'Delete VIDEO_TS' }) as HTMLButtonElement).disabled,
     ).toBe(false);

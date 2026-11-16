@@ -88,7 +88,9 @@ pub async fn refuse_if_deleted(
 #[derive(Debug, Default, Deserialize, ToSchema)]
 pub struct RequestDeletion {
     /// Required, true, to delete an original: an imported original or a
-    /// disc dump, which may be somebody's only copy.
+    /// disc dump, which Tangible cannot make again as it can a derivative.
+    /// Having it again means importing it again from its source, or ripping
+    /// the disc again.
     #[serde(default)]
     pub confirm_original: bool,
 }
@@ -117,7 +119,7 @@ fn refused(change: DeletionChange, artifact_id: &str) -> Problem {
         DeletionChange::NotFound => Problem::not_found("artifact", artifact_id),
         DeletionChange::Refused(DeletionError::OriginalNotConfirmed) => Problem::new(
             ErrorCode::ValidationFailed,
-            "this artifact is an original, which may be somebody's only copy; set \
+            "this artifact is an original, which Tangible cannot make again; set \
              confirm_original to true to say deleting it is intended",
         ),
         DeletionChange::Refused(DeletionError::AlreadyDeleted) => Problem::new(

@@ -14268,7 +14268,7 @@
         "properties": {
           "confirm_original": {
             "type": "boolean",
-            "description": "Required, true, to delete an original: an imported original or a\ndisc dump, which may be somebody's only copy."
+            "description": "Required, true, to delete an original: an imported original or a\ndisc dump, which Tangible cannot make again as it can a derivative.\nHaving it again means importing it again from its source, or ripping\nthe disc again."
           }
         }
       },

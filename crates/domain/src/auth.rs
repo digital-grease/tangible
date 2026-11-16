@@ -76,7 +76,7 @@ pub enum Permission {
     /// (ADR 0020).
     ///
     /// Administrators only: after the grace period the bytes are gone, and
-    /// an original may be somebody's only copy.
+    /// an original cannot be made again, only imported or ripped again.
     DeleteArtifacts,
     /// Ask for an item, attesting to owning it, and withdraw one's own
     /// requests (ADR 0021, docs/plans/requests.md).

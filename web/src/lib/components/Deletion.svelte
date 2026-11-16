@@ -13,6 +13,7 @@
   import Confirm from '$lib/components/ui/Confirm.svelte';
   import {
     isOriginal,
+    originalNote,
     keepArtifact,
     requestDeletion,
     type ArtifactDeletionView,
@@ -126,8 +127,9 @@
           another artifact stays for that one.
         </p>
         {#if original}
+          {#if originalNote(origin)}<p>{originalNote(origin)}</p>{/if}
           <Checkbox
-            label="I understand this is an original, which may be the only copy there is"
+            label="I understand this is an original, which Tangible cannot make again"
             bind:checked={confirmed}
           />
         {/if}
