@@ -10,10 +10,12 @@ import {
   createRequest,
   declineRequest,
   detailsOf,
+  discName,
   grabOutcome,
   grabRelease,
   imdbId,
   kindLabel,
+  largestDiscNote,
   loadReleaseSearch,
   loadRequestImport,
   loadRequests,
@@ -33,6 +35,8 @@ import {
   searchedFor,
   sourceNote,
   type ReleaseView,
+  tooLargeDetail,
+  tooLargeMark,
 } from './requests';
 
 function recorder() {
@@ -265,5 +269,23 @@ describe('requests', () => {
     expect(releaseRefusal('RATE_LIMITED')).toMatch(/Try again later/);
     expect(releaseRefusal('INTEGRATION_AUTH_FAILED')).toMatch(/API key/);
     expect(releaseRefusal('CONFLICT')).toBeNull();
+  });
+
+  it('names the discs that sizes are judged against', () => {
+    expect(discName('cd')).toBe('an 80-minute CD');
+    expect(discName('dvd')).toBe('a DVD');
+    expect(discName('dvd_dual_layer')).toBe('a dual-layer DVD');
+    expect(discName('bluray_dual_layer')).toBe('a dual-layer Blu-ray disc');
+    expect(discName('something new')).toBe('one disc');
+    const dvd = { kind: 'dvd', capacity_bytes: 4_707_319_808 };
+    expect(largestDiscNote(dvd)).toBe(
+      'Your drives write discs up to a DVD, 4.4 GiB. A release larger than that is marked.',
+    );
+    expect(largestDiscNote(null)).toMatch(/not checked/);
+    expect(tooLargeMark(dvd)).toBe('Larger than a DVD');
+    const unsized = { size_bytes: null } as Parameters<typeof tooLargeDetail>[0];
+    expect(tooLargeDetail(unsized, dvd)).toMatch(
+      /^This release is more than a DVD holds \(4\.4 GiB\)/,
+    );
   });
 });

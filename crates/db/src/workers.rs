@@ -120,6 +120,38 @@ pub async fn list_workers(
     rows.iter().map(worker_from_row).collect()
 }
 
+/// Every media profile a drive that may still burn says it writes, each
+/// once: the drives of workers neither revoked nor incompatible, and not
+/// disabled. Offline workers count, being expected back.
+///
+/// The lists are what workers reported, evidence and nothing more, so they
+/// are read with bounds: the first 64 entries of a drive's list, each of at
+/// most 80 characters, and nothing from a list that is not one.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn drive_write_profiles(pool: &PgPool) -> Result<Vec<String>, DbError> {
+    sqlx::query_scalar(
+        "SELECT DISTINCT listed.profile
+         FROM drives d
+         JOIN workers w ON w.id = d.worker_id
+         CROSS JOIN LATERAL jsonb_array_elements_text(
+             CASE WHEN jsonb_typeof(d.capabilities_json -> 'write_profiles') = 'array'
+                  THEN d.capabilities_json -> 'write_profiles'
+                  ELSE '[]'::jsonb END
+         ) WITH ORDINALITY AS listed (profile, position)
+         WHERE w.status NOT IN ('revoked', 'incompatible')
+           AND d.status <> 'disabled'
+           AND listed.position <= 64
+           AND length(listed.profile) <= 80
+         ORDER BY listed.profile",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(DbError::Query)
+}
+
 /// One worker.
 ///
 /// # Errors

@@ -17,7 +17,8 @@ use tangible_db::repositories::{
 };
 use tangible_db::rips::{RipOptions, claim_rip, request_rip};
 use tangible_db::workers::{
-    WorkerChange, drain_worker, enable_worker, get_worker, list_workers, revoke_worker,
+    WorkerChange, drain_worker, drive_write_profiles, enable_worker, get_worker, list_workers,
+    revoke_worker,
 };
 use tangible_db::{Database, DbConfig};
 use tangible_domain::{DriveId, ErasureMode, WorkerId};
@@ -272,4 +273,63 @@ async fn a_revoked_worker_past_authentication_takes_nothing() {
             .err(),
         Some(ClaimOutcome::NoWork)
     );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn the_profiles_drives_write_are_those_of_drives_that_may_burn() {
+    // Names no other test uses, so the shared database's other drives do
+    // not matter; each worker is revoked at the end, which takes its
+    // drive's profiles out again.
+    let pool = pool().await;
+    let (worker, drive) = worker_and_drive(&pool).await;
+    let (other, other_drive) = worker_and_drive(&pool).await;
+    let mine = format!("BD-RE {drive}");
+    let theirs = format!("DVD+R/DL {other_drive}");
+    let long = format!("CD-R {}", "x".repeat(80));
+    let set = |id: DriveId, capabilities: serde_json::Value| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query("UPDATE drives SET capabilities_json = $2 WHERE id = $1")
+                .bind(id.as_uuid())
+                .bind(capabilities)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+    };
+    set(
+        drive,
+        serde_json::json!({"write_profiles": [mine, mine, long], "read_profiles": ["BD-ROM"]}),
+    )
+    .await;
+    set(other_drive, serde_json::json!({"write_profiles": [theirs]})).await;
+
+    let listed = drive_write_profiles(&pool).await.unwrap();
+    assert_eq!(
+        listed.iter().filter(|p| **p == mine).count(),
+        1,
+        "once each"
+    );
+    assert!(listed.contains(&theirs));
+    assert!(!listed.contains(&long), "too long to be a profile");
+    assert!(!listed.iter().any(|p| p == "BD-ROM"), "read, not written");
+
+    // A drive turned off, or a list that is not one, says nothing.
+    sqlx::query("UPDATE drives SET status = 'disabled' WHERE id = $1")
+        .bind(other_drive.as_uuid())
+        .execute(&pool)
+        .await
+        .unwrap();
+    set(drive, serde_json::json!({"write_profiles": mine})).await;
+    let listed = drive_write_profiles(&pool).await.unwrap();
+    assert!(!listed.contains(&theirs));
+    assert!(!listed.contains(&mine));
+
+    // Nor does a revoked worker's drive.
+    set(drive, serde_json::json!({"write_profiles": [mine]})).await;
+    assert!(drive_write_profiles(&pool).await.unwrap().contains(&mine));
+    revoke_worker(&pool, worker, "alice").await.unwrap();
+    revoke_worker(&pool, other, "alice").await.unwrap();
+    assert!(!drive_write_profiles(&pool).await.unwrap().contains(&mine));
 }

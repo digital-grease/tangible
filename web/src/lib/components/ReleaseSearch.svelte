@@ -7,7 +7,9 @@
   // best first, each saying why it ranks where it does; and Grab on one,
   // which asks first and names the download client it goes to. Nothing is
   // downloaded until a person grabs. The server holds a search for an hour,
-  // so it is loaded again when the page is.
+  // so it is loaded again when the page is. A release larger than the
+  // largest disc the drives write is marked, and said so again before it is
+  // grabbed; the server judges which, from the profiles the drives listed.
   import { onMount } from 'svelte';
   import ErrorPanel from './ErrorPanel.svelte';
   import Button from './ui/Button.svelte';
@@ -24,6 +26,7 @@
     clientsFor,
     grabOutcome,
     grabRelease,
+    largestDiscNote,
     loadReleaseSearch,
     protocolLabel,
     releaseAge,
@@ -31,6 +34,8 @@
     releaseRefusal,
     searchReleases,
     searchedFor,
+    tooLargeDetail,
+    tooLargeMark,
     type GrabView,
     type ReleaseSearchView,
     type ReleaseView,
@@ -163,10 +168,13 @@
   {/if}
 
   {#if held}
-    <p class="quiet held">
-      {searchedFor(held)} at {time(held.searched_at)}. Held until {time(held.held_until)}; search
-      again after that to grab one.
-    </p>
+    <div class="held">
+      <p class="quiet">
+        {searchedFor(held)} at {time(held.searched_at)}. Held until {time(held.held_until)}; search
+        again after that to grab one.
+      </p>
+      <p class="quiet">{largestDiscNote(held.largest_disc)}</p>
+    </div>
     {#if held.indexers_enabled === 0}
       <Callout tone="warn" role="note">
         <p>Prowlarr has no indexer turned on, so nothing can be found. Add one in Prowlarr.</p>
@@ -202,6 +210,11 @@
             <tr>
               <th scope="row" class="release">
                 <span class="title">{release.title}</span>
+                {#if release.larger_than_largest_disc && held.largest_disc}
+                  <span class="too-large"
+                    ><StatusMark tone="warn" label={tooLargeMark(held.largest_disc)} /></span
+                  >
+                {/if}
                 {#if release.categories.length > 0}
                   <span class="sub">{release.categories.join(', ')}</span>
                 {/if}
@@ -258,6 +271,11 @@
             : 'the client chosen'}, which downloads it; the request is fulfilled once it is in the
           library.
         </p>
+        {#if release.larger_than_largest_disc && held?.largest_disc}
+          <Callout tone="warn" role="note">
+            <p>{tooLargeDetail(release, held.largest_disc)}</p>
+          </Callout>
+        {/if}
         {#if pickedClients.length > 1}
           <Select
             label="Download client"
@@ -301,7 +319,12 @@
     min-width: 0;
   }
   .held {
+    display: grid;
+    gap: var(--space-1);
     margin: var(--space-3) 0;
+  }
+  .held p {
+    margin: 0;
   }
   .release {
     font-weight: var(--weight-regular);
@@ -311,6 +334,11 @@
     display: block;
     font-weight: var(--weight-medium);
     overflow-wrap: anywhere;
+  }
+  .too-large {
+    display: block;
+    margin-top: var(--space-1);
+    font-size: var(--text-sm);
   }
   .sub {
     display: block;

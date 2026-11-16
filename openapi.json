@@ -13207,6 +13207,26 @@
           }
         }
       },
+      "LargestDiscView": {
+        "type": "object",
+        "description": "The largest disc the drives write, by the media profiles they list.",
+        "required": [
+          "kind",
+          "capacity_bytes"
+        ],
+        "properties": {
+          "capacity_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The most an image of one can be, in bytes. Nominal: the disc in a\ndrive may hold a little less, and its own capacity is what a burn is\nheld to.",
+            "minimum": 0
+          },
+          "kind": {
+            "type": "string",
+            "description": "`cd` (80 minutes), `dvd`, `dvd_dual_layer` or `bluray_dual_layer`."
+          }
+        }
+      },
       "LineageView": {
         "type": "object",
         "description": "An artifact's lineage, and what could still be derived from it.",
@@ -13980,6 +14000,17 @@
             },
             "description": "Those it has paused after they failed: their releases are missing."
           },
+          "largest_disc": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LargestDiscView",
+                "description": "The largest disc any drive that may burn says it writes: of workers\nneither revoked nor incompatible, offline ones included, and not\ndisabled. Absent when no drive has said."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "query": {
             "type": "string",
             "description": "The words searched for, or the IMDb ID."
@@ -14016,7 +14047,8 @@
           "categories",
           "score",
           "reasons",
-          "can_grab"
+          "can_grab",
+          "larger_than_largest_disc"
         ],
         "properties": {
           "can_grab": {
@@ -14046,6 +14078,10 @@
           "indexer": {
             "type": "string",
             "description": "The indexer that has it, as Prowlarr names it."
+          },
+          "larger_than_largest_disc": {
+            "type": "boolean",
+            "description": "Whether it is larger than the largest disc the drives write\n(`largest_disc`), so that, as it is, it cannot be one such disc.\nFalse when either size is not known."
           },
           "leechers": {
             "type": [

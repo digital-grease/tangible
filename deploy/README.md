@@ -786,6 +786,12 @@ category, as a job handed over by hand is. The request follows the import,
 and is in the library when it completes. Nothing is searched for or grabbed
 unless an operator does it, for an approved request.
 
+A release larger than the largest disc your drives write is marked, and Grab
+says so before it hands it over. Each burn worker lists what its drive
+writes when it starts, so a worker older than the server lists nothing until
+it is updated, and the search then says sizes are not checked. The mark is a
+warning: a release may unpack smaller, or hold a set of discs.
+
 Prowlarr's download links carry its API key: Tangible never shows, logs or
 audits them, and holds a search's links sealed with the secret key below,
 for the hour a release may be picked. A restart forgets them; search again.

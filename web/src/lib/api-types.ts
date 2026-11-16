@@ -4634,6 +4634,18 @@ export interface components {
             /** @description When it lapses, RFC 3339. */
             expires_at: string;
         };
+        /** @description The largest disc the drives write, by the media profiles they list. */
+        LargestDiscView: {
+            /**
+             * Format: int64
+             * @description The most an image of one can be, in bytes. Nominal: the disc in a
+             *     drive may hold a little less, and its own capacity is what a burn is
+             *     held to.
+             */
+            capacity_bytes: number;
+            /** @description `cd` (80 minutes), `dvd`, `dvd_dual_layer` or `bluray_dual_layer`. */
+            kind: string;
+        };
         /** @description An artifact's lineage, and what could still be derived from it. */
         LineageView: {
             /** @description What has been derived from it. */
@@ -4944,6 +4956,7 @@ export interface components {
             indexers_enabled?: number | null;
             /** @description Those it has paused after they failed: their releases are missing. */
             indexers_paused: components["schemas"]["PausedIndexerView"][];
+            largest_disc?: components["schemas"]["LargestDiscView"] | null;
             /** @description The words searched for, or the IMDb ID. */
             query: string;
             /** @description The request. */
@@ -4973,6 +4986,12 @@ export interface components {
             id: string;
             /** @description The indexer that has it, as Prowlarr names it. */
             indexer: string;
+            /**
+             * @description Whether it is larger than the largest disc the drives write
+             *     (`largest_disc`), so that, as it is, it cannot be one such disc.
+             *     False when either size is not known.
+             */
+            larger_than_largest_disc: boolean;
             /**
              * Format: int32
              * @description A torrent's leechers.

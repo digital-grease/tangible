@@ -380,6 +380,7 @@ pub const API_BASE: &str = "/api/v1";
         routes::request_releases::ReleaseSearchView,
         routes::request_releases::ReleaseView,
         routes::request_releases::PausedIndexerView,
+        routes::request_releases::LargestDiscView,
         routes::request_releases::DownloadClientChoiceView,
         routes::request_releases::GrabReleaseRequest,
         routes::request_releases::GrabView,

@@ -647,6 +647,56 @@ async fn a_request_is_searched_for_grabbed_and_fulfilled_by_its_import() {
     assert_eq!(status, StatusCode::OK, "{held}");
     assert_eq!(held["results"][0]["id"], results[0]["id"]);
 
+    // Sizes are judged against the largest disc a drive writes, as the
+    // drives listed them. A Blu-ray writer's is the largest there is, so
+    // the shared database's other drives do not change it.
+    let worker = uuid::Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO workers (id, name, software_version, protocol_version, credential_hash) \
+         VALUES ($1, 'releases-' || $1::text, '0.1.0', '1alpha1', 'hash-' || $1::text)",
+    )
+    .bind(worker)
+    .execute(&harness.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO drives (id, worker_id, configured_name, device_alias, capabilities_json) \
+         VALUES ($1, $2, 'writer', '/dev/sr0', $3)",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(worker)
+    .bind(json!({ "write_profiles": ["BD-RE", "DVD+R/DL", "CD-R"], "read_profiles": ["BD-ROM"] }))
+    .execute(&harness.pool)
+    .await
+    .unwrap();
+    let (status, judged, _) = harness
+        .send(
+            &harness.operator,
+            Method::GET,
+            &format!("/api/v1/requests/{id}/search"),
+            None,
+        )
+        .await;
+    sqlx::query("UPDATE workers SET status = 'revoked', revoked_at = now() WHERE id = $1")
+        .bind(worker)
+        .execute(&harness.pool)
+        .await
+        .unwrap();
+    assert_eq!(status, StatusCode::OK, "{judged}");
+    assert_eq!(
+        judged["largest_disc"]["kind"], "bluray_dual_layer",
+        "{judged}"
+    );
+    assert_eq!(judged["largest_disc"]["capacity_bytes"], 50_050_629_632_u64);
+    assert!(
+        judged["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|release| release["larger_than_largest_disc"] == false),
+        "{judged}"
+    );
+
     // A result not held is refused, and nothing is fetched.
     let (status, refused, _) = harness
         .grab(

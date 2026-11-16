@@ -71,6 +71,7 @@ function release(extra: Partial<ReleaseView> = {}): ReleaseView {
     score: 130,
     reasons: ['every word searched for is in its title', 'it names the year, 2008'],
     can_grab: true,
+    larger_than_largest_disc: false,
     ...extra,
   } as ReleaseView;
 }
@@ -98,6 +99,7 @@ function found(extra: Partial<ReleaseSearchView> = {}): ReleaseSearchView {
     indexers_enabled: 2,
     indexers_paused: [{ name: 'Fake Newznab', until: '2026-11-13T12:05:00Z' }],
     clients: [{ id: 'c1', name: 'qBittorrent', protocol: 'torrent' }],
+    largest_disc: null,
     ...extra,
   } as ReleaseSearchView;
 }
@@ -139,6 +141,65 @@ describe('Finding a release', () => {
     expect(screen.getByText(/Prowlarr has paused Fake Newznab after it failed/)).toBeTruthy();
     expect(screen.getByText(/searched for by its IMDb ID, then by its title/)).toBeTruthy();
     expect(await axeViolations(container)).toEqual([]);
+  });
+
+  it('marks a release larger than the largest disc the drives write, and says so before grabbing', async () => {
+    server({
+      'GET /api/v1/requests/q1/search': {
+        status: 200,
+        body: found({
+          largest_disc: { kind: 'dvd_dual_layer', capacity_bytes: 8_547_991_552 },
+          results: [
+            release({ larger_than_largest_disc: true }),
+            release({
+              id: 'r2',
+              title: 'Big.Buck.Bunny.2008.DVD.ISO',
+              size_bytes: 4_310_695_936,
+            }),
+          ],
+        }),
+      },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    const { container } = render(ReleaseSearch, {
+      props: { request: request(), ongrabbed: () => {} },
+    });
+    const table = await screen.findByRole('table', { name: 'Releases found, best first' });
+    const rows = within(table).getAllByRole('row');
+    expect(within(rows[1] as HTMLElement).getByText('Larger than a dual-layer DVD')).toBeTruthy();
+    expect(within(rows[2] as HTMLElement).queryByText(/Larger than/)).toBeNull();
+    expect(
+      screen.getByText(
+        'Your drives write discs up to a dual-layer DVD, 8.0 GiB. A release larger than that is marked.',
+      ),
+    ).toBeTruthy();
+    expect(await axeViolations(container)).toEqual([]);
+
+    await fireEvent.click(
+      screen.getByRole('button', { name: 'Grab: Big Buck Bunny (2008) [Blu-ray ISO]' }),
+    );
+    expect(
+      screen.getByText(
+        '22.0 GiB is more than a dual-layer DVD holds (8.0 GiB), the largest disc your drives write. Unless it unpacks smaller, or is a set of discs, it will not fit on one.',
+      ),
+    ).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: 'Not this one' }));
+    await fireEvent.click(
+      screen.getByRole('button', { name: 'Grab: Big.Buck.Bunny.2008.DVD.ISO' }),
+    );
+    expect(screen.queryByText(/the largest disc your drives write/)).toBeNull();
+  });
+
+  it('says when sizes are not checked, because no drive has said what it writes', async () => {
+    server({
+      'GET /api/v1/requests/q1/search': { status: 200, body: found() },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    render(ReleaseSearch, { props: { request: request(), ongrabbed: () => {} } });
+    expect(
+      await screen.findByText(/Sizes are not checked against your discs: no drive has listed/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Larger than/)).toBeNull();
   });
 
   it('searches the words given, and says when nothing was found', async () => {

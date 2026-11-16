@@ -25,7 +25,9 @@ use tangible_db::integrations::{IntegrationRecord, Submitted, list_integrations}
 use tangible_db::requests::{
     Download, RequestRecord, RequestRefusal, get_request, record_search, start_download,
 };
+use tangible_db::workers::drive_write_profiles;
 use tangible_domain::RequestId;
+use tangible_domain::media::{self, DiscSize};
 use tangible_integrations::prowlarr::{Fetched, Protocol, ProwlarrClient, Search};
 use utoipa::ToSchema;
 
@@ -83,6 +85,21 @@ pub struct ReleaseView {
     /// Whether a download client for its protocol is configured and turned
     /// on, so it can be grabbed.
     pub can_grab: bool,
+    /// Whether it is larger than the largest disc the drives write
+    /// (`largest_disc`), so that, as it is, it cannot be one such disc.
+    /// False when either size is not known.
+    pub larger_than_largest_disc: bool,
+}
+
+/// The largest disc the drives write, by the media profiles they list.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct LargestDiscView {
+    /// `cd` (80 minutes), `dvd`, `dvd_dual_layer` or `bluray_dual_layer`.
+    pub kind: String,
+    /// The most an image of one can be, in bytes. Nominal: the disc in a
+    /// drive may hold a little less, and its own capacity is what a burn is
+    /// held to.
+    pub capacity_bytes: u64,
 }
 
 /// An indexer Prowlarr has paused after it failed.
@@ -126,6 +143,10 @@ pub struct ReleaseSearchView {
     pub indexers_paused: Vec<PausedIndexerView>,
     /// The download clients a release may go to.
     pub clients: Vec<DownloadClientChoiceView>,
+    /// The largest disc any drive that may burn says it writes: of workers
+    /// neither revoked nor incompatible, offline ones included, and not
+    /// disabled. Absent when no drive has said.
+    pub largest_disc: Option<LargestDiscView>,
 }
 
 /// Which release to grab, and, when more than one client takes its
@@ -251,10 +272,24 @@ fn clients(all: &[IntegrationRecord]) -> Vec<DownloadClientChoiceView> {
         .collect()
 }
 
+/// The largest disc the drives write, or none when no drive has said or
+/// their lists cannot be read. A search is still worth answering without
+/// it, so a failure here is logged rather than answered.
+async fn largest_disc(state: &ApiState) -> Option<DiscSize> {
+    match drive_write_profiles(state.database().pool()).await {
+        Ok(profiles) => media::largest(profiles.iter().map(String::as_str)),
+        Err(error) => {
+            tracing::warn!(error = ?error, "the drives' profiles could not be read");
+            None
+        }
+    }
+}
+
 fn search_view(
     id: RequestId,
     held: &HeldSearch,
     clients: Vec<DownloadClientChoiceView>,
+    largest: Option<DiscSize>,
 ) -> ReleaseSearchView {
     let (searched_by, query) = match held.query.strip_prefix("{ImdbId:") {
         Some(rest) => ("imdb_id", rest.trim_end_matches('}').to_owned()),
@@ -285,6 +320,9 @@ fn search_view(
                 can_grab: clients
                     .iter()
                     .any(|client| client.protocol == release.protocol.as_str()),
+                larger_than_largest_disc: largest
+                    .zip(release.size_bytes)
+                    .is_some_and(|(disc, bytes)| !disc.holds(bytes)),
             }
         })
         .collect();
@@ -309,6 +347,10 @@ fn search_view(
             })
             .collect(),
         clients,
+        largest_disc: largest.map(|disc| LargestDiscView {
+            kind: disc.as_str().to_owned(),
+            capacity_bytes: disc.bytes(),
+        }),
     }
 }
 
@@ -451,7 +493,7 @@ pub async fn search_releases(
         by = %user.username,
         "request searched for"
     );
-    let view = search_view(id, &held, clients(&all));
+    let view = search_view(id, &held, clients(&all), largest_disc(&state).await);
     state.releases().hold(*id.as_uuid(), held);
     Ok(Json(view).into_response())
 }
@@ -489,7 +531,12 @@ pub async fn held_search(
         )
     })?;
     let all = integrations(&state).await?;
-    Ok(Json(search_view(id, &held, clients(&all))))
+    Ok(Json(search_view(
+        id,
+        &held,
+        clients(&all),
+        largest_disc(&state).await,
+    )))
 }
 
 fn expired() -> Problem {
@@ -776,6 +823,61 @@ mod tests {
         let none = choose(&[sabnzbd], Protocol::Torrent, None).unwrap_err();
         assert_eq!(none.code, "INTEGRATION_OFF");
         assert_eq!(clients(&all).len(), 2);
+    }
+
+    #[test]
+    fn a_release_larger_than_the_largest_disc_is_marked() {
+        // The recorded film search: a 23.6 GB Blu-ray ISO and two 4.3 GB
+        // DVD ISOs.
+        let key = SecretKey::from_bytes(&[7; 32]).unwrap();
+        let found = tangible_integrations::prowlarr::parse_releases(include_str!(
+            "../../../../fixtures/tool-output/prowlarr/search-movies-2.7.0.json"
+        ))
+        .unwrap();
+        let mut releases = found
+            .into_iter()
+            .map(|release| HeldRelease::seal(&key, release, 1, Vec::new()).unwrap())
+            .collect::<Vec<_>>();
+        let mut no_size = releases[0].clone();
+        no_size.release.size_bytes = None;
+        releases.push(no_size);
+        let held = HeldSearch::new(
+            uuid::Uuid::now_v7(),
+            "Big Buck Bunny".to_owned(),
+            releases,
+            IndexerState::default(),
+        );
+        let marked = |view: &ReleaseSearchView| {
+            view.results
+                .iter()
+                .map(|release| (release.size_bytes, release.larger_than_largest_disc))
+                .collect::<Vec<_>>()
+        };
+        let id = RequestId::generate();
+
+        let dvd = search_view(id, &held, Vec::new(), Some(DiscSize::DvdDualLayer));
+        let largest = dvd.largest_disc.as_ref().unwrap();
+        assert_eq!(largest.kind, "dvd_dual_layer");
+        assert_eq!(largest.capacity_bytes, 8_547_991_552);
+        assert_eq!(
+            marked(&dvd),
+            [
+                (Some(23_622_320_128), true),
+                (Some(4_310_695_936), false),
+                (Some(4_310_695_936), false),
+                (None, false),
+            ]
+        );
+
+        // A Blu-ray writer takes them all; with no drive known, nothing is
+        // judged.
+        let bluray = search_view(id, &held, Vec::new(), Some(DiscSize::BluRayDualLayer));
+        assert!(marked(&bluray).iter().all(|(_, larger)| !larger));
+        let unknown = search_view(id, &held, Vec::new(), None);
+        assert!(unknown.largest_disc.is_none());
+        assert!(marked(&unknown).iter().all(|(_, larger)| !larger));
+        let cd = search_view(id, &held, Vec::new(), Some(DiscSize::Cd));
+        assert_eq!(marked(&cd).iter().filter(|(_, larger)| *larger).count(), 3);
     }
 
     #[test]

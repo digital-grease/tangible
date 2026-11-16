@@ -8,6 +8,7 @@
 
 import type { Tone } from './components/ui/tone';
 import type { components } from './api-types';
+import { formatBytes } from './library';
 import { apiCall, apiFetch, type Result } from './session';
 
 export type RequestView = components['schemas']['RequestView'];
@@ -19,6 +20,7 @@ export type MetadataCandidate = components['schemas']['MetadataCandidateView'];
 export type MetadataSource = components['schemas']['MetadataSourceView'];
 export type ReleaseSearchView = components['schemas']['ReleaseSearchView'];
 export type ReleaseView = components['schemas']['ReleaseView'];
+export type LargestDisc = components['schemas']['LargestDiscView'];
 export type GrabView = components['schemas']['GrabView'];
 export type DownloadClientChoice = components['schemas']['DownloadClientChoiceView'];
 export type ImportView = components['schemas']['ImportView'];
@@ -412,6 +414,41 @@ export function releasePeers(release: ReleaseView): string {
     return `${release.seeders} seeding${leeching}`;
   }
   return release.grabs == null ? 'Not said' : `${release.grabs} grabs`;
+}
+
+/** A kind of disc, as a sentence names one. */
+export function discName(kind: string): string {
+  switch (kind) {
+    case 'cd':
+      return 'an 80-minute CD';
+    case 'dvd':
+      return 'a DVD';
+    case 'dvd_dual_layer':
+      return 'a dual-layer DVD';
+    case 'bluray_dual_layer':
+      return 'a dual-layer Blu-ray disc';
+    default:
+      return 'one disc';
+  }
+}
+
+/** What a search's release sizes are judged against, or why they are not. */
+export function largestDiscNote(largest: LargestDisc | null | undefined): string {
+  if (!largest) {
+    return 'Sizes are not checked against your discs: no drive has listed the discs it writes. A worker lists them when it starts.';
+  }
+  return `Your drives write discs up to ${discName(largest.kind)}, ${formatBytes(largest.capacity_bytes)}. A release larger than that is marked.`;
+}
+
+/** The mark on a release larger than the largest disc the drives write. */
+export function tooLargeMark(largest: LargestDisc): string {
+  return `Larger than ${discName(largest.kind)}`;
+}
+
+/** The same, in full, where the release is about to be grabbed. */
+export function tooLargeDetail(release: ReleaseView, largest: LargestDisc): string {
+  const size = release.size_bytes == null ? 'This release' : formatBytes(release.size_bytes);
+  return `${size} is more than ${discName(largest.kind)} holds (${formatBytes(largest.capacity_bytes)}), the largest disc your drives write. Unless it unpacks smaller, or is a set of discs, it will not fit on one.`;
 }
 
 /** The download clients that take `protocol`. */

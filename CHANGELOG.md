@@ -41,11 +41,17 @@ may change between minor versions, and the release notes say how.
   is searched for or grabbed on its own. Prowlarr's download links carry its
   key, so they are never shown, logged or audited, and are held only sealed.
   Migration 0037 adds the Prowlarr kind.
+- A release too large for your discs is marked in a request's release
+  search: one larger than the largest disc your drives write (by the
+  profiles they list) says "Larger than a dual-layer DVD", for instance, and
+  Grab says it again in full before it is grabbed. A warning only, since a
+  release may unpack smaller or hold a set of discs. The search says which
+  disc it judges by, or that no drive has listed what it writes.
 - Burn workers list what their drive reads and writes: the xorriso probe
   reads the drive's own profile list (xorriso `-list_profiles`), with or
   without a disc in it, as each worker starts. Preflight still reads the
-  disc in the drive before every burn, and the list is not yet used to
-  choose a drive.
+  disc in the drive before every burn; the list only sizes the warning
+  above. Update the workers as well as the server for it.
 - A "Buy me a coffee" link at the foot of the web UI's sidebar, under the
   source code link, and a button in the README, for anyone who wants to
   support Tangible's development. The link is plain text: the page loads
