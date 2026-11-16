@@ -108,6 +108,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/artifacts/{artifact_id}/deletion-requests/now": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete an artifact pending deletion now, without waiting for its grace
+         *     period to end.
+         * @description Delete an artifact that is pending deletion now, rather than when its grace period ends (ADR 0022), to free its space sooner: its grace period ends at once and the deletion runner is woken, which makes the tombstone and removes its bytes within moments, unless something holds it, when it waits as a due deletion does. Until the tombstone is made it can still be kept. Only an artifact already pending: deleting is still asked for first. Needs an administrator, and is audited.
+         */
+        post: operations["delete_artifact_now"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/artifacts/{artifact_id}/derivatives": {
         parameters: {
             query?: never;
@@ -6386,6 +6407,47 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description No such artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Deleted already, or not pending */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    delete_artifact_now: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Artifact identifier */
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Due now */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactDeletionView"];
+                };
             };
             /** @description No such artifact */
             404: {

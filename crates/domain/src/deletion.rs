@@ -103,6 +103,30 @@ impl Deletion {
         }
     }
 
+    /// End the grace period at `now`, for an artifact pending deletion
+    /// whose bytes are wanted gone sooner (ADR 0022). It stays pending, and
+    /// may still be kept, until the tombstone is made; a grace period that
+    /// has already ended is left as it is.
+    ///
+    /// # Errors
+    ///
+    /// [`DeletionError::NotPending`] for an artifact kept: it is asked for
+    /// first, so deleting is still two deliberate steps.
+    /// [`DeletionError::AlreadyDeleted`] once the bytes are gone.
+    pub fn delete_now(self, now: OffsetDateTime) -> Result<Self, DeletionError> {
+        match self {
+            Self::Pending {
+                requested_at,
+                delete_after,
+            } => Ok(Self::Pending {
+                requested_at,
+                delete_after: delete_after.min(now),
+            }),
+            Self::Kept => Err(DeletionError::NotPending),
+            Self::Deleted { .. } => Err(DeletionError::AlreadyDeleted),
+        }
+    }
+
     /// Make the tombstone at `now`.
     ///
     /// # Errors
@@ -202,5 +226,34 @@ mod tests {
             .request(ArtifactOrigin::Derived, false, now(), time::Duration::ZERO)
             .unwrap();
         assert!(pending.complete(now()).is_ok());
+    }
+
+    #[test]
+    fn a_pending_deletion_can_be_brought_forward_and_only_that() {
+        let pending = Deletion::Kept
+            .request(ArtifactOrigin::Derived, false, now(), 7 * DAY)
+            .unwrap();
+        let later = now() + DAY;
+        let hastened = pending.delete_now(later).unwrap();
+        assert_eq!(
+            hastened,
+            Deletion::Pending {
+                requested_at: now(),
+                delete_after: later,
+            }
+        );
+        // Due at once, and still kept on request until it is made.
+        assert!(hastened.complete(later).is_ok());
+        assert_eq!(hastened.keep(), Ok(Deletion::Kept));
+        // An ended grace period is not moved back.
+        let ended = pending.delete_now(now() + 30 * DAY).unwrap();
+        assert_eq!(ended, pending);
+        // Not without a request first, and not for a tombstone.
+        assert_eq!(
+            Deletion::Kept.delete_now(now()),
+            Err(DeletionError::NotPending)
+        );
+        let gone = Deletion::Deleted { deleted_at: now() };
+        assert_eq!(gone.delete_now(now()), Err(DeletionError::AlreadyDeleted));
     }
 }

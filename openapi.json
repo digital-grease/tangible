@@ -506,6 +506,64 @@
         ]
       }
     },
+    "/api/v1/artifacts/{artifact_id}/deletion-requests/now": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Delete an artifact pending deletion now, without waiting for its grace\nperiod to end.",
+        "description": "Delete an artifact that is pending deletion now, rather than when its grace period ends (ADR 0022), to free its space sooner: its grace period ends at once and the deletion runner is woken, which makes the tombstone and removes its bytes within moments, unless something holds it, when it waits as a due deletion does. Until the tombstone is made it can still be kept. Only an artifact already pending: deleting is still asked for first. Needs an administrator, and is audited.",
+        "operationId": "delete_artifact_now",
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "description": "Artifact identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Due now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactDeletionView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Deleted already, or not pending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/artifacts/{artifact_id}/derivatives": {
       "post": {
         "tags": [

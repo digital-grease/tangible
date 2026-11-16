@@ -26,7 +26,7 @@ use serde::Deserialize;
 use tangible_db::Database;
 use tangible_db::deletions::{
     DeletionChange, Due, Hold, Tombstone, audit_collection, begin_removal, collectable_objects,
-    deletion_state, due_for_deletion, keep_artifact, make_tombstone, request_deletion,
+    delete_now, deletion_state, due_for_deletion, keep_artifact, make_tombstone, request_deletion,
 };
 use tangible_domain::ArtifactId;
 use tangible_domain::deletion::{Deletion, DeletionError};
@@ -238,12 +238,62 @@ pub async fn keep_pending_artifact(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Delete an artifact pending deletion now, without waiting for its grace
+/// period to end.
+///
+/// # Errors
+///
+/// `NOT_FOUND`, `ARTIFACT_DELETED` once its bytes are gone, `CONFLICT` for
+/// one not pending.
+#[utoipa::path(
+    post,
+    path = "/api/v1/artifacts/{artifact_id}/deletion-requests/now",
+    tag = "library",
+    description = "Delete an artifact that is pending deletion now, rather than when its grace \
+                   period ends (ADR 0022), to free its space sooner: its grace period ends at \
+                   once and the deletion runner is woken, which makes the tombstone and removes \
+                   its bytes within moments, unless something holds it, when it waits as a due \
+                   deletion does. Until the tombstone is made it can still be kept. Only an \
+                   artifact already pending: deleting is still asked for first. Needs an \
+                   administrator, and is audited.",
+    params(("artifact_id" = String, Path, description = "Artifact identifier")),
+    responses(
+        (status = 202, description = "Due now", body = ArtifactDeletionView),
+        (status = 404, description = "No such artifact", body = Problem),
+        (status = 409, description = "Deleted already, or not pending", body = Problem),
+    ),
+)]
+pub async fn delete_artifact_now(
+    State(state): State<ApiState>,
+    SignedIn(user): SignedIn,
+    Path(artifact_id): Path<String>,
+) -> Result<(StatusCode, Json<ArtifactDeletionView>), Problem> {
+    let id = parse_artifact(&artifact_id)?;
+    let change = delete_now(state.database().pool(), id, &user.username)
+        .await
+        .map_err(|error| unavailable(&error))?;
+    if !matches!(change, DeletionChange::Done(Deletion::Pending { .. })) {
+        return Err(refused(change, &artifact_id));
+    }
+    tracing::warn!(artifact_id = %id, by = %user.username, "artifact to be deleted now");
+    state.deletion_nudge().notify_one();
+    let view = view(&state, id)
+        .await?
+        .ok_or_else(|| Problem::not_found("artifact", &artifact_id))?;
+    Ok((StatusCode::ACCEPTED, Json(view)))
+}
+
 /// The deletion routes.
 pub fn router() -> Router<ApiState> {
-    Router::new().route(
-        "/artifacts/{artifact_id}/deletion-requests",
-        post(request_artifact_deletion).delete(keep_pending_artifact),
-    )
+    Router::new()
+        .route(
+            "/artifacts/{artifact_id}/deletion-requests",
+            post(request_artifact_deletion).delete(keep_pending_artifact),
+        )
+        .route(
+            "/artifacts/{artifact_id}/deletion-requests/now",
+            post(delete_artifact_now),
+        )
 }
 
 /// What one pass of the runner did.
@@ -299,6 +349,14 @@ impl DeletionRunner {
     #[must_use]
     pub const fn with_batch(mut self, batch: i64) -> Self {
         self.batch = if batch < 1 { 1 } else { batch };
+        self
+    }
+
+    /// Wake on `nudge` as well as on the runner's own clock: the API
+    /// state's, so "delete now" is acted on at once (ADR 0022).
+    #[must_use]
+    pub fn with_nudge(mut self, nudge: Arc<Notify>) -> Self {
+        self.nudge = nudge;
         self
     }
 

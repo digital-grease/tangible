@@ -375,6 +375,12 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
         "/api/v1/artifacts/{artifact_id}/deletion-requests",
         Signed(DeleteArtifacts),
     ),
+    // Deleting a pending artifact now (ADR 0022).
+    (
+        "POST",
+        "/api/v1/artifacts/{artifact_id}/deletion-requests/now",
+        Signed(DeleteArtifacts),
+    ),
     // The event stream (API.md 12): what anyone who can read sees change.
     ("GET", "/api/v1/events", Signed(Read)),
     // The audit log (docs/plans/audit-log.md): read by administrators only.

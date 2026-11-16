@@ -437,6 +437,21 @@ export function keepArtifact(id: string, fetcher: typeof fetch = apiFetch): Prom
   );
 }
 
+/**
+ * Delete an artifact pending deletion now, rather than when its grace period
+ * ends (ADR 0022): the server removes its files within moments.
+ */
+export function deleteNow(
+  id: string,
+  fetcher: typeof fetch = apiFetch,
+): Promise<Result<ArtifactDeletionView>> {
+  return apiCall(
+    fetcher,
+    `/api/v1/artifacts/${encodeURIComponent(id)}/deletion-requests/now`,
+    'POST',
+  );
+}
+
 export type UnpackedFromView = components['schemas']['UnpackedFromView'];
 
 /** An archive format's name, as people know it. */

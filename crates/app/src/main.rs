@@ -594,7 +594,8 @@ fn with_policies(state: ApiState, serve: &ServeConfig) -> ApiState {
 /// and collects their objects (ADR 0020), when there is a library.
 fn start_deletions(state: &ApiState) -> Option<Stoppable> {
     let manifests = state.manifests()?.clone();
-    let runner = tangible_api::deletion::DeletionRunner::new(state.database().clone(), manifests);
+    let runner = tangible_api::deletion::DeletionRunner::new(state.database().clone(), manifests)
+        .with_nudge(state.deletion_nudge());
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(runner.run(async {
         let _ = stopped.await;

@@ -356,6 +356,69 @@ describe('Deleting an artifact', () => {
     );
   });
 
+  it('deletes a pending artifact now, after one question', async () => {
+    const asked = serve(
+      artifact({
+        origin: 'imported_original',
+        deletion: { ...PENDING, delete_after: '2099-01-01T12:00:00Z' },
+      }),
+      {
+        'POST /api/v1/artifacts/a1/deletion-requests/now': {
+          status: 202,
+          body: { ...PENDING, delete_after: '2026-11-02T12:00:01Z' },
+        },
+      },
+    );
+    const { container } = render(ArtifactPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Delete now…' }));
+    expect(screen.getByRole('heading', { name: 'Delete VIDEO_TS now?' })).toBeTruthy();
+    expect(screen.getByText(/Its files are removed now, rather than after/)).toBeTruthy();
+    expect(await axeViolations(container)).toEqual([]);
+    // Not now leaves it pending, as it was.
+    await fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+    expect(asked).not.toContain('POST /api/v1/artifacts/a1/deletion-requests/now');
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete now…' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete now' }));
+    await vi.waitFor(() =>
+      expect(asked).toContain('POST /api/v1/artifacts/a1/deletion-requests/now'),
+    );
+  });
+
+  it('follows a deletion due now until its files are gone', async () => {
+    const listeners = new Map<string, ((event: MessageEvent) => void)[]>();
+    class StandInSource {
+      addEventListener(type: string, listener: (event: MessageEvent) => void) {
+        listeners.set(type, [...(listeners.get(type) ?? []), listener]);
+      }
+      close() {}
+    }
+    vi.stubGlobal('EventSource', StandInSource);
+    let gone = false;
+    serve(artifact(), {
+      'GET /api/v1/artifacts/a1': () => ({
+        status: 200,
+        body: artifact({
+          origin: 'imported_original',
+          deletion: gone
+            ? { ...PENDING, state: 'deleted', deleted_at: '2026-11-15T12:00:00Z' }
+            : PENDING,
+        }),
+      }),
+    });
+    render(ArtifactPage);
+    expect(await screen.findByText(/Its files are being removed now/)).toBeTruthy();
+    // Due already: nothing to bring forward, and it can still be kept.
+    expect(screen.queryByRole('button', { name: 'Delete now…' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Keep VIDEO_TS' })).toBeTruthy();
+
+    gone = true;
+    await vi.waitFor(() => expect(listeners.get('artifact.changed')?.length).toBeTruthy());
+    for (const listener of listeners.get('artifact.changed') ?? []) {
+      listener({ data: JSON.stringify({ topic: 'library', id: 'a1' }) } as MessageEvent);
+    }
+    expect(await screen.findByRole('heading', { name: 'Deleted' })).toBeTruthy();
+  });
+
   it('shows a deleted artifact as a record, with nothing to download or check', async () => {
     serve(
       artifact({

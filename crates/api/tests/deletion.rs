@@ -299,6 +299,89 @@ async fn an_original_becomes_a_tombstone_its_record_kept_and_its_bytes_gone() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
+async fn a_pending_artifact_is_deleted_now_on_request_and_its_bytes_go_at_once() {
+    let _serial = SERIAL.lock().await;
+    let mut harness = harness().await;
+    // A week's grace, so only "now" can bring it forward.
+    harness.state = harness.state.clone().with_deletion_grace_days(7);
+    let artifact = harness.import("now.bin", &unique("now")).await;
+    let digest = harness.digest_of(artifact).await;
+    let path = harness.objects.object_path(&digest);
+    let uri = format!("/api/v1/artifacts/{artifact}/deletion-requests");
+    let now_uri = format!("{uri}/now");
+
+    // Not before it is asked for: deleting is still two steps.
+    let (status, refused) = harness.admin("POST", &now_uri, None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert!(path.exists());
+
+    let (status, pending) = harness
+        .admin("POST", &uri, Some(json!({ "confirm_original": true })))
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{pending}");
+
+    // The runner as the server runs it, woken by the state's nudge; its
+    // own clock is fifteen minutes, so only the nudge can explain a prompt
+    // tombstone.
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let runner = harness
+        .runner
+        .clone()
+        .with_nudge(harness.state.deletion_nudge());
+    let task = tokio::spawn(runner.run(async {
+        let _ = stopped.await;
+    }));
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(path.exists(), "still in its grace period");
+
+    let (status, due) = harness.admin("POST", &now_uri, None).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{due}");
+    assert_eq!(due["state"], "pending");
+    assert_eq!(due["requested_at"], pending["requested_at"]);
+    assert_ne!(
+        due["delete_after"], pending["delete_after"],
+        "brought forward"
+    );
+
+    let mut deleted = Value::Null;
+    for _ in 0..100 {
+        let (_, detail) = harness
+            .admin("GET", &format!("/api/v1/artifacts/{artifact}"), None)
+            .await;
+        if detail["deletion"]["state"] == "deleted" {
+            deleted = detail;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(deleted["deletion"]["state"], "deleted", "deleted promptly");
+    // Collection follows the tombstone in the same pass.
+    for _ in 0..50 {
+        if !path.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(!path.exists(), "its bytes are gone");
+    stop.send(()).unwrap();
+    task.await.unwrap();
+
+    // Once deleted, there is nothing to bring forward.
+    let (status, gone) = harness.admin("POST", &now_uri, None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{gone}");
+    assert_eq!(gone["code"], "ARTIFACT_DELETED");
+    assert_eq!(
+        harness.actions(artifact).await,
+        [
+            "artifact.deletion_requested",
+            "artifact.deletion_brought_forward",
+            "artifact.deleted"
+        ]
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn an_object_another_artifact_has_is_kept() {
     let _serial = SERIAL.lock().await;
     let harness = harness().await;

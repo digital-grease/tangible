@@ -262,6 +262,71 @@ pub async fn keep_artifact(
     Ok(DeletionChange::Done(next))
 }
 
+/// Delete an artifact pending deletion now, rather than when its grace
+/// period ends (ADR 0022): its grace period ends at once, so the deletion
+/// runner makes the tombstone on its next pass. It may still be kept until
+/// then. One already due is left as it is.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn delete_now(
+    pool: &PgPool,
+    id: ArtifactId,
+    actor: &str,
+) -> Result<DeletionChange, DbError> {
+    let mut tx = pool.begin().await.map_err(DbError::Query)?;
+    let Some((_, _, current)) = lock_artifact(&mut tx, id).await? else {
+        tx.rollback().await.map_err(DbError::Query)?;
+        return Ok(DeletionChange::NotFound);
+    };
+    let now = OffsetDateTime::now_utc();
+    let next = match current.delete_now(now) {
+        Ok(next) => next,
+        Err(error) => {
+            tx.rollback().await.map_err(DbError::Query)?;
+            return Ok(DeletionChange::Refused(error));
+        }
+    };
+    let (
+        Deletion::Pending {
+            delete_after: was, ..
+        },
+        Deletion::Pending {
+            delete_after: now_due,
+            ..
+        },
+    ) = (current, next)
+    else {
+        tx.rollback().await.map_err(DbError::Query)?;
+        return Ok(DeletionChange::Done(current));
+    };
+    if was == now_due {
+        tx.commit().await.map_err(DbError::Query)?;
+        return Ok(DeletionChange::Done(current));
+    }
+    sqlx::query("UPDATE artifacts SET delete_after = $2, state_changed_at = now() WHERE id = $1")
+        .bind(id.as_uuid())
+        .bind(now_due)
+        .execute(&mut *tx)
+        .await
+        .map_err(DbError::Query)?;
+    crate::accounts::audit(
+        &mut tx,
+        actor,
+        "artifact.deletion_brought_forward",
+        &id.to_string(),
+        serde_json::json!({
+            "delete_after_was": was
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default(),
+        }),
+    )
+    .await?;
+    tx.commit().await.map_err(DbError::Query)?;
+    Ok(DeletionChange::Done(next))
+}
+
 /// An artifact whose grace period has ended, and when it did: also where
 /// the next page of them starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

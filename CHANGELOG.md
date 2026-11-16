@@ -67,6 +67,12 @@ may change between minor versions, and the release notes say how.
   a disc image, a video file (encoded or remuxed, without the disc's
   menus) or audio files. Video and audio files are marked and rank well
   below disc images, and Grab warns before one is grabbed.
+- A pending deletion can be done now: "Delete now…" beside "Keep" on a
+  pending artifact's page asks once, then its files are removed within
+  moments rather than after the grace period, to free space when it is
+  needed. Only an artifact already pending, so deleting is still two
+  deliberate steps (ADR 0022). New route `POST
+  /api/v1/artifacts/{artifact_id}/deletion-requests/now`, audited.
 - Burn workers list what their drive reads and writes: the xorriso probe
   reads the drive's own profile list (xorriso `-list_profiles`), with or
   without a disc in it, as each worker starts. Preflight still reads the

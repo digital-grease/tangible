@@ -90,6 +90,9 @@ struct Inner {
     /// Days a deleted artifact's bytes are kept before they go
     /// (`TANGIBLE_DELETION_GRACE_DAYS`, ADR 0020).
     deletion_grace_days: u32,
+    /// Wakes the deletion runner, as "delete now" does (ADR 0022). Every
+    /// clone of this state shares it.
+    deletion_nudge: Arc<tokio::sync::Notify>,
 }
 
 /// How long a worker credential is used before rotation, unless configured.
@@ -149,6 +152,7 @@ impl ApiState {
                 worker_credential_max_age_days: DEFAULT_WORKER_CREDENTIAL_MAX_AGE_DAYS,
                 events: crate::events::EventHub::new(),
                 deletion_grace_days: crate::deletion::DEFAULT_GRACE_DAYS,
+                deletion_nudge: Arc::new(tokio::sync::Notify::new()),
             }),
         }
     }
@@ -185,6 +189,7 @@ impl ApiState {
                 worker_credential_max_age_days: DEFAULT_WORKER_CREDENTIAL_MAX_AGE_DAYS,
                 events: crate::events::EventHub::new(),
                 deletion_grace_days: crate::deletion::DEFAULT_GRACE_DAYS,
+                deletion_nudge: Arc::new(tokio::sync::Notify::new()),
             }),
         }
     }
@@ -285,6 +290,13 @@ impl ApiState {
     #[must_use]
     pub fn deletion_grace_days(&self) -> u32 {
         self.inner.deletion_grace_days
+    }
+
+    /// What wakes the deletion runner: given to it when it starts, and
+    /// notified when an artifact is to be deleted now.
+    #[must_use]
+    pub fn deletion_nudge(&self) -> Arc<tokio::sync::Notify> {
+        Arc::clone(&self.inner.deletion_nudge)
     }
 
     /// What the event stream sends. Every clone of this state shares it.

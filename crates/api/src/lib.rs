@@ -203,6 +203,7 @@ pub const API_BASE: &str = "/api/v1";
         events::event_stream,
         deletion::request_artifact_deletion,
         deletion::keep_pending_artifact,
+        deletion::delete_artifact_now,
         routes::audit::list_audit_log,
         routes::audit::get_audit_log_event,
         routes::worker_admin::list_all_workers,
