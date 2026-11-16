@@ -4,16 +4,15 @@
   /**
    * An artifact's deletion (ADR 0020): what it is now, and asking for it or
    * keeping it. Deleting is never immediate: the artifact is pending for the
-   * server's grace period, during which it can be kept, and an original
-   * needs saying so besides.
+   * server's grace period, during which it can be kept. One question asks
+   * for it; answering it is the confirmation an original needs
+   * (`confirm_original`), so an original takes no more than a derivative.
    */
   import Button from '$lib/components/ui/Button.svelte';
   import Callout from '$lib/components/ui/Callout.svelte';
-  import Checkbox from '$lib/components/ui/Checkbox.svelte';
   import Confirm from '$lib/components/ui/Confirm.svelte';
   import {
     isOriginal,
-    originalNote,
     keepArtifact,
     requestDeletion,
     type ArtifactDeletionView,
@@ -35,7 +34,6 @@
   } = $props();
 
   let asking = $state(false);
-  let confirmed = $state(false);
   let working = $state(false);
   let problem = $state<Problem | null>(null);
 
@@ -57,7 +55,8 @@
     if (working) return;
     working = true;
     problem = null;
-    const result = await requestDeletion(artifactId, original && confirmed);
+    // Answering the question is the confirmation an original needs.
+    const result = await requestDeletion(artifactId, original);
     working = false;
     if (result.kind === 'error') {
       problem = result.problem;
@@ -114,30 +113,20 @@
         variant="danger"
         onclick={() => {
           asking = true;
-          confirmed = false;
           problem = null;
         }}>Delete this artifact…</Button
       >
     {:else}
       <Confirm title={`Delete ${name}`} onsubmit={ask}>
         <p>
-          <strong>After the grace period its bytes are removed, and cannot be brought back</strong>
-          except from a backup. Until then it is pending and can be kept. Its record stays: the files'
-          names and hashes, where it came from, what was made of it, and its burns. A file it shares with
-          another artifact stays for that one.
+          Are you sure you want to delete this artifact? Once its grace period ends, its files are
+          removed and can't be recovered.
         </p>
-        {#if original}
-          {#if originalNote(origin)}<p>{originalNote(origin)}</p>{/if}
-          <Checkbox
-            label="I understand this is an original, which Tangible cannot make again"
-            bind:checked={confirmed}
-          />
-        {/if}
         <div role="alert">
           {#if problem}<p class="problem"><strong>Not deleted.</strong> {explain(problem)}</p>{/if}
         </div>
         {#snippet actions()}
-          <Button type="submit" variant="danger" disabled={working || (original && !confirmed)}>
+          <Button type="submit" variant="danger" disabled={working}>
             {working ? 'Asking…' : `Delete ${name}`}
           </Button>
           <Button onclick={() => (asking = false)}>Keep {name}</Button>

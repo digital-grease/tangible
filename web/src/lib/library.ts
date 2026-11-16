@@ -408,21 +408,6 @@ export function isOriginal(origin: string): boolean {
   return origin === 'imported_original' || origin === 'physical_dump';
 }
 
-/**
- * Why deleting an original asks to be sure, by where it came from: Tangible
- * can make a derivative again, but not an original. Null for anything else.
- */
-export function originalNote(origin: string): string | null {
-  switch (origin) {
-    case 'physical_dump':
-      return 'It was read from a disc in a drive. To have it again, the disc would have to be ripped again.';
-    case 'imported_original':
-      return 'It is what was imported, exactly as it arrived. To have it again, it would have to be imported again from where it came from, if that still has it.';
-    default:
-      return null;
-  }
-}
-
 /** An artifact's deletion, in words, for a list. Null when none was asked for. */
 export function deletionLabel(deletion: ArtifactDeletionView | null | undefined): string | null {
   if (!deletion) return null;

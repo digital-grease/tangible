@@ -79,11 +79,13 @@ may change between minor versions, and the release notes say how.
 
 ### Changed
 
-- Deleting an original no longer says it "may be the only copy there is",
-  which a download seldom is. It says Tangible cannot make an original
-  again, and how it could be had again: imported again from where it came
-  from, or, for a rip, the disc ripped again. The API's refusal without
-  `confirm_original` says the same.
+- Deleting an artifact asks one short question ("Are you sure you want to
+  delete this artifact? Once its grace period ends, its files are removed
+  and can't be recovered.") in place of a paragraph, and an original no
+  longer needs a box ticked saying it "may be the only copy there is",
+  which a download seldom is: answering the question confirms it. The
+  API still needs `confirm_original` for an original; its refusal without
+  it says Tangible cannot make an original again.
 - A request whose download turns out not to be a disc image Tangible
   recognises, such as a video file, fails ("not a disc image") rather than
   being fulfilled by it, so another release can be grabbed. What it

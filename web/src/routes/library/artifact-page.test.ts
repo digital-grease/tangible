@@ -291,48 +291,52 @@ describe('Deleting an artifact', () => {
     deleted_at: null,
   };
 
-  it('asks for an original only once it is confirmed, saying what happens', async () => {
+  /** The body a POST to `url` was sent with, parsed. */
+  function sent(url: string): unknown {
+    const calls = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const call = calls.find(
+      ([input, init]) => String(input) === url && (init as RequestInit)?.method === 'POST',
+    );
+    return JSON.parse(String((call?.[1] as RequestInit)?.body ?? 'null'));
+  }
+
+  it('asks once, briefly, and that is the confirmation an original needs', async () => {
     const asked = serve(artifact({ origin: 'imported_original', deletion: null }), {
       'POST /api/v1/artifacts/a1/deletion-requests': { status: 202, body: PENDING },
     });
     const { container } = render(ArtifactPage);
     await fireEvent.click(await screen.findByRole('button', { name: 'Delete this artifact…' }));
-    expect(screen.getByText(/cannot be brought back/)).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Are you sure you want to delete this artifact? Once its grace period ends, its files are removed and can't be recovered.",
+      ),
+    ).toBeTruthy();
     // The keyboard is taken to the question.
     await vi.waitFor(() =>
       expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Delete VIDEO_TS' })),
     );
     expect(await axeViolations(container)).toEqual([]);
-    const submit = screen.getByRole('button', { name: 'Delete VIDEO_TS' });
-    expect((submit as HTMLButtonElement).disabled).toBe(true);
-    // Not that it is the only copy: that Tangible cannot make it again, and
-    // how it could be had again.
-    expect(screen.getByLabelText(/an original, which Tangible cannot make again/)).toBeTruthy();
-    expect(screen.getByText(/imported again from where it came from/)).toBeTruthy();
+    // No box to tick, and nothing about it being the only copy.
+    expect(screen.queryByRole('checkbox')).toBeNull();
     expect(screen.queryByText(/only copy/)).toBeNull();
-    await fireEvent.click(screen.getByLabelText(/this is an original/));
+    const submit = screen.getByRole('button', { name: 'Delete VIDEO_TS' });
     expect((submit as HTMLButtonElement).disabled).toBe(false);
     await fireEvent.click(submit);
     await vi.waitFor(() => expect(asked).toContain('POST /api/v1/artifacts/a1/deletion-requests'));
+    expect(sent('/api/v1/artifacts/a1/deletion-requests')).toEqual({ confirm_original: true });
   });
 
-  it('says a rip could be had again only by ripping the disc again', async () => {
-    serve(artifact({ origin: 'physical_dump', deletion: null }));
+  it('asks the same of a derivative, which needs no more', async () => {
+    const asked = serve(artifact({ origin: 'derived', deletion: null }), {
+      'POST /api/v1/artifacts/a1/deletion-requests': { status: 202, body: PENDING },
+    });
     render(ArtifactPage);
     await fireEvent.click(await screen.findByRole('button', { name: 'Delete this artifact…' }));
-    expect(screen.getByText(/the disc would have to be ripped again/)).toBeTruthy();
-    expect(screen.getByLabelText(/this is an original/)).toBeTruthy();
-  });
-
-  it('asks for a derivative without the original confirmation', async () => {
-    serve(artifact({ origin: 'derived', deletion: null }));
-    render(ArtifactPage);
-    await fireEvent.click(await screen.findByRole('button', { name: 'Delete this artifact…' }));
-    expect(screen.queryByLabelText(/this is an original/)).toBeNull();
-    expect(screen.queryByText(/would have to be/)).toBeNull();
-    expect(
-      (screen.getByRole('button', { name: 'Delete VIDEO_TS' }) as HTMLButtonElement).disabled,
-    ).toBe(false);
+    expect(screen.getByText(/Are you sure you want to delete this artifact\?/)).toBeTruthy();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete VIDEO_TS' }));
+    await vi.waitFor(() => expect(asked).toContain('POST /api/v1/artifacts/a1/deletion-requests'));
+    expect(sent('/api/v1/artifacts/a1/deletion-requests')).toEqual({ confirm_original: false });
   });
 
   it('says when a pending artifact goes, and keeps it on request', async () => {
