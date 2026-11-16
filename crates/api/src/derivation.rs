@@ -982,17 +982,17 @@ impl DerivationPipeline {
 /// The component the tool reads: the descriptor of a CD layout, or the
 /// image itself.
 fn tool_input(parent: &ArtifactManifest) -> Result<&Component, DerivationError> {
-    let (role, what) = match parent.classification.format {
-        ArtifactFormat::CueBin | ArtifactFormat::TocBin => {
-            (ComponentRole::Descriptor, "descriptor")
-        }
-        _ => (ComponentRole::PrimaryImage, "primary image"),
-    };
-    parent
-        .components
-        .iter()
-        .find(|c| c.role == role)
-        .ok_or(DerivationError::NoInput(what))
+    match parent.classification.format {
+        ArtifactFormat::CueBin | ArtifactFormat::TocBin => parent
+            .components
+            .iter()
+            .find(|c| c.role == ComponentRole::Descriptor)
+            .ok_or(DerivationError::NoInput("descriptor")),
+        // The image, even beside a release's `.nfo`.
+        _ => parent
+            .image_component()
+            .ok_or(DerivationError::NoInput("primary image")),
+    }
 }
 
 /// A sheet for `laid`, naming `bin_name`, and the layout it reads back as

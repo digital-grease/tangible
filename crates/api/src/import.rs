@@ -995,6 +995,7 @@ impl ImportPipeline {
             subchannel_laid: false,
             tree: None,
             media_family: None,
+            image: inspection.is_iso9660.then(|| primary.clone()),
         })
     }
 
@@ -1119,7 +1120,7 @@ impl ImportPipeline {
                 {
                     // A file of the disc's own filesystem, kept as a file.
                     ComponentRole::FilesystemFile
-                } else if staged.len() == 1 {
+                } else if staged.len() == 1 || detection.image.as_ref() == Some(path) {
                     ComponentRole::PrimaryImage
                 } else {
                     // Staged alongside the artifact and not named by anything
@@ -1490,6 +1491,9 @@ struct Detection {
     /// The medium, when the format says it and its name does not (an MDS
     /// descriptor describes a CD or a DVD).
     media_family: Option<MediaFamily>,
+    /// The file found to be the image, when other files were staged with it:
+    /// the one an ISO's filesystem was read from, beside a release's `.nfo`.
+    image: Option<LogicalPath>,
 }
 
 /// A recognised directory tree.
@@ -1522,6 +1526,7 @@ impl Detection {
             subchannel_laid: false,
             tree: None,
             media_family: None,
+            image: None,
         }
     }
 }

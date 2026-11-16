@@ -211,6 +211,56 @@ describe('Artifact page', () => {
   });
 });
 
+describe('An image that came with other files', () => {
+  const component = (n: number, path: string, role: string, length: number) => ({
+    id: `c${n}`,
+    logical_path: path,
+    role,
+    length_bytes: length,
+    sha256: String(n).repeat(64),
+    ordinal: n,
+  });
+
+  it('says which file the format was found in, and that the rest is kept alongside', async () => {
+    // Recorded before its image was named: neither file has a role.
+    serve(
+      artifact({
+        origin: 'imported_original',
+        format: 'iso',
+        artifact_kind: 'multi_file_image',
+        component_count: 2,
+        image: 'hackers-apnk.img',
+        components: [
+          component(0, 'hackers-apnk.img', 'unknown', 4_381_118_464),
+          component(1, 'hackers-apnk.nfo', 'unknown', 10_647),
+        ],
+      }),
+    );
+    render(ArtifactPage);
+    const format = (await screen.findByText('Format')).nextElementSibling;
+    expect(format?.textContent?.replace(/\s+/g, ' ')).toMatch(
+      /^ISO, found in hackers-apnk\.img \(detection confidence 100%\)/,
+    );
+    await fireEvent.click(screen.getByRole('tab', { name: /Components/ }));
+    const row = (path: string) => screen.getByRole('rowheader', { name: path }).closest('tr');
+    expect(within(row('hackers-apnk.img') as HTMLElement).getByText('disc image')).toBeTruthy();
+    expect(within(row('hackers-apnk.nfo') as HTMLElement).getByText('kept alongside')).toBeTruthy();
+  });
+
+  it('names an ISO alone only when its name does not say so', async () => {
+    serve(
+      artifact({
+        format: 'iso',
+        image: 'disc.iso',
+        components: [component(0, 'disc.iso', 'primary_image', 2048)],
+      }),
+    );
+    render(ArtifactPage);
+    const format = (await screen.findByText('Format')).nextElementSibling;
+    expect(format?.textContent).not.toMatch(/found in/);
+  });
+});
+
 function integrityCheck(extra: Record<string, unknown> = {}) {
   return {
     id: 'c1',

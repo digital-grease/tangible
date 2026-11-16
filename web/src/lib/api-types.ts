@@ -2666,6 +2666,12 @@ export interface components {
              * @description Detection confidence, from 0 to 1. Diagnostic only.
              */
             format_confidence: number;
+            /**
+             * @description The file holding the disc image, for an artifact that is one image:
+             *     the one burned, exported and converted, which may be imported beside
+             *     a release's `.nfo`. Null for a layout of tracks or a tree of files.
+             */
+            image?: string | null;
             ripped?: components["schemas"]["RippedView"] | null;
             /** @description Where the bytes came from. */
             source_kind: string;

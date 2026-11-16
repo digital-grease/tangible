@@ -290,6 +290,42 @@ export function formatLabel(format: string): string {
 }
 
 /**
+ * What a file is to its artifact, in words. The artifact's image is a disc
+ * image whatever its recorded role: an ISO imported beside a release's
+ * `.nfo` before its image was named recorded neither file's role.
+ */
+export function componentRoleLabel(
+  component: { role: string; logical_path: string },
+  image: string | null | undefined,
+): string {
+  if (image && component.logical_path === image) return 'disc image';
+  switch (component.role) {
+    case 'primary_image':
+      return 'disc image';
+    case 'filesystem_file':
+      return 'file of the disc';
+    case 'unknown':
+      // Imported with the artifact, kept with it, and not written to a disc.
+      return 'kept alongside';
+    default:
+      return component.role.replace(/_/g, ' ');
+  }
+}
+
+/**
+ * The image file to name beside the format: when other files came with it,
+ * or its name does not say it is an ISO. Null when there is nothing to add.
+ */
+export function namedImage(
+  detail: Pick<ArtifactDetail, 'image' | 'components' | 'format'>,
+): string | null {
+  const image = detail.image;
+  if (!image) return null;
+  if (detail.components.length > 1) return image;
+  return detail.format === 'iso' && !image.toLowerCase().endsWith('.iso') ? image : null;
+}
+
+/**
  * Whether an artifact keeps a disc's subchannel, which no burner here
  * writes: it is not burned as it is (docs/plans/ccd-images.md).
  */

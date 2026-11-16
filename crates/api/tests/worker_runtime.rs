@@ -260,11 +260,20 @@ async fn server_from(decryption_allowed: bool, tamper: Option<Tamper>) -> Server
 impl Server {
     /// Import an ISO and register it, as an import route will.
     async fn import(&self, bytes: &[u8]) -> String {
+        self.import_files(&[("disc.iso", bytes)], Some("disc.iso"))
+            .await
+    }
+
+    /// Import the files staged together, as a download arrives, and register
+    /// them.
+    async fn import_files(&self, files: &[(&str, &[u8])], source_filename: Option<&str>) -> String {
         let import_id = ImportJobId::generate();
         let area = self.pipeline.open_area(import_id).await.expect("area");
-        area.write(&LogicalPath::parse("disc.iso").expect("path"), bytes)
-            .await
-            .expect("stage");
+        for (path, bytes) in files {
+            area.write(&LogicalPath::parse(path).expect("path"), bytes)
+                .await
+                .expect("stage");
+        }
 
         let mut checkpoint = ImportCheckpoint::default();
         let outcome = self
@@ -273,7 +282,7 @@ impl Server {
                 &ImportRequest {
                     import_id,
                     source_kind: "upload".to_owned(),
-                    source_filename: Some("disc.iso".to_owned()),
+                    source_filename: source_filename.map(ToOwned::to_owned),
                     source_reference: None,
                     physical_dump: None,
                     lineage: None,
@@ -791,6 +800,75 @@ async fn a_worker_enrolls_claims_burns_and_reports_without_help() {
     assert_eq!(detail["medium"]["blank"], true, "{detail}");
     assert!(detail["medium"]["capacity_blocks"].as_u64().unwrap_or(0) > 0);
 
+    server.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_iso_downloaded_with_its_nfo_burns_the_image_alone() {
+    let _queue = exclusive_queue().await;
+    let mut server = server().await;
+    server.drain_queue().await;
+
+    // A release as it arrives: its image, named `.img`, and its `.nfo`,
+    // which sorts after it here and is far smaller.
+    let image = iso_image("RELEASE", 32);
+    let nfo = b"Release notes, in a text file.\n".to_vec();
+    let artifact = server
+        .import_files(&[("release.img", &image), ("release.nfo", &nfo)], None)
+        .await;
+    let detail = server.get(&format!("/api/v1/artifacts/{artifact}")).await;
+    assert_eq!(detail["format"], "iso", "{detail}");
+    let roles: Vec<(String, String)> = detail["components"]
+        .as_array()
+        .expect("components")
+        .iter()
+        .map(|c| {
+            (
+                c["logical_path"].as_str().unwrap_or_default().to_owned(),
+                c["role"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        roles,
+        [
+            ("release.img".to_owned(), "primary_image".to_owned()),
+            ("release.nfo".to_owned(), "unknown".to_owned()),
+        ]
+    );
+    assert_eq!(detail["image"], "release.img");
+
+    let disc = server.seed_disc().await;
+    let job = server.queue_burn(&disc, &artifact).await;
+    let worker_dir = TempDir::new().expect("temp dir");
+    let token = server.enrollment_token().await;
+    let settings = settings(&server, worker_dir.path().to_path_buf(), token);
+    let media_root = settings.state_dir.join("media");
+    let engine = FakeEngine::new(&media_root);
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let worker = tokio::spawn(async move {
+        let mut runtime = WorkerRuntime::new(settings, engine).expect("runtime");
+        runtime
+            .run(async {
+                let _ = stopped.await;
+            })
+            .await
+    });
+    let settled = server.await_settled(&job).await;
+    let _ = stop.send(());
+    let outcome = worker.await.expect("the worker task");
+    assert!(outcome.is_ok(), "the worker exited badly: {outcome:?}");
+    assert_eq!(settled["state"], "complete", "{settled}");
+    assert_eq!(settled["attempts"][0]["state"], "verified", "{settled}");
+
+    // The disc is the image: the `.nfo` stays with the artifact.
+    let media: Vec<PathBuf> = std::fs::read_dir(&media_root)
+        .expect("media directory")
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .collect();
+    let written = media.first().expect("one simulated disc");
+    assert_eq!(std::fs::read(written).expect("read the disc"), image);
     server.stop().await;
 }
 

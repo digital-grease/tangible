@@ -35,6 +35,8 @@
     formatBytes,
     archiveLabel,
     formatLabel,
+    componentRoleLabel,
+    namedImage,
     integrityShort,
     integrityTone,
     isOriginal,
@@ -195,7 +197,8 @@
               <div>
                 <dt>Format</dt>
                 <dd>
-                  {formatLabel(artifact.format)}
+                  {formatLabel(artifact.format)}{#if namedImage(artifact)}, found in
+                    <code>{namedImage(artifact)}</code>{/if}
                   <!-- Confidence is diagnostic and labelled as such, so it is
                        not mistaken for a guarantee. -->
                   <small class="quiet"
@@ -361,7 +364,7 @@
                 {#each artifact.components as component (component.logical_path)}
                   <tr>
                     <th scope="row"><code>{component.logical_path}</code></th>
-                    <td>{component.role.replace(/_/g, ' ')}</td>
+                    <td>{componentRoleLabel(component, artifact.image)}</td>
                     <td class="num">{formatBytes(component.length_bytes)}</td>
                     <td>
                       <code title={component.sha256}>{shortDigest(component.sha256)}</code>

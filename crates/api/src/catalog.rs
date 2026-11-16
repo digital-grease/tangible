@@ -77,14 +77,12 @@ pub fn rows_for(manifest: &ArtifactManifest) -> CatalogRows {
         })
         .collect();
 
-    // The component that stands for the artifact: the primary image if one is
-    // named, otherwise the first. A single-file ISO has exactly one either
-    // way; a CUE/BIN set has a descriptor and its data tracks, and the data
-    // is what a lookup by digest should find.
+    // The component that stands for the artifact: its image if it is one,
+    // otherwise the first. An ISO has one image even beside a release's
+    // `.nfo`; a CUE/BIN set has a descriptor and its data tracks, and the
+    // data is what a lookup by digest should find.
     let primary = manifest
-        .components
-        .iter()
-        .find(|component| component.role == tangible_domain::ComponentRole::PrimaryImage)
+        .image_component()
         .or_else(|| manifest.components.first());
 
     // Validators are kept only when they had something to say. An empty
@@ -277,6 +275,20 @@ mod tests {
         assert_eq!(
             rows.primary_sha256.as_deref(),
             Some(digest(2).to_hex().as_str())
+        );
+    }
+
+    #[test]
+    fn an_iso_recorded_beside_its_nfo_is_looked_up_by_its_image() {
+        // Imported before the image was named: neither file has a role, and
+        // the `.nfo` sorts first.
+        let mut nfo = component("a.nfo", ComponentRole::Unknown, 0, 3);
+        nfo.length_bytes = 900;
+        let image = component("disc.img", ComponentRole::Unknown, 1, 4);
+        let rows = rows_for(&manifest(vec![nfo, image]));
+        assert_eq!(
+            rows.primary_sha256.as_deref(),
+            Some(digest(4).to_hex().as_str())
         );
     }
 

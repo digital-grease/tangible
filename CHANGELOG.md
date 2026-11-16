@@ -130,6 +130,16 @@ may change between minor versions, and the release notes say how.
 
 ### Fixed
 
+- An ISO downloaded with its release's `.nfo` (or any other file) had no
+  file marked as its image: burning it staged both files and failed once a
+  disc was in the drive, and it could not be exported to RomM or converted.
+  The file its filesystem was read from is now its `primary_image`; a burn
+  worker stages and writes only the image of a block image; and an ISO
+  imported before this, with neither file's role recorded, is burned,
+  exported and converted from its largest file, the one its import read.
+  The artifact page names the file the format was found in ("ISO, found in
+  movie.img") and says each file's role in words ("disc image", "kept
+  alongside").
 - A request's release search counted "BluRay" or "DVD" in a release's name
   as saying it was a disc image, so a video file encoded from a Blu-ray
   (`1080p.BluRay.x265`) ranked higher and said "it says it is a disc

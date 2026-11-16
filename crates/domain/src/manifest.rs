@@ -37,8 +37,8 @@ use time::OffsetDateTime;
 use crate::cd;
 use crate::digest::Sha256Digest;
 use crate::enums::{
-    ArtifactFormat, ArtifactKind, ArtifactOrigin, DiscRelationship, LossCharacter, MediaFamily,
-    ValidationState,
+    ArtifactFormat, ArtifactKind, ArtifactOrigin, ComponentRole, DiscRelationship, LossCharacter,
+    MediaFamily, ValidationState,
 };
 use crate::id::{ArtifactId, ComponentId, DiscId};
 use crate::logical_path::LogicalPath;
@@ -787,6 +787,33 @@ impl PhysicalDump {
 }
 
 impl ArtifactManifest {
+    /// The file holding the disc image, for an artifact that is one image:
+    /// the component named the primary image; else its only component; else,
+    /// for an ISO, its largest, which is the file its import read and found
+    /// the filesystem in. That last is how an ISO imported with another
+    /// file, such as a release's `.nfo`, was recorded before its image was
+    /// named. None for a layout of tracks, a tree of files, or anything else
+    /// of several files.
+    #[must_use]
+    pub fn image_component(&self) -> Option<&Component> {
+        if let Some(primary) = self
+            .components
+            .iter()
+            .find(|component| component.role == ComponentRole::PrimaryImage)
+        {
+            return Some(primary);
+        }
+        match self.components.as_slice() {
+            [only] => Some(only),
+            // The import took the last of the largest, in staged order, and
+            // so does `max_by_key`.
+            several if self.classification.format == ArtifactFormat::Iso => several
+                .iter()
+                .max_by_key(|component| component.length_bytes),
+            _ => None,
+        }
+    }
+
     /// Check every internal consistency rule.
     ///
     /// Deserialization already guarantees shape, path safety, and that
@@ -971,7 +998,6 @@ pub enum ManifestParseError {
 #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::enums::ComponentRole;
 
     fn digest(byte: u8) -> Sha256Digest {
         Sha256Digest::from_bytes([byte; 32])
@@ -1043,6 +1069,62 @@ mod tests {
             },
             extensions: Extensions::new(),
         }
+    }
+
+    #[test]
+    fn the_image_is_the_primary_one_or_an_iso_s_largest_file() {
+        let with_role = |mut c: Component, role: ComponentRole| {
+            c.role = role;
+            c
+        };
+        // Named.
+        let named = manifest(vec![
+            with_role(component(0, "a.nfo", 1, 9), ComponentRole::Unknown),
+            component(1, "disc.img", 2, 4096),
+        ]);
+        assert_eq!(
+            named.image_component().unwrap().logical_path.as_str(),
+            "disc.img"
+        );
+        // Alone, whatever its role.
+        let alone = manifest(vec![with_role(
+            component(0, "disc.iso", 1, 5),
+            ComponentRole::Unknown,
+        )]);
+        assert_eq!(
+            alone.image_component().unwrap().logical_path.as_str(),
+            "disc.iso"
+        );
+        // An ISO recorded with a release's `.nfo` and no role for either: the
+        // largest, wherever it sorts, and the last of equals as its import
+        // took it.
+        let unnamed = manifest(vec![
+            with_role(component(0, "a.nfo", 1, 10_647), ComponentRole::Unknown),
+            with_role(
+                component(1, "hackers.img", 2, 4_381_118_464),
+                ComponentRole::Unknown,
+            ),
+            with_role(component(2, "z.sfv", 3, 80), ComponentRole::Unknown),
+        ]);
+        assert_eq!(
+            unnamed.image_component().unwrap().logical_path.as_str(),
+            "hackers.img"
+        );
+        let even = manifest(vec![
+            with_role(component(0, "one.iso", 1, 2048), ComponentRole::Unknown),
+            with_role(component(1, "two.iso", 2, 2048), ComponentRole::Unknown),
+        ]);
+        assert_eq!(
+            even.image_component().unwrap().logical_path.as_str(),
+            "two.iso"
+        );
+        // A CUE/BIN is tracks, not one image.
+        let mut sheet = manifest(vec![
+            with_role(component(0, "disc.cue", 1, 90), ComponentRole::Descriptor),
+            with_role(component(1, "disc.bin", 2, 9000), ComponentRole::TrackData),
+        ]);
+        sheet.classification.format = ArtifactFormat::CueBin;
+        assert!(sheet.image_component().is_none());
     }
 
     #[test]

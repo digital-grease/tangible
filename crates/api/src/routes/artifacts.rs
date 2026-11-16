@@ -407,6 +407,10 @@ pub struct ArtifactDetail {
     pub warnings: Vec<String>,
     /// The files making up the artifact.
     pub components: Vec<ComponentView>,
+    /// The file holding the disc image, for an artifact that is one image:
+    /// the one burned, exported and converted, which may be imported beside
+    /// a release's `.nfo`. Null for a layout of tracks or a tree of files.
+    pub image: Option<String>,
     /// The disc's tracks, when the artifact was described by a CUE sheet or a
     /// TOC whose tracks could be laid out.
     pub disc: Option<DiscLayout>,
@@ -929,6 +933,9 @@ pub async fn get_artifact(
         source_kind: manifest.origin.source_kind.clone(),
         warnings,
         components: manifest.components.iter().map(component_view).collect(),
+        image: manifest
+            .image_component()
+            .map(|component| component.logical_path.to_string()),
         disc: disc_view(&manifest),
         ripped: ripped_view(&manifest),
         unpacked_from: manifest

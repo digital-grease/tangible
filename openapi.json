@@ -8960,6 +8960,13 @@
                 "format": "float",
                 "description": "Detection confidence, from 0 to 1. Diagnostic only."
               },
+              "image": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The file holding the disc image, for an artifact that is one image:\nthe one burned, exported and converted, which may be imported beside\na release's `.nfo`. Null for a layout of tracks or a tree of files."
+              },
               "ripped": {
                 "oneOf": [
                   {

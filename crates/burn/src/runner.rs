@@ -1526,10 +1526,21 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             .fetch_manifest(artifact_id, lease.artifact.manifest_sha256.as_deref())
             .await?;
 
-        let mut inputs = Vec::with_capacity(manifest.components.len());
+        // A disc of tracks is written from all its files, which the tracks
+        // name. Any other is one image, written from its image file alone:
+        // what was imported beside it, such as a release's `.nfo`, stays
+        // with the artifact and is not a disc's to write.
+        let written: Vec<&tangible_domain::manifest::Component> =
+            match (&manifest.topology, manifest.image_component()) {
+                (tangible_domain::manifest::Topology::CdTracks { .. }, _) | (_, None) => {
+                    manifest.components.iter().collect()
+                }
+                (_, Some(image)) => vec![image],
+            };
+        let mut inputs = Vec::with_capacity(written.len());
         let mut input_of: std::collections::BTreeMap<tangible_domain::ComponentId, usize> =
             std::collections::BTreeMap::new();
-        for component in &manifest.components {
+        for component in written {
             let destination = self
                 .staging_root()
                 .join(artifact_id.to_string())

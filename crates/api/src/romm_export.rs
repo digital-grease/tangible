@@ -805,16 +805,10 @@ fn missing_image(
     }
 }
 
-/// The image file of a single-image artifact.
+/// The image file of a single-image artifact, even beside a release's
+/// `.nfo`.
 fn primary_image(manifest: &ArtifactManifest) -> Option<&tangible_domain::manifest::Component> {
-    manifest
-        .components
-        .iter()
-        .find(|component| component.role == ComponentRole::PrimaryImage)
-        .or(match manifest.components.as_slice() {
-            [only] => Some(only),
-            _ => None,
-        })
+    manifest.image_component()
 }
 
 /// Which disc a planned file belongs to, from its name.
