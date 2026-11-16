@@ -183,6 +183,8 @@
     {/if}
     {#if request.state === 'fulfilled' && request.artifact_id}
       <p><a href={`/library/${request.artifact_id}`}>Open it in the library</a></p>
+    {:else if request.state === 'failed' && request.artifact_id}
+      <p><a href={`/library/${request.artifact_id}`}>Open what it downloaded in the library</a></p>
     {/if}
     {#if request.import_id && request.state === 'downloading'}
       {#if download}

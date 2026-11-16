@@ -63,6 +63,10 @@ may change between minor versions, and the release notes say how.
   pane at the top, however long ago it started; "Recent imports" at the
   foot holds those that have finished. The imports list takes `settled`
   (`true` or `false`) to ask for either.
+- A request's release search says what each release holds by its name:
+  a disc image, a video file (encoded or remuxed, without the disc's
+  menus) or audio files. Video and audio files are marked and rank well
+  below disc images, and Grab warns before one is grabbed.
 - Burn workers list what their drive reads and writes: the xorriso probe
   reads the drive's own profile list (xorriso `-list_profiles`), with or
   without a disc in it, as each worker starts. Preflight still reads the
@@ -75,6 +79,10 @@ may change between minor versions, and the release notes say how.
 
 ### Changed
 
+- A request whose download turns out not to be a disc image Tangible
+  recognises, such as a video file, fails ("not a disc image") rather than
+  being fulfilled by it, so another release can be grabbed. What it
+  downloaded stays in the library as it arrived, and the request links it.
 - 7z and xz archives are read with sevenz-rust2 and lzma-rust2 0.25, which
   check each entry's size and checksum more strictly. An archive with an
   entry Tangible refuses still stops at that entry, every later one left
@@ -89,6 +97,11 @@ may change between minor versions, and the release notes say how.
 
 ### Fixed
 
+- A request's release search counted "BluRay" or "DVD" in a release's name
+  as saying it was a disc image, so a video file encoded from a Blu-ray
+  (`1080p.BluRay.x265`) ranked higher and said "it says it is a disc
+  image". Only names that say so, such as ISO, BDMV, VIDEO_TS, DVDR or
+  COMPLETE BLURAY, count now.
 - A 7z archive whose packed header lists its checksum, as tools built on
   the sevenz-rust2 library write it, was refused as unreadable ("its header
   could not be read"). It is now read, its header checked as before.

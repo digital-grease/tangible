@@ -521,7 +521,7 @@ pub async fn start_download(
     sqlx::query(
         "UPDATE requests
          SET state = 'downloading', integration_id = $2, import_id = $3,
-             error_code = NULL, error_detail = NULL
+             artifact_id = NULL, error_code = NULL, error_detail = NULL
          WHERE id = $1",
     )
     .bind(id.as_uuid())
@@ -546,7 +546,12 @@ pub async fn start_download(
 
 /// Move requests whose import has moved. Returns the requests that moved.
 ///
-/// - The import completed: the request is fulfilled with its artifact.
+/// - The import completed with a disc image: the request is fulfilled with
+///   its artifact.
+/// - The import completed with something Tangible does not recognise as a
+///   disc image (a video file, say): the request failed with
+///   [`NOT_A_DISC_IMAGE`], naming the artifact, which stays in the library
+///   as it arrived, and another release may be grabbed.
 /// - The import failed for good, was canceled or was quarantined: the
 ///   request failed, saying how, and another release may be grabbed.
 /// - The import of a failed request was retried: it is downloading again.
@@ -567,6 +572,10 @@ pub async fn settle_requests(pool: &PgPool) -> Result<Vec<RequestId>, DbError> {
 /// The import states a request's download has failed in.
 const ENDED_BADLY: &str = "('failed_terminal', 'canceled', 'quarantined')";
 
+/// The code a request fails with when its download brought in something
+/// that is not a disc image Tangible recognises (its format is `unknown`).
+pub const NOT_A_DISC_IMAGE: &str = "NOT_A_DISC_IMAGE";
+
 /// [`settle_requests`], for one request or all, in a transaction.
 async fn settle_in(
     tx: &mut Transaction<'_, Postgres>,
@@ -575,16 +584,20 @@ async fn settle_in(
     let only = only.map(|id| *id.as_uuid());
     // Revived first, so one whose retried import has since completed is
     // fulfilled below, through downloading, as the states require.
+    // One that failed for bringing in something other than a disc image
+    // has a complete import, and is not revived by it.
     let revived: Vec<uuid::Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "UPDATE requests r
          SET state = 'downloading', error_code = NULL, error_detail = NULL
          FROM import_jobs i
          WHERE i.id = r.import_id AND r.state = 'failed'
            AND i.state NOT IN {ENDED_BADLY}
+           AND r.error_code IS DISTINCT FROM $2
            AND ($1::uuid IS NULL OR r.id = $1)
          RETURNING r.id"
     )))
     .bind(only)
+    .bind(NOT_A_DISC_IMAGE)
     .fetch_all(&mut **tx)
     .await
     .map_err(DbError::Query)?;
@@ -592,13 +605,30 @@ async fn settle_in(
         "UPDATE requests r
          SET state = 'fulfilled', artifact_id = i.artifact_id,
              error_code = NULL, error_detail = NULL
-         FROM import_jobs i
+         FROM import_jobs i JOIN artifacts a ON a.id = i.artifact_id
          WHERE i.id = r.import_id AND r.state = 'downloading'
-           AND i.state = 'complete' AND i.artifact_id IS NOT NULL
+           AND i.state = 'complete' AND a.format <> 'unknown'
            AND ($1::uuid IS NULL OR r.id = $1)
          RETURNING r.id",
     )
     .bind(only)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(DbError::Query)?;
+    let not_disc_images: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "UPDATE requests r
+         SET state = 'failed', artifact_id = i.artifact_id, error_code = $2,
+             error_detail = 'what the download brought in is not a disc image Tangible '
+                 || 'recognises, such as a video file; it is kept in the library as it '
+                 || 'arrived. Search again and grab another release'
+         FROM import_jobs i JOIN artifacts a ON a.id = i.artifact_id
+         WHERE i.id = r.import_id AND r.state = 'downloading'
+           AND i.state = 'complete' AND a.format = 'unknown'
+           AND ($1::uuid IS NULL OR r.id = $1)
+         RETURNING r.id",
+    )
+    .bind(only)
+    .bind(NOT_A_DISC_IMAGE)
     .fetch_all(&mut **tx)
     .await
     .map_err(DbError::Query)?;
@@ -621,6 +651,7 @@ async fn settle_in(
     for (ids, action) in [
         (&revived, "request.downloading"),
         (&fulfilled, "request.fulfilled"),
+        (&not_disc_images, "request.failed"),
         (&failed, "request.failed"),
     ] {
         for id in ids {
@@ -628,7 +659,12 @@ async fn settle_in(
         }
     }
     // A request revived and then fulfilled moved once.
-    let mut moved: Vec<uuid::Uuid> = revived.into_iter().chain(fulfilled).chain(failed).collect();
+    let mut moved: Vec<uuid::Uuid> = revived
+        .into_iter()
+        .chain(fulfilled)
+        .chain(not_disc_images)
+        .chain(failed)
+        .collect();
     moved.sort_unstable();
     moved.dedup();
     Ok(moved.into_iter().map(RequestId::from_uuid).collect())

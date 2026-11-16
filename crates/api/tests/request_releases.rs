@@ -847,6 +847,96 @@ async fn a_request_is_searched_for_grabbed_and_fulfilled_by_its_import() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
+async fn a_download_that_is_not_a_disc_image_fails_the_request() {
+    // A release named as a disc image that downloads as a video file: the
+    // request is not fulfilled by it, and another may be grabbed.
+    let harness = harness().await;
+    harness.prowlarr(KEY).await;
+    let qbittorrent = harness.qbittorrent().await;
+    let id = harness.approved_film().await;
+    let (status, found, _) = harness.search(&id, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{found}");
+    // Each result says what its name says it holds.
+    let results = found["results"].as_array().unwrap();
+    assert!(
+        results
+            .iter()
+            .all(|release| release["holds"] == "disc_image"),
+        "{found}"
+    );
+    let (_, hash) = fixture_torrent();
+    harness.fake.lock().unwrap().adding = Some(hash.clone());
+    let (status, grabbed, _) = harness
+        .grab(
+            &id,
+            json!({ "result_id": results[0]["id"], "integration_id": qbittorrent }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{grabbed}");
+    let import_id = grabbed["import_id"].as_str().unwrap().to_owned();
+
+    // An MP4's first box, then bytes no other test's file has, as long as
+    // the fake client says the download is.
+    let mut video = vec![0_u8; 65_536];
+    video[..12].copy_from_slice(b"\0\0\0\x18ftypisom");
+    video[1024..1040].copy_from_slice(uuid::Uuid::now_v7().as_bytes());
+    std::fs::write(harness.downloads.join("film.mp4"), &video).unwrap();
+    harness.fake.lock().unwrap().torrents.insert(
+        hash.clone(),
+        torrent(&hash, "stalledUP", 1.0, "/downloads/tangible/film.mp4"),
+    );
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    harness.drain().await;
+
+    let (_, import, _) = harness
+        .send(
+            &harness.admin,
+            Method::GET,
+            &format!("/api/v1/imports/{import_id}"),
+            None,
+        )
+        .await;
+    assert_eq!(import["state"], "complete", "{import}");
+    let request = harness.request(&id).await;
+    assert_eq!(request["state"], "failed", "{request}");
+    assert_eq!(request["error_code"], "NOT_A_DISC_IMAGE");
+    assert!(
+        request["error_detail"]
+            .as_str()
+            .unwrap()
+            .contains("kept in the library"),
+        "{request}"
+    );
+    // It names what the download brought in, which is kept as it arrived.
+    assert_eq!(request["artifact_id"], import["artifact_id"]);
+    let (_, artifact, _) = harness
+        .send(
+            &harness.admin,
+            Method::GET,
+            &format!(
+                "/api/v1/artifacts/{}",
+                import["artifact_id"].as_str().unwrap()
+            ),
+            None,
+        )
+        .await;
+    assert_eq!(artifact["format"], "unknown", "{artifact}");
+    assert_eq!(artifact["request"]["id"], id.as_str());
+
+    // Settling again leaves it failed: its import is complete, and that
+    // does not bring it back.
+    harness.drain().await;
+    assert_eq!(harness.request(&id).await["state"], "failed");
+
+    // Another release may be searched for.
+    assert_eq!(request["can_search"], true, "{request}");
+    let (status, again, _) = harness.search(&id, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    remove_prowlarrs(&harness.pool).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn a_magnet_only_release_is_grabbed_by_the_magnet_its_link_redirects_to() {
     let harness = harness().await;
     harness.prowlarr(KEY).await;

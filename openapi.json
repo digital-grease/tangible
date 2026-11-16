@@ -14096,6 +14096,7 @@
           "score",
           "reasons",
           "can_grab",
+          "holds",
           "larger_than_largest_disc"
         ],
         "properties": {
@@ -14118,6 +14119,10 @@
             "format": "int32",
             "description": "How often it was grabbed, where the indexer says.",
             "minimum": 0
+          },
+          "holds": {
+            "type": "string",
+            "description": "What its name and categories say it holds: `disc_image`,\n`video_file` (encoded or remuxed, without the disc's menus),\n`audio_files`, or `unknown` when they do not say."
           },
           "id": {
             "type": "string",

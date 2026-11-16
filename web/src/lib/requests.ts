@@ -84,7 +84,7 @@ export function requestStateTone(state: string): Tone {
 }
 
 /** What happens next to a request in this state, said to whoever looks at it. */
-export function requestNext(request: Pick<RequestView, 'state'>): string {
+export function requestNext(request: Pick<RequestView, 'state' | 'error_code'>): string {
   switch (request.state) {
     case 'pending_approval':
       return 'An operator or administrator looks at it next. Nothing is searched for or downloaded until one approves it.';
@@ -95,7 +95,9 @@ export function requestNext(request: Pick<RequestView, 'state'>): string {
     case 'fulfilled':
       return 'It is in the library.';
     case 'failed':
-      return 'The download did not end in the library. An operator or administrator may find another release.';
+      return request.error_code === 'NOT_A_DISC_IMAGE'
+        ? 'What it downloaded is not a disc image Tangible recognises, such as a video file. It is kept in the library as it arrived; an operator or administrator may find another release.'
+        : 'The download did not end in the library. An operator or administrator may find another release.';
     case 'declined':
       return 'Declined. Nothing was searched for or downloaded.';
     case 'canceled':
@@ -414,6 +416,33 @@ export function releasePeers(release: ReleaseView): string {
     return `${release.seeders} seeding${leeching}`;
   }
   return release.grabs == null ? 'Not said' : `${release.grabs} grabs`;
+}
+
+/**
+ * The mark on a release whose name says it is not a disc image, or null
+ * when it does not say so.
+ */
+export function holdsMark(holds: string): string | null {
+  switch (holds) {
+    case 'video_file':
+      return 'A video file, not a disc image';
+    case 'audio_files':
+      return 'Audio files, not a disc image';
+    default:
+      return null;
+  }
+}
+
+/** The same, in full, where the release is about to be grabbed. */
+export function holdsDetail(holds: string): string | null {
+  switch (holds) {
+    case 'video_file':
+      return "Its name says it is a video file, encoded or remuxed from a disc, not an image of the disc: it has none of the disc's menus. If it arrives as one, the request fails and the file is kept in the library.";
+    case 'audio_files':
+      return 'Its name says it is audio files, track by track, not an image of the CD. If it arrives as them, the request fails and the files are kept in the library.';
+    default:
+      return null;
+  }
 }
 
 /** A kind of disc, as a sentence names one. */

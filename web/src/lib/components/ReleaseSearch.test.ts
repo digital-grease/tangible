@@ -72,6 +72,7 @@ function release(extra: Partial<ReleaseView> = {}): ReleaseView {
     reasons: ['every word searched for is in its title', 'it names the year, 2008'],
     can_grab: true,
     larger_than_largest_disc: false,
+    holds: 'disc_image',
     ...extra,
   } as ReleaseView;
 }
@@ -188,6 +189,41 @@ describe('Finding a release', () => {
       screen.getByRole('button', { name: 'Grab: Big.Buck.Bunny.2008.DVD.ISO' }),
     );
     expect(screen.queryByText(/the largest disc your drives write/)).toBeNull();
+  });
+
+  it('marks a release whose name says it is a video file, and says so before grabbing', async () => {
+    server({
+      'GET /api/v1/requests/q1/search': {
+        status: 200,
+        body: found({
+          results: [
+            release({
+              title: 'Hackers.1995.REMASTERED.1080p.BluRay.x265-LAMA',
+              holds: 'video_file',
+              reasons: ['it looks like a video file, not a disc image'],
+            }),
+            release({ id: 'r2', title: 'Hackers.1995.COMPLETE.BLURAY' }),
+          ],
+        }),
+      },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    const { container } = render(ReleaseSearch, {
+      props: { request: request(), ongrabbed: () => {} },
+    });
+    const table = await screen.findByRole('table', { name: 'Releases found, best first' });
+    const rows = within(table).getAllByRole('row');
+    expect(within(rows[1] as HTMLElement).getByText('A video file, not a disc image')).toBeTruthy();
+    expect(within(rows[2] as HTMLElement).queryByText(/not a disc image/)).toBeNull();
+    expect(await axeViolations(container)).toEqual([]);
+
+    await fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Grab: Hackers.1995.REMASTERED.1080p.BluRay.x265-LAMA',
+      }),
+    );
+    expect(screen.getByText(/Its name says it is a video file/)).toBeTruthy();
+    expect(screen.getByText(/the request fails and the file is kept in the library/)).toBeTruthy();
   });
 
   it('says when sizes are not checked, because no drive has said what it writes', async () => {

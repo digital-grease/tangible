@@ -4997,6 +4997,12 @@ export interface components {
              * @description How often it was grabbed, where the indexer says.
              */
             grabs?: number | null;
+            /**
+             * @description What its name and categories say it holds: `disc_image`,
+             *     `video_file` (encoded or remuxed, without the disc's menus),
+             *     `audio_files`, or `unknown` when they do not say.
+             */
+            holds: string;
             /** @description The result's id, which a grab names. */
             id: string;
             /** @description The indexer that has it, as Prowlarr names it. */

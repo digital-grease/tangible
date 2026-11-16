@@ -451,6 +451,33 @@ describe('A request', () => {
     expect(await axeViolations(container)).toEqual([]);
   });
 
+  it('says what it downloaded was not a disc image, and links it', async () => {
+    server({
+      '/api/v1/requests/q1': {
+        status: 200,
+        body: request({
+          state: 'failed',
+          decided_by: 'operator',
+          can_search: false,
+          import_id: 'i1',
+          artifact_id: 'a1',
+          error_code: 'NOT_A_DISC_IMAGE',
+          error_detail:
+            'what the download brought in is not a disc image Tangible recognises, such as a video file; it is kept in the library as it arrived. Search again and grab another release',
+        }),
+      },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    render(RequestPage);
+    expect(await screen.findByText(/What it downloaded is not a disc image/)).toBeTruthy();
+    expect(
+      screen
+        .getByRole('link', { name: 'Open what it downloaded in the library' })
+        .getAttribute('href'),
+    ).toBe('/library/a1');
+    expect(screen.queryByText(/did not end in the library/)).toBeNull();
+  });
+
   it('shows no release search to a requester', async () => {
     server({
       '/api/v1/requests/q1': {

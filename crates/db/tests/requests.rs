@@ -297,13 +297,19 @@ async fn client_and_import(pool: &PgPool, state: &str) -> (uuid::Uuid, uuid::Uui
     (integration, import)
 }
 
-/// Complete `import` with a new artifact, answering the artifact.
+/// Complete `import` with a new ISO, answering the artifact.
 async fn complete(pool: &PgPool, import: uuid::Uuid) -> uuid::Uuid {
+    complete_as(pool, import, "iso").await
+}
+
+/// Complete `import` with a new artifact of `format`, answering it.
+async fn complete_as(pool: &PgPool, import: uuid::Uuid, format: &str) -> uuid::Uuid {
     let artifact = uuid::Uuid::now_v7();
     pool.execute(sqlx::AssertSqlSafe(
         format!(
             "INSERT INTO artifacts (id, origin, manifest_version, total_bytes, component_count, \
-             validation_state) VALUES ('{artifact}', 'imported_original', 'v1alpha1', 1, 1, 'valid')"
+             validation_state, format) \
+             VALUES ('{artifact}', 'imported_original', 'v1alpha1', 1, 1, 'valid', '{format}')"
         )
         .as_str(),
     ))
@@ -418,6 +424,53 @@ async fn only_an_approved_request_is_searched_for_or_grabbed() {
     .await
     .unwrap();
     assert_eq!(metadata["title"], "Some Game (USA)");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_download_that_is_not_a_disc_image_fails_its_request_and_stays_failed() {
+    let pool = pool().await;
+    let operator = account(&pool, Role::Operator).await;
+    let film = ask(&pool, &operator, true).await;
+    let (integration, import) = client_and_import(&pool, "acquiring").await;
+    start_download(&pool, rid(film), &grabbed(&operator.1, integration, import))
+        .await
+        .unwrap()
+        .unwrap();
+    let video = complete_as(&pool, import, "unknown").await;
+
+    // Other tests settle too, so what is checked is where it stands.
+    settle_requests(&pool).await.unwrap();
+    let record = get_request(&pool, rid(film)).await.unwrap().unwrap();
+    assert_eq!(record.state, RequestState::Failed);
+    assert_eq!(record.error_code.as_deref(), Some("NOT_A_DISC_IMAGE"));
+    assert_eq!(record.artifact_id, Some(video), "it names what came in");
+    // Its import is complete, which does not bring it back.
+    settle_requests(&pool).await.unwrap();
+    assert_eq!(
+        get_request(&pool, rid(film)).await.unwrap().unwrap().state,
+        RequestState::Failed
+    );
+    assert!(
+        audit_actions(&pool, film)
+            .await
+            .ends_with(&["request.failed".to_owned()])
+    );
+
+    // Grabbed again, it no longer names the video; a disc image fulfils it.
+    let (_, again) = client_and_import(&pool, "acquiring").await;
+    let record = start_download(&pool, rid(film), &grabbed(&operator.1, integration, again))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.state, RequestState::Downloading);
+    assert_eq!(record.artifact_id, None);
+    assert_eq!(record.error_code, None);
+    let disc = complete(&pool, again).await;
+    settle_requests(&pool).await.unwrap();
+    let record = get_request(&pool, rid(film)).await.unwrap().unwrap();
+    assert_eq!(record.state, RequestState::Fulfilled);
+    assert_eq!(record.artifact_id, Some(disc));
 }
 
 #[tokio::test]

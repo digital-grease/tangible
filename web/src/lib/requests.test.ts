@@ -13,6 +13,8 @@ import {
   discName,
   grabOutcome,
   grabRelease,
+  holdsDetail,
+  holdsMark,
   imdbId,
   kindLabel,
   largestDiscNote,
@@ -286,6 +288,26 @@ describe('requests', () => {
     const unsized = { size_bytes: null } as Parameters<typeof tooLargeDetail>[0];
     expect(tooLargeDetail(unsized, dvd)).toMatch(
       /^This release is more than a DVD holds \(4\.4 GiB\)/,
+    );
+  });
+});
+
+describe('what a release holds, and a request it failed', () => {
+  it('marks a video file or audio files, and nothing else', () => {
+    expect(holdsMark('video_file')).toBe('A video file, not a disc image');
+    expect(holdsMark('audio_files')).toBe('Audio files, not a disc image');
+    expect(holdsMark('disc_image')).toBeNull();
+    expect(holdsMark('unknown')).toBeNull();
+    expect(holdsDetail('video_file')).toMatch(/none of the disc's menus/);
+    expect(holdsDetail('disc_image')).toBeNull();
+  });
+
+  it('says a request failed for what it downloaded, apart from a failed download', () => {
+    expect(requestNext({ state: 'failed', error_code: 'NOT_A_DISC_IMAGE' })).toMatch(
+      /not a disc image Tangible recognises.*kept in the library/,
+    );
+    expect(requestNext({ state: 'failed', error_code: 'IMPORT_FAILED' })).toMatch(
+      /did not end in the library/,
     );
   });
 });

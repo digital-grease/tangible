@@ -160,11 +160,102 @@ const PLATFORM_ALIASES: [(&str, &[&str]); 12] = [
     ("mega cd", &["segacd", "scd"]),
 ];
 
-/// Words that say a release is a disc image.
+/// What a release's name says it holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Holds {
+    /// A disc image: an ISO, a BDMV or VIDEO_TS folder, a CUE sheet and
+    /// its files.
+    DiscImage,
+    /// A video file encoded or remuxed from a disc or a broadcast: the
+    /// film, without the disc's menus and structure.
+    VideoFile,
+    /// Audio files, track by track, rather than an image of the CD.
+    AudioFiles,
+    /// It does not say.
+    Unknown,
+}
+
+impl Holds {
+    /// Its name on the wire.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DiscImage => "disc_image",
+            Self::VideoFile => "video_file",
+            Self::AudioFiles => "audio_files",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// Words that say a release is a disc image. `BluRay` and `DVD` alone are
+/// not among them: in a release's name they say which disc a video file
+/// was encoded from (`1080p.BluRay.x265`) at least as often as they say it
+/// is that disc, which is how an x265 MP4 once ranked as a disc image.
 const DISC_WORDS: [&str; 18] = [
-    "iso", "bin", "cue", "chd", "img", "mdf", "mds", "ccd", "toc", "nrg", "bdmv", "bluray", "blu",
-    "dvd", "dvd5", "dvd9", "bd25", "bd50",
+    "iso", "bin", "cue", "chd", "img", "mdf", "mds", "ccd", "toc", "nrg", "bdmv", "dvdr", "dvd5",
+    "dvd9", "bd25", "bd50", "bd66", "bd100",
 ];
+
+/// Words that say a release is a video file: the codec, the file's kind,
+/// or how it was made (ripped, remuxed, recorded from a broadcast or the
+/// web).
+const VIDEO_WORDS: [&str; 20] = [
+    "x264", "x265", "h264", "h265", "hevc", "xvid", "divx", "webrip", "webdl", "hdtv", "hdrip",
+    "bdrip", "brrip", "dvdrip", "remux", "mkv", "mp4", "avi", "m4v", "wmv",
+];
+
+/// Words that say a release is audio files rather than an image of a CD.
+const AUDIO_WORDS: [&str; 5] = ["mp3", "m4a", "ogg", "opus", "flac"];
+
+/// Newznab categories that hold only video files: films and television as
+/// WEB-DL or x265.
+const VIDEO_CATEGORIES: [u32; 4] = [2080, 2090, 5010, 5090];
+
+/// Newznab's MP3 category.
+const AUDIO_CATEGORIES: [u32; 1] = [3010];
+
+/// What `release` holds, by its name and categories. A sign of a disc
+/// image wins over the rest, since a full Blu-ray release names the codec
+/// its disc carries (`COMPLETE.UHD.BLURAY.HEVC`).
+#[must_use]
+pub fn holds(release: &Release) -> Holds {
+    let words = tokens(&release.title);
+    let has = |word: &str| words.iter().any(|have| have == word);
+    let pair = |first: &str, second: &str| {
+        words
+            .windows(2)
+            .any(|two| two[0] == first && two[1] == second)
+    };
+    let in_category = |ids: &[u32]| {
+        release
+            .categories
+            .iter()
+            .any(|category| ids.contains(&category.id))
+    };
+    let disc = DISC_WORDS.iter().any(|word| has(word))
+        || pair("video", "ts")
+        || pair("dvd", "r")
+        || pair("bd", "100")
+        || pair("cd", "image")
+        || pair("disc", "image")
+        || (has("complete") && (has("bluray") || has("blu") || has("uhd") || has("dvd")));
+    if disc {
+        return Holds::DiscImage;
+    }
+    if VIDEO_WORDS.iter().any(|word| has(word))
+        || pair("h", "264")
+        || pair("h", "265")
+        || pair("web", "dl")
+        || in_category(&VIDEO_CATEGORIES)
+    {
+        return Holds::VideoFile;
+    }
+    if AUDIO_WORDS.iter().any(|word| has(word)) || in_category(&AUDIO_CATEGORIES) {
+        return Holds::AudioFiles;
+    }
+    Holds::Unknown
+}
 
 /// Whether `have` names the platform `platform`: every word of its name
 /// but its maker's, or a short name releases use for it.
@@ -194,8 +285,9 @@ fn is_year(word: &str) -> bool {
 
 /// How well `release` matches what was asked for, and why: the share of
 /// the words searched for in its title (up to 100), the year and platform
-/// when the request names them, whether it names a disc image, and a
-/// torrent nobody seeds.
+/// when the request names them, whether it names a disc image (10 more) or
+/// looks like a video or audio files (60 fewer), and a torrent nobody
+/// seeds.
 #[must_use]
 pub fn rank(record: &RequestRecord, words: &str, release: &Release) -> (i32, Vec<String>) {
     let mut score = 0_i32;
@@ -241,10 +333,20 @@ pub fn rank(record: &RequestRecord, words: &str, release: &Release) -> (i32, Vec
         score += 20;
         reasons.push(format!("it names the platform, {platform}"));
     }
-    let video_ts = have.contains("video") && have.contains("ts");
-    if video_ts || DISC_WORDS.iter().any(|word| have.contains(*word)) {
-        score += 10;
-        reasons.push("it says it is a disc image".to_owned());
+    match holds(release) {
+        Holds::DiscImage => {
+            score += 10;
+            reasons.push("it says it is a disc image".to_owned());
+        }
+        Holds::VideoFile => {
+            score -= 60;
+            reasons.push("it looks like a video file, not a disc image".to_owned());
+        }
+        Holds::AudioFiles => {
+            score -= 60;
+            reasons.push("it looks like audio files, not a disc image".to_owned());
+        }
+        Holds::Unknown => {}
     }
     if release.protocol == Protocol::Torrent && release.seeders == Some(0) {
         score -= 50;
@@ -491,6 +593,93 @@ mod tests {
         release.guid = title.to_owned();
         release.seeders = seeders;
         release
+    }
+
+    #[test]
+    fn a_release_is_told_a_disc_image_or_a_video_or_audio_files() {
+        let named = |title: &str| {
+            let mut release = release(title, None);
+            release.categories = Vec::new();
+            holds(&release)
+        };
+        for title in [
+            "Big Buck Bunny (2008) [Blu-ray ISO]",
+            "Big.Buck.Bunny.2008.DVD.ISO",
+            "Hackers.1995.COMPLETE.BLURAY-UNTOUCHED",
+            "Hackers.1995.2160p.COMPLETE.UHD.BLURAY.HEVC-GROUP",
+            "Hackers.1995.NTSC.DVDR-GROUP",
+            "Hackers 1995 DVD-R",
+            "Hackers.1995.DVD9",
+            "Hackers.1995.BD50",
+            "Hackers.1995.BD100",
+            "Hackers/VIDEO_TS",
+            "Crash Bandicoot (1996) (USA) [PSX] [BIN/CUE]",
+            "Homebrew.Disc.Collection.World.v1.0.ISO",
+            "Big Buck Bunny Soundtrack (2008) [FLAC CD image]",
+            "Live Set 2004 [FLAC+CUE]",
+        ] {
+            assert_eq!(named(title), Holds::DiscImage, "{title}");
+        }
+        for title in [
+            // The release that once ranked as a disc image for its BluRay.
+            "Hackers.1995.REMASTERED.1080p.BluRay.x265-LAMA",
+            "Hackers.1995.1080p.BluRay.REMUX.AVC.DTS-HD.MA.5.1-FGT",
+            "Hackers.1995.DVDRip.XviD-GROUP",
+            "Hackers.1995.1080p.WEB-DL.DD5.1.H.264-GROUP",
+            "Hackers.1995.720p.BRRip.x264",
+            "Hackers (1995).mkv",
+            "Hackers.1995.1080p.HEVC",
+        ] {
+            assert_eq!(named(title), Holds::VideoFile, "{title}");
+        }
+        for title in ["Live Set (2004) [MP3 320]", "Live Set 2004 FLAC"] {
+            assert_eq!(named(title), Holds::AudioFiles, "{title}");
+        }
+        // Not said either way: a full disc named only by its source, and a
+        // game whose title has words a video file's name would.
+        for title in [
+            "Hackers 1995 1080p Blu-ray AVC DTS-HD MA 5.1",
+            "Spider-Man Web of Shadows (USA) PS3",
+            "Hackers.1995.DVD",
+        ] {
+            assert_eq!(named(title), Holds::Unknown, "{title}");
+        }
+
+        // An indexer's WEB-DL or x265 category says so whatever the name.
+        let mut filed = release("Hackers 1995", None);
+        filed.categories = vec![tangible_integrations::prowlarr::Category {
+            id: 2090,
+            name: "Movies/x265".to_owned(),
+        }];
+        assert_eq!(holds(&filed), Holds::VideoFile);
+        filed.categories[0].id = 3010;
+        assert_eq!(holds(&filed), Holds::AudioFiles);
+        filed.title = "Hackers 1995 ISO".to_owned();
+        assert_eq!(holds(&filed), Holds::DiscImage);
+        assert_eq!(Holds::VideoFile.as_str(), "video_file");
+    }
+
+    #[test]
+    fn a_video_file_ranks_below_a_disc_image_of_the_same() {
+        let film = request(
+            RequestKind::Movie,
+            "Hackers",
+            serde_json::json!({ "year": "1995" }),
+        );
+        let (disc, _) = rank(
+            &film,
+            "Hackers",
+            &release("Hackers.1995.COMPLETE.BLURAY", None),
+        );
+        let (video, why) = rank(
+            &film,
+            "Hackers",
+            &release("Hackers.1995.REMASTERED.1080p.BluRay.x265-LAMA", None),
+        );
+        assert_eq!(disc, 100 + 20 + 10);
+        assert_eq!(video, 100 + 20 - 60, "{why:?}");
+        assert!(why.contains(&"it looks like a video file, not a disc image".to_owned()));
+        assert!(!why.contains(&"it says it is a disc image".to_owned()));
     }
 
     #[test]

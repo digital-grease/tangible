@@ -26,6 +26,8 @@
     clientsFor,
     grabOutcome,
     grabRelease,
+    holdsDetail,
+    holdsMark,
     largestDiscNote,
     loadReleaseSearch,
     protocolLabel,
@@ -210,8 +212,13 @@
             <tr>
               <th scope="row" class="release">
                 <span class="title">{release.title}</span>
+                {#if holdsMark(release.holds)}
+                  <span class="caveat"
+                    ><StatusMark tone="warn" label={holdsMark(release.holds) ?? ''} /></span
+                  >
+                {/if}
                 {#if release.larger_than_largest_disc && held.largest_disc}
-                  <span class="too-large"
+                  <span class="caveat"
                     ><StatusMark tone="warn" label={tooLargeMark(held.largest_disc)} /></span
                   >
                 {/if}
@@ -271,6 +278,11 @@
             : 'the client chosen'}, which downloads it; the request is fulfilled once it is in the
           library.
         </p>
+        {#if holdsDetail(release.holds)}
+          <Callout tone="warn" role="note">
+            <p>{holdsDetail(release.holds)}</p>
+          </Callout>
+        {/if}
         {#if release.larger_than_largest_disc && held?.largest_disc}
           <Callout tone="warn" role="note">
             <p>{tooLargeDetail(release, held.largest_disc)}</p>
@@ -335,7 +347,7 @@
     font-weight: var(--weight-medium);
     overflow-wrap: anywhere;
   }
-  .too-large {
+  .caveat {
     display: block;
     margin-top: var(--space-1);
     font-size: var(--text-sm);

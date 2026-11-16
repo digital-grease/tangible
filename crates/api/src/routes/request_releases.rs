@@ -35,7 +35,7 @@ use crate::auth::SignedIn;
 use crate::download_clients::{open_client, open_prowlarr};
 use crate::problem::{ErrorCode, Problem};
 use crate::releases::{
-    HeldRelease, HeldSearch, IndexerState, MAX_WORDS_CHARS, plan, ranked, words_of,
+    HeldRelease, HeldSearch, IndexerState, MAX_WORDS_CHARS, holds, plan, ranked, words_of,
 };
 use crate::routes::integration_jobs::{Submission, deliver};
 use crate::routes::integrations::{client_problem, note_health, open_problem};
@@ -85,6 +85,10 @@ pub struct ReleaseView {
     /// Whether a download client for its protocol is configured and turned
     /// on, so it can be grabbed.
     pub can_grab: bool,
+    /// What its name and categories say it holds: `disc_image`,
+    /// `video_file` (encoded or remuxed, without the disc's menus),
+    /// `audio_files`, or `unknown` when they do not say.
+    pub holds: String,
     /// Whether it is larger than the largest disc the drives write
     /// (`largest_disc`), so that, as it is, it cannot be one such disc.
     /// False when either size is not known.
@@ -320,6 +324,7 @@ fn search_view(
                 can_grab: clients
                     .iter()
                     .any(|client| client.protocol == release.protocol.as_str()),
+                holds: holds(release).as_str().to_owned(),
                 larger_than_largest_disc: largest
                     .zip(release.size_bytes)
                     .is_some_and(|(disc, bytes)| !disc.holds(bytes)),
