@@ -26,6 +26,7 @@ pub mod id;
 pub mod import;
 pub mod logical_path;
 pub mod manifest;
+pub mod media;
 pub mod report;
 pub mod rip;
 pub mod secret;

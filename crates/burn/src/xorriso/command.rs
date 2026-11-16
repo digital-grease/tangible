@@ -76,6 +76,20 @@ pub fn inspect(drive: &DriveRef) -> Vec<String> {
     ]
 }
 
+/// Arguments that ask a drive which media profiles it supports, written or
+/// read, with or without a disc in it.
+#[must_use]
+pub fn profiles(drive: &DriveRef) -> Vec<String> {
+    vec![
+        "-abort_on".to_owned(),
+        "FATAL".to_owned(),
+        "-outdev".to_owned(),
+        device_argument(&drive.device_alias),
+        "-list_profiles".to_owned(),
+        "out".to_owned(),
+    ]
+}
+
 /// Arguments that erase a rewritable medium.
 ///
 /// `fast` makes a CD-RW or an unformatted DVD-RW reusable, and invalidates the
@@ -400,6 +414,21 @@ mod tests {
     fn a_device_node_is_passed_through_unchanged() {
         assert_eq!(device_argument("/dev/sr0"), "/dev/sr0");
         assert_eq!(device_argument("/dev/disc-block"), "/dev/disc-block");
+    }
+
+    #[test]
+    fn asking_for_profiles_is_exactly_these_arguments() {
+        assert_eq!(
+            profiles(&drive("/dev/sr0")),
+            [
+                "-abort_on",
+                "FATAL",
+                "-outdev",
+                "/dev/sr0",
+                "-list_profiles",
+                "out"
+            ]
+        );
     }
 
     #[test]

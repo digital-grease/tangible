@@ -36,6 +36,14 @@ Then, with a blank 80 minute CD-R in the tray, `-toc` again and the engine's
 write arguments with `-dummy` added, which writes with the laser off; the disc
 was checked blank afterwards.
 
+One more from the same drive on 2026-11-15, from xorriso 1.5.6 in the
+Debian 13 worker image (`docker exec` into the burn worker), with a written,
+closed DVD-RW in the tray; stdout and stderr together:
+
+```bash
+xorriso -abort_on FATAL -outdev /dev/sr0 -list_profiles out
+```
+
 The drive's serial number in the captures is replaced with `X`s. It
 identifies one physical drive and has no business in a public repository.
 
@@ -56,6 +64,7 @@ identifies one physical drive and has no business in a public repository.
 | `toc-address-rejected.txt` | xorriso 1.5.4 in the worker image, run by the operator in the first end-to-end run, refusing `/dev/disc-block`: libburn treats only drive names it enumerates as drives. The engine reports this as the drive being unavailable, not as an empty tray. |
 | `toc-no-disc.txt` | `-toc` on a real drive with an empty tray. It says `Media current: is not recognizable`, which the parser used to read as a profile, so an empty drive looked like a disc that could not be written. |
 | `toc-lost-connection.txt` | `-toc` on a real blank CD-R in the Slimtype DS8A8SH, on 2026-11-03 with xorriso 1.5.6 from the Debian 13 image, when the drive dropped off USB part of the way through (its hub chain reset). stderr as the terminal showed it; stdout was empty; exit 5. The summary printed first names a blank CD-R and nothing of its capacity, which the engine used to read as a CD-R that could not be written. |
+| `profiles-dvd-writer.txt` | `-list_profiles out` on the Slimtype: every profile the drive supports, written or read, in its own order. The disc in the tray marks two of them `(current)`, which says nothing about the drive and is dropped. Recordable profiles become the drive's `write_profiles`. |
 | `write-success-then-abort.txt` | **The interesting one.** The write completed and xorriso then crashed on shutdown, exiting non-zero. |
 
 That last file is why the parser reports what the output said and leaves the

@@ -238,6 +238,12 @@ async fn both_engines_can_reach_the_drive() {
     assert!(identity.vendor.is_some(), "no vendor: {identity:?}");
     assert!(identity.model.is_some(), "no model: {identity:?}");
     assert!(identity.firmware.is_some(), "no firmware: {identity:?}");
+    // And the drive's own list of what it writes, which every writer has.
+    assert!(
+        !capabilities.write_profiles.is_empty(),
+        "no write profiles: {:?}",
+        capabilities.read_profiles
+    );
 }
 
 #[tokio::test]

@@ -41,7 +41,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tangible_domain::Sha256Digest;
+use tangible_domain::{Sha256Digest, media};
 use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, BufReader};
 use tokio::process::Command;
 
@@ -405,9 +405,9 @@ impl BurnEngine for XorrisoEngine {
         let devices = parse::devices(&run.text);
 
         // What the drive says it is, recorded as evidence rather than as
-        // permission. Profiles are left empty until a medium is inspected:
-        // claiming a drive writes BD-R because its model number suggests so
-        // is exactly the guess preflight exists to avoid.
+        // permission. Its profiles are the drive's own list, never a guess
+        // from its model number, and even that list is not trusted with a
+        // burn: preflight reads the disc actually in the drive.
         let mut capabilities = DriveCapabilities::default();
         if let Some(found) = devices
             .iter()
@@ -432,6 +432,21 @@ impl BurnEngine for XorrisoEngine {
                 capabilities
                     .identity
                     .fill_from(&parse::drive_type(&drive_type));
+            }
+            // Which discs it reads and writes, as the drive lists them, with
+            // or without a disc in it. A drive that will not say goes without,
+            // as before.
+            if let Ok(listed) = self.run(&command::profiles(drive), PROBE_TIMEOUT).await {
+                let listed = parse::profiles(&listed.text);
+                capabilities.write_profiles = listed
+                    .iter()
+                    .filter(|profile| media::is_recordable(profile))
+                    .cloned()
+                    .collect();
+                capabilities.read_profiles = listed
+                    .into_iter()
+                    .filter(|profile| media::is_optical(profile))
+                    .collect();
             }
         } else {
             capabilities.engine_evidence.insert(

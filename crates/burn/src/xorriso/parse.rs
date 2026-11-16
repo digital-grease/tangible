@@ -122,6 +122,62 @@ pub fn drive_type(value: &str) -> DriveIdentity {
     }
 }
 
+/// The most profiles kept from one list. Real drives list about fifteen;
+/// the bound is for output that is not what it should be.
+const MAX_PROFILES: usize = 64;
+
+/// The longest profile name kept. The longest MMC name is under forty
+/// characters.
+const MAX_PROFILE_NAME: usize = 80;
+
+/// The media profiles a drive lists, by name, from `-list_profiles`:
+///
+/// ```text
+/// Profile      : 0x002B (DVD+R/DL)
+/// Profile      : 0x0014 (DVD-RW sequential recording) (current)
+/// ```
+///
+/// In the drive's order, each once. `(current)` marks the profile of the
+/// disc in the drive, which is not a property of the drive and is dropped.
+#[must_use]
+pub fn profiles(output: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for line in output.lines() {
+        let Some(rest) = line.strip_prefix("Profile") else {
+            continue;
+        };
+        let Some((_, value)) = rest.split_once(':') else {
+            continue;
+        };
+        let Some((number, named)) = value.trim().split_once(' ') else {
+            continue;
+        };
+        if !number.starts_with("0x") {
+            continue;
+        }
+        let Some(name) = named
+            .trim()
+            .strip_prefix('(')
+            .and_then(|inner| inner.split_once(')'))
+            .map(|(name, _)| name.trim())
+        else {
+            continue;
+        };
+        if name.is_empty()
+            || name.len() > MAX_PROFILE_NAME
+            || name.chars().any(char::is_control)
+            || found.iter().any(|seen| seen == name)
+        {
+            continue;
+        }
+        found.push(name.to_owned());
+        if found.len() == MAX_PROFILES {
+            break;
+        }
+    }
+    found
+}
+
 /// What is in a drive, as `-toc` describes it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MediumReport {
@@ -573,6 +629,59 @@ mod tests {
         assert_eq!(padded.model.as_deref(), Some("BD-RW BDR-212M"));
         assert_eq!(padded.firmware, None);
         assert_eq!(drive_type("garbled"), DriveIdentity::default());
+    }
+
+    #[test]
+    fn a_dvd_writer_lists_its_profiles() {
+        // The Slimtype DS8A8SH with a written DVD-RW in the tray: the
+        // disc's profile is marked current twice, and that is dropped.
+        let listed = profiles(&fixture("profiles-dvd-writer.txt"));
+        assert_eq!(
+            listed,
+            [
+                "DVD+R/DL",
+                "DVD+R",
+                "DVD+RW",
+                "DVD-R/DL layer jump recording",
+                "DVD-R/DL sequential recording",
+                "DVD-RW sequential recording",
+                "DVD-RW restricted overwrite",
+                "DVD-RAM",
+                "DVD-R sequential recording",
+                "DVD-ROM",
+                "CD-RW",
+                "CD-R",
+                "CD-ROM",
+                "Removable disk",
+            ]
+        );
+        // Nothing else in the output is taken for a profile.
+        assert!(profiles(&fixture("toc-written.txt")).is_empty());
+        assert!(profiles(&fixture("toc-no-disc.txt")).is_empty());
+    }
+
+    #[test]
+    fn a_profile_list_that_is_not_one_is_mostly_ignored() {
+        let odd = "\
+Profile      : 0x0009 (CD-R)
+Profile      : 0x0009 (CD-R)
+Profile      : nonsense (DVD-R)
+Profile      : 0x0010
+Profile      : 0x0011 ()
+Profiles are fun : 0x0012 (DVD-RAM
+Media current: DVD-RW sequential recording
+";
+        assert_eq!(profiles(odd), ["CD-R"]);
+        let long = format!(
+            "Profile      : 0x0001 ({})\n",
+            "x".repeat(MAX_PROFILE_NAME + 1)
+        );
+        assert!(profiles(&long).is_empty());
+        let many = (0..200)
+            .map(|n| format!("Profile      : 0x{n:04X} (Profile {n})"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(profiles(&many).len(), MAX_PROFILES);
     }
 
     #[test]

@@ -1234,8 +1234,9 @@ impl BurnEngine for CdrdaoEngine {
             });
         }
 
-        // Evidence rather than permission, as with xorriso: profiles stay
-        // empty until a disc is inspected.
+        // Evidence rather than permission, as with xorriso. cdrdao does not
+        // list a drive's profiles, so they stay empty here; xorriso, the
+        // other engine of a combined worker, lists them.
         let info = parse::drive_info(&text, &drive.device_alias);
         let mut capabilities = DriveCapabilities {
             supports_buffer_underrun_protection: info.burn_proof == Some(true),

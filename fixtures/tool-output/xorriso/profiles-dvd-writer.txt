@@ -1,0 +1,23 @@
+xorriso 1.5.6 : RockRidge filesystem manipulator, libburnia project.
+
+xorriso : NOTE : Disc status unsuitable for writing
+Drive current: -outdev '/dev/sr0'
+Media current: DVD-RW sequential recording
+Media status : is written , is closed
+Media summary: 1 session, 3406 data blocks, 6812k data,     0 free
+Drive current: -outdev '/dev/sr0'
+Drive type   : vendor 'Slimtype' product 'DVD A DS8A8SH' revision 'KS21'
+Profile      : 0x002B (DVD+R/DL)
+Profile      : 0x001B (DVD+R)
+Profile      : 0x001A (DVD+RW)
+Profile      : 0x0016 (DVD-R/DL layer jump recording)
+Profile      : 0x0015 (DVD-R/DL sequential recording)
+Profile      : 0x0014 (DVD-RW sequential recording) (current)
+Profile      : 0x0013 (DVD-RW restricted overwrite) (current)
+Profile      : 0x0012 (DVD-RAM)
+Profile      : 0x0011 (DVD-R sequential recording)
+Profile      : 0x0010 (DVD-ROM)
+Profile      : 0x000A (CD-RW)
+Profile      : 0x0009 (CD-R)
+Profile      : 0x0008 (CD-ROM)
+Profile      : 0x0002 (Removable disk)
