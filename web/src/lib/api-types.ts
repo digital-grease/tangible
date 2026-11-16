@@ -808,6 +808,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/discs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Find discs to burn to.
+         * @description Find discs by where they sit: each word of `search` must be in a disc's title, edition, set, name, volume label or year. With `artifact`, discs linked to it come first and say `linked`; with `id`, only that disc. Each disc comes with its title, edition and set, as a burn's disc is chosen.
+         */
+        get: operations["find_catalog_discs"];
+        put?: never;
+        /**
+         * Catalogue a single-disc release in one step.
+         * @description Catalogue a single-disc release in one step, as a burn's disc is chosen: the title (or the one already catalogued under the same name in any case, kind and year), a new edition of it, a set of one disc, disc 1, and the artifact's link to it. All or nothing. Needs the catalog permission; audited (`disc.catalogued`).
+         */
+        post: operations["catalogue_new_disc"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/discs/{disc_id}": {
         parameters: {
             query?: never;
@@ -3004,6 +3028,66 @@ export interface components {
              *     another worker's drive.
              */
             drive_id: string;
+        };
+        /** @description Discs found. */
+        CatalogDiscPage: {
+            /**
+             * @description The discs: those linked to the artifact asked about first, then by
+             *     title, edition, set and number.
+             */
+            items: components["schemas"]["CatalogDiscView"][];
+            /** @description Whether more discs match than were answered: search for more words. */
+            more: boolean;
+        };
+        /** @description A disc and where it sits in the catalog, as a burn's disc is chosen. */
+        CatalogDiscView: {
+            /** @description The disc. */
+            disc: components["schemas"]["DiscView"];
+            /**
+             * Format: int32
+             * @description How many discs its set should contain.
+             */
+            disc_count_expected?: number | null;
+            /** @description What its set is called. */
+            disc_set: string;
+            /** @description What its edition is called. */
+            edition: string;
+            /** @description Its edition. */
+            edition_id: string;
+            /** @description Whether the artifact asked about (`artifact`) is linked to it. */
+            linked: boolean;
+            /**
+             * Format: int32
+             * @description When its title was released.
+             */
+            release_year?: number | null;
+            /** @description What its title is called. */
+            title: string;
+            /** @description Its title. */
+            title_id: string;
+            /** @description What kind of work its title is. */
+            title_kind: string;
+        };
+        /** @description A single-disc release to catalogue, for a burn of it. */
+        CatalogueDiscRequest: {
+            /** @description The artifact to link to it, as a representation of it. */
+            artifact_id?: string | null;
+            /** @description What this release is called, such as `DVD` or `PAL DVD`. */
+            edition: string;
+            /** @description What kind of work it is. Defaults to unknown. */
+            kind?: string | null;
+            /** @description Its medium. Defaults to unknown. */
+            media_family?: string | null;
+            /**
+             * Format: int32
+             * @description When it was released.
+             */
+            release_year?: number | null;
+            /**
+             * @description What its title is called. A title already catalogued under this name
+             *     (in any case), kind and year gains the edition instead.
+             */
+            title: string;
         };
         /**
          * @description How redumper read a CD (ADR 0015). Offsets are in samples, 588 to a
@@ -5292,6 +5376,8 @@ export interface components {
             kind: string;
             /** @description The item, as its requester named it. */
             title: string;
+            /** @description Its year, when its details give one. */
+            year?: string | null;
         };
         /** @description A page of requests, newest first. */
         RequestPage: {
@@ -8006,6 +8092,80 @@ export interface operations {
                 };
             };
             /** @description No such set, or an unusable value */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    find_catalog_discs: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Words, each of which must be in a disc's title, edition, set, name,
+                 *     volume label or year. At most 200 characters; eight words are used.
+                 */
+                search?: string | null;
+                /** @description The artifact a burn is for: discs linked to it come first and say so. */
+                artifact?: string | null;
+                /** @description Only this disc, to show one already chosen. */
+                id?: string | null;
+                /** @description Most discs to answer. Clamped. */
+                limit?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Discs found */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogDiscPage"];
+                };
+            };
+            /** @description An unusable parameter */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    catalogue_new_disc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CatalogueDiscRequest"];
+            };
+        };
+        responses: {
+            /** @description Catalogued */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogDiscView"];
+                };
+            };
+            /** @description Will not be stored, or no such artifact */
             422: {
                 headers: {
                     [name: string]: unknown;

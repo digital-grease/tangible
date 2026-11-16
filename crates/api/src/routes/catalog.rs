@@ -43,6 +43,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use utoipa::{IntoParams, ToSchema};
 
+use crate::auth::SignedIn;
 use crate::problem::{ErrorCode, Problem};
 use crate::routes::catalog_edits::{
     edit_one_disc, edit_one_disc_set, edit_one_edition, edit_one_title, get_one_disc_set,
@@ -985,6 +986,275 @@ pub async fn link_artifact(
     list_linked_artifacts(State(state), Path(disc_id)).await
 }
 
+// --- choosing a disc -------------------------------------------------------------
+
+/// Longest search accepted.
+const MAX_SEARCH: usize = 200;
+
+/// A disc and where it sits in the catalog, as a burn's disc is chosen.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct CatalogDiscView {
+    /// The disc.
+    pub disc: DiscView,
+    /// Its title.
+    pub title_id: String,
+    /// What its title is called.
+    pub title: String,
+    /// What kind of work its title is.
+    pub title_kind: String,
+    /// When its title was released.
+    pub release_year: Option<i16>,
+    /// Its edition.
+    pub edition_id: String,
+    /// What its edition is called.
+    pub edition: String,
+    /// What its set is called.
+    pub disc_set: String,
+    /// How many discs its set should contain.
+    pub disc_count_expected: Option<i16>,
+    /// Whether the artifact asked about (`artifact`) is linked to it.
+    pub linked: bool,
+}
+
+impl From<tangible_db::catalog_discs::DiscPlace> for CatalogDiscView {
+    fn from(place: tangible_db::catalog_discs::DiscPlace) -> Self {
+        Self {
+            disc: DiscView::from(place.disc),
+            title_id: place.title_id.to_string(),
+            title: place.title,
+            title_kind: place.title_kind,
+            release_year: place.release_year,
+            edition_id: place.edition_id.to_string(),
+            edition: place.edition,
+            disc_set: place.disc_set,
+            disc_count_expected: place.disc_count_expected,
+            linked: place.linked,
+        }
+    }
+}
+
+/// Discs found.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct CatalogDiscPage {
+    /// The discs: those linked to the artifact asked about first, then by
+    /// title, edition, set and number.
+    pub items: Vec<CatalogDiscView>,
+    /// Whether more discs match than were answered: search for more words.
+    pub more: bool,
+}
+
+/// What to look for among discs.
+#[derive(Debug, Clone, Default, Deserialize, IntoParams)]
+pub struct DiscQuery {
+    /// Words, each of which must be in a disc's title, edition, set, name,
+    /// volume label or year. At most 200 characters; eight words are used.
+    pub search: Option<String>,
+    /// The artifact a burn is for: discs linked to it come first and say so.
+    pub artifact: Option<String>,
+    /// Only this disc, to show one already chosen.
+    pub id: Option<String>,
+    /// Most discs to answer. Clamped.
+    pub limit: Option<usize>,
+}
+
+/// A single-disc release to catalogue, for a burn of it.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct CatalogueDiscRequest {
+    /// What its title is called. A title already catalogued under this name
+    /// (in any case), kind and year gains the edition instead.
+    pub title: String,
+    /// What kind of work it is. Defaults to unknown.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// When it was released.
+    #[serde(default)]
+    pub release_year: Option<i16>,
+    /// What this release is called, such as `DVD` or `PAL DVD`.
+    pub edition: String,
+    /// Its medium. Defaults to unknown.
+    #[serde(default)]
+    pub media_family: Option<String>,
+    /// The artifact to link to it, as a representation of it.
+    #[serde(default)]
+    pub artifact_id: Option<String>,
+}
+
+fn parse_id<T: std::str::FromStr>(raw: Option<&str>, name: &str) -> Result<Option<T>, Problem> {
+    raw.map(|raw| {
+        raw.parse::<T>()
+            .map_err(|_| Problem::invalid_parameter(name, "not a valid identifier"))
+    })
+    .transpose()
+}
+
+/// Find discs to burn to.
+///
+/// # Errors
+///
+/// `INVALID_PARAMETER` for a search over 200 characters or a malformed
+/// identifier.
+#[utoipa::path(
+    get,
+    path = "/api/v1/discs",
+    tag = "catalog",
+    description = "Find discs by where they sit: each word of `search` must be in a disc's \
+                   title, edition, set, name, volume label or year. With `artifact`, discs \
+                   linked to it come first and say `linked`; with `id`, only that disc. Each \
+                   disc comes with its title, edition and set, as a burn's disc is chosen.",
+    params(DiscQuery),
+    responses(
+        (status = 200, description = "Discs found", body = CatalogDiscPage),
+        (status = 400, description = "An unusable parameter", body = Problem),
+    ),
+)]
+pub async fn find_catalog_discs(
+    State(state): State<ApiState>,
+    Query(query): Query<DiscQuery>,
+) -> Result<Json<CatalogDiscPage>, Problem> {
+    if query
+        .search
+        .as_ref()
+        .is_some_and(|search| search.chars().count() > MAX_SEARCH)
+    {
+        return Err(Problem::invalid_parameter(
+            "search",
+            "at most 200 characters",
+        ));
+    }
+    let artifact = parse_id::<ArtifactId>(query.artifact.as_deref(), "artifact")?;
+    let disc = parse_id::<DiscId>(query.id.as_deref(), "id")?;
+    let limit = limit_of(query.limit);
+    let mut found = tangible_db::catalog_discs::find_discs(
+        state.database().pool(),
+        tangible_db::catalog_discs::DiscSearch {
+            search: query.search.as_deref(),
+            artifact,
+            disc,
+            limit: as_i64(limit).saturating_add(1),
+        },
+    )
+    .await
+    .map_err(|error| {
+        tracing::error!(error = ?error, "could not find discs");
+        unavailable("the discs could not be read")
+    })?;
+    let more = found.len() > limit;
+    found.truncate(limit);
+    Ok(Json(CatalogDiscPage {
+        items: found.into_iter().map(CatalogDiscView::from).collect(),
+        more,
+    }))
+}
+
+/// Catalogue a single-disc release in one step.
+///
+/// # Errors
+///
+/// `VALIDATION_FAILED` for a name, kind, year or medium this server will not
+/// store; `REFERENCE_NOT_FOUND` for no such artifact.
+#[utoipa::path(
+    post,
+    path = "/api/v1/discs",
+    tag = "catalog",
+    description = "Catalogue a single-disc release in one step, as a burn's disc is chosen: \
+                   the title (or the one already catalogued under the same name in any case, \
+                   kind and year), a new edition of it, a set of one disc, disc 1, and the \
+                   artifact's link to it. All or nothing. Needs the catalog permission; \
+                   audited (`disc.catalogued`).",
+    request_body = CatalogueDiscRequest,
+    responses(
+        (status = 201, description = "Catalogued", body = CatalogDiscView),
+        (status = 422, description = "Will not be stored, or no such artifact", body = Problem),
+    ),
+)]
+pub async fn catalogue_new_disc(
+    State(state): State<ApiState>,
+    SignedIn(user): SignedIn,
+    Json(request): Json<CatalogueDiscRequest>,
+) -> Result<axum::response::Response, Problem> {
+    let title = request.title.trim();
+    let edition = request.edition.trim();
+    bounded(title, "title")?;
+    bounded(edition, "edition")?;
+    let kind = match &request.kind {
+        None => TitleKind::Unknown,
+        Some(raw) => raw.parse::<TitleKind>().map_err(|_| {
+            Problem::new(
+                ErrorCode::ValidationFailed,
+                "that is not a kind of work this server knows",
+            )
+        })?,
+    };
+    if request
+        .release_year
+        .is_some_and(|year| !(1870..=2200).contains(&year))
+    {
+        return Err(Problem::new(
+            ErrorCode::ValidationFailed,
+            "a release year is between 1870 and 2200",
+        ));
+    }
+    let media_family = match &request.media_family {
+        None => MediaFamily::Unknown,
+        Some(raw) => raw.parse::<MediaFamily>().map_err(|_| {
+            Problem::new(
+                ErrorCode::ValidationFailed,
+                "that is not a kind of medium this server knows",
+            )
+        })?,
+    };
+    let artifact = parse_id::<ArtifactId>(request.artifact_id.as_deref(), "artifact_id")?;
+
+    let pool = state.database().pool();
+    let catalogued = tangible_db::catalog_discs::catalogue_disc(
+        pool,
+        tangible_db::catalog_discs::NewCataloguedDisc {
+            title,
+            kind: kind.as_str(),
+            release_year: request.release_year,
+            edition,
+            media_family: media_family.as_str(),
+            artifact,
+            actor: &user.username,
+        },
+    )
+    .await
+    .map_err(|error| {
+        tracing::error!(error = ?error, "could not catalogue a disc");
+        unavailable("the disc could not be catalogued")
+    })?;
+    let tangible_db::catalog_discs::Catalogued::Disc { disc, .. } = catalogued else {
+        return Err(Problem::new(
+            ErrorCode::ReferenceNotFound,
+            "no artifact with that identifier",
+        ));
+    };
+    tracing::info!(disc_id = %disc, "disc catalogued");
+    if artifact.is_some()
+        && let Some(romm) = state.romm()
+    {
+        romm.nudge();
+    }
+    let place = tangible_db::catalog_discs::find_discs(
+        pool,
+        tangible_db::catalog_discs::DiscSearch {
+            disc: Some(disc),
+            artifact,
+            limit: 1,
+            ..tangible_db::catalog_discs::DiscSearch::default()
+        },
+    )
+    .await
+    .map_err(|error| {
+        tracing::error!(error = ?error, "could not read a catalogued disc");
+        unavailable("the disc could not be read")
+    })?
+    .into_iter()
+    .next()
+    .ok_or_else(|| unavailable("the disc could not be read"))?;
+    Ok((StatusCode::CREATED, Json(CatalogDiscView::from(place))).into_response())
+}
+
 /// The catalog routes.
 pub fn router() -> Router<ApiState> {
     Router::new()
@@ -1013,6 +1283,7 @@ pub fn router() -> Router<ApiState> {
             "/disc-sets/{disc_set_id}/discs",
             get(list_set_discs).post(create_set_disc),
         )
+        .route("/discs", get(find_catalog_discs).post(catalogue_new_disc))
         .route("/discs/{disc_id}", get(get_one_disc).patch(edit_one_disc))
         .route("/discs/{disc_id}/artifacts", get(list_linked_artifacts))
         .route("/discs/{disc_id}/artifact-links", post(link_artifact))

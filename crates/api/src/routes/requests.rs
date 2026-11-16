@@ -75,6 +75,8 @@ pub struct RequestLinkView {
     /// What kind of item: `game`, `music`, `movie`, `television`,
     /// `software` or `other`.
     pub kind: String,
+    /// Its year, when its details give one.
+    pub year: Option<String>,
 }
 
 impl From<tangible_db::requests::RequestLink> for RequestLinkView {
@@ -83,6 +85,7 @@ impl From<tangible_db::requests::RequestLink> for RequestLinkView {
             id: link.id.to_string(),
             title: link.title,
             kind: link.kind.as_str().to_owned(),
+            year: link.year,
         }
     }
 }

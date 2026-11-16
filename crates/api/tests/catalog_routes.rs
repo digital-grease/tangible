@@ -718,3 +718,116 @@ async fn a_viewer_reads_the_catalog_and_changes_none_of_it() {
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
+
+// --- choosing a disc for a burn --------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_disc_is_found_by_where_it_sits_and_one_linked_comes_first() {
+    let harness = harness().await;
+    let (_, _, _, walked) = harness.a_disc().await;
+    let (_, walked_body) = harness.get(&format!("/api/v1/discs/{walked}")).await;
+    let artifact = harness.an_artifact().await;
+    let tag = uuid::Uuid::now_v7().simple().to_string();
+    let (status, made) = harness
+        .post(
+            "/api/v1/discs",
+            json!({
+                "title": format!("Hackers {tag}"),
+                "kind": "movie",
+                "release_year": 1995,
+                "edition": "NTSC DVD",
+                "media_family": "dvd",
+                "artifact_id": artifact,
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{made}");
+    assert_eq!(made["title"], format!("Hackers {tag}"));
+    assert_eq!(made["edition"], "NTSC DVD");
+    assert_eq!(made["disc_set"], "Single disc");
+    assert_eq!(made["disc"]["sequence_number"], 1);
+    assert_eq!(made["disc"]["media_family"], "dvd");
+    assert_eq!(made["disc"]["artifact_count"], 1);
+    assert_eq!(made["linked"], true);
+    let made_id = made["disc"]["id"].as_str().expect("a disc").to_owned();
+
+    // By every word of where it sits, and by its identifier.
+    let (status, found) = harness
+        .get(&format!(
+            "/api/v1/discs?search={tag}%20ntsc%201995&artifact={artifact}"
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{found}");
+    assert_eq!(found["items"].as_array().map(Vec::len), Some(1), "{found}");
+    assert_eq!(found["items"][0]["disc"]["id"], made_id.as_str());
+    assert_eq!(found["more"], false);
+    let (_, one) = harness.get(&format!("/api/v1/discs?id={walked}")).await;
+    assert_eq!(one["items"][0]["disc"]["id"], walked.as_str());
+    assert_eq!(one["items"][0]["edition"], "Special Edition");
+    assert_eq!(one["items"][0]["disc_set"], "Two-disc set");
+    assert_eq!(one["items"][0]["linked"], false);
+    assert_eq!(walked_body["display_name"], "Feature");
+
+    // The disc linked to the artifact comes first of everything.
+    let (_, first) = harness
+        .get(&format!("/api/v1/discs?artifact={artifact}&limit=1"))
+        .await;
+    assert_eq!(first["items"][0]["disc"]["id"], made_id.as_str());
+    assert_eq!(first["more"], true);
+
+    // What cannot be searched for is refused, not guessed.
+    for bad in [
+        "/api/v1/discs?id=nope".to_owned(),
+        "/api/v1/discs?artifact=nope".to_owned(),
+        format!("/api/v1/discs?search={}", "x".repeat(201)),
+    ] {
+        let (status, refused) = harness.get(&bad).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}: {refused}");
+        assert_eq!(refused["code"], "INVALID_PARAMETER");
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn cataloguing_a_disc_refuses_what_it_would_not_store_and_makes_nothing() {
+    let harness = harness().await;
+    let name = format!("Refused {}", uuid::Uuid::now_v7().simple());
+    for (body, code) in [
+        (
+            json!({ "title": " ", "edition": "DVD" }),
+            "VALIDATION_FAILED",
+        ),
+        (json!({ "title": name, "edition": "" }), "VALIDATION_FAILED"),
+        (
+            json!({ "title": name, "edition": "DVD", "kind": "opera" }),
+            "VALIDATION_FAILED",
+        ),
+        (
+            json!({ "title": name, "edition": "DVD", "release_year": 1500 }),
+            "VALIDATION_FAILED",
+        ),
+        (
+            json!({ "title": name, "edition": "DVD", "media_family": "laserdisc" }),
+            "VALIDATION_FAILED",
+        ),
+        (
+            json!({ "title": name, "edition": "DVD", "artifact_id": uuid::Uuid::now_v7() }),
+            "REFERENCE_NOT_FOUND",
+        ),
+    ] {
+        let (status, refused) = harness.post("/api/v1/discs", body.clone()).await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{body}: {refused}"
+        );
+        assert_eq!(refused["code"], code, "{body}");
+    }
+    let made: i64 = sqlx::query_scalar("SELECT count(*) FROM titles WHERE display_title = $1")
+        .bind(&name)
+        .fetch_one(&harness.pool)
+        .await
+        .expect("count");
+    assert_eq!(made, 0);
+}

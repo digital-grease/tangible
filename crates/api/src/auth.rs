@@ -277,6 +277,8 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
         "/api/v1/disc-sets/{disc_set_id}/discs",
         Signed(Catalog),
     ),
+    ("GET", "/api/v1/discs", Signed(Read)),
+    ("POST", "/api/v1/discs", Signed(Catalog)),
     ("GET", "/api/v1/discs/{disc_id}", Signed(Read)),
     ("PATCH", "/api/v1/discs/{disc_id}", Signed(Catalog)),
     ("GET", "/api/v1/discs/{disc_id}/artifacts", Signed(Read)),

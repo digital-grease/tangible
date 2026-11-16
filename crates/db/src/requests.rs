@@ -134,6 +134,8 @@ pub struct RequestLink {
     pub kind: RequestKind,
     /// Where it was found (`[{provider, external_id}]`), for its cover.
     pub refs: Value,
+    /// Its year, as its details give it.
+    pub year: Option<String>,
 }
 
 fn link_from_row(row: &sqlx::postgres::PgRow) -> Result<RequestLink, DbError> {
@@ -143,6 +145,7 @@ fn link_from_row(row: &sqlx::postgres::PgRow) -> Result<RequestLink, DbError> {
         title: row.try_get("title").map_err(DbError::Query)?,
         kind: parse("kind", &kind)?,
         refs: row.try_get("refs").map_err(DbError::Query)?,
+        year: row.try_get("year").map_err(DbError::Query)?,
     })
 }
 
@@ -159,7 +162,8 @@ pub async fn requests_of_imports(
     import_ids: &[uuid::Uuid],
 ) -> Result<HashMap<uuid::Uuid, RequestLink>, DbError> {
     let rows = sqlx::query(
-        "SELECT import_id, id, title, kind, refs FROM requests WHERE import_id = ANY($1)",
+        "SELECT import_id, id, title, kind, refs, details->>'year' AS year
+         FROM requests WHERE import_id = ANY($1)",
     )
     .bind(import_ids)
     .fetch_all(pool)
@@ -184,7 +188,8 @@ pub async fn requests_of_artifacts(
     artifact_ids: &[uuid::Uuid],
 ) -> Result<HashMap<uuid::Uuid, RequestLink>, DbError> {
     let rows = sqlx::query(
-        "SELECT DISTINCT ON (artifact_id) artifact_id, id, title, kind, refs
+        "SELECT DISTINCT ON (artifact_id) artifact_id, id, title, kind, refs,
+                details->>'year' AS year
          FROM requests
          WHERE artifact_id = ANY($1)
          ORDER BY artifact_id, created_at, id",

@@ -2729,6 +2729,139 @@
         ]
       }
     },
+    "/api/v1/discs": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Find discs to burn to.",
+        "description": "Find discs by where they sit: each word of `search` must be in a disc's title, edition, set, name, volume label or year. With `artifact`, discs linked to it come first and say `linked`; with `id`, only that disc. Each disc comes with its title, edition and set, as a burn's disc is chosen.",
+        "operationId": "find_catalog_discs",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Words, each of which must be in a disc's title, edition, set, name,\nvolume label or year. At most 200 characters; eight words are used.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "artifact",
+            "in": "query",
+            "description": "The artifact a burn is for: discs linked to it come first and say so.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "description": "Only this disc, to show one already chosen.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Most discs to answer. Clamped.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Discs found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogDiscPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unusable parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Catalogue a single-disc release in one step.",
+        "description": "Catalogue a single-disc release in one step, as a burn's disc is chosen: the title (or the one already catalogued under the same name in any case, kind and year), a new edition of it, a set of one disc, disc 1, and the artifact's link to it. All or nothing. Needs the catalog permission; audited (`disc.catalogued`).",
+        "operationId": "catalogue_new_disc",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogueDiscRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Catalogued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogDiscView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Will not be stored, or no such artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/discs/{disc_id}": {
       "get": {
         "tags": [
@@ -9744,6 +9877,138 @@
           }
         }
       },
+      "CatalogDiscPage": {
+        "type": "object",
+        "description": "Discs found.",
+        "required": [
+          "items",
+          "more"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogDiscView"
+            },
+            "description": "The discs: those linked to the artifact asked about first, then by\ntitle, edition, set and number."
+          },
+          "more": {
+            "type": "boolean",
+            "description": "Whether more discs match than were answered: search for more words."
+          }
+        }
+      },
+      "CatalogDiscView": {
+        "type": "object",
+        "description": "A disc and where it sits in the catalog, as a burn's disc is chosen.",
+        "required": [
+          "disc",
+          "title_id",
+          "title",
+          "title_kind",
+          "edition_id",
+          "edition",
+          "disc_set",
+          "linked"
+        ],
+        "properties": {
+          "disc": {
+            "$ref": "#/components/schemas/DiscView",
+            "description": "The disc."
+          },
+          "disc_count_expected": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How many discs its set should contain."
+          },
+          "disc_set": {
+            "type": "string",
+            "description": "What its set is called."
+          },
+          "edition": {
+            "type": "string",
+            "description": "What its edition is called."
+          },
+          "edition_id": {
+            "type": "string",
+            "description": "Its edition."
+          },
+          "linked": {
+            "type": "boolean",
+            "description": "Whether the artifact asked about (`artifact`) is linked to it."
+          },
+          "release_year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "When its title was released."
+          },
+          "title": {
+            "type": "string",
+            "description": "What its title is called."
+          },
+          "title_id": {
+            "type": "string",
+            "description": "Its title."
+          },
+          "title_kind": {
+            "type": "string",
+            "description": "What kind of work its title is."
+          }
+        }
+      },
+      "CatalogueDiscRequest": {
+        "type": "object",
+        "description": "A single-disc release to catalogue, for a burn of it.",
+        "required": [
+          "title",
+          "edition"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The artifact to link to it, as a representation of it."
+          },
+          "edition": {
+            "type": "string",
+            "description": "What this release is called, such as `DVD` or `PAL DVD`."
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What kind of work it is. Defaults to unknown."
+          },
+          "media_family": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its medium. Defaults to unknown."
+          },
+          "release_year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "When it was released."
+          },
+          "title": {
+            "type": "string",
+            "description": "What its title is called. A title already catalogued under this name\n(in any case), kind and year gains the edition instead."
+          }
+        }
+      },
       "CdReadView": {
         "type": "object",
         "description": "How redumper read a CD (ADR 0015). Offsets are in samples, 588 to a\nsector.",
@@ -14730,6 +14995,13 @@
           "title": {
             "type": "string",
             "description": "The item, as its requester named it."
+          },
+          "year": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its year, when its details give one."
           }
         }
       },
