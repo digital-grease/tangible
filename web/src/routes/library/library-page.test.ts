@@ -70,6 +70,45 @@ describe('Library page', () => {
   });
 });
 
+describe('Library page, naming artifacts', () => {
+  it('names an artifact by its request, then what it came in as', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          ({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              items: [
+                summary('requested', {
+                  origin: 'imported_original',
+                  source_filename: null,
+                  source_name: 'Hackers.1995.DVD.ISO',
+                  request: { id: 'q9', title: 'Hackers', kind: 'movie' },
+                }),
+                summary('received', {
+                  source_filename: null,
+                  source_name: 'Homebrew Disc (World)',
+                }),
+                summary('01a1e1bc-5e71-74f2-b979-0130a78da3b6', { source_filename: null }),
+              ],
+              next_cursor: null,
+            }),
+            headers: new Headers(),
+          }) as Response,
+      ),
+    );
+    render(LibraryPage);
+    const requested = await screen.findByRole('link', { name: 'Hackers' });
+    expect(requested.getAttribute('href')).toBe('/library/requested');
+    expect(screen.getByText('Hackers.1995.DVD.ISO')).toBeTruthy();
+    expect(screen.getByText(/Film request/)).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Homebrew Disc (World)' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Artifact a78da3b6' })).toBeTruthy();
+  });
+});
+
 describe('Library filters', () => {
   function server(pages: Record<string, unknown[]>): string[] {
     const asked: string[] = [];

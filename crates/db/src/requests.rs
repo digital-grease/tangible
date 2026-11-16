@@ -11,6 +11,7 @@
 
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction};
+use std::collections::HashMap;
 use std::str::FromStr;
 use tangible_domain::{RequestId, RequestKind, RequestState};
 use time::OffsetDateTime;
@@ -120,6 +121,80 @@ fn parse<T: FromStr>(column: &'static str, value: &str) -> Result<T, DbError> {
         column,
         value: value.to_owned(),
     })
+}
+
+/// A request, as an import or an artifact names the one it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestLink {
+    /// The request.
+    pub id: RequestId,
+    /// The item, as its requester named it.
+    pub title: String,
+    /// What kind of item.
+    pub kind: RequestKind,
+}
+
+fn link_from_row(row: &sqlx::postgres::PgRow) -> Result<RequestLink, DbError> {
+    let kind: String = row.try_get("kind").map_err(DbError::Query)?;
+    Ok(RequestLink {
+        id: RequestId::from_uuid(row.try_get("id").map_err(DbError::Query)?),
+        title: row.try_get("title").map_err(DbError::Query)?,
+        kind: parse("kind", &kind)?,
+    })
+}
+
+/// The request each of `import_ids` brings in, by import: the one whose
+/// download it follows now. An import a request has moved on from (its
+/// download failed and another was grabbed) has none.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure; [`DbError::Enum`] for a kind
+/// this build does not know.
+pub async fn requests_of_imports(
+    pool: &PgPool,
+    import_ids: &[uuid::Uuid],
+) -> Result<HashMap<uuid::Uuid, RequestLink>, DbError> {
+    let rows =
+        sqlx::query("SELECT import_id, id, title, kind FROM requests WHERE import_id = ANY($1)")
+            .bind(import_ids)
+            .fetch_all(pool)
+            .await
+            .map_err(DbError::Query)?;
+    rows.iter()
+        .map(|row| {
+            let import: uuid::Uuid = row.try_get("import_id").map_err(DbError::Query)?;
+            Ok((import, link_from_row(row)?))
+        })
+        .collect()
+}
+
+/// The request each of `artifact_ids` fulfilled, by artifact. Two requests
+/// for the same item may both end in one artifact; the first made is named.
+///
+/// # Errors
+///
+/// As [`requests_of_imports`].
+pub async fn requests_of_artifacts(
+    pool: &PgPool,
+    artifact_ids: &[uuid::Uuid],
+) -> Result<HashMap<uuid::Uuid, RequestLink>, DbError> {
+    let rows = sqlx::query(
+        "SELECT DISTINCT ON (artifact_id) artifact_id, id, title, kind
+         FROM requests
+         WHERE artifact_id = ANY($1)
+         ORDER BY artifact_id, created_at, id",
+    )
+    .bind(artifact_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(DbError::Query)?;
+    rows.iter()
+        .map(|row| {
+            let artifact: uuid::Uuid = row.try_get("artifact_id").map_err(DbError::Query)?;
+            Ok((artifact, link_from_row(row)?))
+        })
+        .collect()
 }
 
 fn request_from_row(row: &sqlx::postgres::PgRow) -> Result<RequestRecord, DbError> {

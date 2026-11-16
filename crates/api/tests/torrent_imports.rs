@@ -547,6 +547,9 @@ async fn a_torrent_is_handed_over_followed_and_imported_when_it_finishes() {
     harness.drain().await;
     let held = harness.import(&import_id).await;
     assert_eq!(held["state"], "acquiring", "{held}");
+    // Named as the torrent names what it holds.
+    assert_eq!(held["name"], "probe-disc.iso", "{held}");
+    assert!(held["request"].is_null(), "{held}");
     assert_eq!(held["bytes_received"], 150_000);
     assert_eq!(held["bytes_expected"], 300_000);
     assert!(held["error_code"].is_null(), "{held}");

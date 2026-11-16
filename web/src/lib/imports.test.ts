@@ -21,6 +21,8 @@ import {
   toBase64,
   clientOfSource,
   jobOutcome,
+  importName,
+  importReceivedAs,
   nzbRequest,
   torrentRequest,
   MAX_NZB_BYTES,
@@ -472,7 +474,11 @@ describe('torrents for a download client', () => {
     const huge = { size: MAX_TORRENT_BYTES + 1 } as File;
     expect(await torrentRequest('', huge)).toBeNull();
     const nzb = new File([new Uint8Array([60, 110, 122, 98])], 'x.nzb');
-    expect(await nzbRequest(nzb)).toEqual({ nzb: 'PG56Yg==' });
+    expect(await nzbRequest(nzb)).toEqual({ nzb: 'PG56Yg==', name: 'x' });
+    // Its file name names what it fetches; a name that is only `.nzb` names nothing.
+    const named = new File([new Uint8Array([60])], 'Homebrew Disc (World).NZB');
+    expect(await nzbRequest(named)).toEqual({ nzb: 'PA==', name: 'Homebrew Disc (World)' });
+    expect(await nzbRequest(new File([new Uint8Array([60])], '.nzb'))).toEqual({ nzb: 'PA==' });
     expect(await nzbRequest(null)).toBeNull();
     expect(await nzbRequest({ size: MAX_NZB_BYTES + 1 } as File)).toBeNull();
   });
@@ -517,5 +523,26 @@ describe('an import’s state, as a tone', () => {
     expect(importStateTone('failed_retryable')).toBe('warn');
     expect(importStateTone('canceled')).toBe('idle');
     expect(importStateTone('hashing')).toBe('busy');
+  });
+});
+
+describe('naming an import', () => {
+  const job = { request: null, name: null, source_filename: null };
+  it('names it by its request, then what its source called it', () => {
+    expect(importName(job)).toBeNull();
+    expect(importName({ ...job, source_filename: 'disc.iso' })).toBe('disc.iso');
+    expect(importName({ ...job, name: 'Hackers.1995.DVD', source_filename: 'x.iso' })).toBe(
+      'Hackers.1995.DVD',
+    );
+    const requested = {
+      request: { id: 'q1', title: 'Hackers', kind: 'movie' },
+      name: 'Hackers.1995.DVD',
+      source_filename: null,
+    };
+    expect(importName(requested)).toBe('Hackers');
+    expect(importReceivedAs(requested)).toBe('Hackers.1995.DVD');
+    // Said once, not twice.
+    expect(importReceivedAs({ ...job, name: 'Hackers.1995.DVD' })).toBeNull();
+    expect(importReceivedAs({ ...requested, name: 'Hackers' })).toBeNull();
   });
 });

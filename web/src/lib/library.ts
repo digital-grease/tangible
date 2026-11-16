@@ -132,6 +132,29 @@ export async function loadArtifact(
 }
 
 /** Render a byte count for a human. */
+/**
+ * What an artifact is, as a person would name it: the item the request it
+ * fulfilled asked for, or what its import fetched (a release, a torrent,
+ * the file as received). Null when nothing names it; the page then falls
+ * back to its identifier.
+ */
+export function artifactName(
+  artifact: Pick<ArtifactSummary, 'request' | 'source_name' | 'source_filename'>,
+): string | null {
+  return artifact.request?.title ?? artifact.source_name ?? artifact.source_filename ?? null;
+}
+
+/**
+ * The name it came in under, when that is not already its name: a
+ * release's title beneath the title of the request it fulfilled.
+ */
+export function receivedAs(
+  artifact: Pick<ArtifactSummary, 'request' | 'source_name' | 'source_filename'>,
+): string | null {
+  const received = artifact.source_name ?? artifact.source_filename ?? null;
+  return received && received !== artifactName(artifact) ? received : null;
+}
+
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   const units = ['KiB', 'MiB', 'GiB', 'TiB'];

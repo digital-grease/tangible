@@ -19,6 +19,8 @@
     importFromS3,
     importFromUrl,
     importFromWatchedRoot,
+    importName,
+    importReceivedAs,
     importStateLabel,
     sourceRemovalLabel,
     importStateTone,
@@ -43,6 +45,7 @@
   } from '$lib/imports';
   import { formatBytes, type LoadState, type Problem } from '$lib/library';
   import { reportSettingsOnce } from '$lib/report';
+  import { kindLabel } from '$lib/requests';
 
   let view = $state<LoadState<ImportPage>>({ kind: 'loading' });
   let sources = $state<ImportSources | null>(null);
@@ -501,7 +504,7 @@
         <Table caption="Imports, newest first">
           <thead>
             <tr>
-              <th scope="col">File</th>
+              <th scope="col">Item</th>
               <th scope="col">Source</th>
               <th scope="col">State</th>
               <th scope="col" class="num">Size</th>
@@ -512,8 +515,20 @@
           <tbody>
             {#each view.data.items as job (job.id)}
               {@const fraction = transferFraction(job)}
+              {@const name = importName(job)}
+              {@const receivedAs = importReceivedAs(job)}
               <tr>
-                <th scope="row">{job.source_filename ?? shortId(job.id)}</th>
+                <th scope="row" class="item">
+                  <span class="name">{name ?? `Import ${shortId(job.id)}`}</span>
+                  {#if job.request}
+                    <small class="reference"
+                      ><a href={`/requests/${job.request.id}`}
+                        >{kindLabel(job.request.kind)} request</a
+                      ></small
+                    >
+                  {/if}
+                  {#if receivedAs}<small class="reference">{receivedAs}</small>{/if}
+                </th>
                 <td>
                   <span>{sourceLabel(job.source_kind)}</span>
                   {#if (job.source_kind === 'http_url' || job.source_kind === 's3_object' || clientOfSource(job.source_kind)) && job.source_reference}
@@ -528,10 +543,7 @@
                       pill
                     />
                     {#if fraction !== null}
-                      <Progress
-                        value={fraction}
-                        label="Transfer of {job.source_filename ?? 'the file'}"
-                      />
+                      <Progress value={fraction} label="Transfer of {name ?? 'the file'}" />
                     {/if}
                     {#if job.error_code}
                       <small><code>{job.error_code}</code></small>
@@ -650,6 +662,13 @@
   .reference {
     display: block;
     color: var(--text-muted);
+    overflow-wrap: anywhere;
+  }
+  .item {
+    min-width: 14rem;
+  }
+  .name {
+    display: block;
     overflow-wrap: anywhere;
   }
   .removal {

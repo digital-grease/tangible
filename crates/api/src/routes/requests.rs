@@ -65,6 +65,28 @@ pub const PROVIDERS: [&str; 5] = ["dat", "musicbrainz", "tmdb", "igdb", "imdb"];
 /// The wording the request form shows beside its checkbox (ADR 0021).
 pub const ATTESTATION: &str = "I legally own this item and want a digital image of it.";
 
+/// A request, as an import or an artifact names the one it belongs to.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RequestLinkView {
+    /// The request.
+    pub id: String,
+    /// The item, as its requester named it.
+    pub title: String,
+    /// What kind of item: `game`, `music`, `movie`, `television`,
+    /// `software` or `other`.
+    pub kind: String,
+}
+
+impl From<tangible_db::requests::RequestLink> for RequestLinkView {
+    fn from(link: tangible_db::requests::RequestLink) -> Self {
+        Self {
+            id: link.id.to_string(),
+            title: link.title,
+            kind: link.kind.as_str().to_owned(),
+        }
+    }
+}
+
 /// Where an item was found.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]

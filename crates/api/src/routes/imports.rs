@@ -25,6 +25,8 @@
 //! would fail on the first proxy timeout and take the import with it. The
 //! background runner does that work and the job records its progress.
 
+use std::collections::HashMap;
+
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -36,6 +38,7 @@ use tangible_db::repositories::{
     create_audited_import_job, create_import_job, get_import_job, list_import_jobs, record_denial,
     retry_import_job,
 };
+use tangible_db::requests::{RequestLink, requests_of_imports};
 use tangible_db::source_removals::{SourceRemovalRecord, removals_for_imports};
 use tangible_domain::{ImportJobId, ImportState, LogicalPath};
 use time::OffsetDateTime;
@@ -46,6 +49,7 @@ use utoipa::{IntoParams, ToSchema};
 use crate::auth::SignedIn;
 use crate::pagination::{decode_cursor, encode_cursor};
 use crate::problem::{ErrorCode, Problem};
+use crate::routes::requests::RequestLinkView;
 use crate::state::ApiState;
 
 /// Largest page a caller may ask for.
@@ -72,6 +76,12 @@ pub struct ImportView {
     pub source_kind: String,
     /// The filename as received, when one was recorded.
     pub source_filename: Option<String>,
+    /// What it brings in, as its source named it: the release, torrent or
+    /// NZB a download client fetches, or the file's name as received.
+    /// Download-client imports recorded no name before 2026-11-15.
+    pub name: Option<String>,
+    /// The request whose download it follows, if any.
+    pub request: Option<RequestLinkView>,
     /// Where it came from, as it may be shown: a watched root and path, or a
     /// URL without credentials, query or fragment.
     pub source_reference: Option<String>,
@@ -155,15 +165,32 @@ impl From<SourceRemovalRecord> for SourceRemovalView {
 }
 
 impl ImportView {
-    /// The view, with its source's removal from `removals` if it has one.
-    fn with_removal(record: ImportJobRecord, removals: &mut Vec<SourceRemovalRecord>) -> Self {
+    /// The view, with its source's removal from `removals` and its request
+    /// from `requests`, if it has them.
+    fn with_removal(
+        record: ImportJobRecord,
+        removals: &mut Vec<SourceRemovalRecord>,
+        requests: &mut HashMap<uuid::Uuid, RequestLink>,
+    ) -> Self {
         let id = *record.id.as_uuid();
         let mut view = Self::from(record);
         if let Some(at) = removals.iter().position(|r| r.import_job_id == id) {
             view.source_removal = Some(SourceRemovalView::from(removals.swap_remove(at)));
         }
+        view.request = requests.remove(&id).map(RequestLinkView::from);
         view
     }
+}
+
+/// The requests `ids` bring in. Names, not the import: a database that
+/// cannot answer leaves them out rather than failing the read.
+async fn requests_of(state: &ApiState, ids: &[uuid::Uuid]) -> HashMap<uuid::Uuid, RequestLink> {
+    requests_of_imports(state.database().pool(), ids)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(error = ?error, "the imports' requests could not be read");
+            HashMap::new()
+        })
 }
 
 impl From<ImportJobRecord> for ImportView {
@@ -183,14 +210,20 @@ impl From<ImportJobRecord> for ImportView {
             })
             .unwrap_or_default();
 
+        let named = |key: &str| {
+            record
+                .source_descriptor
+                .get(key)
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        };
         Self {
             id: record.id.to_string(),
             source_kind: record.source_kind,
-            source_filename: record
-                .source_descriptor
-                .get("filename")
-                .and_then(|value| value.as_str())
-                .map(ToOwned::to_owned),
+            source_filename: named("filename"),
+            name: named("name").or_else(|| named("filename")),
+            request: None,
             source_reference: record
                 .source_descriptor
                 .get("reference")
@@ -915,10 +948,11 @@ pub async fn list_imports(
             tracing::error!(error = ?error, "could not read source removals");
             unavailable("the imports could not be read")
         })?;
+    let mut requests = requests_of(&state, &ids).await;
     Ok(Json(ImportPage {
         items: jobs
             .into_iter()
-            .map(|job| ImportView::with_removal(job, &mut removals))
+            .map(|job| ImportView::with_removal(job, &mut removals, &mut requests))
             .collect(),
         next_cursor,
     }))
@@ -933,7 +967,12 @@ async fn shown(state: &ApiState, id: ImportJobId) -> Result<ImportView, Problem>
             tracing::error!(error = ?error, "could not read a source removal");
             unavailable("the import could not be read")
         })?;
-    Ok(ImportView::with_removal(record, &mut removals))
+    let mut requests = requests_of(state, &[*id.as_uuid()]).await;
+    Ok(ImportView::with_removal(
+        record,
+        &mut removals,
+        &mut requests,
+    ))
 }
 
 async fn load(state: &ApiState, id: ImportJobId) -> Result<ImportJobRecord, Problem> {

@@ -24,7 +24,8 @@ use tangible_db::integrations::{
 use tangible_integrations::nzb::{MAX_NZB_BYTES, Nzb};
 use tangible_integrations::qbittorrent::{Added, TorrentSource};
 use tangible_integrations::torrent::{
-    Infohash, MAX_TORRENT_BYTES, infohash_of_magnet, infohash_of_torrent,
+    Infohash, MAX_TORRENT_BYTES, infohash_of_magnet, infohash_of_torrent, name_of_magnet,
+    name_of_torrent,
 };
 use utoipa::ToSchema;
 
@@ -61,6 +62,11 @@ pub struct SubmitJobRequest {
     /// An NZB file, base64.
     #[serde(default)]
     pub nzb: Option<String>,
+    /// What it fetches, as people would name it, such as the NZB's file
+    /// name without `.nzb`. Shown with its import and what it becomes;
+    /// left out, a `.torrent` file or magnet link names itself.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 /// A job handed to a download client, and the import following it.
@@ -164,6 +170,15 @@ impl Submission {
                 "{} takes an NZB, not a magnet link or a .torrent file",
                 client.name()
             ))),
+        }
+    }
+
+    /// The name a `.torrent` file or magnet link gives what it fetches.
+    fn own_name(&self) -> Option<String> {
+        match self {
+            Self::Magnet(link, _) => name_of_magnet(link),
+            Self::Torrent(bytes, _) => name_of_torrent(bytes),
+            Self::Nzb(..) => None,
         }
     }
 
@@ -372,6 +387,7 @@ pub async fn submit_job(
         &mut client,
         &folders,
         &submission,
+        request.name.as_deref(),
         &user.username,
     )
     .await?;
@@ -381,6 +397,29 @@ pub async fn submit_job(
         delivered.client_job_id,
         delivered.submitted,
     ))
+}
+
+/// The most characters of a job's name kept.
+const MAX_NAME_CHARS: usize = 300;
+
+/// A name for showing, from text nobody vouches for (a release's title, a
+/// torrent's name, a file name): control characters and runs of white space
+/// become one space, the ends are trimmed, and it is cut at 300 characters.
+/// None when nothing is left.
+pub(crate) fn shown_name(raw: &str) -> Option<String> {
+    let mut name = String::new();
+    for word in raw
+        .split(|c: char| c.is_whitespace() || c.is_control())
+        .filter(|word| !word.is_empty())
+    {
+        if !name.is_empty() {
+            name.push(' ');
+        }
+        name.push_str(word);
+    }
+    let name: String = name.chars().take(MAX_NAME_CHARS).collect();
+    let name = name.trim_end().to_owned();
+    (!name.is_empty()).then_some(name)
 }
 
 /// A job handed over, or found handed over before.
@@ -397,12 +436,17 @@ pub(crate) struct Delivered {
 /// its category, and record the import that follows it: what
 /// `POST /integrations/{id}/jobs` does, and a request's grab (ADR 0021). A
 /// job handed over before is found, and the client is not asked again.
+///
+/// `name` is what the job fetches, as people would name it (a release's
+/// title); without one, a `.torrent` file or magnet link names itself. It
+/// is kept with the import, since the client's job is named by digest.
 pub(crate) async fn deliver(
     state: &ApiState,
     id: uuid::Uuid,
     client: &mut DownloadClient,
     folders: &Folders,
     submission: &Submission,
+    name: Option<&str>,
     actor: &str,
 ) -> Result<Delivered, Problem> {
     let pool = state.database().pool();
@@ -427,12 +471,18 @@ pub(crate) async fn deliver(
         DownloadClient::Sabnzbd(_) => "sabnzbd",
         DownloadClient::Nzbget(_) => "nzbget",
     };
-    let descriptor = serde_json::json!({
+    let mut descriptor = serde_json::json!({
         "integration_id": id,
         "client_job_id": client_job_id,
         "identity": identity,
         "reference": format!("{prefix}:{client_job_id}"),
     });
+    if let Some(name) = name
+        .and_then(shown_name)
+        .or_else(|| submission.own_name().as_deref().and_then(shown_name))
+    {
+        descriptor["name"] = serde_json::Value::String(name);
+    }
     let submitted = submit_integration_job(
         pool,
         &NewIntegrationJob {
@@ -456,4 +506,55 @@ pub(crate) async fn deliver(
         client_job_id: Some(client_job_id),
         submitted,
     })
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_name_is_tidied_for_showing() {
+        assert_eq!(
+            shown_name("  Hackers.1995.DVD.ISO \n").as_deref(),
+            Some("Hackers.1995.DVD.ISO")
+        );
+        // Control characters and runs of white space are one space.
+        assert_eq!(
+            shown_name("Big\tBuck\u{7}\u{1b}[31mBunny   (2008)").as_deref(),
+            Some("Big Buck [31mBunny (2008)")
+        );
+        assert_eq!(shown_name(" \t\n\u{0}"), None);
+        assert_eq!(shown_name(""), None);
+        // Cut at 300 characters, never inside one.
+        let long = "é".repeat(400);
+        assert_eq!(shown_name(&long).unwrap().chars().count(), MAX_NAME_CHARS);
+    }
+
+    #[test]
+    fn a_torrent_or_magnet_link_names_itself_and_an_nzb_does_not() {
+        let magnet = Submission::magnet(
+            "magnet:?xt=urn:btih:ed0d831bcefc077847bc1fa808bd2ae5fd32ae9b&dn=Big%20Buck%20Bunny",
+        )
+        .unwrap();
+        assert_eq!(magnet.own_name().as_deref(), Some("Big Buck Bunny"));
+        let torrent = Submission::torrent(
+            std::fs::read(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../fixtures/tool-output/qbittorrent/single-file.torrent"
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(torrent.own_name().as_deref(), Some("probe-disc.iso"));
+        let nzb = Submission::nzb(
+            std::fs::read(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../fixtures/tool-output/sabnzbd/probe.nzb"
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(nzb.own_name(), None);
+    }
 }

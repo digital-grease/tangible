@@ -17,7 +17,10 @@
   import { bestMatchLabel } from '$lib/identification';
   import { apiFetch } from '$lib/session';
   import { onMount } from 'svelte';
+  import { shortId } from '$lib/ids';
+  import { kindLabel } from '$lib/requests';
   import {
+    artifactName,
     deletionLabel,
     filtersNothing,
     formatBytes,
@@ -27,6 +30,7 @@
     isOriginal,
     loadLibrary,
     originLabel,
+    receivedAs,
     validationLabel,
     validationTone,
     type ArtifactSummaryPage,
@@ -116,7 +120,7 @@
       <input
         type="search"
         bind:value={name}
-        placeholder="Part of a file's name"
+        placeholder="Part of its name"
         autocomplete="off"
         spellcheck="false"
       />
@@ -231,11 +235,17 @@
                 <div class="artifact">
                   <Disc shape={artifact.disc_shape} size={28} hole="var(--surface)" />
                   <div class="names">
-                    <a href={`/library/${artifact.id}`}>{artifact.source_filename ?? artifact.id}</a
+                    <a href={`/library/${artifact.id}`}
+                      >{artifactName(artifact) ?? `Artifact ${shortId(artifact.id)}`}</a
                     >
+                    {#if receivedAs(artifact)}
+                      <span class="received">{receivedAs(artifact)}</span>
+                    {/if}
                     <span class="origin">
                       {#if isOriginal(artifact.origin)}<Icon name="lock" size={12} />{/if}
                       {originLabel(artifact.origin)}
+                      {#if artifact.request}<span>· {kindLabel(artifact.request.kind)} request</span
+                        >{/if}
                     </span>
                   </div>
                 </div>
@@ -364,6 +374,11 @@
   }
   .names a {
     font-weight: var(--weight-strong);
+    overflow-wrap: anywhere;
+  }
+  .received {
+    color: var(--text-muted);
+    font-size: var(--text-sm);
     overflow-wrap: anywhere;
   }
   .origin {

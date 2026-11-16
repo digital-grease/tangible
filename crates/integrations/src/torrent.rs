@@ -87,6 +87,22 @@ pub enum TorrentError {
 ///
 /// [`TorrentError`] saying what is wrong with it.
 pub fn infohash_of_torrent(bytes: &[u8]) -> Result<Infohash, TorrentError> {
+    let raw = info_of(bytes)?;
+    let shape = info_shape(raw)?;
+    let digest = if shape.has_pieces {
+        sha1_of(raw)
+    } else if shape.meta_version == Some(2) {
+        Sha256::digest(raw)[..20].to_vec()
+    } else {
+        return Err(TorrentError::Malformed(
+            "its info dictionary has neither pieces nor meta version 2",
+        ));
+    };
+    Ok(Infohash(hex::encode(digest)))
+}
+
+/// A `.torrent` file's info dictionary, exactly as encoded.
+fn info_of(bytes: &[u8]) -> Result<&[u8], TorrentError> {
     if bytes.len() > MAX_TORRENT_BYTES {
         return Err(TorrentError::TooLarge);
     }
@@ -116,17 +132,48 @@ pub fn infohash_of_torrent(bytes: &[u8]) -> Result<Infohash, TorrentError> {
     if raw.first() != Some(&b'd') {
         return Err(TorrentError::Malformed("its info is not a dictionary"));
     }
-    let shape = info_shape(raw)?;
-    let digest = if shape.has_pieces {
-        sha1_of(raw)
-    } else if shape.meta_version == Some(2) {
-        Sha256::digest(raw)[..20].to_vec()
-    } else {
-        return Err(TorrentError::Malformed(
-            "its info dictionary has neither pieces nor meta version 2",
-        ));
-    };
-    Ok(Infohash(hex::encode(digest)))
+    Ok(raw)
+}
+
+/// The name a `.torrent` file gives what it holds: its info dictionary's
+/// `name.utf-8` or `name`, as text, or none when it has neither or is not a
+/// torrent. Untrusted, like everything in the file: for showing, not for a
+/// path.
+#[must_use]
+pub fn name_of_torrent(bytes: &[u8]) -> Option<String> {
+    let raw = info_of(bytes).ok()?;
+    let mut name = None;
+    let mut position = 1;
+    loop {
+        if *raw.get(position)? == b'e' {
+            break;
+        }
+        let (key, after_key) = string_at(raw, position).ok()?;
+        let end = skip(raw, after_key, 2).ok()?;
+        match key {
+            b"name.utf-8" => return text_at(raw, after_key),
+            b"name" => name = text_at(raw, after_key),
+            _ => {}
+        }
+        position = end;
+    }
+    name
+}
+
+/// The byte string at `position` as text, when it is one.
+fn text_at(bytes: &[u8], position: usize) -> Option<String> {
+    let (value, _) = string_at(bytes, position).ok()?;
+    Some(String::from_utf8_lossy(value).into_owned())
+}
+
+/// The name a magnet link gives what it fetches: its `dn`, or none.
+/// Untrusted, as [`name_of_torrent`] says.
+#[must_use]
+pub fn name_of_magnet(link: &str) -> Option<String> {
+    let query = link.trim().strip_prefix("magnet:?")?;
+    url::form_urlencoded::parse(query.as_bytes())
+        .find(|(key, _)| key == "dn")
+        .map(|(_, value)| value.into_owned())
 }
 
 /// SHA-1, for v1 infohashes only. Never used for identity inside Tangible
@@ -440,7 +487,49 @@ mod tests {
                 hash_of(name),
                 "{file}"
             );
+            // And named as qBittorrent named it.
+            assert_eq!(name_of_torrent(&bytes).as_deref(), Some(name), "{file}");
         }
+    }
+
+    #[test]
+    fn a_torrent_and_a_magnet_link_say_what_they_hold() {
+        let torrent = encode(&B::D(vec![(b"info", v1_info())]));
+        assert_eq!(name_of_torrent(&torrent).as_deref(), Some("disc.iso"));
+        // The UTF-8 name is preferred where both are given, whichever first.
+        let both = encode(&B::D(vec![(
+            b"info",
+            B::D(vec![
+                (b"name", B::S(b"Disc")),
+                (b"name.utf-8", B::S("Disc \u{e9}".as_bytes())),
+                (b"pieces", B::S(&[7; 20])),
+            ]),
+        )]));
+        assert_eq!(name_of_torrent(&both).as_deref(), Some("Disc \u{e9}"));
+        let unnamed = encode(&B::D(vec![(
+            b"info",
+            B::D(vec![(b"pieces", B::S(&[7; 20]))]),
+        )]));
+        assert_eq!(name_of_torrent(&unnamed), None);
+        assert_eq!(name_of_torrent(b"not a torrent"), None);
+        let invalid = encode(&B::D(vec![(
+            b"info",
+            B::D(vec![(b"name", B::S(&[0xff, b'x']))]),
+        )]));
+        assert_eq!(name_of_torrent(&invalid).as_deref(), Some("\u{fffd}x"));
+
+        assert_eq!(
+            name_of_magnet(
+                "magnet:?xt=urn:btih:ed0d831bcefc077847bc1fa808bd2ae5fd32ae9b&dn=Big%20Buck%20Bunny"
+            )
+            .as_deref(),
+            Some("Big Buck Bunny")
+        );
+        assert_eq!(
+            name_of_magnet("magnet:?xt=urn:btih:ed0d831bcefc077847bc1fa808bd2ae5fd32ae9b"),
+            None
+        );
+        assert_eq!(name_of_magnet("https://example.invalid/?dn=x"), None);
     }
 
     #[test]

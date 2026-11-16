@@ -796,6 +796,52 @@ async fn a_request_is_searched_for_grabbed_and_fulfilled_by_its_import() {
         .await;
     assert_eq!(import["state"], "complete", "{import}");
     assert_eq!(request["artifact_id"], import["artifact_id"]);
+
+    // The import is named as the release was, though the client's job is
+    // named by digest, and says which request it brings in; so does what
+    // it became.
+    assert_eq!(
+        import["name"], "Big Buck Bunny (2008) [Blu-ray ISO]",
+        "{import}"
+    );
+    assert_eq!(import["request"]["id"], id.as_str(), "{import}");
+    assert_eq!(import["request"]["title"], "Big Buck Bunny");
+    assert_eq!(import["request"]["kind"], "movie");
+    let artifact_id = import["artifact_id"].as_str().unwrap();
+    let (status, artifact, _) = harness
+        .send(
+            &harness.viewer,
+            Method::GET,
+            &format!("/api/v1/artifacts/{artifact_id}"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{artifact}");
+    assert_eq!(
+        artifact["source_name"],
+        "Big Buck Bunny (2008) [Blu-ray ISO]"
+    );
+    assert_eq!(artifact["request"]["id"], id.as_str());
+    assert_eq!(artifact["request"]["title"], "Big Buck Bunny");
+    // And the library finds it by either name.
+    for name in ["Blu-ray%20ISO", "buck%20bunny"] {
+        let (status, listed, _) = harness
+            .send(
+                &harness.viewer,
+                Method::GET,
+                &format!("/api/v1/artifacts?name={name}&limit=200"),
+                None,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{listed}");
+        let item = listed["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == artifact_id)
+            .unwrap_or_else(|| panic!("{name} did not find it: {listed}"));
+        assert_eq!(item["request"]["title"], "Big Buck Bunny");
+    }
     remove_prowlarrs(&harness.pool).await;
 }
 

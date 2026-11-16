@@ -151,6 +151,37 @@ describe('Artifact page', () => {
     expect(screen.queryByText('Read offset')).toBeNull();
   });
 
+  it('says what it is: the request it fulfilled, and what it came in as', async () => {
+    serve(
+      artifact({
+        source_kind: 'nzbget_job',
+        source_filename: null,
+        source_name: 'Hackers.1995.DVD.ISO',
+        request: { id: 'q9', title: 'Hackers', kind: 'movie' },
+      }),
+    );
+    const { container } = render(ArtifactPage);
+    expect(await screen.findByRole('heading', { level: 1, name: 'Hackers' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Hackers' }).getAttribute('href')).toBe('/requests/q9');
+    expect(screen.getByText('(Film)')).toBeTruthy();
+    expect(screen.getByText('Received as')).toBeTruthy();
+    expect(screen.getByText('Hackers.1995.DVD.ISO')).toBeTruthy();
+    // Its source in words, not as the server spells it.
+    expect(screen.getByText('NZBGet')).toBeTruthy();
+    expect(screen.queryByText('nzbget_job')).toBeNull();
+    expect(await axeViolations(container)).toEqual([]);
+  });
+
+  it('is named by what it came in as, without a request', async () => {
+    serve(artifact({ source_filename: null, source_name: 'Homebrew Disc (World)' }));
+    render(ArtifactPage);
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Homebrew Disc (World)' }),
+    ).toBeTruthy();
+    expect(screen.queryByText('Received as')).toBeNull();
+    expect(screen.queryByText('Requested as')).toBeNull();
+  });
+
   it('says nothing about ripping for an upload', async () => {
     serve(artifact({ source_kind: 'upload' }));
     render(ArtifactPage);

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 digitalgrease
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { forgetReportSettings } from '$lib/report';
 import { TOPICS } from '$lib/events';
@@ -265,7 +265,7 @@ describe('Imports page, sending a torrent to a download client', () => {
     expect(await screen.findByText(/Handed to SAB/)).toBeTruthy();
     const sent = asked.find((call) => call.method === 'POST');
     expect(sent?.url).toBe('/api/v1/integrations/s1/jobs');
-    expect(JSON.parse(sent?.body ?? '{}')).toEqual({ nzb: 'PG56Yg==' });
+    expect(JSON.parse(sent?.body ?? '{}')).toEqual({ nzb: 'PG56Yg==', name: 'x' });
     expect(await screen.findByText('Downloading in SABnzbd')).toBeTruthy();
     expect(screen.getByText('sabnzbd:SABnzbd_nzo_x')).toBeTruthy();
   });
@@ -419,6 +419,41 @@ describe('Imports page, live', () => {
     await vi.waitFor(() =>
       expect(asked.filter((request) => request.url === '/api/v1/imports').length).toBe(before + 1),
     );
+  });
+});
+
+describe('Imports page, naming what is imported', () => {
+  it('names an import by its request, and says what it fetched', async () => {
+    server({
+      '/api/v1/import-sources': sources(false, [NAS]),
+      '/api/v1/imports': {
+        status: 200,
+        body: {
+          items: [
+            torrentImport({
+              name: 'Hackers.1995.DVD.ISO',
+              request: { id: 'q9', title: 'Hackers', kind: 'movie' },
+            }),
+            torrentImport({ id: 't2', name: 'Homebrew Disc (World)' }),
+            torrentImport({ id: '01a1e1b1-c705-73da-a8ba-3690997ad479' }),
+          ],
+        },
+      },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    const { container } = render(ImportsPage);
+    const table = await screen.findByRole('table', { name: /Imports, newest first/ });
+    const rows = within(table).getAllByRole('row');
+    const first = within(rows[1] as HTMLElement);
+    expect(first.getByRole('rowheader').textContent).toMatch(/^\s*Hackers\b/);
+    expect(first.getByRole('link', { name: 'Film request' }).getAttribute('href')).toBe(
+      '/requests/q9',
+    );
+    expect(first.getByText('Hackers.1995.DVD.ISO')).toBeTruthy();
+    expect(within(rows[2] as HTMLElement).getByText('Homebrew Disc (World)')).toBeTruthy();
+    // Nothing to name it by: its short identifier, saying what it is.
+    expect(within(rows[3] as HTMLElement).getByText('Import 997ad479')).toBeTruthy();
+    expect(await axeViolations(container)).toEqual([]);
   });
 });
 

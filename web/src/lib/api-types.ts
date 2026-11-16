@@ -2627,8 +2627,16 @@ export interface components {
              *     original or a dump needs `confirm_original` to be deleted.
              */
             origin: string;
+            request?: components["schemas"]["RequestLinkView"] | null;
             /** @description Filename as received, when one was recorded. */
             source_filename?: string | null;
+            /**
+             * @description What the import that brought it in called it: the release, torrent
+             *     or NZB its download client fetched, or the file's name as received.
+             *     Download-client imports recorded no name before 2026-11-15, so those
+             *     have none.
+             */
+            source_name?: string | null;
             /**
              * Format: int64
              * @description Total size of all components.
@@ -4390,6 +4398,13 @@ export interface components {
             /** @description Whether the import has finished, one way or another. */
             is_settled: boolean;
             /**
+             * @description What it brings in, as its source named it: the release, torrent or
+             *     NZB a download client fetches, or the file's name as received.
+             *     Download-client imports recorded no name before 2026-11-15.
+             */
+            name?: string | null;
+            request?: components["schemas"]["RequestLinkView"] | null;
+            /**
              * @description Whether a retry would resume rather than start again.
              *
              *     Surfaced because it is the question an operator asks before pressing
@@ -5109,6 +5124,18 @@ export interface components {
              */
             scope: string;
         };
+        /** @description A request, as an import or an artifact names the one it belongs to. */
+        RequestLinkView: {
+            /** @description The request. */
+            id: string;
+            /**
+             * @description What kind of item: `game`, `music`, `movie`, `television`,
+             *     `software` or `other`.
+             */
+            kind: string;
+            /** @description The item, as its requester named it. */
+            title: string;
+        };
         /** @description A page of requests, newest first. */
         RequestPage: {
             /** @description The requests. */
@@ -5671,6 +5698,12 @@ export interface components {
         SubmitJobRequest: {
             /** @description A magnet link. */
             magnet?: string | null;
+            /**
+             * @description What it fetches, as people would name it, such as the NZB's file
+             *     name without `.nzb`. Shown with its import and what it becomes;
+             *     left out, a `.torrent` file or magnet link names itself.
+             */
+            name?: string | null;
             /** @description An NZB file, base64. */
             nzb?: string | null;
             /** @description A `.torrent` file, base64. */
@@ -6106,9 +6139,11 @@ export interface operations {
                  */
                 deleted?: boolean | null;
                 /**
-                 * @description Part of the name of one of its files, as received or as stored, in
-                 *     any case: `vol2` finds `homebrew-comp-vol2.cue`. At most 200
-                 *     characters; `%` and `_` match themselves. Blank is no filter.
+                 * @description Part of the name of one of its files, as received or as stored, of
+                 *     what its import fetched (a release's title, a torrent's name), or of
+                 *     the title of the request it fulfilled, in any case: `vol2` finds
+                 *     `homebrew-comp-vol2.cue`. At most 200 characters; `%` and `_` match
+                 *     themselves. Blank is no filter.
                  */
                 name?: string | null;
             };

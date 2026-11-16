@@ -8,10 +8,45 @@
 //! Only identifiers come back; the summaries are read from the manifests,
 //! as for an unfiltered list.
 
+use std::collections::HashMap;
+
 use sqlx::PgPool;
 use time::OffsetDateTime;
 
 use crate::DbError;
+
+/// What each of `artifact_ids` was called by the import that brought it
+/// in, by artifact: the name its download client job was given (a
+/// release's title, a torrent's name), or the file's name as received. The
+/// earliest import that recorded one is used. Names are recorded with the
+/// import rather than in the manifest, so an artifact's manifest stays as
+/// it was written.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn import_names(
+    pool: &PgPool,
+    artifact_ids: &[uuid::Uuid],
+) -> Result<HashMap<uuid::Uuid, String>, DbError> {
+    let rows: Vec<(uuid::Uuid, String)> = sqlx::query_as(
+        "SELECT DISTINCT ON (artifact_id) artifact_id, name
+         FROM (
+             SELECT artifact_id, created_at, id,
+                    COALESCE(source_descriptor_json ->> 'name',
+                             source_descriptor_json ->> 'filename') AS name
+             FROM import_jobs
+             WHERE artifact_id = ANY($1)
+         ) named
+         WHERE name IS NOT NULL AND name <> ''
+         ORDER BY artifact_id, created_at, id",
+    )
+    .bind(artifact_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(rows.into_iter().collect())
+}
 
 /// What to keep. Each set field must match; `None` keeps everything.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -32,8 +67,10 @@ pub struct ArtifactFilter<'a> {
     pub created_before: Option<OffsetDateTime>,
     /// Deleted artifacts only (`true`); otherwise none (ADR 0020).
     pub deleted: Option<bool>,
-    /// Part of the name of one of its files, as received or as stored, in
-    /// any case. Matched literally: `%` and `_` are not wildcards.
+    /// Part of the name of one of its files, as received or as stored, of
+    /// what its import fetched (a release's title, a torrent's name), or of
+    /// the title of the request it fulfilled, in any case. Matched
+    /// literally: `%` and `_` are not wildcards.
     pub name: Option<&'a str>,
 }
 
@@ -88,11 +125,19 @@ pub async fn filtered_artifact_ids(
            AND ($7::timestamptz IS NULL OR a.created_at >= $7)
            AND ($8::timestamptz IS NULL OR a.created_at < $8)
            AND (a.deleted_at IS NOT NULL) = $10
-           AND ($11::text IS NULL OR EXISTS (
+           AND ($11::text IS NULL
+                OR EXISTS (
                  SELECT 1 FROM artifact_components c
                  WHERE c.artifact_id = a.id
                    AND (c.logical_path ILIKE $11 ESCAPE '\\'
-                        OR c.source_filename ILIKE $11 ESCAPE '\\')))
+                        OR c.source_filename ILIKE $11 ESCAPE '\\'))
+                OR EXISTS (
+                 SELECT 1 FROM import_jobs i
+                 WHERE i.artifact_id = a.id
+                   AND i.source_descriptor_json ->> 'name' ILIKE $11 ESCAPE '\\')
+                OR EXISTS (
+                 SELECT 1 FROM requests r
+                 WHERE r.artifact_id = a.id AND r.title ILIKE $11 ESCAPE '\\'))
          ORDER BY a.id
          LIMIT $9",
     )

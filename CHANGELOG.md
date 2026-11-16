@@ -47,6 +47,18 @@ may change between minor versions, and the release notes say how.
   Grab says it again in full before it is grabbed. A warning only, since a
   release may unpack smaller or hold a set of discs. The search says which
   disc it judges by, or that no drive has listed what it writes.
+- Imports, the library and the artifact page say what each thing is. An
+  import or artifact that came from a request is named by it ("Hackers",
+  with a link to the request), and otherwise by what its source called it:
+  the release, torrent or NZB a download client fetched, or the file's
+  name. Before, a download client's import showed only an identifier, as
+  did what it became. The artifact page's Summary starts with what was
+  requested and the name it came in as, and gives its source in words. The
+  library's name filter finds artifacts by those names too.
+  Download-client imports now record that name: a release's title when a
+  request grabs it, a torrent's or magnet link's own name, or the file
+  name of an NZB handed over on the Imports page (the jobs route takes an
+  optional `name`). Imports from before this have none to show.
 - Burn workers list what their drive reads and writes: the xorriso probe
   reads the drive's own profile list (xorriso `-list_profiles`), with or
   without a disc in it, as each worker starts. Preflight still reads the

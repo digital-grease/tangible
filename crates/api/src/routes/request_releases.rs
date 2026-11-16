@@ -727,6 +727,7 @@ pub async fn grab_release(
         &mut client,
         &folders,
         &submission,
+        Some(&release.release.title),
         &user.username,
     )
     .await?;

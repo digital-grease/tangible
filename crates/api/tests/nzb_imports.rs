@@ -593,6 +593,7 @@ async fn an_nzb_is_handed_over_followed_and_imported_when_it_finishes() {
     harness.drain().await;
     let held = harness.import(&import_id).await;
     assert_eq!(held["state"], "acquiring", "{held}");
+    assert!(held["name"].is_null(), "an NZB alone names nothing: {held}");
     assert_eq!(held["bytes_expected"], 304_087);
 
     // The same NZB again: answered without asking SABnzbd, which would add
@@ -651,8 +652,13 @@ async fn an_nzb_is_handed_over_followed_and_imported_when_it_finishes() {
 async fn a_failed_download_ends_the_import_saying_why() {
     let harness = harness().await;
     let integration = harness.integration(API_KEY).await;
+    // Named as the person handing it over named it, tidied: an NZB does
+    // not name itself.
     let (status, job) = harness
-        .submit(&integration, json!({ "nzb": base64(&unique_nzb()) }))
+        .submit(
+            &integration,
+            json!({ "nzb": base64(&unique_nzb()), "name": " Homebrew\tDisc  (World) " }),
+        )
         .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{job}");
     let nzo_id = job["client_job_id"].as_str().unwrap();
@@ -668,6 +674,7 @@ async fn a_failed_download_ends_the_import_saying_why() {
     harness.drain().await;
     let ended = harness.import(job["import_id"].as_str().unwrap()).await;
     assert_eq!(ended["state"], "failed_terminal", "{ended}");
+    assert_eq!(ended["name"], "Homebrew Disc (World)", "{ended}");
     assert_eq!(ended["error_code"], "INTEGRATION_JOB_FAILED");
     assert!(
         ended["error_detail"]

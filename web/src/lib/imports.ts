@@ -14,6 +14,26 @@ import type { LoadState, Problem } from './library';
  */
 export type ImportView = components['schemas']['ImportView'];
 export type ImportPage = components['schemas']['ImportPage'];
+
+/**
+ * What an import brings in, as a person would name it: the item of the
+ * request it follows, or what its source called it (a release, a torrent,
+ * the file). Null when nothing names it; the page then shows its
+ * identifier.
+ */
+export function importName(
+  job: Pick<ImportView, 'request' | 'name' | 'source_filename'>,
+): string | null {
+  return job.request?.title ?? job.name ?? job.source_filename ?? null;
+}
+
+/** What its source called it, when that is not already its name. */
+export function importReceivedAs(
+  job: Pick<ImportView, 'request' | 'name' | 'source_filename'>,
+): string | null {
+  const received = job.name ?? job.source_filename ?? null;
+  return received && received !== importName(job) ? received : null;
+}
 export type ImportSources = components['schemas']['ImportSources'];
 export type CreateImportRequest = components['schemas']['CreateImportRequest'];
 export type UrlImportRequest = components['schemas']['UrlImportRequest'];
@@ -194,7 +214,12 @@ export async function torrentRequest(
  */
 export async function nzbRequest(file: File | null | undefined): Promise<SubmitJobRequest | null> {
   if (!file || file.size > MAX_NZB_BYTES) return null;
-  return { nzb: toBase64(new Uint8Array(await file.arrayBuffer())) };
+  // An NZB does not name what it fetches; its file name usually does.
+  const name = file.name.replace(/\.nzb$/i, '').trim();
+  return {
+    nzb: toBase64(new Uint8Array(await file.arrayBuffer())),
+    ...(name ? { name } : {}),
+  };
 }
 
 /** What handing a job over came to, in words. */

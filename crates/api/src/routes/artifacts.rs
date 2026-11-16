@@ -31,6 +31,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::pagination::{Page, PageQuery};
 use crate::problem::{ErrorCode, Problem};
+use crate::routes::requests::RequestLinkView;
 use crate::state::ApiState;
 
 /// An artifact as it appears in a listing.
@@ -57,6 +58,14 @@ pub struct ArtifactSummary {
     pub total_bytes: u64,
     /// Filename as received, when one was recorded.
     pub source_filename: Option<String>,
+    /// What the import that brought it in called it: the release, torrent
+    /// or NZB its download client fetched, or the file's name as received.
+    /// Download-client imports recorded no name before 2026-11-15, so those
+    /// have none.
+    pub source_name: Option<String>,
+    /// The request it fulfilled, if it fulfilled one: what the item is, as
+    /// its requester named it.
+    pub request: Option<RequestLinkView>,
     /// Whether anything structural is worth an operator's attention.
     ///
     /// Surfaced in the summary so a damaged artifact is visible in a list
@@ -206,6 +215,8 @@ impl From<&ArtifactManifest> for ArtifactSummary {
             component_count: manifest.components.len(),
             total_bytes: manifest.classification.total_bytes,
             source_filename: manifest.origin.source_filename.clone(),
+            source_name: manifest.origin.source_filename.clone(),
+            request: None,
             has_warnings: !manifest.validation.validators.is_empty(),
             integrity_state: "unchecked".to_owned(),
             integrity_checked_at: None,
@@ -216,9 +227,10 @@ impl From<&ArtifactManifest> for ArtifactSummary {
     }
 }
 
-/// Fill in what integrity checks found, and the best DAT match, from the
-/// catalogue. A database that cannot answer leaves them unchecked and
-/// unmatched rather than failing the read: the manifests are the library.
+/// Fill in what integrity checks found, the best DAT match, what its import
+/// called it and the request it fulfilled, from the catalogue. A database
+/// that cannot answer leaves them unchecked, unmatched and unnamed rather
+/// than failing the read: the manifests are the library.
 async fn with_integrity(state: &ApiState, summaries: &mut [ArtifactSummary]) {
     use time::format_description::well_known::Rfc3339;
     let ids: Vec<uuid::Uuid> = summaries
@@ -255,6 +267,30 @@ async fn with_integrity(state: &ApiState, summaries: &mut [ArtifactSummary]) {
             }
         }
         Err(error) => tracing::warn!(error = ?error, "DAT matches could not be read"),
+    }
+    match tangible_db::library::import_names(state.database().pool(), &ids).await {
+        Ok(mut found) => {
+            for summary in summaries.iter_mut() {
+                if let Some(name) = uuid::Uuid::parse_str(&summary.id)
+                    .ok()
+                    .and_then(|id| found.remove(&id))
+                {
+                    summary.source_name = Some(name);
+                }
+            }
+        }
+        Err(error) => tracing::warn!(error = ?error, "import names could not be read"),
+    }
+    match tangible_db::requests::requests_of_artifacts(state.database().pool(), &ids).await {
+        Ok(mut found) => {
+            for summary in summaries.iter_mut() {
+                summary.request = uuid::Uuid::parse_str(&summary.id)
+                    .ok()
+                    .and_then(|id| found.remove(&id))
+                    .map(RequestLinkView::from);
+            }
+        }
+        Err(error) => tracing::warn!(error = ?error, "requests could not be read"),
     }
     match tangible_db::library::deletions_of(state.database().pool(), &ids).await {
         Ok(mut found) => {
@@ -632,9 +668,11 @@ pub struct ArtifactFilterQuery {
     /// `true` lists deleted artifacts only, the tombstones; otherwise they
     /// are left out (ADR 0020).
     pub deleted: Option<bool>,
-    /// Part of the name of one of its files, as received or as stored, in
-    /// any case: `vol2` finds `homebrew-comp-vol2.cue`. At most 200
-    /// characters; `%` and `_` match themselves. Blank is no filter.
+    /// Part of the name of one of its files, as received or as stored, of
+    /// what its import fetched (a release's title, a torrent's name), or of
+    /// the title of the request it fulfilled, in any case: `vol2` finds
+    /// `homebrew-comp-vol2.cue`. At most 200 characters; `%` and `_` match
+    /// themselves. Blank is no filter.
     pub name: Option<String>,
 }
 

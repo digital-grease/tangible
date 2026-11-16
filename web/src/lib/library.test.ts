@@ -3,6 +3,8 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  artifactName,
+  receivedAs,
   archiveLabel,
   deletionLabel,
   isOriginal,
@@ -406,5 +408,25 @@ describe('library states, for status marks', () => {
     expect(originLabel('imported_original')).toBe('Imported original');
     expect(originLabel('physical_dump')).toBe('Ripped from a disc');
     expect(originLabel('derived')).toBe('Made here from another');
+  });
+});
+
+describe('naming an artifact', () => {
+  const none = { request: null, source_name: null, source_filename: null };
+  it('names it by its request, then what it came in as', () => {
+    expect(artifactName(none)).toBeNull();
+    expect(artifactName({ ...none, source_filename: 'disc.cue' })).toBe('disc.cue');
+    expect(artifactName({ ...none, source_name: 'Disc (World)', source_filename: 'x.cue' })).toBe(
+      'Disc (World)',
+    );
+    const requested = {
+      request: { id: 'q1', title: 'Hackers', kind: 'movie' },
+      source_name: 'Hackers.1995.DVD.ISO',
+      source_filename: null,
+    };
+    expect(artifactName(requested)).toBe('Hackers');
+    expect(receivedAs(requested)).toBe('Hackers.1995.DVD.ISO');
+    expect(receivedAs({ ...none, source_name: 'Disc (World)' })).toBeNull();
+    expect(receivedAs({ ...requested, source_name: null })).toBeNull();
   });
 });

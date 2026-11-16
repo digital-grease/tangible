@@ -24,7 +24,10 @@
   import { onMount } from 'svelte';
   import { page } from '$app/state';
   import { familyLabel } from '$lib/disc';
+  import { sourceLabel } from '$lib/imports';
+  import { kindLabel } from '$lib/requests';
   import {
+    artifactName,
     componentUrl,
     discSummary,
     formatBytes,
@@ -37,6 +40,7 @@
     msf,
     notBurnedAsItIs,
     originLabel,
+    receivedAs,
     trackDetails,
     trackModeLabel,
     validationLabel,
@@ -87,7 +91,7 @@
 <svelte:head>
   <title>
     {view.kind === 'ready'
-      ? `${view.data.source_filename ?? 'Artifact'} — Tangible`
+      ? `${artifactName(view.data) ?? 'Artifact'} — Tangible`
       : 'Artifact — Tangible'}
   </title>
 </svelte:head>
@@ -112,10 +116,10 @@
     {@const burnable = !deleted && !pending && !refusal}
 
     <PageHeader
-      title={artifact.source_filename ?? 'Artifact'}
+      title={artifactName(artifact) ?? 'Artifact'}
       crumbs={[
         { label: 'Library', href: '/library' },
-        { label: artifact.source_filename ?? 'Artifact' },
+        { label: artifactName(artifact) ?? 'Artifact' },
       ]}
     >
       {#snippet badges()}
@@ -150,7 +154,7 @@
       <!-- First, when it is going or gone: everything below reads differently. -->
       <Deletion
         artifactId={artifact.id}
-        name={artifact.source_filename ?? 'this artifact'}
+        name={artifactName(artifact) ?? 'this artifact'}
         origin={artifact.origin}
         deletion={artifact.deletion}
         onchanged={reload}
@@ -163,6 +167,21 @@
           <section aria-labelledby="summary-heading">
             <h2 id="summary-heading">Summary</h2>
             <dl class="facts">
+              {#if artifact.request}
+                <div>
+                  <dt>Requested as</dt>
+                  <dd>
+                    <a href={`/requests/${artifact.request.id}`}>{artifact.request.title}</a>
+                    <small class="quiet">({kindLabel(artifact.request.kind)})</small>
+                  </dd>
+                </div>
+              {/if}
+              {#if receivedAs(artifact)}
+                <div>
+                  <dt>Received as</dt>
+                  <dd>{receivedAs(artifact)}</dd>
+                </div>
+              {/if}
               <div>
                 <dt>Identifier</dt>
                 <dd><code>{artifact.id}</code></dd>
@@ -188,7 +207,7 @@
               </div>
               <div>
                 <dt>Source</dt>
-                <dd>{artifact.source_kind}</dd>
+                <dd>{sourceLabel(artifact.source_kind)}</dd>
               </div>
               <div>
                 <dt>Validation</dt>
@@ -482,7 +501,7 @@
       <div class="danger">
         <Deletion
           artifactId={artifact.id}
-          name={artifact.source_filename ?? 'this artifact'}
+          name={artifactName(artifact) ?? 'this artifact'}
           origin={artifact.origin}
           deletion={artifact.deletion}
           onchanged={reload}

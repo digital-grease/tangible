@@ -373,6 +373,7 @@ pub const API_BASE: &str = "/api/v1";
         routes::dashboard::DashboardBurn,
         routes::requests::RequestView,
         routes::requests::RequestRefView,
+        routes::requests::RequestLinkView,
         routes::requests::RequestPage,
         routes::requests::CreateItemRequest,
         routes::requests::DeclineItemRequest,

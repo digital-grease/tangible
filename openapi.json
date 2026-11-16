@@ -143,7 +143,7 @@
           {
             "name": "name",
             "in": "query",
-            "description": "Part of the name of one of its files, as received or as stored, in\nany case: `vol2` finds `homebrew-comp-vol2.cue`. At most 200\ncharacters; `%` and `_` match themselves. Blank is no filter.",
+            "description": "Part of the name of one of its files, as received or as stored, of\nwhat its import fetched (a release's title, a torrent's name), or of\nthe title of the request it fulfilled, in any case: `vol2` finds\n`homebrew-comp-vol2.cue`. At most 200 characters; `%` and `_` match\nthemselves. Blank is no filter.",
             "required": false,
             "schema": {
               "type": [
@@ -8808,12 +8808,30 @@
             "type": "string",
             "description": "Where its bytes came from: `imported_original`, `derived`,\n`physical_dump`, `generated` or `external_reference`. An imported\noriginal or a dump needs `confirm_original` to be deleted."
           },
+          "request": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RequestLinkView",
+                "description": "The request it fulfilled, if it fulfilled one: what the item is, as\nits requester named it."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "source_filename": {
             "type": [
               "string",
               "null"
             ],
             "description": "Filename as received, when one was recorded."
+          },
+          "source_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the import that brought it in called it: the release, torrent\nor NZB its download client fetched, or the file's name as received.\nDownload-client imports recorded no name before 2026-11-15, so those\nhave none."
           },
           "total_bytes": {
             "type": "integer",
@@ -12677,6 +12695,24 @@
             "type": "boolean",
             "description": "Whether the import has finished, one way or another."
           },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it brings in, as its source named it: the release, torrent or\nNZB a download client fetches, or the file's name as received.\nDownload-client imports recorded no name before 2026-11-15."
+          },
+          "request": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RequestLinkView",
+                "description": "The request whose download it follows, if any."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "resumes_from": {
             "type": [
               "string",
@@ -14285,6 +14321,29 @@
         },
         "additionalProperties": false
       },
+      "RequestLinkView": {
+        "type": "object",
+        "description": "A request, as an import or an artifact names the one it belongs to.",
+        "required": [
+          "id",
+          "title",
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The request."
+          },
+          "kind": {
+            "type": "string",
+            "description": "What kind of item: `game`, `music`, `movie`, `television`,\n`software` or `other`."
+          },
+          "title": {
+            "type": "string",
+            "description": "The item, as its requester named it."
+          }
+        }
+      },
       "RequestPage": {
         "type": "object",
         "description": "A page of requests, newest first.",
@@ -15618,6 +15677,13 @@
               "null"
             ],
             "description": "A magnet link."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it fetches, as people would name it, such as the NZB's file\nname without `.nzb`. Shown with its import and what it becomes;\nleft out, a `.torrent` file or magnet link names itself."
           },
           "nzb": {
             "type": [
