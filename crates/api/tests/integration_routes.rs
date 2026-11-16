@@ -92,7 +92,9 @@ async fn send(
         .await
         .unwrap();
     let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+    // The tests share one database, which keeps what every run made, so a
+    // list of integrations grows past a megabyte; 16 MiB is room for years.
+    let bytes = axum::body::to_bytes(response.into_body(), 16 << 20)
         .await
         .unwrap();
     (
