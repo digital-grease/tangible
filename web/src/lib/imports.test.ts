@@ -14,6 +14,7 @@ import {
   sourceRemovalLabel,
   loadImportSources,
   loadImports,
+  MAX_ACTIVE_LISTED,
   retryImport,
   s3ImportRequest,
   sendTorrent,
@@ -96,6 +97,27 @@ describe('loadImports', () => {
       }),
     );
     expect(populated.kind).toBe('ready');
+  });
+
+  it('asks for those settled or not, and as many as the server lists', async () => {
+    const asked: string[] = [];
+    const fetcher = (async (input: string | URL | Request) => {
+      asked.push(String(input));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ items: [], next_cursor: null }),
+        headers: new Headers(),
+      } as Response;
+    }) as typeof fetch;
+    await loadImports(fetcher, undefined, { settled: false, limit: MAX_ACTIVE_LISTED });
+    await loadImports(fetcher, 'c 1', { settled: true });
+    await loadImports(fetcher);
+    expect(asked).toEqual([
+      '/api/v1/imports?settled=false&limit=200',
+      '/api/v1/imports?settled=true&cursor=c+1',
+      '/api/v1/imports',
+    ]);
   });
 
   it('surfaces a problem document as an error', async () => {

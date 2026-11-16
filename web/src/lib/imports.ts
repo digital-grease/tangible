@@ -105,12 +105,23 @@ export async function loadImportSources(
   return { kind: 'ready', data: result };
 }
 
-/** Fetch one page of imports, newest first. */
+/** The most imports under way listed at once (the server allows up to 500). */
+export const MAX_ACTIVE_LISTED = 200;
+
+/**
+ * Fetch one page of imports, newest first: those `settled` (finished one
+ * way or another) or not (under way, waiting or due a retry), or all.
+ */
 export async function loadImports(
   fetcher: typeof fetch = apiFetch,
   cursor?: string,
+  { settled, limit }: { settled?: boolean; limit?: number } = {},
 ): Promise<LoadState<ImportPage>> {
-  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+  const params = new URLSearchParams();
+  if (settled !== undefined) params.set('settled', String(settled));
+  if (limit !== undefined) params.set('limit', String(limit));
+  if (cursor) params.set('cursor', cursor);
+  const query = params.size > 0 ? `?${params.toString()}` : '';
   const result = await request<ImportPage>(fetcher, `/api/v1/imports${query}`);
   if (isProblem(result)) return { kind: 'error', problem: result };
   // Empty is a distinct state, not a zero-length success: it needs its own

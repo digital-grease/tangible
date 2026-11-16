@@ -344,6 +344,10 @@ pub struct ImportQuery {
     pub cursor: Option<String>,
     /// Only imports in this state.
     pub state: Option<String>,
+    /// `true` for only the imports that have finished, one way or
+    /// another; `false` for only those that have not: under way, waiting,
+    /// or due a retry.
+    pub settled: Option<String>,
 }
 
 fn limit_of(limit: Option<usize>) -> usize {
@@ -928,12 +932,30 @@ pub async fn list_imports(
         })?),
     };
 
-    let jobs = list_import_jobs(state.database().pool(), state_filter, as_i64(limit), before)
-        .await
-        .map_err(|error| {
-            tracing::error!(error = ?error, "could not list imports");
-            unavailable("the imports could not be read")
-        })?;
+    let settled = match query.settled.as_deref() {
+        None => None,
+        Some("true") => Some(true),
+        Some("false") => Some(false),
+        Some(_) => {
+            return Err(Problem::invalid_parameter(
+                "settled",
+                "must be true or false",
+            ));
+        }
+    };
+
+    let jobs = list_import_jobs(
+        state.database().pool(),
+        state_filter,
+        settled,
+        as_i64(limit),
+        before,
+    )
+    .await
+    .map_err(|error| {
+        tracing::error!(error = ?error, "could not list imports");
+        unavailable("the imports could not be read")
+    })?;
 
     let next_cursor = if jobs.len() < limit {
         None

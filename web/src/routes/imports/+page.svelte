@@ -40,13 +40,18 @@
     uploadImport,
     uploadInParts,
     urlImportRequest,
+    MAX_ACTIVE_LISTED,
     type ImportPage,
     type ImportSources,
+    type ImportView,
   } from '$lib/imports';
   import { formatBytes, type LoadState, type Problem } from '$lib/library';
   import { reportSettingsOnce } from '$lib/report';
   import { kindLabel } from '$lib/requests';
 
+  /** Imports still under way, waiting or due a retry, however old. */
+  let active = $state<LoadState<ImportPage>>({ kind: 'loading' });
+  /** Imports that have finished, newest first. */
   let view = $state<LoadState<ImportPage>>({ kind: 'loading' });
   let sources = $state<ImportSources | null>(null);
   let problem = $state<Problem | null>(null);
@@ -92,11 +97,14 @@
   const FALLBACK_MS = 2_000;
 
   async function refresh() {
-    const next = await loadImports();
+    const [nextActive, nextFinished] = await Promise.all([
+      loadImports(undefined, undefined, { settled: false, limit: MAX_ACTIVE_LISTED }),
+      loadImports(undefined, undefined, { settled: true }),
+    ]);
     // A failed poll leaves what is on screen alone. Replacing a readable list
     // with an error because one refresh missed would be worse than stale.
-    if (next.kind === 'error' && view.kind !== 'loading') return;
-    view = next;
+    if (nextActive.kind !== 'error' || active.kind === 'loading') active = nextActive;
+    if (nextFinished.kind !== 'error' || view.kind === 'loading') view = nextFinished;
   }
 
   onMount(async () => {
@@ -265,6 +273,25 @@
 
 {#if problem}
   <ErrorPanel {problem} area="import" refusal />
+{/if}
+
+<!-- What is under way first, however long ago it started: an import that
+     downloads for hours is not left at the foot of the page. Shown only
+     while there is one. -->
+{#if active.kind === 'ready'}
+  <div class="active">
+    <Panel title="Active imports" aside={String(active.data.items.length)} flush>
+      <div aria-live="polite">
+        {@render importTable(active.data.items, 'Imports under way, newest first')}
+      </div>
+    </Panel>
+  </div>
+{:else if active.kind === 'error'}
+  <div class="active">
+    <Panel title="Active imports">
+      <ErrorPanel problem={active.problem} area="import" endpoint="GET /api/v1/imports" />
+    </Panel>
+  </div>
 {/if}
 
 <!-- Where an import can come from, each its own panel; those this server is
@@ -495,121 +522,124 @@
       {#if view.kind === 'loading'}
         <p class="quiet padded">Loading imports…</p>
       {:else if view.kind === 'empty'}
-        <p class="quiet padded">Nothing has been imported yet.</p>
+        <p class="quiet padded">
+          {active.kind === 'ready'
+            ? 'Nothing has finished importing yet.'
+            : 'Nothing has been imported yet.'}
+        </p>
       {:else if view.kind === 'error'}
         <div class="padded">
           <ErrorPanel problem={view.problem} area="import" endpoint="GET /api/v1/imports" />
         </div>
       {:else}
-        <Table caption="Imports, newest first">
-          <thead>
-            <tr>
-              <th scope="col">Item</th>
-              <th scope="col">Source</th>
-              <th scope="col">State</th>
-              <th scope="col" class="num">Size</th>
-              <th scope="col">Result</th>
-              <th scope="col"><span class="visually-hidden">Actions</span></th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each view.data.items as job (job.id)}
-              {@const fraction = transferFraction(job)}
-              {@const name = importName(job)}
-              {@const receivedAs = importReceivedAs(job)}
-              <tr>
-                <th scope="row" class="item">
-                  <span class="name">{name ?? `Import ${shortId(job.id)}`}</span>
-                  {#if job.request}
-                    <small class="reference"
-                      ><a href={`/requests/${job.request.id}`}
-                        >{kindLabel(job.request.kind)} request</a
-                      ></small
-                    >
-                  {/if}
-                  {#if receivedAs}<small class="reference">{receivedAs}</small>{/if}
-                </th>
-                <td>
-                  <span>{sourceLabel(job.source_kind)}</span>
-                  {#if (job.source_kind === 'http_url' || job.source_kind === 's3_object' || clientOfSource(job.source_kind)) && job.source_reference}
-                    <small class="reference">{job.source_reference}</small>
-                  {/if}
-                </td>
-                <td>
-                  <div class="stack">
-                    <StatusMark
-                      tone={importStateTone(job.state)}
-                      label={importStateLabel(job.state, job.source_kind, job.error_code)}
-                      pill
-                    />
-                    {#if fraction !== null}
-                      <Progress value={fraction} label="Transfer of {name ?? 'the file'}" />
-                    {/if}
-                    {#if job.error_code}
-                      <small><code>{job.error_code}</code></small>
-                    {/if}
-                  </div>
-                </td>
-                <td class="num">{formatBytes(job.bytes_received || (job.bytes_expected ?? 0))}</td>
-                <td>
-                  <div class="stack">
-                    {#if job.artifact_id}
-                      <a href={`/library/${job.artifact_id}`}>Open in library</a>
-                    {:else if job.error_detail}
-                      <span>{job.error_detail}</span>
-                    {:else}
-                      <span class="quiet">·</span>
-                    {/if}
-                    {#if sourceRemovalLabel(job)}
-                      {@const removal = sourceRemovalLabel(job)}
-                      <p class="removal">
-                        <small
-                          ><strong>{removal?.headline}.</strong>
-                          {#if removal?.detail}{removal.detail}.{/if}</small
-                        >
-                      </p>
-                    {/if}
-                    {#if job.warnings.length > 0}
-                      <details>
-                        <summary
-                          >{job.warnings.length} finding{job.warnings.length === 1
-                            ? ''
-                            : 's'}</summary
-                        >
-                        <ul>
-                          {#each job.warnings as warning, index (index)}
-                            <li>{warning}</li>
-                          {/each}
-                        </ul>
-                        {#if job.artifact_id && reportsOn}
-                          <!-- The artifact's page offers a format report when
-                             reports are on; the row does not know the format. -->
-                          <a href={`/library/${job.artifact_id}#validation`}
-                            >Ask about these findings</a
-                          >
-                        {/if}
-                      </details>
-                    {/if}
-                  </div>
-                </td>
-                <td class="actions">
-                  {#if canCancel(job)}
-                    <Button size="sm" onclick={() => cancel(job.id)} disabled={busy}>Cancel</Button>
-                  {/if}
-                  {#if canRetry(job)}
-                    <Button size="sm" onclick={() => retry(job.id)} disabled={busy}>
-                      {job.resumes_from ? `Retry from ${job.resumes_from}` : 'Retry'}
-                    </Button>
-                  {/if}
-                </td>
-              </tr>
-            {/each}
-          </tbody>
-        </Table>
+        {@render importTable(view.data.items, 'Finished imports, newest first')}
       {/if}
     </div>
   </Panel>
 </div>
+
+{#snippet importTable(items: ImportView[], caption: string)}
+  <Table {caption}>
+    <thead>
+      <tr>
+        <th scope="col">Item</th>
+        <th scope="col">Source</th>
+        <th scope="col">State</th>
+        <th scope="col" class="num">Size</th>
+        <th scope="col">Result</th>
+        <th scope="col"><span class="visually-hidden">Actions</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      {#each items as job (job.id)}
+        {@const fraction = transferFraction(job)}
+        {@const name = importName(job)}
+        {@const receivedAs = importReceivedAs(job)}
+        <tr>
+          <th scope="row" class="item">
+            <span class="name">{name ?? `Import ${shortId(job.id)}`}</span>
+            {#if job.request}
+              <small class="reference"
+                ><a href={`/requests/${job.request.id}`}>{kindLabel(job.request.kind)} request</a
+                ></small
+              >
+            {/if}
+            {#if receivedAs}<small class="reference">{receivedAs}</small>{/if}
+          </th>
+          <td>
+            <span>{sourceLabel(job.source_kind)}</span>
+            {#if (job.source_kind === 'http_url' || job.source_kind === 's3_object' || clientOfSource(job.source_kind)) && job.source_reference}
+              <small class="reference">{job.source_reference}</small>
+            {/if}
+          </td>
+          <td>
+            <div class="stack">
+              <StatusMark
+                tone={importStateTone(job.state)}
+                label={importStateLabel(job.state, job.source_kind, job.error_code)}
+                pill
+              />
+              {#if fraction !== null}
+                <Progress value={fraction} label="Transfer of {name ?? 'the file'}" />
+              {/if}
+              {#if job.error_code}
+                <small><code>{job.error_code}</code></small>
+              {/if}
+            </div>
+          </td>
+          <td class="num">{formatBytes(job.bytes_received || (job.bytes_expected ?? 0))}</td>
+          <td>
+            <div class="stack">
+              {#if job.artifact_id}
+                <a href={`/library/${job.artifact_id}`}>Open in library</a>
+              {:else if job.error_detail}
+                <span>{job.error_detail}</span>
+              {:else}
+                <span class="quiet">·</span>
+              {/if}
+              {#if sourceRemovalLabel(job)}
+                {@const removal = sourceRemovalLabel(job)}
+                <p class="removal">
+                  <small
+                    ><strong>{removal?.headline}.</strong>
+                    {#if removal?.detail}{removal.detail}.{/if}</small
+                  >
+                </p>
+              {/if}
+              {#if job.warnings.length > 0}
+                <details>
+                  <summary
+                    >{job.warnings.length} finding{job.warnings.length === 1 ? '' : 's'}</summary
+                  >
+                  <ul>
+                    {#each job.warnings as warning, index (index)}
+                      <li>{warning}</li>
+                    {/each}
+                  </ul>
+                  {#if job.artifact_id && reportsOn}
+                    <!-- The artifact's page offers a format report when
+                       reports are on; the row does not know the format. -->
+                    <a href={`/library/${job.artifact_id}#validation`}>Ask about these findings</a>
+                  {/if}
+                </details>
+              {/if}
+            </div>
+          </td>
+          <td class="actions">
+            {#if canCancel(job)}
+              <Button size="sm" onclick={() => cancel(job.id)} disabled={busy}>Cancel</Button>
+            {/if}
+            {#if canRetry(job)}
+              <Button size="sm" onclick={() => retry(job.id)} disabled={busy}>
+                {job.resumes_from ? `Retry from ${job.resumes_from}` : 'Retry'}
+              </Button>
+            {/if}
+          </td>
+        </tr>
+      {/each}
+    </tbody>
+  </Table>
+{/snippet}
 
 <style>
   .sources {
@@ -650,6 +680,9 @@
   }
   .queue {
     margin-top: var(--space-5);
+  }
+  .active {
+    margin-bottom: var(--space-5);
   }
   .stack {
     display: grid;

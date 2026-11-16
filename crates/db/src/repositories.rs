@@ -2606,7 +2606,10 @@ pub async fn get_import_job(
 /// List imports, newest first.
 ///
 /// Same ordering as the burn queue, for the same reason: the interesting
-/// import is the one that just started.
+/// import is the one that just started. `settled` keeps only those that
+/// have finished one way or another (`true`) or those still under way,
+/// waiting or due a retry (`false`), so an import that has run for days is
+/// found however many have finished since.
 ///
 /// # Errors
 ///
@@ -2614,19 +2617,30 @@ pub async fn get_import_job(
 pub async fn list_import_jobs(
     pool: &PgPool,
     state: Option<ImportState>,
+    settled: Option<bool>,
     limit: i64,
     before: Option<uuid::Uuid>,
 ) -> Result<Vec<ImportJobRecord>, DbError> {
+    // Settled is the domain's terminal states, named here from the domain
+    // so the two cannot drift.
+    let terminal: Vec<&str> = ImportState::all()
+        .iter()
+        .filter(|state| state.is_terminal())
+        .map(ImportState::as_str)
+        .collect();
     let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {IMPORT_JOB_COLUMNS} FROM import_jobs
          WHERE ($1::text IS NULL OR state = $1)
            AND ($2::uuid IS NULL OR id < $2)
+           AND ($4::boolean IS NULL OR (state = ANY($5)) = $4)
          ORDER BY id DESC
          LIMIT $3"
     )))
     .bind(state.map(|state| state.as_str()))
     .bind(before)
     .bind(limit)
+    .bind(settled)
+    .bind(&terminal)
     .fetch_all(pool)
     .await
     .map_err(DbError::Query)?;

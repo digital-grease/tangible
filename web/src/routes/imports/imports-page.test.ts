@@ -25,7 +25,9 @@ function server(routes: Record<string, Reply>): Asked[] {
       const url = String(input);
       const method = init?.method ?? 'GET';
       asked.push({ url, method, ...(typeof init?.body === 'string' ? { body: init.body } : {}) });
-      const reply = routes[`${method} ${url}`] ?? routes[url] ?? { status: 404, body: {} };
+      const reply = routes[`${method} ${url}`] ??
+        routes[url] ??
+        listed(routes, url) ?? { status: 404, body: {} };
       return {
         ok: reply.status >= 200 && reply.status < 300,
         status: reply.status,
@@ -52,6 +54,23 @@ function sources(
       download_clients: downloadClients,
       s3_sources: s3Sources,
     },
+  };
+}
+
+/**
+ * The page asks for the imports settled and not apart; `/api/v1/imports`
+ * in a test's routes is every import, answered for each as the server
+ * would: only those settled, or only those not.
+ */
+function listed(routes: Record<string, Reply>, url: string): Reply | undefined {
+  const match = /^\/api\/v1\/imports\?settled=(true|false)/.exec(url);
+  const all = match ? routes['/api/v1/imports'] : undefined;
+  if (!match || !all || all.status !== 200) return all;
+  const page = all.body as { items: { is_settled?: boolean }[] };
+  const settled = match[1] === 'true';
+  return {
+    status: 200,
+    body: { ...page, items: page.items.filter((item) => (item.is_settled ?? false) === settled) },
   };
 }
 
@@ -409,16 +428,75 @@ describe('Imports page, live', () => {
     expect(await screen.findByText('disc.iso')).toBeTruthy();
     // The tab's one stream, for every topic (docs/plans/ui-overhaul.md, decision 6).
     await vi.waitFor(() => expect(opened).toEqual([`/api/v1/events?topics=${TOPICS.join(',')}`]));
-    const before = asked.filter((request) => request.url === '/api/v1/imports').length;
+    // Both lists are asked again: under way, and finished.
+    const lists = () => asked.filter((request) => request.url.startsWith('/api/v1/imports?'));
+    const before = lists().length;
 
     for (const listener of listeners.get('import.changed') ?? []) {
       listener({
         data: JSON.stringify({ topic: 'imports', id: 'i1', state: 'complete' }),
       } as MessageEvent);
     }
-    await vi.waitFor(() =>
-      expect(asked.filter((request) => request.url === '/api/v1/imports').length).toBe(before + 1),
-    );
+    await vi.waitFor(() => expect(lists().length).toBe(before + 2));
+    expect(
+      lists()
+        .slice(-2)
+        .map((request) => request.url)
+        .sort(),
+    ).toEqual(['/api/v1/imports?settled=false&limit=200', '/api/v1/imports?settled=true']);
+  });
+});
+
+describe('Imports page, active and finished', () => {
+  const FINISHED = {
+    ...DOWNLOADING,
+    id: 'i2',
+    source_filename: 'done.iso',
+    state: 'complete',
+    is_settled: true,
+    bytes_received: 4096,
+    artifact_id: 'a2',
+  };
+
+  it('lists what is under way above the import forms, and what finished below', async () => {
+    server({
+      '/api/v1/import-sources': sources(true),
+      '/api/v1/imports': { status: 200, body: { items: [DOWNLOADING, FINISHED] } },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    const { container } = render(ImportsPage);
+    const active = await screen.findByRole('table', { name: 'Imports under way, newest first' });
+    expect(within(active).getByText('disc.iso')).toBeTruthy();
+    expect(within(active).queryByText('done.iso')).toBeNull();
+    const finished = screen.getByRole('table', { name: 'Finished imports, newest first' });
+    expect(within(finished).getByText('done.iso')).toBeTruthy();
+    expect(within(finished).queryByText('disc.iso')).toBeNull();
+    // Above the forms: the active pane comes before the first of them.
+    const heading = screen.getByRole('heading', { name: /Active imports/ });
+    const upload = screen.getByRole('heading', { name: 'Upload a file' });
+    expect(heading.compareDocumentPosition(upload) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(await axeViolations(container)).toEqual([]);
+  });
+
+  it('shows no active pane while nothing is under way', async () => {
+    server({
+      '/api/v1/import-sources': sources(true),
+      '/api/v1/imports': { status: 200, body: { items: [FINISHED] } },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    render(ImportsPage);
+    expect(await screen.findByText('done.iso')).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: /Active imports/ })).toBeNull();
+  });
+
+  it('says nothing has finished while something is under way', async () => {
+    server({
+      '/api/v1/import-sources': sources(true),
+      '/api/v1/imports': { status: 200, body: { items: [DOWNLOADING] } },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    render(ImportsPage);
+    expect(await screen.findByText('Nothing has finished importing yet.')).toBeTruthy();
   });
 });
 
@@ -442,7 +520,7 @@ describe('Imports page, naming what is imported', () => {
       '/api/v1/report-settings': SETTINGS,
     });
     const { container } = render(ImportsPage);
-    const table = await screen.findByRole('table', { name: /Imports, newest first/ });
+    const table = await screen.findByRole('table', { name: 'Imports under way, newest first' });
     const rows = within(table).getAllByRole('row');
     const first = within(rows[1] as HTMLElement);
     expect(first.getByRole('rowheader').textContent).toMatch(/^\s*Hackers\b/);

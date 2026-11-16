@@ -8561,6 +8561,12 @@ export interface operations {
                 cursor?: string | null;
                 /** @description Only imports in this state. */
                 state?: string | null;
+                /**
+                 * @description `true` for only the imports that have finished, one way or
+                 *     another; `false` for only those that have not: under way, waiting,
+                 *     or due a retry.
+                 */
+                settled?: string | null;
             };
             header?: never;
             path?: never;

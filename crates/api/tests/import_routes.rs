@@ -20,7 +20,7 @@ use std::path::PathBuf;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use serde_json::json;
+use serde_json::{Value, json};
 use sqlx::PgPool;
 use tangible_api::{
     ApiState, ImportContext, ImportPipeline, ImportRunner, ImportRunnerSettings, router,
@@ -484,6 +484,60 @@ async fn imports_are_listed_newest_first_and_page() {
         .get(&format!("/api/v1/imports?limit=1&cursor={cursor}"))
         .await;
     assert_eq!(next["items"][0]["id"], first);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn imports_are_listed_settled_or_not() {
+    let harness = harness().await;
+    let waiting = harness
+        .upload("waiting.iso", iso_image("WAITING", 20))
+        .await
+        .1["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    let ended = harness.upload("ended.iso", iso_image("ENDED", 20)).await.1["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    let (status, body) = harness
+        .post(&format!("/api/v1/imports/{ended}/cancel"), json!({}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let ids = |page: &Value| -> Vec<String> {
+        page["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|item| item["id"].as_str().expect("id").to_owned())
+            .collect()
+    };
+    let (status, active) = harness.get("/api/v1/imports?settled=false&limit=200").await;
+    assert_eq!(status, StatusCode::OK, "{active}");
+    assert!(ids(&active).contains(&waiting), "{active}");
+    assert!(!ids(&active).contains(&ended), "{active}");
+    assert!(
+        active["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .all(|item| item["is_settled"] == false),
+        "{active}"
+    );
+    let (status, settled) = harness.get("/api/v1/imports?settled=true&limit=200").await;
+    assert_eq!(status, StatusCode::OK, "{settled}");
+    assert!(ids(&settled).contains(&ended), "{settled}");
+    assert!(!ids(&settled).contains(&waiting), "{settled}");
+    let (status, problem) = harness.get("/api/v1/imports?settled=maybe").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{problem}");
+    assert_eq!(problem["code"], "INVALID_PARAMETER");
+
+    // Left as it found things: the waiting one is not left for others.
+    harness
+        .post(&format!("/api/v1/imports/{waiting}/cancel"), json!({}))
+        .await;
 }
 
 #[tokio::test]

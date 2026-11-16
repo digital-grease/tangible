@@ -3823,6 +3823,18 @@
                 "null"
               ]
             }
+          },
+          {
+            "name": "settled",
+            "in": "query",
+            "description": "`true` for only the imports that have finished, one way or\nanother; `false` for only those that have not: under way, waiting,\nor due a retry.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {

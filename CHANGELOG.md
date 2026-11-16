@@ -59,6 +59,10 @@ may change between minor versions, and the release notes say how.
   request grabs it, a torrent's or magnet link's own name, or the file
   name of an NZB handed over on the Imports page (the jobs route takes an
   optional `name`). Imports from before this have none to show.
+- The Imports page shows what is under way in its own "Active imports"
+  pane at the top, however long ago it started; "Recent imports" at the
+  foot holds those that have finished. The imports list takes `settled`
+  (`true` or `false`) to ask for either.
 - Burn workers list what their drive reads and writes: the xorriso probe
   reads the drive's own profile list (xorriso `-list_profiles`), with or
   without a disc in it, as each worker starts. Preflight still reads the
