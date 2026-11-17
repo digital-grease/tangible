@@ -2,11 +2,14 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   // The store as a whole, for administrators (docs/plans/storage-integrity.md;
-  // UX.md 21): full scrubs and every integrity check, and the garbage
-  // collection plan. Nothing on this page repairs or removes a stored file;
-  // the server cannot do either. In the new design (docs/plans/ui-overhaul.md,
-  // U8): a panel for the scrub, one for the checks, one for the plan.
+  // UX.md 21): full scrubs and every integrity check, the garbage collection
+  // plan, and collecting orphaned files from a plan kept for it (ADR 0024,
+  // docs/plans/gc-sweep.md G3). Nothing here repairs a stored file, and only
+  // a collection the administrator confirms removes one. In the new design
+  // (docs/plans/ui-overhaul.md, U8): a panel for the scrub, one for the
+  // checks, one for the plan, one for the collections.
   import Callout from '$lib/components/ui/Callout.svelte';
+  import Confirm from '$lib/components/ui/Confirm.svelte';
   import { onDestroy, onMount } from 'svelte';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import Button from '$lib/components/ui/Button.svelte';
@@ -36,6 +39,25 @@
     type GcPlan,
     type IntegrityCheck,
   } from '$lib/integrity';
+  import {
+    MIN_COLLECT_GRACE_DAYS,
+    canCollect,
+    collectPlan,
+    endedLabel,
+    graceDays as graceDaysOf,
+    isCollection,
+    keepPlan,
+    keptPlanLabel,
+    keptPlanTone,
+    loadKeptPlan,
+    loadKeptPlans,
+    originLabel,
+    outcomeLabel,
+    outcomeTone,
+    plannedBy,
+    type KeptPlan,
+    type KeptPlanDetail,
+  } from '$lib/collection';
   import { formatBytes } from '$lib/library';
   import type { Problem } from '$lib/session';
 
@@ -55,6 +77,15 @@
   let planning = $state(false);
   let plan = $state<GcPlan | null>(null);
   let planProblem = $state<Problem | null>(null);
+
+  // Collecting: a plan kept for it, asked about, queued and followed.
+  let kept = $state<KeptPlanDetail | null>(null);
+  let keeping = $state(false);
+  let collecting = $state(false);
+  let collectProblem = $state<Problem | null>(null);
+  let collections = $state<KeptPlan[] | null>(null);
+  let collectionsProblem = $state<Problem | null>(null);
+  let followTimer: ReturnType<typeof setTimeout> | undefined;
 
   const activeScrub = $derived(
     view.kind === 'ready'
@@ -83,8 +114,24 @@
     }
   }
 
-  onMount(() => void refresh());
-  onDestroy(() => clearTimeout(timer));
+  async function refreshCollections() {
+    const result = await loadKeptPlans();
+    if (result.kind === 'ok') {
+      collections = result.data.items.filter(isCollection);
+      collectionsProblem = null;
+    } else if (result.problem.code !== 'FORBIDDEN') {
+      collectionsProblem = result.problem;
+    }
+  }
+
+  onMount(() => {
+    void refresh();
+    void refreshCollections();
+  });
+  onDestroy(() => {
+    clearTimeout(timer);
+    clearTimeout(followTimer);
+  });
 
   async function scrub() {
     if (asking) return;
@@ -124,6 +171,66 @@
       return;
     }
     plan = result.data;
+    kept = null;
+    collectProblem = null;
+  }
+
+  /** Keep a plan with the dry run's grace period, so the question lists what goes. */
+  async function prepareCollection() {
+    if (!plan || keeping) return;
+    keeping = true;
+    collectProblem = null;
+    const result = await keepPlan(Math.floor(plan.grace_seconds / 86_400));
+    keeping = false;
+    if (result.kind === 'error') {
+      collectProblem = result.problem;
+      return;
+    }
+    kept = result.data;
+  }
+
+  async function collect() {
+    if (!kept || collecting) return;
+    collecting = true;
+    collectProblem = null;
+    const result = await collectPlan(kept.plan.id);
+    collecting = false;
+    if (result.kind === 'error') {
+      collectProblem = result.problem;
+      return;
+    }
+    kept = { ...kept, plan: result.data };
+    status = 'Collection asked for. This page follows it.';
+    await refreshCollections();
+    followTimer = setTimeout(() => void follow(result.data.id), FOLLOW_EVERY_MS);
+  }
+
+  /** Look at a queued plan again until it is collected. */
+  async function follow(planId: string) {
+    clearTimeout(followTimer);
+    const result = await loadKeptPlan(planId);
+    if (result.kind === 'error') {
+      collectProblem = result.problem;
+      return;
+    }
+    kept = result.data;
+    if (result.data.plan.state === 'queued') {
+      followTimer = setTimeout(() => void follow(planId), FOLLOW_EVERY_MS);
+      return;
+    }
+    const done = result.data.plan.collected;
+    if (done) {
+      status = `Collected: ${tallyLabel(done.removed)} removed, ${tallyLabel(done.kept)} kept.`;
+      // The dry run above no longer says what is there: plan again to see.
+      plan = null;
+    }
+    await refreshCollections();
+  }
+
+  function dismissKept() {
+    clearTimeout(followTimer);
+    kept = null;
+    collectProblem = null;
   }
 
   /** The full date and time, for a tooltip or a sentence. */
@@ -138,7 +245,7 @@
 
 <PageHeader
   title="Storage"
-  description="Integrity checks read stored files back and compare each with the digest recorded when it was stored. The collection plan says which stored files nothing refers to. Nothing here repairs or removes a file: originals are never rewritten, and the remedy for damage is your backup."
+  description="Integrity checks read stored files back and compare each with the digest recorded when it was stored. The collection plan says which stored files nothing refers to, and collecting removes those, once you confirm. Nothing here repairs a file or touches one an artifact uses: originals are never rewritten, and the remedy for damage is your backup."
 />
 
 <div class="messages">
@@ -301,8 +408,9 @@
   <Panel title="Collection plan">
     <p class="lede">
       What garbage collection would remove: stored files that no artifact, manifest or import refers
-      to, older than a grace period. A plan only. Nothing is removed, and this server cannot remove
-      stored files.
+      to, older than a grace period, such as what an import stored before it failed. Planning
+      removes nothing. Collecting asks first, then removes only the files it listed that nothing
+      refers to still.
     </p>
     <form
       class="plan-form"
@@ -370,6 +478,38 @@
               {tallyLabel(plan.missing)} the catalogue records have no file{#if plan.missing.count > 0};
                 a full scrub says which artifacts they belong to{/if}
             </dd>
+            {#if plan.failed_import_staging}
+              {@const staging = plan.failed_import_staging}
+              <dt>Kept by failed imports</dt>
+              <dd>
+                {#if staging.areas.count === 0}
+                  Nothing
+                {:else}
+                  {staging.areas.count} import{staging.areas.count === 1 ? '' : 's'}, {formatBytes(
+                    staging.areas.bytes,
+                  )} staged: what they received, kept to look into or retry. Never removed here.
+                  <details class="areas-disclosure">
+                    <summary>The largest</summary>
+                    <ul class="areas">
+                      {#each staging.largest as area (area.import_id)}
+                        <li>
+                          <span>{area.name ?? 'An import'}</span>
+                          <span class="small quiet"
+                            >{formatBytes(area.bytes)}, {endedLabel(
+                              area.state,
+                            )}{#if area.error_code}:
+                              {area.error_code}{/if}
+                            <time datetime={area.ended_at} title={full(area.ended_at)}
+                              >{when(area.ended_at)}</time
+                            ></span
+                          >
+                        </li>
+                      {/each}
+                    </ul>
+                  </details>
+                {/if}
+              </dd>
+            {/if}
           </dl>
           {#if plan.candidates.length > 0}
             <div class="candidates">
@@ -406,11 +546,190 @@
             </div>
           {/if}
           <p class="small quiet">Planned {full(plan.planned_at)}.</p>
+          {#if !kept}
+            {#if canCollect(plan)}
+              <div class="action">
+                <Button variant="danger" onclick={prepareCollection} disabled={keeping}>
+                  {keeping ? 'Listing what goes…' : `Collect ${tallyLabel(plan.collectable)}…`}
+                </Button>
+                <p class="hint">
+                  Asks first, listing every file that goes. The server can also collect on its own
+                  every few days (<code>TANGIBLE_ORPHAN_COLLECTION_INTERVAL_DAYS</code>).
+                </p>
+              </div>
+            {:else if plan.certain && plan.grace_seconds < MIN_COLLECT_GRACE_DAYS * 86_400}
+              <p class="hint">
+                Collecting keeps a day's grace at least: plan with 1 day or more to collect.
+              </p>
+            {/if}
+          {/if}
         </div>
       {/if}
     </div>
+    <div role="alert">
+      {#if collectProblem}<p class="problem">
+          <strong>Not collected.</strong>
+          {collectProblem.detail}
+        </p>{/if}
+    </div>
+    {#if kept}
+      {@const keptPlan = kept.plan}
+      <div class="kept" aria-live="polite">
+        {#if keptPlan.state === 'planned' && (keptPlan.candidates.count > 0 || keptPlan.stale_partial_files > 0)}
+          <Confirm
+            title={`Collect ${tallyLabel(keptPlan.candidates)}?`}
+            onsubmit={(event) => {
+              event.preventDefault();
+              void collect();
+            }}
+          >
+            <p>
+              <strong>They are removed from the library for good;</strong> only a backup brings them
+              back. Each is a stored file nothing refers to, written more than {graceDaysOf(
+                keptPlan,
+              )} ago{#if keptPlan.stale_partial_files === 1}, and 1 partial file left by an
+                interrupted import goes too{:else if keptPlan.stale_partial_files > 1}, and {keptPlan.stale_partial_files}
+                partial files left by interrupted imports go too{/if}.
+            </p>
+            <p>
+              Imports that failed keep what they received, so they can still be retried. The server
+              looks at each file again first and keeps any that something has come to use.
+            </p>
+            {@render objects(kept, false)}
+            {#snippet actions()}
+              <Button type="submit" variant="danger" disabled={collecting}>
+                {collecting ? 'Asking…' : `Collect ${tallyLabel(keptPlan.candidates)}`}
+              </Button>
+              <Button onclick={dismissKept}>Keep them</Button>
+            {/snippet}
+          </Confirm>
+        {:else if keptPlan.state === 'planned'}
+          <p class="state">
+            <StatusMark tone="idle" label="Nothing to collect now." />
+            <Button size="sm" variant="quiet" onclick={dismissKept}>Dismiss</Button>
+          </p>
+        {:else if keptPlan.state === 'queued'}
+          <p class="state">
+            <StatusMark tone="busy" label={keptPlanLabel(keptPlan)} />
+            <span
+              >The server collects it shortly, or once the imports and derivations under way end.</span
+            >
+          </p>
+        {:else if keptPlan.state === 'collected' && keptPlan.collected}
+          {@const done = keptPlan.collected}
+          <p class="state">
+            <StatusMark
+              tone={done.kept.count > 0 ? 'warn' : 'ok'}
+              label={`Collected ${when(done.collected_at)}: ${tallyLabel(done.removed)} removed, ${tallyLabel(done.kept)} kept.`}
+            />
+            <Button size="sm" variant="quiet" onclick={dismissKept}>Dismiss</Button>
+          </p>
+          {@render objects(kept, true)}
+        {:else}
+          <Callout tone="warn">
+            <StatusMark tone={keptPlanTone(keptPlan)} label={keptPlanLabel(keptPlan)} />
+            <p>
+              {keptPlan.state === 'uncertain'
+                ? 'A manifest or an import checkpoint could not be read while planning, so nothing is collected. The server log says which.'
+                : 'This plan is more than an hour old. Plan again to collect.'}
+            </p>
+          </Callout>
+          <p><Button size="sm" variant="quiet" onclick={dismissKept}>Dismiss</Button></p>
+        {/if}
+      </div>
+    {/if}
+  </Panel>
+
+  <Panel title="Collections" flush>
+    {#if collectionsProblem}
+      <p class="padded problem">
+        <strong>Could not load collections.</strong>
+        {collectionsProblem.detail}
+      </p>
+    {:else if collections === null}
+      <p class="padded quiet">Loading collections…</p>
+    {:else if collections.length === 0}
+      <p class="padded quiet">
+        Nothing has been collected. Plan a collection above, or have the server collect on its own (<code
+          >TANGIBLE_ORPHAN_COLLECTION_INTERVAL_DAYS</code
+        >).
+      </p>
+    {:else}
+      <Table caption="Collections, newest first">
+        <thead>
+          <tr>
+            <th scope="col">Planned</th>
+            <th scope="col">By</th>
+            <th scope="col">State</th>
+            <th scope="col">Removed</th>
+            <th scope="col">Kept</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each collections as collection (collection.id)}
+            <tr>
+              <th scope="row">
+                <time datetime={collection.planned_at} title={full(collection.planned_at)}
+                  >{when(collection.planned_at)}</time
+                >
+              </th>
+              <td>{plannedBy(collection)}</td>
+              <td>
+                <StatusMark tone={keptPlanTone(collection)} label={keptPlanLabel(collection)} />
+              </td>
+              <td>{collection.collected ? tallyLabel(collection.collected.removed) : ''}</td>
+              <td>{collection.collected ? tallyLabel(collection.collected.kept) : ''}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </Table>
+    {/if}
   </Panel>
 </div>
+
+{#snippet objects(detail: KeptPlanDetail, outcomes: boolean)}
+  {#if detail.objects.length > 0}
+    <div class="candidates">
+      <Table
+        caption={detail.objects.length < detail.plan.candidates.count
+          ? `The ${detail.objects.length} largest of ${detail.plan.candidates.count} files`
+          : outcomes
+            ? 'What became of each file'
+            : 'Every file that goes'}
+        showCaption
+        maxHeight="20rem"
+      >
+        <thead>
+          <tr>
+            <th scope="col">SHA-256</th>
+            <th scope="col" class="num">Size</th>
+            <th scope="col">From</th>
+            {#if outcomes}<th scope="col">Outcome</th>{/if}
+          </tr>
+        </thead>
+        <tbody>
+          {#each detail.objects as object (object.sha256)}
+            <tr>
+              <th scope="row"><code class="digest">{object.sha256}</code></th>
+              <td class="num">{formatBytes(object.size_bytes)}</td>
+              <td>
+                <span class:quiet={!object.import}>{originLabel(object)}</span>
+              </td>
+              {#if outcomes}
+                <td>
+                  <StatusMark
+                    tone={outcomeTone(object.outcome)}
+                    label={outcomeLabel(object.outcome)}
+                  />
+                </td>
+              {/if}
+            </tr>
+          {/each}
+        </tbody>
+      </Table>
+    </div>
+  {/if}
+{/snippet}
 
 <style>
   .stack {
@@ -519,5 +838,25 @@
   }
   .plan > p {
     margin: 0;
+  }
+  .kept {
+    display: grid;
+    gap: var(--space-3);
+    margin-top: var(--space-4);
+  }
+  .kept > p {
+    margin: 0;
+  }
+  .areas-disclosure summary {
+    color: var(--text);
+  }
+  .areas {
+    display: grid;
+    gap: var(--space-1);
+    margin: var(--space-2) 0 0;
+    padding-left: var(--space-4);
+  }
+  .areas li {
+    display: grid;
   }
 </style>

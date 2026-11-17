@@ -38,6 +38,12 @@ may change between minor versions, and the release notes say how.
   Orphans check says when orphans were last collected and what that
   removed, and warns when a scheduled plan was uncertain or the schedule
   has fallen behind.
+- The Storage page collects orphaned files. Under a plan, "Collect 3
+  files…" lists every file that would go and the failed import each came
+  from, and asks; once confirmed it follows the collection and shows what
+  became of each file. A Collections list shows every collection, by hand
+  or by schedule, with what it removed and kept, and the plan shows what
+  failed imports keep in staging.
 - The garbage collection plan (`GET /api/v1/storage/gc-plan`) counts the
   staging areas of imports that failed for good or were canceled, the
   largest first with each import's name and failure: the evidence they
