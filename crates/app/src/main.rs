@@ -1593,37 +1593,97 @@ mod tests {
         "TANGIBLE_MIGRATE_ON_START",
     ];
 
+    /// The worker's variables `deploy/compose.hardware.yaml` leaves out,
+    /// each for a reason. `deploy/compose.worker.yaml` leaves out none.
+    const NOT_IN_HARDWARE_COMPOSE: &[&str] = &[
+        // It reaches the server on their shared Compose network, which is
+        // never plain HTTP across the network; a worker on another machine
+        // uses compose.worker.yaml, which passes it.
+        "TANGIBLE_WORKER_PLAIN_HTTP",
+    ];
+
+    const COMPOSE_SERVER: &str = include_str!("../../../deploy/compose.yaml");
+    const COMPOSE_HARDWARE: &str = include_str!("../../../deploy/compose.hardware.yaml");
+    const COMPOSE_WORKER: &str = include_str!("../../../deploy/compose.worker.yaml");
+
+    /// Whether a Compose file lists a variable in an environment, set or
+    /// commented out to uncomment.
+    fn compose_lists(compose: &str, name: &str) -> bool {
+        let key = format!("{name}:");
+        compose.lines().any(|line| {
+            let line = line.trim_start();
+            line.strip_prefix("# ").unwrap_or(line).starts_with(&key)
+        })
+    }
+
+    /// The variables a subcommand reads that `compose` does not list and
+    /// `left_out` does not excuse.
+    fn not_passed(compose: &str, subcommand: &str, left_out: &[&str]) -> Vec<String> {
+        let cli = Cli::command();
+        let command = cli
+            .find_subcommand(subcommand)
+            .unwrap_or_else(|| panic!("a {subcommand} subcommand"));
+        command
+            .get_arguments()
+            .filter_map(|arg| arg.get_env())
+            .map(|env| env.to_string_lossy().into_owned())
+            .filter(|name| !left_out.contains(&name.as_str()) && !compose_lists(compose, name))
+            .collect()
+    }
+
     #[test]
     fn compose_passes_the_server_every_setting() {
-        let compose = include_str!("../../../deploy/compose.yaml");
-        let listed = |name: &str| {
-            let key = format!("{name}:");
-            compose.lines().any(|line| {
-                let line = line.trim_start();
-                line.strip_prefix("# ").unwrap_or(line).starts_with(&key)
-            })
-        };
-        let cli = Cli::command();
-        let serve = cli.find_subcommand("serve").expect("a serve subcommand");
-        let mut missing = Vec::new();
-        for arg in serve.get_arguments() {
-            let Some(env) = arg.get_env() else { continue };
-            let name = env.to_string_lossy();
-            if !NOT_IN_COMPOSE.contains(&name.as_ref()) && !listed(&name) {
-                missing.push(name.into_owned());
-            }
-        }
+        let missing = not_passed(COMPOSE_SERVER, "serve", NOT_IN_COMPOSE);
         assert!(
             missing.is_empty(),
             "deploy/compose.yaml does not pass the server {missing:?}; add each \
              to its environment, or to NOT_IN_COMPOSE with why"
         );
-        assert!(listed("TANGIBLE_ARTWORK"), "a setting it passes is found");
+        assert!(compose_lists(COMPOSE_SERVER, "TANGIBLE_ARTWORK"));
         assert!(
-            listed("TANGIBLE_SECRET_KEY_FILE"),
-            "so is one commented out, to uncomment"
+            compose_lists(COMPOSE_SERVER, "TANGIBLE_SECRET_KEY_FILE"),
+            "one commented out, to uncomment, counts"
         );
-        assert!(!listed("TANGIBLE_NOT_A_SETTING"));
+        assert!(!compose_lists(COMPOSE_SERVER, "TANGIBLE_NOT_A_SETTING"));
+    }
+
+    #[test]
+    fn compose_passes_each_worker_every_setting() {
+        let missing = not_passed(COMPOSE_WORKER, "burn-worker", &[]);
+        assert!(
+            missing.is_empty(),
+            "deploy/compose.worker.yaml does not pass the worker {missing:?}"
+        );
+        let missing = not_passed(COMPOSE_HARDWARE, "burn-worker", NOT_IN_HARDWARE_COMPOSE);
+        assert!(
+            missing.is_empty(),
+            "deploy/compose.hardware.yaml does not pass the worker {missing:?}; add \
+             each, or to NOT_IN_HARDWARE_COMPOSE with why"
+        );
+        assert!(compose_lists(COMPOSE_WORKER, "TANGIBLE_WORKER_PLAIN_HTTP"));
+    }
+
+    #[test]
+    fn every_compose_file_runs_this_release() {
+        let expected = format!(
+            "image: ghcr.io/digital-grease/tangible:v{}",
+            env!("CARGO_PKG_VERSION")
+        );
+        for (file, compose) in [
+            ("compose.yaml", COMPOSE_SERVER),
+            ("compose.hardware.yaml", COMPOSE_HARDWARE),
+            ("compose.worker.yaml", COMPOSE_WORKER),
+        ] {
+            let images: Vec<&str> = compose
+                .lines()
+                .map(str::trim)
+                .filter(|line| line.starts_with("image: ghcr.io/digital-grease/tangible"))
+                .collect();
+            assert!(!images.is_empty(), "deploy/{file} names Tangible's image");
+            for image in images {
+                assert_eq!(image, expected, "deploy/{file}");
+            }
+        }
     }
 
     #[test]

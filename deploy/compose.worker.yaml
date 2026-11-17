@@ -1,0 +1,99 @@
+# SPDX-FileCopyrightText: 2026 digitalgrease
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# A BURN WORKER ON A MACHINE OF ITS OWN: one worker bound to one optical
+# drive, reaching a Tangible server that runs somewhere else. On the server's
+# own machine use compose.hardware.yaml instead, which joins the server's
+# stack (deploy/README.md, "Adding a real drive").
+#
+# On the drive's machine, in this directory (deploy/ in a clone of a release
+# tag, or the release's tangible-deploy-<tag>.tar.gz unpacked):
+#
+#   cp worker.env.example .env      # then set the server URL and the drive
+#   docker compose -f compose.worker.yaml config
+#   docker compose -f compose.worker.yaml up -d
+#
+# Render and read the result before starting it. deploy/README.md, "A worker
+# on another machine", goes through it. compose.hardware-sg.yaml and
+# compose.decryption.yaml layer onto this file as they do onto
+# compose.hardware.yaml.
+#
+# One worker per drive. To add a second drive, copy the service, give it a
+# new name and a volume of its own, and map its own /dev/srN.
+
+name: tangible-worker
+
+services:
+  burner-sr0:
+    image: ghcr.io/digital-grease/tangible:v0.3.0
+    command: ["burn-worker"]
+    restart: unless-stopped
+    # A worker asked to stop while it writes or erases a disc finishes
+    # first, the read-back and report included: stopping part of the way
+    # ruins the disc. Anything else stops at once. `docker compose stop` and
+    # `down` wait up to this long; `docker compose kill` does not wait.
+    stop_grace_period: 2h
+    devices:
+      # Host path : in-container path. Inside its container the worker sees
+      # its drive as /dev/sr0, whatever the host numbers it, a name libburn
+      # enumerates as a drive.
+      - "${TANGIBLE_BLOCK_DEVICE:-/dev/sr0}:/dev/sr0:rwm"
+    # The group that owns the drive on this host, without which the worker,
+    # an unprivileged user, is refused it. Find it with: stat -c %g /dev/sr0
+    group_add:
+      - "${TANGIBLE_OPTICAL_GID:?set TANGIBLE_OPTICAL_GID to the group that owns the drive: stat -c %g /dev/sr0}"
+    environment:
+      # The server's address as this machine reaches it, normally its
+      # TANGIBLE_PUBLIC_URL. https:// is what a worker on another machine
+      # uses: its credential goes with every request and every image it
+      # burns or rips crosses the same connection.
+      TANGIBLE_SERVER_URL: ${TANGIBLE_SERVER_URL:?set TANGIBLE_SERVER_URL to the server's https:// address}
+      # Without https, the worker refuses to start rather than send its
+      # credential and images across the network unencrypted, unless this is
+      # true. Leave it false unless you mean that.
+      TANGIBLE_WORKER_PLAIN_HTTP: ${TANGIBLE_WORKER_PLAIN_HTTP:-false}
+      # The drive's path inside this container, not on the host.
+      TANGIBLE_BLOCK_DEVICE: /dev/sr0
+      TANGIBLE_WORKER_NAME: ${TANGIBLE_WORKER_NAME:?name this drive, e.g. pioneer-bdr-212}
+      # Where the credential and the local recovery record live. It is on the
+      # volume below because a worker that loses this cannot tell, after a
+      # restart, whether an interrupted attempt wrote a disc.
+      TANGIBLE_WORKER_STATE_DIR: /var/lib/tangible-worker
+      # A one-use token, needed only on first start. An administrator issues
+      # one from the web UI's Workers page. Start the worker within 15
+      # minutes, then remove it from .env: the credential it exchanges the
+      # token for lives on the volume.
+      TANGIBLE_ENROLLMENT_TOKEN: ${TANGIBLE_ENROLLMENT_TOKEN:-}
+      # `fake` writes to a file and touches no drive. `auto` writes to the
+      # mapped drive, ISO images through xorriso and CUE/BIN discs through
+      # cdrdao; see worker.env.example. The default stays fake, so a worker
+      # that is merely started does not write to a disc left in the tray.
+      TANGIBLE_BURN_ENGINE: ${TANGIBLE_BURN_ENGINE:-fake}
+      TANGIBLE_LOG: ${TANGIBLE_LOG:-tangible=info}
+      # A server whose certificate your own certificate authority issued:
+      # uncomment this and the matching volume below, with the authority's
+      # certificate (PEM) beside this file. The worker then trusts that
+      # authority and no other.
+      # SSL_CERT_FILE: /etc/tangible/server-ca.pem
+    volumes:
+      # Local recovery state must survive a container restart.
+      - burner-sr0-cache:/var/lib/tangible-worker
+      # - ./server-ca.pem:/etc/tangible/server-ca.pem:ro
+    security_opt:
+      - no-new-privileges:true
+    # privileged: true is never an accepted default.
+    # The device mapping and the drive's group are the entire required
+    # privilege. The worker runs as an unprivileged user and holds no
+    # capability; dropping them all also empties what a setuid binary could
+    # regain.
+    cap_drop:
+      - ALL
+    # It writes only to its state volume, /tmp (the tools' working directory)
+    # and the drive, which is under /dev, a separate mount.
+    read_only: true
+    tmpfs:
+      - /tmp
+    pids_limit: 1024
+
+volumes:
+  burner-sr0-cache:

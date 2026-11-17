@@ -4,6 +4,28 @@ Notable changes to Tangible, newest first. Versions follow semantic
 versioning; during 0.x the API, the manifest schema and the database schema
 may change between minor versions, and the release notes say how.
 
+## Unreleased
+
+### Added
+
+- A burn worker on a machine other than the server's has a Compose file
+  of its own, `deploy/compose.worker.yaml`, with `deploy/worker.env.example`
+  for its `.env`: the same confined worker, without the server's stack,
+  reaching the server at its `https://` address. A server whose
+  certificate your own authority issued is trusted through
+  `SSL_CERT_FILE`, as the file shows; the worker then trusts that
+  authority alone. `compose.hardware-sg.yaml` and `compose.decryption.yaml`
+  layer onto it. deploy/README.md ("A worker on another machine") goes
+  through it. Before, the only worker file was `compose.hardware.yaml`,
+  which runs in the server's stack and would not start without it.
+
+### Changed
+
+- `TANGIBLE_WORKER_PLAIN_HTTP` moves from `deploy/.env.example` to
+  `deploy/worker.env.example`. `compose.hardware.yaml`, whose worker reaches
+  the server on their shared Compose network, never passed it, so setting
+  it there did nothing; `compose.worker.yaml` passes it.
+
 ## 0.3.0 (2026-11-16)
 
 Tangible takes requests: anyone signed in asks for an item they own, an

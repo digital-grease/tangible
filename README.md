@@ -183,7 +183,8 @@ docker compose up -d
 
 Review the Compose file, environment file, volume mappings, device mappings,
 ports and image references before starting the stack. [`deploy/README.md`](deploy/README.md)
-covers first sign-in, adding a drive, RomM, CHDs, backups, upgrades, and
+covers first sign-in, adding a drive (in the server's machine, or in another
+one with `deploy/compose.worker.yaml`), RomM, CHDs, backups, upgrades, and
 verifying a release's signatures. No installation step pipes a downloaded
 script into a shell, and none ever will.
 

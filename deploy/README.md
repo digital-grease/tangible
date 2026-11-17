@@ -160,7 +160,9 @@ VoidAuth".
 ## Adding a real drive
 
 Hardware is opt-in and deliberately separate, so no default or development
-stack can reach a drive by accident.
+stack can reach a drive by accident. This adds a worker for a drive in the
+server's own machine; for a drive in another machine, see "A worker on
+another machine" below.
 
 ```bash
 ls -l /dev/sr*                   # identify your drive
@@ -189,6 +191,46 @@ starting new work before maintenance, drain it first (below).
 
 ### A worker on another machine
 
+When the drive is in a machine other than the server's, run the worker
+there on its own, from `compose.worker.yaml`. It is the same worker, as
+confined, without the server's stack: it reaches the server across the
+network, at its `https://` address. On the drive's machine, in this
+release's `deploy/` directory (in a clone of the tag, or unpacked from the
+release's `tangible-deploy-<tag>.tar.gz`, as `tangible-deploy-<tag>/`):
+
+```bash
+cp worker.env.example .env
+editor .env              # the server's URL, the drive, its group, a name
+ls -l /dev/sr*           # identify your drive
+stat -c %g /dev/sr0      # the group that owns it
+docker compose -f compose.worker.yaml config
+# read the rendered output, confirm the device mapping is the drive you meant
+docker compose -f compose.worker.yaml up -d
+docker compose -f compose.worker.yaml logs -f
+```
+
+Issue an enrollment token on the server's Workers page and put it in `.env`
+as `TANGIBLE_ENROLLMENT_TOKEN` before the first start. The log says
+`enrolled` once the worker holds its credential; remove the token from
+`.env` then. The worker appears on the Workers page under its name.
+
+`TANGIBLE_SERVER_URL` is the server's address as this machine reaches it,
+normally its `TANGIBLE_PUBLIC_URL`. A certificate from a public authority,
+such as Let's Encrypt's, needs nothing more. One your own certificate
+authority issued needs that authority's certificate: put it beside
+`compose.worker.yaml` as `server-ca.pem`, readable by the worker (`chmod
+0644 server-ca.pem`; it is a public certificate), and uncomment the
+`SSL_CERT_FILE` line and the matching volume in `compose.worker.yaml`. The
+worker then trusts that authority and no other. A worker that does not trust
+the server's certificate stops with `invalid peer certificate:
+UnknownIssuer` at the end of its error; one that cannot read the file says
+`No CA certificates were loaded from the system`.
+
+`compose.hardware-sg.yaml` and `compose.decryption.yaml` layer onto
+`compose.worker.yaml` as they do onto `compose.hardware.yaml`. For a second
+drive on the same machine, copy the service, give it a new name and a volume
+of its own, and map that drive's block device.
+
 A worker sends its credential with every request and every image it burns
 or rips crosses the same connection, so it decides at start how it may
 reach its server:
@@ -203,8 +245,9 @@ reach its server:
   counts, while the LAN, reached through the network's gateway, does not.
 - Any other `http://` URL: the worker refuses to start, and says which
   address would leave the machine and why. Set
-  `TANGIBLE_WORKER_PLAIN_HTTP=true` to accept plain HTTP there anyway; the
-  worker then logs a warning at every start.
+  `TANGIBLE_WORKER_PLAIN_HTTP=true` in the worker's `.env` to accept plain
+  HTTP there anyway, on a network you trust; the worker then logs a warning
+  at every start.
 
 A URL with a user name or password in it is refused, and the worker never
 follows a redirect. A container on the host's network, or on a macvlan or
