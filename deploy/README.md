@@ -165,14 +165,29 @@ server's own machine; for a drive in another machine, see "A worker on
 another machine" below.
 
 ```bash
-ls -l /dev/sr*                   # identify your drive
-stat -c %g /dev/sr0              # the group that owns it
-# set TANGIBLE_BLOCK_DEVICE, TANGIBLE_OPTICAL_GID and TANGIBLE_WORKER_NAME in .env
+ls -l /dev/disk/by-id/ | grep -E 'sr[0-9]+$'   # identify your drive
+stat -L -c %g /dev/disk/by-id/NAME             # the group that owns it
+# set TANGIBLE_BLOCK_DEVICE (/dev/disk/by-id/NAME), TANGIBLE_OPTICAL_GID
+# and TANGIBLE_WORKER_NAME in .env
 
 docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml config
 # read the rendered output, confirm the device mappings are the drive you meant
 docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml up -d
 ```
+
+Name the drive by its `/dev/disk/by-id` name rather than `/dev/srN`. The
+number can change when a USB drive is plugged in again or the machine
+restarts, and a worker mapped to the old number cannot reach its drive; the
+by-id name stays with the drive, and Docker follows it each time the worker
+starts, so after a re-plug restarting the worker is enough
+(`docker compose ... restart burner-sr0`). The names contain colons, which
+is why the worker files map the drive in Compose's long form; that needs
+Docker Compose 2.29.3 or later. `stat` needs `-L` to read the drive and not
+the link to it, which root owns.
+
+Inside its container every worker's drive is `/dev/sr0`, whichever drive on
+the host it is, and that is the path the Workers page shows, in its "Device
+in its container" column.
 
 One worker per drive. To add a second, copy the `burner-sr0` service, rename
 it, and map that drive's own block device.
@@ -201,8 +216,8 @@ release's `tangible-deploy-<tag>.tar.gz`, as `tangible-deploy-<tag>/`):
 ```bash
 cp worker.env.example .env
 editor .env              # the server's URL, the drive, its group, a name
-ls -l /dev/sr*           # identify your drive
-stat -c %g /dev/sr0      # the group that owns it
+ls -l /dev/disk/by-id/ | grep -E 'sr[0-9]+$'   # identify your drive
+stat -L -c %g /dev/disk/by-id/NAME             # the group that owns it
 docker compose -f compose.worker.yaml config
 # read the rendered output, confirm the device mapping is the drive you meant
 docker compose -f compose.worker.yaml up -d

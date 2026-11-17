@@ -33,6 +33,17 @@ may change between minor versions, and the release notes say how.
   showed `/dev/sr0`. The Workers page now shows it in a column headed
   "Device in its container", with a note that the worker's `.env` file
   names the host's drive; the drive bay no longer shows it.
+- The burn worker's Compose files, `compose.hardware.yaml` and
+  `compose.worker.yaml`, map the drive in Compose's long form, so
+  `TANGIBLE_BLOCK_DEVICE` can be the drive's `/dev/disk/by-id` name, whose
+  colons the short form refused ("confusing device mapping"). That name
+  stays with the drive when it is plugged in again or the machine restarts,
+  where `/dev/sr0` can come back as `/dev/sr1` and leave the worker without
+  its drive; Docker follows it each time the worker starts, so restarting
+  the worker is then enough. `.env.example`, `worker.env.example` and
+  deploy/README.md recommend it, with `stat -L` to find its group. These
+  files need Docker Compose 2.29.3 or later. A `.env` naming `/dev/srN`
+  works as before.
 
 ### Fixed
 

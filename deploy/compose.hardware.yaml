@@ -29,21 +29,33 @@ services:
       server:
         condition: service_healthy
     devices:
-      # Host path : in-container path. Inside its own container every worker
-      # sees its drive as /dev/sr0, whatever the host numbers it, so the
-      # worker's configuration is the same on every machine. The in-container
-      # name has to be one libburn enumerates as a drive: an earlier alias,
-      # /dev/disc-block, was refused by xorriso as "not MMC", and a worker
-      # using it waited forever for a disc that was already in the tray.
-      - "${TANGIBLE_BLOCK_DEVICE:-/dev/sr0}:/dev/sr0:rwm"
+      # The drive on the host (source) and its path inside the container
+      # (target). Name the host's drive by its /dev/disk/by-id name, which
+      # stays with the drive when it is plugged in again or the machine
+      # restarts, where /dev/sr0 can come back as /dev/sr1. Docker follows
+      # the name each time the worker starts, so restarting the worker is
+      # then enough. The long form is needed because those names contain
+      # colons, which the short "host:container" form cannot carry; it needs
+      # Docker Compose 2.29.3 or later.
+      #
+      # Inside its own container every worker sees its drive as /dev/sr0,
+      # whatever the host numbers it, so the worker's configuration is the
+      # same on every machine. The in-container name has to be one libburn
+      # enumerates as a drive: an earlier alias, /dev/disc-block, was refused
+      # by xorriso as "not MMC", and a worker using it waited forever for a
+      # disc that was already in the tray.
+      - source: "${TANGIBLE_BLOCK_DEVICE:-/dev/sr0}"
+        target: /dev/sr0
+        permissions: rwm
     # A mapped device keeps its host owner and mode, typically root and a
     # group such as `optical` or `cdrom` with mode 0660, and the image runs as
     # an unprivileged user. Without that group the worker is refused its own
     # drive with "Permission denied". The number differs between
     # distributions, so there is no default to get wrong: find it with
-    #   stat -c %g /dev/sr0
+    #   stat -L -c %g /dev/disk/by-id/NAME
+    # (-L, or stat reads the link, which root owns, and not the drive).
     group_add:
-      - "${TANGIBLE_OPTICAL_GID:?set TANGIBLE_OPTICAL_GID to the group that owns the drive: stat -c %g /dev/sr0}"
+      - "${TANGIBLE_OPTICAL_GID:?set TANGIBLE_OPTICAL_GID to the group that owns the drive: stat -L -c %g on it}"
     environment:
       # Plain HTTP, accepted because the server's address is on the Compose
       # network this container is attached to: the credential and the images
