@@ -237,7 +237,9 @@ fn sealed_secrets(
              sets TANGIBLE_SECRET_KEY_FILE (tangible secrets generate makes a key)",
         ));
     };
-    let mut sealed = Vec::with_capacity(secrets.len());
+    // At most one for each field the kind takes, since any other is refused
+    // below: sized by the kind, not by however many the request named.
+    let mut sealed = Vec::with_capacity(kind.secret_fields().len());
     for (field, value) in secrets {
         if !kind.secret_fields().contains(&field.as_str()) {
             return Err(Problem::new(
