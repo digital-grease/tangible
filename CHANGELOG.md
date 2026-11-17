@@ -33,6 +33,12 @@ may change between minor versions, and the release notes say how.
   built. It has been read back track by track since 0.1.0, MODE1/2048 data
   compared and other tracks checked for length and readability, and
   recorded as partially verified; the file now says so.
+- A burn worker that stopped because no server answered, as when it did
+  not trust the server's certificate, said "the server refused" first, the
+  real cause several lines further down. It now says what happened: "could
+  not reach the server", followed by the cause (for a certificate,
+  `invalid peer certificate: UnknownIssuer`), or "the server refused with"
+  the code and status when the server did refuse.
 
 ## 0.3.0 (2026-11-16)
 

@@ -148,8 +148,11 @@ pub enum RunnerError {
     #[error("the server URL cannot be used")]
     ServerUrl(#[from] ServerUrlError),
 
-    /// The server refused something the worker cannot proceed without.
-    #[error("the server refused")]
+    /// A request to the server failed: the server refused it, could not be
+    /// reached or trusted, or sent something unusable. Worded by the client
+    /// error itself, so a server that never answered, as when its
+    /// certificate is not trusted, is not said to have refused.
+    #[error(transparent)]
     Client(#[from] ClientError),
 
     /// No credential, and no enrollment token to get one with.
@@ -2309,6 +2312,47 @@ mod tests {
         let runtime =
             WorkerRuntime::new(accepted, FakeEngine::new("/nonexistent")).expect("accepted");
         assert_eq!(runtime.server.transport(), Transport::PlainAccepted);
+    }
+
+    /// Every link of an error's chain, as the worker's last words print it.
+    fn chain(error: &dyn std::error::Error) -> Vec<String> {
+        let mut links = vec![error.to_string()];
+        let mut source = error.source();
+        while let Some(cause) = source {
+            links.push(cause.to_string());
+            source = cause.source();
+        }
+        links
+    }
+
+    #[tokio::test]
+    async fn a_server_that_never_answered_is_not_said_to_have_refused() {
+        // Nothing listens there, so no server answers at all.
+        let failure = reqwest::Client::new()
+            .get("http://127.0.0.1:9/")
+            .send()
+            .await
+            .expect_err("nothing listens on the discard port");
+        let links = chain(&RunnerError::from(ClientError::Transport(failure)));
+        assert_eq!(links[0], "could not reach the server", "{links:?}");
+        assert!(
+            links.iter().all(|link| !link.contains("server refused")),
+            "{links:?}"
+        );
+        assert!(links.len() > 1, "the cause follows: {links:?}");
+    }
+
+    #[test]
+    fn a_refusal_says_what_the_server_said() {
+        let error = RunnerError::from(ClientError::Refused {
+            status: 401,
+            code: "UNAUTHENTICATED".to_owned(),
+            detail: "the credential is not valid".to_owned(),
+        });
+        assert_eq!(
+            chain(&error),
+            ["the server refused with UNAUTHENTICATED (401)"]
+        );
     }
 
     #[tokio::test]
