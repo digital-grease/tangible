@@ -1134,11 +1134,15 @@ fn resume_stage(state: ImportState) -> Option<&'static str> {
 /// either, and retrying it forever would hide the real problem.
 fn is_retryable(error: &ImportError) -> bool {
     match error {
-        // Nothing arrived, so a retry imports the same nothing; and a refused
-        // transition is a bug or a stale state rather than weather. Neither
+        // Nothing arrived, so a retry imports the same nothing; a refused
+        // transition is a bug or a stale state rather than weather; and a
+        // staged copy gone or changed is what a retry would read again. None
         // improves by being tried again, and retrying forever would hide the
         // real problem behind an endlessly requeued job.
-        ImportError::NothingStaged { .. } | ImportError::Transition(_) => false,
+        ImportError::NothingStaged { .. }
+        | ImportError::Transition(_)
+        | ImportError::StagedCopyGone { .. }
+        | ImportError::StagedCopyChanged { .. } => false,
         ImportError::Staging(staging) => matches!(staging, StagingError::Io { .. }),
         ImportError::Storage(storage) => matches!(storage, StorageError::Io { .. }),
         ImportError::Manifest(manifest) => matches!(manifest, ManifestStoreError::Io { .. }),
@@ -1160,6 +1164,8 @@ fn failure_code(error: &ImportError) -> &'static str {
         ImportError::Transition(_) => "IMPORT_TRANSITION_REFUSED",
         ImportError::ReadStaged { .. } => "IMPORT_READ_FAILED",
         ImportError::Archive(archive) => archive.code(),
+        ImportError::StagedCopyGone { .. } => "IMPORT_STAGED_COPY_GONE",
+        ImportError::StagedCopyChanged { .. } => "IMPORT_STAGED_COPY_CHANGED",
     }
 }
 
@@ -1193,6 +1199,19 @@ mod tests {
     }
 
     #[test]
+    fn a_staged_copy_gone_or_changed_is_not_retried() {
+        // A retry would read the same staging area and find the same.
+        assert!(!is_retryable(&ImportError::StagedCopyGone {
+            import_id: "x".to_owned(),
+            path: "x".to_owned(),
+        }));
+        assert!(!is_retryable(&ImportError::StagedCopyChanged {
+            import_id: "x".to_owned(),
+            path: "x".to_owned(),
+        }));
+    }
+
+    #[test]
     fn a_read_failure_is_worth_another_go() {
         assert!(is_retryable(&ImportError::ReadStaged {
             path: "x".to_owned(),
@@ -1209,6 +1228,14 @@ mod tests {
             ImportError::ReadStaged {
                 path: "x".to_owned(),
                 source: std::io::Error::other("x"),
+            },
+            ImportError::StagedCopyGone {
+                import_id: "x".to_owned(),
+                path: "x".to_owned(),
+            },
+            ImportError::StagedCopyChanged {
+                import_id: "x".to_owned(),
+                path: "x".to_owned(),
             },
         ];
         let mut codes = std::collections::BTreeSet::new();

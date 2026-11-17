@@ -2278,10 +2278,12 @@ pub async fn register_artifact(
     // One increment per distinct object, matching what was attached. Counting
     // per component would double-count an artifact that references the same
     // bytes twice and pin the object forever. An object collected before is
-    // present again: this import stored its bytes anew (the store's
-    // collection lock, held by the import, kept collection from running
-    // between the two). In digest order, as a tombstone locks them. A replay
-    // reaches none of this, so it cannot mark a collected object present.
+    // present again: this import stored its bytes anew, a resumed one
+    // included, which stores again whatever its checkpoint names that is no
+    // longer stored (the store's collection lock, held by the import, kept
+    // collection from running between the two). In digest order, as a
+    // tombstone locks them. A replay reaches none of this, so it cannot mark a
+    // collected object present.
     for (sha256, _) in &digests {
         sqlx::query(
             "UPDATE cas_objects

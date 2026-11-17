@@ -16,8 +16,9 @@ use axum::http::{Request, StatusCode};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use tangible_api::deletion::DeletionRunner;
+use tangible_api::import::PromotedComponent;
 use tangible_api::{ApiState, ImportCheckpoint, ImportPipeline, ImportRequest, catalog, router};
-use tangible_domain::{ArtifactId, ImportJobId, LogicalPath, Role, Sha256Digest};
+use tangible_domain::{ArtifactId, ImportJobId, ImportState, LogicalPath, Role, Sha256Digest};
 use tangible_storage::{FilesystemStore, IngestLimits, ManifestStore, StagingManager};
 use tempfile::TempDir;
 use tower::ServiceExt as _;
@@ -119,21 +120,7 @@ impl Harness {
         let mut checkpoint = ImportCheckpoint::default();
         let outcome = self
             .pipeline
-            .run(
-                &ImportRequest {
-                    import_id,
-                    source_kind: "upload".to_owned(),
-                    source_filename: Some(name.to_owned()),
-                    source_reference: None,
-                    physical_dump: None,
-                    lineage: None,
-                    limits: IngestLimits {
-                        max_bytes: None,
-                        fsync: false,
-                    },
-                },
-                &mut checkpoint,
-            )
+            .run(&upload(import_id, name), &mut checkpoint)
             .await
             .unwrap();
         let manifest = self
@@ -171,6 +158,22 @@ impl Harness {
         .fetch_all(&self.pool)
         .await
         .unwrap()
+    }
+}
+
+/// An upload of `name`, as the import runner asks for one.
+fn upload(import_id: ImportJobId, name: &str) -> ImportRequest {
+    ImportRequest {
+        import_id,
+        source_kind: "upload".to_owned(),
+        source_filename: Some(name.to_owned()),
+        source_reference: None,
+        physical_dump: None,
+        lineage: None,
+        limits: IngestLimits {
+            max_bytes: None,
+            fsync: false,
+        },
     }
 }
 
@@ -720,4 +723,92 @@ async fn collection_deferred_too_long_waits_for_the_ingest_and_holds_new_ones_ba
     assert!(pass.collection_waited, "{pass:?}");
     assert!(!pass.collection_deferred);
     assert!(!harness.objects.object_path(&digest).exists());
+}
+
+/// The checkpoint an import leaves when it stored `name` and then stopped,
+/// as one that fails after hashing does, holding the store's collection
+/// lock while it stores, as the runner does.
+async fn stored_then_stopped(
+    harness: &Harness,
+    import_id: ImportJobId,
+    name: &str,
+    bytes: &[u8],
+) -> ImportCheckpoint {
+    let path = LogicalPath::parse(name).unwrap();
+    let area = harness.pipeline.open_area(import_id).await.unwrap();
+    area.write(&path, bytes).await.unwrap();
+    let _ingesting = harness.objects.ingesting().await;
+    let stored = area
+        .promote(&path, &harness.objects, upload(import_id, name).limits)
+        .await
+        .unwrap();
+    let mut checkpoint = ImportCheckpoint {
+        state: ImportState::Hashing,
+        ..ImportCheckpoint::default()
+    };
+    checkpoint.promoted.insert(
+        name.to_owned(),
+        PromotedComponent {
+            digest: stored.digest,
+            length_bytes: stored.size_bytes,
+        },
+    );
+    checkpoint
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_retried_import_stores_again_what_collection_removed_meanwhile() {
+    // An import that stored its bytes and then failed for good, or was
+    // cancelled, has ended, so collection does not read its checkpoint. When
+    // its bytes are also a deleted artifact's, collection removes them. A
+    // retry re-enters with the checkpoint, which says they are stored: it
+    // must store them again from its staged copy, not register an artifact
+    // whose bytes are gone.
+    let _serial = SERIAL.lock().await;
+    let harness = harness().await;
+    let bytes = unique("retried");
+    let first = harness.import("first.bin", &bytes).await;
+    let digest = harness.digest_of(first).await;
+
+    let second = ImportJobId::generate();
+    let mut checkpoint = stored_then_stopped(&harness, second, "second.bin", &bytes).await;
+    assert_eq!(checkpoint.promoted["second.bin"].digest, digest);
+
+    let (status, body) = harness
+        .admin(
+            "POST",
+            &format!("/api/v1/artifacts/{first}/deletion-requests"),
+            Some(json!({ "confirm_original": true })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let pass = harness.runner.pass().await.unwrap();
+    assert_eq!(pass.objects_removed, 1, "{pass:?}");
+    assert!(!harness.objects.object_path(&digest).exists());
+
+    // The retry, holding the lock from storing to registering, as the
+    // runner does.
+    let retried = {
+        let _ingesting = harness.objects.ingesting().await;
+        let outcome = harness
+            .pipeline
+            .run(&upload(second, "second.bin"), &mut checkpoint)
+            .await
+            .unwrap();
+        let manifest = harness
+            .pipeline
+            .manifests()
+            .read(outcome.artifact_id)
+            .await
+            .unwrap();
+        catalog::register_manifest(&harness.database, &manifest)
+            .await
+            .unwrap();
+        outcome.artifact_id
+    };
+
+    harness.objects.verify(&digest).await.expect("stored again");
+    assert_eq!(harness.digest_of(retried).await, digest);
+    assert_eq!(harness.reference_count(&digest).await, (1, false));
 }

@@ -372,6 +372,115 @@ async fn an_import_resumed_from_a_mid_stage_checkpoint_completes() {
     assert!(partial.promoted.contains_key("disc.iso"));
 }
 
+/// Stage `files` and import them, then put the checkpoint back to just after
+/// hashing: what an import that stored its files and then failed leaves for
+/// a retry.
+async fn stored_then_stopped(
+    pipeline: &ImportPipeline,
+    import_id: ImportJobId,
+    files: &[(&str, Vec<u8>)],
+) -> (tangible_storage::StagingArea, ImportCheckpoint) {
+    let area = pipeline.open_area(import_id).await.expect("area");
+    for (name, bytes) in files {
+        area.write(&path(name), bytes).await.expect("stage");
+    }
+    let mut checkpoint = ImportCheckpoint::default();
+    pipeline
+        .run(&request(import_id, files[0].0), &mut checkpoint)
+        .await
+        .expect("first");
+    checkpoint.state = ImportState::Hashing;
+    (area, checkpoint)
+}
+
+#[tokio::test]
+async fn a_resumed_import_stores_again_an_object_gone_since() {
+    // A retry re-enters an import that ended; collection may have removed
+    // what it stored meanwhile (ADR 0020). The staged copy is still there, so
+    // the object is stored again rather than the import failing for good.
+    let (_dir, pipeline) = pipeline().await;
+    let import_id = ImportJobId::generate();
+    let (_area, mut checkpoint) = stored_then_stopped(
+        &pipeline,
+        import_id,
+        &[("disc.iso", iso_image("AGAIN", 20))],
+    )
+    .await;
+    let digest = checkpoint.promoted["disc.iso"].digest;
+    let objects = pipeline.manifests().objects();
+    assert!(objects.remove(&digest).await.expect("remove"), "collected");
+
+    let outcome = pipeline
+        .run(&request(import_id, "disc.iso"), &mut checkpoint)
+        .await
+        .expect("the retry");
+
+    assert_eq!(outcome.state, ImportState::Complete);
+    objects.verify(&digest).await.expect("stored again");
+    assert_eq!(checkpoint.promoted["disc.iso"].digest, digest);
+}
+
+#[tokio::test]
+async fn a_resumed_import_whose_staged_copy_is_gone_fails_rather_than_drop_the_file() {
+    // The descriptor's object is still stored, but its staged copy is gone.
+    // Carrying on would publish an artifact of the image alone, short of the
+    // sheet that describes it, without a word.
+    let (_dir, pipeline) = pipeline().await;
+    let import_id = ImportJobId::generate();
+    let (area, mut checkpoint) = stored_then_stopped(
+        &pipeline,
+        import_id,
+        &[
+            ("disc.cue", b"FILE \"disc.bin\" BINARY".to_vec()),
+            ("disc.bin", iso_image("SHORT", 20)),
+        ],
+    )
+    .await;
+    std::fs::remove_file(area.path().join("disc.cue")).expect("remove the staged copy");
+
+    let error = pipeline
+        .run(&request(import_id, "disc.cue"), &mut checkpoint)
+        .await
+        .expect_err("refused");
+
+    assert!(
+        matches!(&error, ImportError::StagedCopyGone { path, .. } if path == "disc.cue"),
+        "{error:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_resumed_import_whose_staged_copy_changed_fails() {
+    // Stored again from a staged copy that no longer holds the same bytes,
+    // it would no longer be the import that was asked for.
+    let (_dir, pipeline) = pipeline().await;
+    let import_id = ImportJobId::generate();
+    let (area, mut checkpoint) = stored_then_stopped(
+        &pipeline,
+        import_id,
+        &[("disc.iso", iso_image("BEFORE", 20))],
+    )
+    .await;
+    let digest = checkpoint.promoted["disc.iso"].digest;
+    pipeline
+        .manifests()
+        .objects()
+        .remove(&digest)
+        .await
+        .expect("remove");
+    std::fs::write(area.path().join("disc.iso"), iso_image("AFTER", 20)).expect("change it");
+
+    let error = pipeline
+        .run(&request(import_id, "disc.iso"), &mut checkpoint)
+        .await
+        .expect_err("refused");
+
+    assert!(
+        matches!(&error, ImportError::StagedCopyChanged { path, .. } if path == "disc.iso"),
+        "{error:?}"
+    );
+}
+
 // --- failures ------------------------------------------------------------------
 
 #[tokio::test]

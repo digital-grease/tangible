@@ -39,6 +39,16 @@ may change between minor versions, and the release notes say how.
   not reach the server", followed by the cause (for a certificate,
   `invalid peer certificate: UnknownIssuer`), or "the server refused with"
   the code and status when the server did refuse.
+- An import retried after it had stored its files skipped storing them
+  again, trusting its checkpoint. If one of those objects had been removed
+  since, as a deleted artifact's object it shared, the retry failed with
+  `IMPORT_MANIFEST_FAILED`, and so did every retry after it. A retried
+  import now stores again, from its staged copy, any object that is gone.
+- A retried import whose staged copy of one of its files had gone was
+  completed without that file: a CUE and its BIN, retried with the CUE gone
+  from staging, became an artifact of the BIN alone. It now fails with
+  `IMPORT_STAGED_COPY_GONE`, and one whose staged copy changed, with
+  `IMPORT_STAGED_COPY_CHANGED`; both say to import the source again.
 
 ## 0.3.0 (2026-11-16)
 

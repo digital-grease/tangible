@@ -195,6 +195,33 @@ pub enum ImportError {
     /// The archive the import arrived in was not unpacked.
     #[error(transparent)]
     Archive(tangible_image::archive::ArchiveError),
+
+    /// A file this import stored before is no longer staged, so the import
+    /// cannot be completed with it, and completing it without would leave
+    /// the artifact short of a file.
+    #[error(
+        "import {import_id} stored {path} before, and its staged copy is gone; import the source \
+         again"
+    )]
+    StagedCopyGone {
+        /// The job.
+        import_id: String,
+        /// The file's logical path.
+        path: String,
+    },
+
+    /// A file this import stored before had to be stored again, and its
+    /// staged copy no longer holds the same bytes.
+    #[error(
+        "import {import_id} stored {path} before, and its staged copy no longer holds those bytes; \
+         import the source again"
+    )]
+    StagedCopyChanged {
+        /// The job.
+        import_id: String,
+        /// The file's logical path.
+        path: String,
+    },
 }
 
 /// Runs imports.
@@ -299,12 +326,50 @@ impl ImportPipeline {
         // --- hashing ------------------------------------------------------
         // Promotion computes the digest from the bytes actually read, so this
         // is both the hash step and the move into canonical storage. Anything
-        // already promoted is skipped, which is what makes a restart cheap.
+        // already promoted is skipped, which is what makes a restart cheap,
+        // but only while it is still stored. A retry re-enters an import that
+        // failed for good or was cancelled, and collection does not read such
+        // an import's checkpoint, so an object it stored may have been
+        // collected since (ADR 0020). That one is stored again from its staged
+        // copy, which a failed import keeps. The caller holds the store's
+        // ingest lock from here until the artifact is registered, so nothing is
+        // collected in between.
+        //
+        // Every component promoted before must still be staged: one whose
+        // staged copy has gone would otherwise be left out of the artifact
+        // without a word.
+        if let Some(gone) = checkpoint
+            .promoted
+            .keys()
+            .find(|promoted| !staged.iter().any(|path| path.as_str() == promoted.as_str()))
+        {
+            return Err(ImportError::StagedCopyGone {
+                import_id: request.import_id.to_string(),
+                path: gone.clone(),
+            });
+        }
         for path in &staged {
-            if checkpoint.promoted.contains_key(path.as_str()) {
-                continue;
+            if let Some(earlier) = checkpoint.promoted.get(path.as_str()) {
+                if self.objects.stat(&earlier.digest).await?.is_some() {
+                    continue;
+                }
+                tracing::warn!(
+                    import_id = %request.import_id,
+                    path = %path.as_str(),
+                    sha256 = %earlier.digest.to_hex(),
+                    "an object this import stored before is gone, collected since; \
+                     storing it again from its staged copy"
+                );
             }
             let promoted = area.promote(path, &self.objects, request.limits).await?;
+            if let Some(earlier) = checkpoint.promoted.get(path.as_str())
+                && earlier.digest != promoted.digest
+            {
+                return Err(ImportError::StagedCopyChanged {
+                    import_id: request.import_id.to_string(),
+                    path: path.as_str().to_owned(),
+                });
+            }
             checkpoint.promoted.insert(
                 path.as_str().to_owned(),
                 PromotedComponent {
