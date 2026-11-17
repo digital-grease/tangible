@@ -46,8 +46,13 @@ Existing media managers usually center on playable video files, episodes, songs,
   names, and reports what looks wrong.
 - Stores every file once, by SHA-256, read-only, never renamed or rewritten,
   with a portable manifest per artifact from which the catalogue can be rebuilt.
-  Integrity checks read it back, on request or on a schedule, and a garbage
-  collection plan says what nothing refers to.
+  Integrity checks read it back, on request or on a schedule.
+- Deletes an artifact only when an administrator asks, keeping its record,
+  hashes and history as a tombstone; its files go with it, except those
+  another artifact shares. Other files nothing refers to, such as what an
+  import stored before it failed, go only from a plan that lists each one and
+  where it came from: an administrator looks it over and collects it, or the
+  server does on a schedule you set.
 - Computes preservation hashes (CRC32, MD5, SHA-1) of every file and CD track,
   and matches them against the Logiqx DATs you load, such as Redump's.
 - Catalogues titles, editions, disc sets and discs, and links images to discs.
@@ -78,7 +83,9 @@ Existing media managers usually center on playable video files, episodes, songs,
 
 - One burn worker per optical drive, each in its own container with only that
   drive's block device and group: no privileged containers, no host devices
-  for anything else.
+  for anything else. A worker runs on the server's machine or on another one,
+  and its drive can be named by the `/dev/disk/by-id` name that stays with it
+  when it is plugged in again.
 - xorriso for ISO images (CD, DVD, Blu-ray), cdrdao for CD layouts with
   audio, mixed mode and pregaps.
 - Checks the disc before writing, writes from a locally staged and re-hashed
@@ -108,6 +115,10 @@ Existing media managers usually center on playable video files, episodes, songs,
 - Worker enrollment, draining and revocation, and credential rotation.
 - Diagnostics safe to share, Prometheus metrics, and `restore-check` for after
   restoring a backup.
+- Issue reports prepared for you: a failed burn, an error, a drive that worked
+  or an image Tangible could not read becomes a prefilled issue with
+  credentials, host paths and file names replaced, which your own browser
+  opens only after you have read it. The server sends nothing.
 - Hardened containers, fuzzed parsers, and release images that are signed and
   carry an SBOM and provenance.
 
@@ -168,7 +179,8 @@ test named after it.
 
 ## Installing
 
-Tangible runs under Docker Compose on Linux. From a release:
+Tangible runs under Docker Compose on Linux; a drive's worker needs Compose
+2.29.3 or later. From a release:
 
 ```bash
 git clone --branch vX.Y.Z --depth 1 https://github.com/digital-grease/tangible.git
@@ -183,9 +195,9 @@ docker compose up -d
 
 Review the Compose file, environment file, volume mappings, device mappings,
 ports and image references before starting the stack. [`deploy/README.md`](deploy/README.md)
-covers first sign-in, adding a drive (in the server's machine, or in another
-one with `deploy/compose.worker.yaml`), RomM, CHDs, backups, upgrades, and
-verifying a release's signatures. No installation step pipes a downloaded
+covers first sign-in, adding a drive (on the server's machine, or on another
+one with `deploy/compose.worker.yaml`), RomM, CHDs, backups, collecting files
+nothing needs, upgrades, and verifying a release's signatures. No installation step pipes a downloaded
 script into a shell, and none ever will.
 
 ## Developing

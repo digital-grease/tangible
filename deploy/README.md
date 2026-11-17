@@ -1,13 +1,15 @@
 # Deployment
 
-Three Compose files. Combine them; do not edit them in place.
+Six Compose files. Combine them; do not edit them in place.
 
 | File | Contains | Device access |
 |---|---|---|
 | `compose.yaml` | server, PostgreSQL | none |
 | `compose.dev.yaml` | development overrides, local build, exposed database | none |
-| `compose.hardware.yaml` | one burn worker per optical drive | `/dev/srN` |
-| `compose.hardware-sg.yaml` | the drive's generic SCSI node, on top of the above, only for a drive that needs it | `/dev/sgN` |
+| `compose.hardware.yaml` | a burn worker for a drive on the server's machine, in the server's stack | the drive's block device |
+| `compose.worker.yaml` | a burn worker for a drive on another machine, on its own | the drive's block device |
+| `compose.hardware-sg.yaml` | the drive's generic SCSI node, on top of either worker file, only for a drive that needs it | `/dev/sgN` |
+| `compose.decryption.yaml` | the worker run from an image you built to rip encrypted discs, on top of either worker file | nothing more |
 
 ## Development
 
