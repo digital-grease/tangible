@@ -29,6 +29,7 @@ pub mod integrity;
 pub mod metadata;
 pub mod metrics;
 pub mod oidc;
+pub mod orphans;
 pub mod pagination;
 pub mod problem;
 pub mod releases;
@@ -175,6 +176,10 @@ pub const API_BASE: &str = "/api/v1";
         routes::integrity::get_one_check,
         routes::integrity::cancel_one_check,
         routes::storage::gc_plan,
+        routes::storage::create_gc_plan,
+        routes::storage::list_gc_plans,
+        routes::storage::get_gc_plan,
+        routes::storage::collect_gc_plan,
         routes::integrations::list_all,
         routes::integrations::create_one,
         routes::integrations::get_one,
@@ -345,6 +350,13 @@ pub const API_BASE: &str = "/api/v1";
         gc::GcPlan,
         gc::GcCandidate,
         gc::Tally,
+        routes::storage::NewGcPlan,
+        routes::storage::StoredGcPlanView,
+        routes::storage::GcCollectionView,
+        routes::storage::GcPlanObjectView,
+        routes::storage::GcOriginView,
+        routes::storage::GcPlanDetail,
+        routes::storage::GcPlanList,
         routes::integrations::IntegrationView,
         routes::integrations::SecretFieldView,
         routes::integrations::IntegrationList,

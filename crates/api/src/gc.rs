@@ -21,7 +21,7 @@ use serde::Serialize;
 use tangible_db::Database;
 use tangible_db::gc::{CatalogueMarks, catalogue_marks};
 use tangible_domain::Sha256Digest;
-use tangible_storage::{Inventory, ManifestStore, ManifestStoreError, StorageError};
+use tangible_storage::{Inventory, ManifestStore, ManifestStoreError, StorageError, StoredObject};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use utoipa::ToSchema;
@@ -169,6 +169,74 @@ pub async fn plan(
     ))
 }
 
+/// One candidate of a plan in full, as the tree has it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FullCandidate {
+    /// The object: digest, length and when its file was last written.
+    pub object: StoredObject,
+    /// Whether the catalogue records it.
+    pub recorded: bool,
+}
+
+/// A plan with every candidate, for keeping (ADR 0024): the summary names
+/// none of them, `candidates` has them all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FullPlan {
+    /// The plan, its counts and certainty.
+    pub summary: GcPlan,
+    /// Every candidate, largest first.
+    pub candidates: Vec<FullCandidate>,
+}
+
+/// Make a plan with every candidate in it.
+///
+/// # Errors
+///
+/// As [`plan`].
+pub async fn plan_in_full(
+    database: &Database,
+    manifests: &ManifestStore,
+    grace: Duration,
+) -> Result<FullPlan, GcError> {
+    let inventory = manifests.objects().inventory().await?;
+    let marks = marks(database, manifests).await?;
+    let now = OffsetDateTime::now_utc();
+    let summary = assess(&inventory, &marks, now, GcSettings { grace, keep: 0 });
+    let recorded: HashSet<Sha256Digest> = marks.recorded.iter().map(|(d, _)| *d).collect();
+    let mut candidates: Vec<FullCandidate> = inventory
+        .objects
+        .into_iter()
+        .filter(|object| collectable(object, &marks, now, grace))
+        .map(|object| FullCandidate {
+            recorded: recorded.contains(&object.digest),
+            object,
+        })
+        .collect();
+    candidates.sort_unstable_by(|a, b| {
+        b.object
+            .size_bytes
+            .cmp(&a.object.size_bytes)
+            .then(a.object.digest.cmp(&b.object.digest))
+    });
+    Ok(FullPlan {
+        summary,
+        candidates,
+    })
+}
+
+/// Whether an object is younger than the grace period as of `now`. One
+/// written in the future, by a clock that disagrees, is young.
+fn young(modified: std::time::SystemTime, now: OffsetDateTime, grace: Duration) -> bool {
+    let grace = time::Duration::try_from(grace).unwrap_or(time::Duration::MAX);
+    now - OffsetDateTime::from(modified) < grace
+}
+
+/// Whether collection would remove an object: nothing marks it, and it is
+/// older than the grace period.
+fn collectable(object: &StoredObject, marks: &Marks, now: OffsetDateTime, grace: Duration) -> bool {
+    !marks.live.contains(&object.digest) && !young(object.modified, now, grace)
+}
+
 /// What refers to stored objects, for collection (ADR 0020): the objects
 /// marked live, and whether every mark could be read. When one could not,
 /// something unread may name an object, and nothing is to be collected.
@@ -240,9 +308,7 @@ fn assess(
     now: OffsetDateTime,
     settings: GcSettings,
 ) -> GcPlan {
-    let grace = time::Duration::try_from(settings.grace).unwrap_or(time::Duration::MAX);
-    // An object written in the future, by a clock that disagrees, is young.
-    let young = |modified: std::time::SystemTime| now - OffsetDateTime::from(modified) < grace;
+    let young = |modified: std::time::SystemTime| young(modified, now, settings.grace);
     let recorded: HashSet<Sha256Digest> = marks.recorded.iter().map(|(d, _)| *d).collect();
 
     let mut plan = GcPlan {
@@ -271,11 +337,11 @@ fn assess(
         plan.stored.add(object.size_bytes);
         if marks.live.contains(&object.digest) {
             plan.live.add(object.size_bytes);
-        } else if young(object.modified) {
-            plan.recent.add(object.size_bytes);
-        } else {
+        } else if collectable(object, marks, now, settings.grace) {
             plan.collectable.add(object.size_bytes);
             candidates.push(object);
+        } else {
+            plan.recent.add(object.size_bytes);
         }
     }
     candidates.sort_unstable_by(|a, b| {
@@ -481,10 +547,12 @@ mod tests {
         let mut inventory = inventory(Vec::new());
         inventory.partial_files = vec![
             PartialFile {
+                name: "a.part".to_owned(),
                 size_bytes: 5,
                 modified: days_ago(30),
             },
             PartialFile {
+                name: "b.part".to_owned(),
                 size_bytes: 7,
                 modified: days_ago(0),
             },

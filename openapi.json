@@ -7202,8 +7202,8 @@
         "tags": [
           "library"
         ],
-        "summary": "What garbage collection would remove now. Nothing is removed.",
-        "description": "Plan garbage collection, a dry run: walk the object store and report the \\\n                   objects nothing refers to (no artifact, published manifest or import under \\\n                   way, no reference count or retention lock) and older than the grace period, \\\n                   with what removing them would free. Also counts leftover partial files and \\\n                   recorded objects whose file is missing. Nothing is removed; this server \\\n                   cannot remove objects. Reads every directory in the store, so it takes a \\\n                   while on a large library.",
+        "summary": "What garbage collection would remove now. Nothing is removed: collecting\ntakes a plan kept for it ([`create_gc_plan`]).",
+        "description": "Plan garbage collection, a dry run: walk the object store and report the objects nothing refers to (no artifact, published manifest or import under way, no reference count or retention lock) and older than the grace period, with what removing them would free. Also counts leftover partial files and recorded objects whose file is missing. Nothing is removed: collecting takes a plan kept for it (POST /api/v1/storage/gc-plans). Reads every directory in the store, so it takes a while on a large library.",
         "operationId": "gc_plan",
         "parameters": [
           {
@@ -7257,6 +7257,252 @@
           },
           "503": {
             "description": "The store or catalogue cannot be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/storage/gc-plans": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "The plans kept, newest first.",
+        "description": "The collection plans kept, newest first: those made by an administrator and by the schedule, and what collecting each did. Needs an administrator.",
+        "operationId": "list_gc_plans",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Clamped to 1 to 100, 20 unless given.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plans",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GcPlanList"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalogue cannot be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Make a plan and keep it, to be collected.",
+        "description": "Plan garbage collection and keep the plan, with every candidate, so that collecting it removes at most what it lists (ADR 0024). The candidates are the orphaned objects nothing refers to, older than the grace period, each with the import that failed or was canceled after storing it, when one did; that import's staging area keeps the file it is a copy of. Nothing is removed until the plan is collected, within the hour. Reads every directory in the store. Needs an administrator.",
+        "operationId": "create_gc_plan",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewGcPlan"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The plan, kept",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GcPlanDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A grace period out of range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store or catalogue cannot be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/storage/gc-plans/{plan_id}": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "One kept plan and its largest candidates.",
+        "description": "A kept collection plan, with its largest candidates, where each came from and, once collected, what became of each. Needs an administrator.",
+        "operationId": "get_gc_plan",
+        "parameters": [
+          {
+            "name": "plan_id",
+            "in": "path",
+            "description": "Plan identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Largest first, clamped to 1 to 1000, 100 unless given.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GcPlanDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalogue cannot be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/storage/gc-plans/{plan_id}/collect": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Ask for a kept plan to be collected.",
+        "description": "Collect a kept plan: remove its candidates that nothing refers to still and whose file is the one planned, and the stale partial files in the object tree (ADR 0024). Nothing the plan does not list is removed. The server collects it shortly, holding back new imports for a moment, or once the imports and derivations under way end; read the plan for what it did. Refused for a plan that could not read every manifest and checkpoint, one more than an hour old, or one asked for already. Cannot be undone; a failed import keeps its staging area, so it can still be retried. Needs an administrator, and is audited.",
+        "operationId": "collect_gc_plan",
+        "parameters": [
+          {
+            "name": "plan_id",
+            "in": "path",
+            "description": "Plan identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Queued for collection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoredGcPlanView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Uncertain, expired, or asked for already",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalogue cannot be read",
             "content": {
               "application/json": {
                 "schema": {
@@ -12915,6 +13161,72 @@
           }
         }
       },
+      "GcCollectionView": {
+        "type": "object",
+        "description": "What collecting a plan did.",
+        "required": [
+          "collected_at",
+          "removed",
+          "kept",
+          "partial_files_removed"
+        ],
+        "properties": {
+          "collected_at": {
+            "type": "string",
+            "description": "When it finished."
+          },
+          "kept": {
+            "$ref": "#/components/schemas/Tally",
+            "description": "Candidates kept, each with its reason, and their bytes as planned."
+          },
+          "partial_files_removed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Stale partial files removed."
+          },
+          "removed": {
+            "$ref": "#/components/schemas/Tally",
+            "description": "Candidates removed, and the bytes freed."
+          }
+        }
+      },
+      "GcOriginView": {
+        "type": "object",
+        "description": "The ended import an orphan came from.",
+        "required": [
+          "import_id",
+          "state",
+          "ended_at"
+        ],
+        "properties": {
+          "ended_at": {
+            "type": "string",
+            "description": "When it ended."
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its failure code, when it failed."
+          },
+          "import_id": {
+            "type": "string",
+            "description": "The import (`/api/v1/imports/{id}`)."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it brought in, as its source named it."
+          },
+          "state": {
+            "type": "string",
+            "description": "`failed_terminal` or `canceled`."
+          }
+        }
+      },
       "GcPlan": {
         "type": "object",
         "description": "What garbage collection would do now. A dry run: nothing is removed.",
@@ -13009,6 +13321,90 @@
           "unrecognized": {
             "$ref": "#/components/schemas/Tally",
             "description": "Entries in the object tree that are not objects. Never collected."
+          }
+        }
+      },
+      "GcPlanDetail": {
+        "type": "object",
+        "description": "A kept plan and its largest candidates.",
+        "required": [
+          "plan",
+          "objects"
+        ],
+        "properties": {
+          "objects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GcPlanObjectView"
+            },
+            "description": "Its candidates, largest first, as many as asked for; `plan.candidates`\ncounts them all."
+          },
+          "plan": {
+            "$ref": "#/components/schemas/StoredGcPlanView",
+            "description": "The plan."
+          }
+        }
+      },
+      "GcPlanList": {
+        "type": "object",
+        "description": "Plans kept, newest first.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StoredGcPlanView"
+            },
+            "description": "The plans."
+          }
+        }
+      },
+      "GcPlanObjectView": {
+        "type": "object",
+        "description": "One candidate of a kept plan.",
+        "required": [
+          "sha256",
+          "size_bytes",
+          "modified_at",
+          "recorded"
+        ],
+        "properties": {
+          "import": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GcOriginView",
+                "description": "The import it came from, when an import that failed for good or was\ncanceled lists it. Its staging area keeps the file this is a copy of."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "modified_at": {
+            "type": "string",
+            "description": "When its file was last written, when planned."
+          },
+          "outcome": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What collecting did with it, once it has: `removed`; or kept, as\n`kept_live` (something refers to it now), `kept_held` (counted, or a\nretention lock), `kept_changed` (its file is not the one planned),\n`kept_gone` (no file), `kept_uncertain` (the marks could not all be\nread), `kept_failed` (removing it failed)."
+          },
+          "recorded": {
+            "type": "boolean",
+            "description": "Whether the catalogue recorded it. One it did not was stored by work\nthat never registered it."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "Its digest."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its length when planned."
           }
         }
       },
@@ -14182,6 +14578,21 @@
           "state": {
             "type": "string",
             "description": "`answered`, `failed`, `unconfigured` or `off`."
+          }
+        }
+      },
+      "NewGcPlan": {
+        "type": "object",
+        "description": "A plan to be kept for collecting.",
+        "properties": {
+          "grace_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How young, in days, an unreferenced object is kept anyway: 1 to 3650,\n7 unless given. Under a day is refused: a plan to be collected leaves\nwork that has only just stored its bytes alone.",
+            "minimum": 0
           }
         }
       },
@@ -16369,6 +16780,88 @@
           "state": {
             "type": "string",
             "description": "`verifying` (the library's copy is being checked first), `removing`\n(at the source, tried again until it answers), or how it ended:\n`removed`, `already_gone`, `kept` (left, saying why) or `refused`\n(the library's copy failed its check, so nothing was removed)."
+          }
+        }
+      },
+      "StoredGcPlanView": {
+        "type": "object",
+        "description": "A plan kept for collecting.",
+        "required": [
+          "id",
+          "planned_at",
+          "grace_seconds",
+          "certain",
+          "candidates",
+          "stale_partial_files",
+          "state",
+          "expires_at"
+        ],
+        "properties": {
+          "candidates": {
+            "$ref": "#/components/schemas/Tally",
+            "description": "What collecting it would remove, as planned: orphaned objects older\nthan the grace period."
+          },
+          "certain": {
+            "type": "boolean",
+            "description": "Whether every manifest and import checkpoint could be read. One that\nwas not can never be collected."
+          },
+          "collect_requested_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When collecting it was asked for."
+          },
+          "collect_requested_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who asked, or `null` for the schedule."
+          },
+          "collected": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GcCollectionView",
+                "description": "What collecting it did, once it has."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expires_at": {
+            "type": "string",
+            "description": "When it can no longer be collected, unless asked to be by then."
+          },
+          "grace_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How young an unreferenced object was kept anyway, in seconds."
+          },
+          "id": {
+            "type": "string",
+            "description": "Opaque identifier."
+          },
+          "planned_at": {
+            "type": "string",
+            "description": "When it was made."
+          },
+          "planned_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The administrator who made it, or `null` when the schedule did."
+          },
+          "stale_partial_files": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Partial files in the object tree older than the grace period, which\ncollecting it also removes."
+          },
+          "state": {
+            "type": "string",
+            "description": "`planned`, which can be collected until `expires_at`; `expired`;\n`uncertain`, which cannot be collected; `queued`, asked to be\ncollected, which the server does shortly, or once imports under way\nend; `collected`."
           }
         }
       },

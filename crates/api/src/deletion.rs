@@ -318,7 +318,29 @@ pub struct DeletionPass {
     pub collection_waited: bool,
 }
 
-/// Makes due artifacts tombstones and collects their objects.
+/// What collecting the queued plans did (ADR 0024).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OrphanPass {
+    /// Plans collected.
+    pub plans: u64,
+    /// Orphans removed.
+    pub objects_removed: u64,
+    /// Their bytes.
+    pub bytes_freed: u64,
+    /// Candidates kept.
+    pub objects_kept: u64,
+    /// Stale partial files removed.
+    pub partial_files_removed: u64,
+    /// Whether collection waited for another pass because an import or a
+    /// derivation was under way.
+    pub deferred: bool,
+    /// Whether collection, deferred too long, waited for the ingests under
+    /// way and held new ones back.
+    pub waited: bool,
+}
+
+/// Makes due artifacts tombstones and collects their objects, and collects
+/// the orphans of the plans asked to be collected (ADR 0024).
 #[derive(Debug, Clone)]
 pub struct DeletionRunner {
     database: Database,
@@ -394,6 +416,9 @@ impl DeletionRunner {
                 }
                 Ok(_) => {}
                 Err(error) => tracing::error!(error = ?error, "a deletion pass failed"),
+            }
+            if let Err(error) = self.collect_queued_plans().await {
+                tracing::error!(error = ?error, "collecting the queued plans failed");
             }
             tokio::select! {
                 () = &mut shutdown => return,
@@ -521,6 +546,50 @@ impl DeletionRunner {
             audit_collection(pool, pass.objects_removed, pass.bytes_freed).await?;
         }
         Ok(())
+    }
+
+    /// Collect every plan asked to be collected, oldest request first,
+    /// holding the collection lock as [`Self::pass`] does for a deleted
+    /// artifact's objects: deferred while ingests are under way, until it
+    /// has deferred too long.
+    ///
+    /// # Errors
+    ///
+    /// A database failure, or marks that could not be read at all; the plans
+    /// stay queued.
+    pub async fn collect_queued_plans(&self) -> Result<OrphanPass, crate::gc::GcError> {
+        let pool = self.database.pool();
+        if tangible_db::gc_plans::queued_plans(pool).await?.is_empty() {
+            return Ok(OrphanPass::default());
+        }
+        let mut lock = DeletionPass::default();
+        let Some(_collecting) = self
+            .collection_lock(self.manifests.objects(), &mut lock)
+            .await
+        else {
+            return Ok(OrphanPass {
+                deferred: true,
+                ..OrphanPass::default()
+            });
+        };
+        let mut pass = OrphanPass {
+            waited: lock.collection_waited,
+            ..OrphanPass::default()
+        };
+        for id in tangible_db::gc_plans::queued_plans(pool).await? {
+            let Some(collected) =
+                crate::orphans::collect_plan(&self.database, &self.manifests, id).await?
+            else {
+                continue;
+            };
+            let count = |value: i64| u64::try_from(value).unwrap_or(0);
+            pass.plans += 1;
+            pass.objects_removed += count(collected.removed_count);
+            pass.bytes_freed += count(collected.removed_bytes);
+            pass.objects_kept += count(collected.kept_count);
+            pass.partial_files_removed += count(collected.partial_files_removed);
+        }
+        Ok(pass)
     }
 
     /// Ask the runner to look now.

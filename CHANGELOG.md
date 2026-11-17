@@ -18,6 +18,17 @@ may change between minor versions, and the release notes say how.
   layer onto it. deploy/README.md ("A worker on another machine") goes
   through it. Before, the only worker file was `compose.hardware.yaml`,
   which runs in the server's stack and would not start without it.
+- Orphaned objects can be collected (ADR 0024): bytes an import stored
+  before it failed for good or was canceled, output a derivation never
+  registered, and partial files ingests left behind. Until now only a
+  deleted artifact's bytes were ever removed, and these stayed for good.
+  An administrator keeps a plan (`POST /api/v1/storage/gc-plans`), which
+  lists every candidate and the failed import each came from, and collects
+  it within the hour (`POST /api/v1/storage/gc-plans/{id}/collect`). Only
+  what the plan listed goes, and only if nothing refers to it still and its
+  file is the one planned; the plan keeps what became of each. A failed
+  import keeps its staging area, so it can still be retried. Migration
+  0040 adds the plans' tables. `tangible gc` stays a dry run.
 
 ### Changed
 

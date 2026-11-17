@@ -244,6 +244,19 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
     // What collection would remove: a plan of the whole store, which reads
     // every directory in it.
     ("GET", "/api/v1/storage/gc-plan", Signed(MaintainStorage)),
+    // Collecting orphans (ADR 0024): a plan kept, and collected on request.
+    ("POST", "/api/v1/storage/gc-plans", Signed(MaintainStorage)),
+    ("GET", "/api/v1/storage/gc-plans", Signed(MaintainStorage)),
+    (
+        "GET",
+        "/api/v1/storage/gc-plans/{plan_id}",
+        Signed(MaintainStorage),
+    ),
+    (
+        "POST",
+        "/api/v1/storage/gc-plans/{plan_id}/collect",
+        Signed(MaintainStorage),
+    ),
     // The catalog.
     ("GET", "/api/v1/titles", Signed(Read)),
     ("POST", "/api/v1/titles", Signed(Catalog)),

@@ -33,6 +33,9 @@ pub struct StoredObject {
 /// A temporary file an ingest left in `incoming`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PartialFile {
+    /// Its name in `incoming`, as [`FilesystemStore::remove_stale_partial`]
+    /// takes it.
+    pub name: String,
     /// Its length.
     pub size_bytes: u64,
     /// When it was last written.
@@ -83,9 +86,10 @@ fn walk(objects: &Path) -> Result<Inventory, StorageError> {
                 walk_digests(&objects.join(ALGORITHM_DIR), &mut inventory)?;
             }
             INCOMING_DIR if metadata.is_dir() => {
-                for (_, metadata) in entries(&objects.join(INCOMING_DIR))? {
+                for (name, metadata) in entries(&objects.join(INCOMING_DIR))? {
                     if metadata.is_file() {
                         inventory.partial_files.push(PartialFile {
+                            name,
                             size_bytes: metadata.len(),
                             modified: modified(&metadata),
                         });
@@ -137,6 +141,99 @@ impl Inventory {
         self.unrecognized_count += 1;
         if metadata.is_file() {
             self.unrecognized_bytes += metadata.len();
+        }
+    }
+}
+
+impl FilesystemStore {
+    /// The partial files in `incoming` alone, without walking the objects:
+    /// what collection looks at under the collection lock.
+    ///
+    /// # Errors
+    ///
+    /// [`StorageError::Io`] if `incoming` cannot be read.
+    pub async fn partial_files(&self) -> Result<Vec<PartialFile>, StorageError> {
+        let incoming = self.root().join(OBJECTS_DIR).join(INCOMING_DIR);
+        tokio::task::spawn_blocking(move || {
+            Ok(entries(&incoming)?
+                .into_iter()
+                .filter(|(_, metadata)| metadata.is_file())
+                .map(|(name, metadata)| PartialFile {
+                    name,
+                    size_bytes: metadata.len(),
+                    modified: modified(&metadata),
+                })
+                .collect())
+        })
+        .await
+        .map_err(|error| StorageError::Io {
+            operation: "listing the incoming directory",
+            path: INCOMING_DIR.into(),
+            source: std::io::Error::other(error.to_string()),
+        })?
+    }
+
+    /// An object's file as it is now, its length and when it was last
+    /// written, or `None` if it is absent: what collection checks against
+    /// its plan before the file goes (ADR 0024). Does not follow a link.
+    ///
+    /// # Errors
+    ///
+    /// [`StorageError::Io`] if the file exists but cannot be inspected.
+    pub async fn object_file(
+        &self,
+        digest: &Sha256Digest,
+    ) -> Result<Option<(u64, SystemTime)>, StorageError> {
+        let path = self.object_path(digest);
+        match tokio::fs::symlink_metadata(&path).await {
+            Ok(metadata) if metadata.is_file() => Ok(Some((metadata.len(), modified(&metadata)))),
+            Ok(_) => Ok(None),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(source) => Err(StorageError::Io {
+                operation: "reading an object's metadata",
+                path,
+                source,
+            }),
+        }
+    }
+
+    /// Remove a partial file from `incoming` if it is a regular file last
+    /// written before `older_than`; whether one was removed. A name that is
+    /// not a plain file name is refused, so nothing outside `incoming` can
+    /// be named. Only for collection, holding the collection lock, so no
+    /// ingest is writing one (ADR 0024).
+    ///
+    /// # Errors
+    ///
+    /// [`StorageError::Io`] if it exists and cannot be inspected or removed.
+    pub async fn remove_stale_partial(
+        &self,
+        name: &str,
+        older_than: SystemTime,
+    ) -> Result<bool, StorageError> {
+        let plain =
+            !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', '\0']);
+        if !plain {
+            return Ok(false);
+        }
+        let path = self.root().join(OBJECTS_DIR).join(INCOMING_DIR).join(name);
+        let failed = |operation, source| StorageError::Io {
+            operation,
+            path: path.clone(),
+            source,
+        };
+        let metadata = match tokio::fs::symlink_metadata(&path).await {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(failed("reading a partial file's metadata", error)),
+        };
+        if !metadata.is_file() || modified(&metadata) >= older_than {
+            return Ok(false);
+        }
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(failed("removing a partial file", error)),
         }
     }
 }
@@ -234,7 +331,85 @@ mod tests {
         let inventory = store.inventory().await.unwrap();
         assert_eq!(inventory.partial_files.len(), 1);
         assert_eq!(inventory.partial_files[0].size_bytes, 4);
+        assert_eq!(inventory.partial_files[0].name, "abc.part");
         assert!(inventory.objects.is_empty());
+        assert_eq!(
+            store.partial_files().await.unwrap(),
+            inventory.partial_files
+        );
+    }
+
+    /// Date a file's last write, which its owner may do on a read-only
+    /// file, as objects are (ADR 0011).
+    fn written_at(path: &Path, when: SystemTime) {
+        std::fs::File::options()
+            .read(true)
+            .open(path)
+            .unwrap()
+            .set_modified(when)
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn only_a_stale_partial_file_is_removed_and_only_from_incoming() {
+        let (dir, store) = store().await;
+        let incoming = store.root().join("objects/incoming");
+        let day = std::time::Duration::from_hours(24);
+        let cutoff = SystemTime::now() - day;
+        std::fs::write(incoming.join("old.part"), b"1").unwrap();
+        written_at(&incoming.join("old.part"), cutoff - day);
+        std::fs::write(incoming.join("new.part"), b"2").unwrap();
+        assert!(
+            store
+                .remove_stale_partial("old.part", cutoff)
+                .await
+                .unwrap()
+        );
+        assert!(!incoming.join("old.part").exists());
+        // Written since the cutoff: an ingest may own it.
+        assert!(
+            !store
+                .remove_stale_partial("new.part", cutoff)
+                .await
+                .unwrap()
+        );
+        assert!(incoming.join("new.part").exists());
+        // Gone already.
+        assert!(
+            !store
+                .remove_stale_partial("old.part", cutoff)
+                .await
+                .unwrap()
+        );
+        // Nothing outside incoming can be named.
+        let outside = dir.path().join("outside");
+        std::fs::write(&outside, b"3").unwrap();
+        written_at(&outside, cutoff - day);
+        for name in ["../../../outside", "..", ".", "", "a/b", "a\\b"] {
+            assert!(!store.remove_stale_partial(name, cutoff).await.unwrap());
+        }
+        assert!(outside.exists());
+    }
+
+    #[tokio::test]
+    async fn an_objects_file_says_its_length_and_when_it_was_written() {
+        let (_dir, store) = store().await;
+        let limits = IngestLimits {
+            max_bytes: None,
+            fsync: false,
+        };
+        let stored = store
+            .put_stream(Cursor::new(b"twelve bytes".to_vec()), limits)
+            .await
+            .unwrap();
+        let when = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        written_at(&store.object_path(&stored.digest), when);
+        assert_eq!(
+            store.object_file(&stored.digest).await.unwrap(),
+            Some((12, when))
+        );
+        let absent: Sha256Digest = EMPTY.parse().unwrap();
+        assert_eq!(store.object_file(&absent).await.unwrap(), None);
     }
 
     #[tokio::test]

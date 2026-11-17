@@ -137,6 +137,13 @@ pub enum ErrorCode {
     /// A release was picked from a search no longer held: more than an hour
     /// old, or made before the server restarted (ADR 0021).
     SearchExpired,
+    /// A collection plan could not read every manifest and checkpoint, so
+    /// it is not collected (ADR 0024).
+    GcPlanUncertain,
+    /// A collection plan more than an hour old: make another (ADR 0024).
+    GcPlanExpired,
+    /// Collecting the plan was asked for already (ADR 0024).
+    GcPlanCollected,
     /// Anything unanticipated.
     Internal,
 }
@@ -184,6 +191,9 @@ impl ErrorCode {
             Self::ArtifactRetained => "ARTIFACT_RETAINED",
             Self::AttestationRequired => "ATTESTATION_REQUIRED",
             Self::SearchExpired => "SEARCH_EXPIRED",
+            Self::GcPlanUncertain => "GC_PLAN_UNCERTAIN",
+            Self::GcPlanExpired => "GC_PLAN_EXPIRED",
+            Self::GcPlanCollected => "GC_PLAN_COLLECTED",
             Self::Internal => "INTERNAL",
         }
     }
@@ -236,7 +246,10 @@ impl ErrorCode {
             | Self::ArtifactDeleted
             | Self::ArtifactInUse
             | Self::ArtifactRetained
-            | Self::SearchExpired => StatusCode::CONFLICT,
+            | Self::SearchExpired
+            | Self::GcPlanUncertain
+            | Self::GcPlanExpired
+            | Self::GcPlanCollected => StatusCode::CONFLICT,
             // The server is a gateway to the client here: the request was
             // fine, and what stands behind it failed.
             Self::IntegrationUnreachable
@@ -289,6 +302,9 @@ impl ErrorCode {
             Self::ArtifactRetained => "The artifact is retained",
             Self::AttestationRequired => "Ownership was not attested",
             Self::SearchExpired => "The search is no longer held",
+            Self::GcPlanUncertain => "The plan is not certain",
+            Self::GcPlanExpired => "The plan is too old",
+            Self::GcPlanCollected => "The plan is collected already",
             Self::Internal => "Internal error",
         }
     }
@@ -452,6 +468,9 @@ mod tests {
             ErrorCode::ArtifactRetained,
             ErrorCode::AttestationRequired,
             ErrorCode::SearchExpired,
+            ErrorCode::GcPlanUncertain,
+            ErrorCode::GcPlanExpired,
+            ErrorCode::GcPlanCollected,
             ErrorCode::IntegrationAddressRefused,
             ErrorCode::InsufficientSpace,
             ErrorCode::DatInvalid,

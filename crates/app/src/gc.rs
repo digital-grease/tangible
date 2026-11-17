@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! `tangible gc`: what garbage collection would remove
-//! (docs/plans/storage-integrity.md, phase S2). A dry run, and the only
-//! kind there is: it reads the store and the catalogue and removes nothing.
+//! (docs/plans/storage-integrity.md, phase S2). A dry run: it reads the
+//! store and the catalogue and removes nothing. Only the server collects
+//! (ADR 0024), because the store's collection lock, which keeps an ingest
+//! from counting an object as it goes, is in the server's process.
 
 use std::io::Write as _;
 
@@ -86,6 +88,13 @@ fn lines(plan: &GcPlan) -> Vec<String> {
         .saturating_sub(count(&plan.candidates));
     if unnamed > 0 {
         lines.push(format!("  and {unnamed} more (--limit 0 names them all)"));
+    }
+    if plan.collectable.count > 0 {
+        lines.push(
+            "  Only the server collects: an administrator keeps a plan \
+             (POST /api/v1/storage/gc-plans) and collects it."
+                .to_owned(),
+        );
     }
     if plan.partial_files.count > 0 {
         lines.push(format!(
@@ -208,6 +217,9 @@ mod tests {
                     "  {}  1.0 KiB  written 2026-09-01T00:00:00Z  (never catalogued)",
                     "ab".repeat(32)
                 ),
+                "  Only the server collects: an administrator keeps a plan \
+                 (POST /api/v1/storage/gc-plans) and collects it."
+                    .to_owned(),
             ]
         );
     }

@@ -2104,18 +2104,77 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * What garbage collection would remove now. Nothing is removed.
-         * @description Plan garbage collection, a dry run: walk the object store and report the \
-         *                        objects nothing refers to (no artifact, published manifest or import under \
-         *                        way, no reference count or retention lock) and older than the grace period, \
-         *                        with what removing them would free. Also counts leftover partial files and \
-         *                        recorded objects whose file is missing. Nothing is removed; this server \
-         *                        cannot remove objects. Reads every directory in the store, so it takes a \
-         *                        while on a large library.
+         * What garbage collection would remove now. Nothing is removed: collecting
+         *     takes a plan kept for it ([`create_gc_plan`]).
+         * @description Plan garbage collection, a dry run: walk the object store and report the objects nothing refers to (no artifact, published manifest or import under way, no reference count or retention lock) and older than the grace period, with what removing them would free. Also counts leftover partial files and recorded objects whose file is missing. Nothing is removed: collecting takes a plan kept for it (POST /api/v1/storage/gc-plans). Reads every directory in the store, so it takes a while on a large library.
          */
         get: operations["gc_plan"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/storage/gc-plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The plans kept, newest first.
+         * @description The collection plans kept, newest first: those made by an administrator and by the schedule, and what collecting each did. Needs an administrator.
+         */
+        get: operations["list_gc_plans"];
+        put?: never;
+        /**
+         * Make a plan and keep it, to be collected.
+         * @description Plan garbage collection and keep the plan, with every candidate, so that collecting it removes at most what it lists (ADR 0024). The candidates are the orphaned objects nothing refers to, older than the grace period, each with the import that failed or was canceled after storing it, when one did; that import's staging area keeps the file it is a copy of. Nothing is removed until the plan is collected, within the hour. Reads every directory in the store. Needs an administrator.
+         */
+        post: operations["create_gc_plan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/storage/gc-plans/{plan_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One kept plan and its largest candidates.
+         * @description A kept collection plan, with its largest candidates, where each came from and, once collected, what became of each. Needs an administrator.
+         */
+        get: operations["get_gc_plan"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/storage/gc-plans/{plan_id}/collect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask for a kept plan to be collected.
+         * @description Collect a kept plan: remove its candidates that nothing refers to still and whose file is the one planned, and the stale partial files in the object tree (ADR 0024). Nothing the plan does not list is removed. The server collects it shortly, holding back new imports for a moment, or once the imports and derivations under way end; read the plan for what it did. Refused for a plan that could not read every manifest and checkpoint, one more than an hour old, or one asked for already. Cannot be undone; a failed import keeps its staging area, so it can still be retried. Needs an administrator, and is audited.
+         */
+        post: operations["collect_gc_plan"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4408,6 +4467,33 @@ export interface components {
              */
             size_bytes: number;
         };
+        /** @description What collecting a plan did. */
+        GcCollectionView: {
+            /** @description When it finished. */
+            collected_at: string;
+            /** @description Candidates kept, each with its reason, and their bytes as planned. */
+            kept: components["schemas"]["Tally"];
+            /**
+             * Format: int64
+             * @description Stale partial files removed.
+             */
+            partial_files_removed: number;
+            /** @description Candidates removed, and the bytes freed. */
+            removed: components["schemas"]["Tally"];
+        };
+        /** @description The ended import an orphan came from. */
+        GcOriginView: {
+            /** @description When it ended. */
+            ended_at: string;
+            /** @description Its failure code, when it failed. */
+            error_code?: string | null;
+            /** @description The import (`/api/v1/imports/{id}`). */
+            import_id: string;
+            /** @description What it brought in, as its source named it. */
+            name?: string | null;
+            /** @description `failed_terminal` or `canceled`. */
+            state: string;
+        };
         /** @description What garbage collection would do now. A dry run: nothing is removed. */
         GcPlan: {
             /** @description The largest of them, first. */
@@ -4462,6 +4548,47 @@ export interface components {
             stored: components["schemas"]["Tally"];
             /** @description Entries in the object tree that are not objects. Never collected. */
             unrecognized: components["schemas"]["Tally"];
+        };
+        /** @description A kept plan and its largest candidates. */
+        GcPlanDetail: {
+            /**
+             * @description Its candidates, largest first, as many as asked for; `plan.candidates`
+             *     counts them all.
+             */
+            objects: components["schemas"]["GcPlanObjectView"][];
+            /** @description The plan. */
+            plan: components["schemas"]["StoredGcPlanView"];
+        };
+        /** @description Plans kept, newest first. */
+        GcPlanList: {
+            /** @description The plans. */
+            items: components["schemas"]["StoredGcPlanView"][];
+        };
+        /** @description One candidate of a kept plan. */
+        GcPlanObjectView: {
+            import?: components["schemas"]["GcOriginView"] | null;
+            /** @description When its file was last written, when planned. */
+            modified_at: string;
+            /**
+             * @description What collecting did with it, once it has: `removed`; or kept, as
+             *     `kept_live` (something refers to it now), `kept_held` (counted, or a
+             *     retention lock), `kept_changed` (its file is not the one planned),
+             *     `kept_gone` (no file), `kept_uncertain` (the marks could not all be
+             *     read), `kept_failed` (removing it failed).
+             */
+            outcome?: string | null;
+            /**
+             * @description Whether the catalogue recorded it. One it did not was stored by work
+             *     that never registered it.
+             */
+            recorded: boolean;
+            /** @description Its digest. */
+            sha256: string;
+            /**
+             * Format: int64
+             * @description Its length when planned.
+             */
+            size_bytes: number;
         };
         /**
          * @description Which release to grab, and, when more than one client takes its
@@ -4991,6 +5118,16 @@ export interface components {
             provider: string;
             /** @description `answered`, `failed`, `unconfigured` or `off`. */
             state: string;
+        };
+        /** @description A plan to be kept for collecting. */
+        NewGcPlan: {
+            /**
+             * Format: int32
+             * @description How young, in days, an unreferenced object is kept anyway: 1 to 3650,
+             *     7 unless given. Under a day is refused: a plan to be collected leaves
+             *     work that has only just stored its bytes alone.
+             */
+            grace_days?: number | null;
         };
         /** @description Whether sign-in through a provider is offered. */
         OidcStatusView: {
@@ -5937,6 +6074,50 @@ export interface components {
              *     (at the source, tried again until it answers), or how it ended:
              *     `removed`, `already_gone`, `kept` (left, saying why) or `refused`
              *     (the library's copy failed its check, so nothing was removed).
+             */
+            state: string;
+        };
+        /** @description A plan kept for collecting. */
+        StoredGcPlanView: {
+            /**
+             * @description What collecting it would remove, as planned: orphaned objects older
+             *     than the grace period.
+             */
+            candidates: components["schemas"]["Tally"];
+            /**
+             * @description Whether every manifest and import checkpoint could be read. One that
+             *     was not can never be collected.
+             */
+            certain: boolean;
+            /** @description When collecting it was asked for. */
+            collect_requested_at?: string | null;
+            /** @description Who asked, or `null` for the schedule. */
+            collect_requested_by?: string | null;
+            collected?: components["schemas"]["GcCollectionView"] | null;
+            /** @description When it can no longer be collected, unless asked to be by then. */
+            expires_at: string;
+            /**
+             * Format: int64
+             * @description How young an unreferenced object was kept anyway, in seconds.
+             */
+            grace_seconds: number;
+            /** @description Opaque identifier. */
+            id: string;
+            /** @description When it was made. */
+            planned_at: string;
+            /** @description The administrator who made it, or `null` when the schedule did. */
+            planned_by?: string | null;
+            /**
+             * Format: int64
+             * @description Partial files in the object tree older than the grace period, which
+             *     collecting it also removes.
+             */
+            stale_partial_files: number;
+            /**
+             * @description `planned`, which can be collected until `expires_at`; `expired`;
+             *     `uncertain`, which cannot be collected; `queued`, asked to be
+             *     collected, which the server does shortly, or once imports under way
+             *     end; `collected`.
              */
             state: string;
         };
@@ -11165,6 +11346,174 @@ export interface operations {
                 };
             };
             /** @description The store or catalogue cannot be read */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_gc_plans: {
+        parameters: {
+            query?: {
+                /** @description Clamped to 1 to 100, 20 unless given. */
+                limit?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The plans */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GcPlanList"];
+                };
+            };
+            /** @description The catalogue cannot be read */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_gc_plan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewGcPlan"];
+            };
+        };
+        responses: {
+            /** @description The plan, kept */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GcPlanDetail"];
+                };
+            };
+            /** @description A grace period out of range */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The store or catalogue cannot be read */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_gc_plan: {
+        parameters: {
+            query?: {
+                /** @description Largest first, clamped to 1 to 1000, 100 unless given. */
+                limit?: number | null;
+            };
+            header?: never;
+            path: {
+                /** @description Plan identifier */
+                plan_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The plan */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GcPlanDetail"];
+                };
+            };
+            /** @description No such plan */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The catalogue cannot be read */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    collect_gc_plan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Plan identifier */
+                plan_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Queued for collection */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StoredGcPlanView"];
+                };
+            };
+            /** @description No such plan */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Uncertain, expired, or asked for already */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The catalogue cannot be read */
             503: {
                 headers: {
                     [name: string]: unknown;

@@ -61,7 +61,7 @@ enum Command {
     Doctor(Box<DoctorConfig>),
     /// Say what garbage collection would remove: stored objects nothing
     /// refers to, and what removing them would free. A dry run; nothing is
-    /// removed.
+    /// removed. Only the server collects (ADR 0024).
     Gc(Box<GcConfig>),
     /// Inspect and validate artifact manifests.
     #[command(subcommand)]

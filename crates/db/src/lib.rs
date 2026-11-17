@@ -27,6 +27,7 @@ pub mod diagnostics;
 pub mod drive_activity;
 pub mod erasures;
 pub mod gc;
+pub mod gc_plans;
 pub mod identification;
 pub mod integrations;
 pub mod integrity;
