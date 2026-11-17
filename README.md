@@ -10,7 +10,7 @@
 
 > A self-hosted disc-image preservation, management, and burning platform.
 
-**Status:** early release, 0.2.1. Everything listed under "What it does" works
+**Status:** early release, 0.3.0. Everything listed under "What it does" works
 and is tested, including on a real optical drive. Expect the API and the
 manifest schema to change during 0.x, with release notes.
 
@@ -51,6 +51,9 @@ Existing media managers usually center on playable video files, episodes, songs,
 - Computes preservation hashes (CRC32, MD5, SHA-1) of every file and CD track,
   and matches them against the Logiqx DATs you load, such as Redump's.
 - Catalogues titles, editions, disc sets and discs, and links images to discs.
+- Shows cover art: a request's, from the provider it was found with; libretro's
+  box art for a game a loaded DAT matches exactly; or one picked by hand. The
+  server fetches each once and serves it itself.
 
 **Requests**
 
@@ -110,9 +113,9 @@ Existing media managers usually center on playable video files, episodes, songs,
 
 ## Not yet
 
-Ripping Blu-ray discs, BDMV images, burning a `VIDEO_TS` folder, metadata
-providers, and S3-compatible storage for the library itself (S3 is an import
-source). See `CHANGELOG.md` for what each release adds.
+Ripping Blu-ray discs, BDMV images, burning a `VIDEO_TS` folder, and
+S3-compatible storage for the library itself (S3 is an import source). See
+`CHANGELOG.md` for what each release adds.
 
 ## Architecture
 

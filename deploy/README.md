@@ -799,7 +799,7 @@ is an image, and serves it itself; your browser never contacts a provider.
 An artifact's cover can also be picked on its page ("Find cover art…"), and
 a game a loaded DAT matches exactly gets libretro's box art from
 `thumbnails.libretro.com`, which needs no key but learns the games' names.
-`TANGIBLE_ARTWORK=false` stops fetching (ADR 0023).
+`TANGIBLE_ARTWORK=false` stops fetching.
 
 Prowlarr's download links carry its API key: Tangible never shows, logs or
 audits them, and holds a search's links sealed with the secret key below,
@@ -889,7 +889,7 @@ correctly signed image. `cosign version` says which you have.
 
 ```bash
 IMAGE=ghcr.io/digital-grease/tangible@sha256:<digest from the release page>
-TAG=v0.2.1
+TAG=v0.3.0
 
 # The image was signed by this repository's release workflow at this tag.
 cosign verify "$IMAGE" \
@@ -982,16 +982,16 @@ check it carries what you expect:
 
 ```bash
 docker build -f deploy/decryption/Dockerfile \
-  --build-arg TANGIBLE_IMAGE=ghcr.io/digital-grease/tangible:v0.2.1 \
-  -t tangible-decryption:v0.2.1 deploy/decryption
-docker run --rm --entrypoint cat tangible-decryption:v0.2.1 /usr/share/tangible/decryption.json
+  --build-arg TANGIBLE_IMAGE=ghcr.io/digital-grease/tangible:v0.3.0 \
+  -t tangible-decryption:v0.3.0 deploy/decryption
+docker run --rm --entrypoint cat tangible-decryption:v0.3.0 /usr/share/tangible/decryption.json
 ```
 
 Run the drive's worker from it with one more override, which changes only
 the image:
 
 ```bash
-TANGIBLE_DECRYPTION_IMAGE=tangible-decryption:v0.2.1 docker compose \
+TANGIBLE_DECRYPTION_IMAGE=tangible-decryption:v0.3.0 docker compose \
   -f deploy/compose.yaml -f deploy/compose.hardware.yaml \
   -f deploy/compose.decryption.yaml up -d
 ```

@@ -4,7 +4,49 @@ Notable changes to Tangible, newest first. Versions follow semantic
 versioning; during 0.x the API, the manifest schema and the database schema
 may change between minor versions, and the release notes say how.
 
-## Unreleased
+## 0.3.0 (2026-11-16)
+
+Tangible takes requests: anyone signed in asks for an item they own, an
+operator or administrator approves it, finds a release for it in their own
+Prowlarr and picks one, and the import that follows fulfils the request.
+The highlights, each detailed below:
+
+- Requests, each with the requester's statement that they own the item,
+  approved or declined by an operator or administrator.
+- Finding what to ask for in MusicBrainz, TMDB and IGDB as well as the
+  loaded DATs, and a release for an approved request in your Prowlarr,
+  grabbed only when an operator picks it.
+- Cover art for requests and the library, fetched and served by the server.
+- Imports, the library and the artifact page name what each thing is.
+- Queueing a burn chooses its disc from the catalog, or catalogues one in
+  one step.
+- An ISO downloaded with its release's `.nfo` burns, exports and converts.
+
+### Upgrading from 0.2.1
+
+The usual upgrade, as deploy/README.md ("Upgrading") says: take a backup,
+change the image to this release's digest, pull, migrate, start. The five
+migrations, 0035 to 0039, add the tables for requests and cover art and let
+an integration be a metadata provider or Prowlarr; nothing is removed, and
+no API route or field is gone. 0.2.1 still runs on the migrated database,
+so going back needs no restore: run the digests you noted before upgrading
+again, the workers' included. It leaves the new tables alone, so requests
+and covers wait for the next upgrade, and a metadata provider or Prowlarr
+added meanwhile shows as unconfigured.
+
+Once it runs, the server fetches cover art by itself for games a loaded DAT
+matches exactly, those already in the library included: libretro's box art,
+from `thumbnails.libretro.com`, which needs no key but learns the games'
+names. Set `TANGIBLE_ARTWORK=false` in `.env` before starting it if you
+would rather it did not, and take this release's `deploy/compose.yaml`, or
+its `TANGIBLE_ARTWORK` line, which passes the setting to the server. The
+covers of requests come only from the providers an administrator adds.
+
+Upgrade every burn worker as well: a 0.3.0 worker lists what its drive
+writes, burns an ISO that came with other files, and says when its drive
+could not be reached. A 0.2.1 worker still works with a 0.3.0 server,
+without these. If you built the decryption image, build it again from this
+release.
 
 ### Added
 
@@ -69,7 +111,7 @@ may change between minor versions, and the release notes say how.
   each once, keeps it only if it is a JPEG, PNG or WebP of at most 2 MiB,
   and serves it itself (`GET /api/v1/artwork/{id}`); the browser never
   contacts a provider. `TANGIBLE_ARTWORK=false` turns fetching off.
-  Migration 0038 adds the covers' table (ADR 0023). The library, artifact
+  Migration 0038 adds the covers' table. The library, artifact
   pages and request pages show them. Any other artifact's cover can be
   picked on its page ("Find cover art…") from the metadata providers'
   search, by an operator or administrator (`PUT` and `DELETE
@@ -78,8 +120,8 @@ may change between minor versions, and the release notes say how.
   and game names, with no key.
 - "Report an issue" at the foot of the sidebar, where reports are on:
   GitHub's bug form, filled in by the server with the build and the page
-  you were on, shown for review before it is opened, as other reports are
-  (ADR 0014). New route `POST /api/v1/issue-reports`.
+  you were on, shown for review before it is opened, as other reports are.
+  New route `POST /api/v1/issue-reports`.
 - A request's release search says what each release holds by its name:
   a disc image, a video file (encoded or remuxed, without the disc's
   menus) or audio files. Video and audio files are marked and rank well
@@ -88,7 +130,7 @@ may change between minor versions, and the release notes say how.
   pending artifact's page asks once, then its files are removed within
   moments rather than after the grace period, to free space when it is
   needed. Only an artifact already pending, so deleting is still two
-  deliberate steps (ADR 0022). New route `POST
+  deliberate steps. New route `POST
   /api/v1/artifacts/{artifact_id}/deletion-requests/now`, audited.
 - Burn workers list what their drive reads and writes: the xorriso probe
   reads the drive's own profile list (xorriso `-list_profiles`), with or
