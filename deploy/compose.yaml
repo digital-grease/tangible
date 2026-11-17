@@ -70,6 +70,18 @@ services:
       # matching against DATs (deploy/README.md, "Identifying discs with
       # DATs"). On unless set to false.
       TANGIBLE_PRESERVATION_HASHES: ${TANGIBLE_PRESERVATION_HASHES:-true}
+      # Cover art for requests and the library, which the server fetches once
+      # from the metadata providers and libretro and serves itself
+      # (deploy/README.md, "Requests"). On unless set to false.
+      TANGIBLE_ARTWORK: ${TANGIBLE_ARTWORK:-true}
+      # Days an artifact asked to be deleted stays pending, and can be kept,
+      # before its files are removed (deploy/README.md, "Deleting an
+      # artifact"). 7 unless set; 0 removes them at the next pass.
+      TANGIBLE_DELETION_GRACE_DAYS: ${TANGIBLE_DELETION_GRACE_DAYS:-7}
+      # Days a burn worker uses one credential before it is asked to rotate
+      # it (deploy/README.md, "Draining and revoking a worker"). 90 unless
+      # set; 0 never asks by age.
+      TANGIBLE_WORKER_CREDENTIAL_MAX_AGE_DAYS: ${TANGIBLE_WORKER_CREDENTIAL_MAX_AGE_DAYS:-90}
       # RomM's roms directory, to show chosen games in RomM (deploy/README.md,
       # "Showing games in RomM"). Off unless set: uncomment this and the
       # matching volume below. Tangible writes only folders it marks as its

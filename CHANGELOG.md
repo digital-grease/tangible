@@ -165,6 +165,10 @@ may change between minor versions, and the release notes say how.
 - A 7z archive whose packed header lists its checksum, as tools built on
   the sevenz-rust2 library write it, was refused as unreadable ("its header
   could not be read"). It is now read, its header checked as before.
+- `TANGIBLE_DELETION_GRACE_DAYS` and `TANGIBLE_WORKER_CREDENTIAL_MAX_AGE_DAYS`
+  did nothing when set in `.env`, because `deploy/compose.yaml` did not pass
+  them to the server. It passes them now, with `TANGIBLE_ARTWORK`, and
+  `deploy/.env.example` lists all three.
 
 ## 0.2.1 (2026-11-12)
 

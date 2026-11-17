@@ -1578,6 +1578,54 @@ mod tests {
         "TANGIBLE_WORKER_STATE_DIR",
     ];
 
+    /// The server's variables that `deploy/compose.yaml` leaves out, each
+    /// for a reason. Every other one must be there, set or commented out to
+    /// uncomment: Compose passes the server only what it lists, so a setting
+    /// it leaves out does nothing when put in `.env`.
+    const NOT_IN_COMPOSE: &[&str] = &[
+        // The server writes no discs: each burn worker chooses its engine,
+        // as compose.yaml says where the server's would go.
+        "TANGIBLE_BURN_ENGINE",
+        // The image sets where its web UI is.
+        "TANGIBLE_WEB_ROOT",
+        // Compose migrates as a step of its own (deploy/README.md,
+        // "Upgrading"), not as the server starts.
+        "TANGIBLE_MIGRATE_ON_START",
+    ];
+
+    #[test]
+    fn compose_passes_the_server_every_setting() {
+        let compose = include_str!("../../../deploy/compose.yaml");
+        let listed = |name: &str| {
+            let key = format!("{name}:");
+            compose.lines().any(|line| {
+                let line = line.trim_start();
+                line.strip_prefix("# ").unwrap_or(line).starts_with(&key)
+            })
+        };
+        let cli = Cli::command();
+        let serve = cli.find_subcommand("serve").expect("a serve subcommand");
+        let mut missing = Vec::new();
+        for arg in serve.get_arguments() {
+            let Some(env) = arg.get_env() else { continue };
+            let name = env.to_string_lossy();
+            if !NOT_IN_COMPOSE.contains(&name.as_ref()) && !listed(&name) {
+                missing.push(name.into_owned());
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "deploy/compose.yaml does not pass the server {missing:?}; add each \
+             to its environment, or to NOT_IN_COMPOSE with why"
+        );
+        assert!(listed("TANGIBLE_ARTWORK"), "a setting it passes is found");
+        assert!(
+            listed("TANGIBLE_SECRET_KEY_FILE"),
+            "so is one commented out, to uncomment"
+        );
+        assert!(!listed("TANGIBLE_NOT_A_SETTING"));
+    }
+
     #[test]
     fn a_mistyped_variable_is_named_and_a_real_one_is_not() {
         let mut declared = std::collections::BTreeSet::new();
