@@ -26,6 +26,14 @@ may change between minor versions, and the release notes say how.
   the server on their shared Compose network, never passed it, so setting
   it there did nothing; `compose.worker.yaml` passes it.
 
+### Fixed
+
+- `deploy/.env.example` said a CUE/BIN disc burned through cdrdao is
+  recorded as written and unverified, because reading it back was not
+  built. It has been read back track by track since 0.1.0, MODE1/2048 data
+  compared and other tracks checked for length and readability, and
+  recorded as partially verified; the file now says so.
+
 ## 0.3.0 (2026-11-16)
 
 Tangible takes requests: anyone signed in asks for an item they own, an
