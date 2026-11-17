@@ -189,7 +189,10 @@ fn unique(tag: &str) -> Vec<u8> {
 async fn an_original_becomes_a_tombstone_its_record_kept_and_its_bytes_gone() {
     let _serial = SERIAL.lock().await;
     let harness = harness().await;
-    let artifact = harness.import("disc.bin", &unique("original")).await;
+    // Named to be found among the tombstones, which are listed from the
+    // shared database, oldest first, so may be more than one page holds.
+    let name = format!("tombstone-{}.bin", uuid::Uuid::now_v7().simple());
+    let artifact = harness.import(&name, &unique("original")).await;
     let digest = harness.digest_of(artifact).await;
     let path = harness.objects.object_path(&digest);
     let uri = format!("/api/v1/artifacts/{artifact}/deletion-requests");
@@ -282,17 +285,11 @@ async fn an_original_becomes_a_tombstone_its_record_kept_and_its_bytes_gone() {
             .all(|item| item["id"] != artifact.to_string()),
         "not in the library"
     );
-    let (_, tombstones) = harness
-        .admin("GET", "/api/v1/artifacts?deleted=true&limit=500", None)
-        .await;
-    assert!(
-        tombstones["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|item| item["id"] == artifact.to_string()),
-        "{tombstones}"
-    );
+    let deleted = format!("/api/v1/artifacts?deleted=true&name={name}");
+    let (_, tombstones) = harness.admin("GET", &deleted, None).await;
+    let only = &tombstones["items"];
+    assert_eq!(only.as_array().map(Vec::len), Some(1), "{tombstones}");
+    assert_eq!(only[0]["id"], artifact.to_string(), "{tombstones}");
 
     assert_eq!(
         harness.actions(artifact).await,
@@ -514,6 +511,10 @@ async fn a_request_is_kept_and_held_artifacts_are_refused() {
     assert_eq!(status, StatusCode::FORBIDDEN);
     let (status, _) = harness.send(&operator, "POST", &uri, Some(json!({}))).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Withdrawn, so no other test's pass collects it.
+    let (status, _) = harness.admin("DELETE", &uri, None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
 }
 
 #[tokio::test]
@@ -783,8 +784,10 @@ async fn a_retried_import_stores_again_what_collection_removed_meanwhile() {
         )
         .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    // At least its object: the database is shared, so the pass may also
+    // collect what another test left pending.
     let pass = harness.runner.pass().await.unwrap();
-    assert_eq!(pass.objects_removed, 1, "{pass:?}");
+    assert!(pass.objects_removed >= 1, "{pass:?}");
     assert!(!harness.objects.object_path(&digest).exists());
 
     // The retry, holding the lock from storing to registering, as the
