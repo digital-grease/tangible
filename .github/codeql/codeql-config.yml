@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 digitalgrease
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# What CodeQL analyses (.github/workflows/codeql.yml): everything but the
+# tests. Tests hold fixed passwords, tokens and nonces by design, to sign in
+# with and to check that a wrong one is refused, and print them in their
+# failure messages; every alert of a hard-coded cryptographic value, and of
+# cleartext logging, was one of those. Nothing here is built or shipped.
+#
+# A test module inside a source file (#[cfg(test)]) is still analysed: a
+# path cannot pick it out.
+
+name: Tangible
+
+paths-ignore:
+  # Each Rust crate's integration tests.
+  - crates/*/tests/**
+  # The web UI's unit and component tests.
+  - web/src/**/*.test.ts
