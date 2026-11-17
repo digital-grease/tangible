@@ -593,7 +593,7 @@ fn with_policies(state: ApiState, serve: &ServeConfig) -> ApiState {
 /// Start the runners that keep the library tidy and dressed: deletions
 /// (ADR 0020) and cover art (ADR 0023).
 fn start_upkeep(state: &ApiState, serve: &ServeConfig) -> impl Iterator<Item = Stoppable> {
-    start_deletions(state)
+    start_deletions(state, serve.orphan_collection_interval_days)
         .into_iter()
         .chain(start_artwork(state, serve.artwork))
 }
@@ -615,11 +615,21 @@ fn start_artwork(state: &ApiState, enabled: bool) -> Option<Stoppable> {
 }
 
 /// Start the runner that makes artifacts due for deletion into tombstones
-/// and collects their objects (ADR 0020), when there is a library.
-fn start_deletions(state: &ApiState) -> Option<Stoppable> {
+/// and collects their objects (ADR 0020), and collects orphans from the
+/// plans asked to be collected and on its schedule (ADR 0024), when there
+/// is a library.
+fn start_deletions(state: &ApiState, orphan_interval_days: u32) -> Option<Stoppable> {
     let manifests = state.manifests()?.clone();
+    if orphan_interval_days > 0 {
+        tracing::info!(
+            days = orphan_interval_days,
+            "orphaned objects are collected that many days after the last collection ends \
+             (TANGIBLE_ORPHAN_COLLECTION_INTERVAL_DAYS)"
+        );
+    }
     let runner = tangible_api::deletion::DeletionRunner::new(state.database().clone(), manifests)
-        .with_nudge(state.deletion_nudge());
+        .with_nudge(state.deletion_nudge())
+        .with_orphan_schedule(orphan_interval_days);
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(runner.run(async {
         let _ = stopped.await;
@@ -908,6 +918,7 @@ fn diagnostics_settings(
             }),
         secret_key_id: secret_key.map(|key| key.id().to_owned()),
         scrub_interval_days: serve.scrub_interval_days,
+        orphan_collection_interval_days: serve.orphan_collection_interval_days,
         // Checked at start too; a mistyped id fails there.
         removable_roots: WatchRoots::parse(&serve.watch_roots)
             .with_removable(serve.removable_roots.split(','))
@@ -1562,6 +1573,7 @@ mod tests {
         "TANGIBLE_REPORT_SCRUB_ADDRESSES",
         "TANGIBLE_ROMM_EXPORT_ROOT",
         "TANGIBLE_SCRUB_INTERVAL_DAYS",
+        "TANGIBLE_ORPHAN_COLLECTION_INTERVAL_DAYS",
         // The path to the key file, which is secret; the path is not.
         "TANGIBLE_SECRET_KEY_FILE",
         "TANGIBLE_SERVER_URL",

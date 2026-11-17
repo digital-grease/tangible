@@ -17,7 +17,9 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime};
 
 use tangible_db::Database;
-use tangible_db::gc_plans::{self, Collected, NewPlan, NewPlanObject, Outcome, RowHold};
+use tangible_db::gc_plans::{
+    self, Collected, CollectionSummary, NewPlan, NewPlanObject, Outcome, Refusal, RowHold,
+};
 use tangible_domain::Sha256Digest;
 use tangible_storage::{FilesystemStore, ManifestStore};
 use time::OffsetDateTime;
@@ -30,6 +32,76 @@ pub const MIN_GRACE_DAYS: u32 = 1;
 
 /// How long after it is made a plan can be collected.
 pub const PLAN_LIFETIME: Duration = Duration::from_hours(1);
+
+/// How long after a scheduled plan that could not read every mark the
+/// schedule tries again, rather than waiting its whole interval.
+pub const UNCERTAIN_RETRY: Duration = Duration::from_hours(24);
+
+/// Whether the schedule makes a plan now (ADR 0024, decision 6): every
+/// `interval_days` after the last collection ended, by hand or by
+/// schedule, or at once when none has; never with an interval of 0, while
+/// a plan waits to be collected, or within a day of a scheduled plan that
+/// could not read every mark.
+#[must_use]
+pub fn scheduled_plan_due(
+    interval_days: u32,
+    summary: &CollectionSummary,
+    now: OffsetDateTime,
+) -> bool {
+    if interval_days == 0 || summary.queued > 0 {
+        return false;
+    }
+    let retry = time::Duration::try_from(UNCERTAIN_RETRY).unwrap_or(time::Duration::DAY);
+    if let Some((made, false)) = summary.last_scheduled
+        && now - made < retry
+    {
+        return false;
+    }
+    summary
+        .last_collected
+        .is_none_or(|last| now - last.at >= time::Duration::days(i64::from(interval_days)))
+}
+
+/// Make a plan as the schedule and ask for it to be collected, which the
+/// deletion runner then does. The plan's id, and whether it was queued: one
+/// that could not read every mark is kept and not queued.
+///
+/// # Errors
+///
+/// As [`make_plan`], or a database failure.
+pub async fn schedule_plan(
+    database: &Database,
+    manifests: &ManifestStore,
+) -> Result<(uuid::Uuid, bool), GcError> {
+    let id = make_plan(database, manifests, crate::gc::DEFAULT_GRACE_DAYS, None).await?;
+    let lifetime = time::Duration::try_from(PLAN_LIFETIME).unwrap_or(time::Duration::HOUR);
+    let queued = gc_plans::request_collection(
+        database.pool(),
+        id,
+        None,
+        lifetime,
+        i64::from(MIN_GRACE_DAYS) * 86_400,
+    )
+    .await?;
+    match queued {
+        Ok(_) => {
+            tracing::info!(plan_id = %id, "scheduled orphan collection planned");
+            Ok((id, true))
+        }
+        Err(Refusal::Uncertain) => {
+            tracing::warn!(
+                plan_id = %id,
+                "a manifest or an import's checkpoint could not be read, so the scheduled \
+                 orphan collection collects nothing; it tries again in a day"
+            );
+            Ok((id, false))
+        }
+        Err(refusal) => {
+            tracing::warn!(plan_id = %id, ?refusal, "a scheduled plan was not queued");
+            Ok((id, false))
+        }
+    }
+}
 
 /// Make a plan with grace period `grace_days` and keep it: `planned_by` is
 /// the administrator, or `None` for the schedule. Its id.
@@ -282,6 +354,66 @@ fn to_micros(at: SystemTime) -> OffsetDateTime {
 #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    fn at(days: i64) -> OffsetDateTime {
+        OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap() + time::Duration::days(days)
+    }
+
+    fn collected(on: i64) -> Collected {
+        Collected {
+            at: at(on),
+            removed_count: 1,
+            removed_bytes: 1,
+            kept_count: 0,
+            kept_bytes: 0,
+            partial_files_removed: 0,
+        }
+    }
+
+    #[test]
+    fn the_schedule_runs_every_interval_after_the_last_collection() {
+        let never = CollectionSummary::default();
+        // Off.
+        assert!(!scheduled_plan_due(0, &never, at(0)));
+        // Never collected: at once.
+        assert!(scheduled_plan_due(7, &never, at(0)));
+        // Collected six days ago, by hand or by schedule: not yet; seven: now.
+        let last = CollectionSummary {
+            last_collected: Some(collected(0)),
+            ..CollectionSummary::default()
+        };
+        assert!(!scheduled_plan_due(7, &last, at(6)));
+        assert!(scheduled_plan_due(7, &last, at(7)));
+        assert!(!scheduled_plan_due(0, &last, at(100)));
+    }
+
+    #[test]
+    fn the_schedule_waits_for_a_queued_plan_and_a_day_after_an_uncertain_one() {
+        let queued = CollectionSummary {
+            queued: 1,
+            ..CollectionSummary::default()
+        };
+        assert!(!scheduled_plan_due(1, &queued, at(30)));
+        let uncertain = CollectionSummary {
+            last_collected: Some(collected(0)),
+            last_scheduled: Some((at(10), false)),
+            queued: 0,
+        };
+        // Due since day 7, but the plan on day 10 could not read every mark:
+        // a day later, not seven.
+        assert!(!scheduled_plan_due(
+            7,
+            &uncertain,
+            at(10) + time::Duration::hours(23)
+        ));
+        assert!(scheduled_plan_due(7, &uncertain, at(11)));
+        // A certain scheduled plan does not hold it back.
+        let certain = CollectionSummary {
+            last_scheduled: Some((at(10), true)),
+            ..uncertain
+        };
+        assert!(scheduled_plan_due(7, &certain, at(10)));
+    }
 
     #[test]
     fn a_file_time_keeps_its_microseconds_and_drops_the_rest() {

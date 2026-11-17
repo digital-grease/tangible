@@ -29,6 +29,15 @@ may change between minor versions, and the release notes say how.
   file is the one planned; the plan keeps what became of each. A failed
   import keeps its staging area, so it can still be retried. Migration
   0040 adds the plans' tables. `tangible gc` stays a dry run.
+- Orphaned objects can be collected on a schedule as well:
+  `TANGIBLE_ORPHAN_COLLECTION_INTERVAL_DAYS`, off (0) by default, has the
+  server plan, keeping anything younger than a week, and collect that plan
+  every so many days after the last collection, by hand or by schedule. A
+  plan that could not read every manifest and import checkpoint collects
+  nothing and is tried again a day later. The Diagnostics page's new
+  Orphans check says when orphans were last collected and what that
+  removed, and warns when a scheduled plan was uncertain or the schedule
+  has fallen behind.
 - The garbage collection plan (`GET /api/v1/storage/gc-plan`) counts the
   staging areas of imports that failed for good or were canceled, the
   largest first with each import's name and failure: the evidence they

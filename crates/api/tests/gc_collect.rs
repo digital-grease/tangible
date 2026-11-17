@@ -639,3 +639,59 @@ async fn an_import_retried_after_its_orphan_was_collected_completes() {
         .await
         .expect("stored again");
 }
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_scheduled_plan_is_collected_as_the_schedule_and_an_uncertain_one_is_not() {
+    let _serial = SERIAL.lock().await;
+    let h = harness().await;
+    let orphan = h.old_orphan().await;
+
+    // With no interval the runner never plans.
+    assert_eq!(h.runner.run_schedule().await.unwrap(), None);
+
+    let (id, queued) = tangible_api::orphans::schedule_plan(&h.database, &h.manifests)
+        .await
+        .unwrap();
+    assert!(queued);
+    let pass = h.runner.collect_queued_plans().await.unwrap();
+    assert!(pass.plans >= 1, "{pass:?}");
+    let (status, body) = h
+        .admin("GET", &format!("/api/v1/storage/gc-plans/{id}"))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["plan"]["state"], "collected", "{body}");
+    assert_eq!(body["plan"]["planned_by"], Value::Null);
+    assert_eq!(body["plan"]["collect_requested_by"], Value::Null);
+    assert_eq!(body["plan"]["grace_seconds"], 7 * 86_400);
+    assert_eq!(body["plan"]["collected"]["removed"]["count"], 1);
+    assert!(!h.present(&orphan));
+    let actor: (String, String) = sqlx::query_as(
+        "SELECT actor_type, actor_id FROM audit_events
+         WHERE action = 'storage.orphans_removed' AND target_id = $1",
+    )
+    .bind(id.to_string())
+    .fetch_one(&h.pool)
+    .await
+    .unwrap();
+    assert_eq!(actor, ("system".to_owned(), "schedule".to_owned()));
+
+    // A plan that could not read every mark is kept and not queued.
+    let other = h.old_orphan().await;
+    let unreadable = h
+        .manifests
+        .manifest_path(tangible_domain::ArtifactId::generate());
+    std::fs::write(&unreadable, b"{ not a manifest").unwrap();
+    let (id, queued) = tangible_api::orphans::schedule_plan(&h.database, &h.manifests)
+        .await
+        .unwrap();
+    std::fs::remove_file(&unreadable).unwrap();
+    assert!(!queued);
+    let (_, body) = h
+        .admin("GET", &format!("/api/v1/storage/gc-plans/{id}"))
+        .await;
+    assert_eq!(body["plan"]["state"], "uncertain");
+    assert_eq!(body["plan"]["collect_requested_at"], Value::Null);
+    h.runner.collect_queued_plans().await.unwrap();
+    assert!(h.present(&other));
+}

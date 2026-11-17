@@ -326,6 +326,18 @@ pub struct ServeConfig {
     )]
     pub deletion_grace_days: u32,
 
+    /// Days after orphaned objects were last collected before the server
+    /// collects them again, up to 3650 (ADR 0024): it plans with a week's
+    /// grace and collects the plan at once. 0, the default, never does; an
+    /// administrator can still collect from a plan by hand.
+    #[arg(
+        long,
+        env = "TANGIBLE_ORPHAN_COLLECTION_INTERVAL_DAYS",
+        default_value_t = 0,
+        value_parser = clap::value_parser!(u32).range(0..=3650)
+    )]
+    pub orphan_collection_interval_days: u32,
+
     /// Whether to compute every artifact's preservation hashes (CRC32, MD5
     /// and SHA-1 of its files and CD tracks) in the background, for matching
     /// against DATs. On by default; each artifact's stored bytes are read
@@ -700,6 +712,22 @@ mod tests {
         for refused in ["-1", "3651", "weekly"] {
             assert!(
                 TestCli::try_parse_from(["tangible", "--scrub-interval-days", refused]).is_err(),
+                "{refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn orphans_are_never_collected_on_a_schedule_unless_asked_for() {
+        // A fresh install removes nothing nobody chose to remove (ADR 0024).
+        assert_eq!(parse().orphan_collection_interval_days, 0);
+        let cli = TestCli::try_parse_from(["tangible", "--orphan-collection-interval-days", "7"])
+            .expect("a week parses");
+        assert_eq!(cli.serve.orphan_collection_interval_days, 7);
+        for refused in ["-1", "3651", "weekly"] {
+            assert!(
+                TestCli::try_parse_from(["tangible", "--orphan-collection-interval-days", refused])
+                    .is_err(),
                 "{refused}"
             );
         }

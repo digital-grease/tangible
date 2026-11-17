@@ -351,6 +351,8 @@ pub struct DeletionRunner {
     deferred_since: Arc<std::sync::Mutex<Option<Instant>>>,
     max_deferral: Duration,
     batch: i64,
+    /// Days between scheduled orphan collections; 0 never (ADR 0024).
+    orphan_interval_days: u32,
 }
 
 impl DeletionRunner {
@@ -364,7 +366,16 @@ impl DeletionRunner {
             deferred_since: Arc::default(),
             max_deferral: MAX_DEFERRAL,
             batch: BATCH,
+            orphan_interval_days: 0,
         }
+    }
+
+    /// Collect orphans every `days` after the last collection ended
+    /// (`TANGIBLE_ORPHAN_COLLECTION_INTERVAL_DAYS`, ADR 0024); 0 never.
+    #[must_use]
+    pub const fn with_orphan_schedule(mut self, days: u32) -> Self {
+        self.orphan_interval_days = days;
+        self
     }
 
     /// How many artifacts due are read at a time.
@@ -416,6 +427,9 @@ impl DeletionRunner {
                 }
                 Ok(_) => {}
                 Err(error) => tracing::error!(error = ?error, "a deletion pass failed"),
+            }
+            if let Err(error) = self.run_schedule().await {
+                tracing::error!(error = ?error, "the scheduled orphan collection failed");
             }
             if let Err(error) = self.collect_queued_plans().await {
                 tracing::error!(error = ?error, "collecting the queued plans failed");
@@ -546,6 +560,29 @@ impl DeletionRunner {
             audit_collection(pool, pass.objects_removed, pass.bytes_freed).await?;
         }
         Ok(())
+    }
+
+    /// Make and queue a plan as the schedule, when one is due; its id and
+    /// whether it was queued. [`Self::collect_queued_plans`] collects it.
+    ///
+    /// # Errors
+    ///
+    /// A database failure, or a store that cannot be walked.
+    pub async fn run_schedule(&self) -> Result<Option<(uuid::Uuid, bool)>, crate::gc::GcError> {
+        if self.orphan_interval_days == 0 {
+            return Ok(None);
+        }
+        let summary = tangible_db::gc_plans::collection_summary(self.database.pool()).await?;
+        if !crate::orphans::scheduled_plan_due(
+            self.orphan_interval_days,
+            &summary,
+            time::OffsetDateTime::now_utc(),
+        ) {
+            return Ok(None);
+        }
+        crate::orphans::schedule_plan(&self.database, &self.manifests)
+            .await
+            .map(Some)
     }
 
     /// Collect every plan asked to be collected, oldest request first,

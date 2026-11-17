@@ -181,6 +181,9 @@ pub struct DiagnosticsSettings {
     /// Days after a full scrub ends before the next is queued
     /// (`TANGIBLE_SCRUB_INTERVAL_DAYS`); 0 is never.
     pub scrub_interval_days: u32,
+    /// Days after orphans were last collected before the server collects
+    /// them again (`TANGIBLE_ORPHAN_COLLECTION_INTERVAL_DAYS`); 0 is never.
+    pub orphan_collection_interval_days: u32,
     /// The watched roots Tangible may delete in
     /// (`TANGIBLE_REMOVABLE_ROOTS`, ADR 0017), to see that each is writable.
     pub removable_roots: Vec<PathBuf>,
@@ -263,6 +266,8 @@ pub struct Facts {
     pub integrity: Answer<IntegritySummary>,
     /// Preservation hashes and DATs, counted.
     pub identification: Answer<IdentificationSummary>,
+    /// Where orphan collection stands (ADR 0024).
+    pub orphans: Answer<tangible_db::gc_plans::CollectionSummary>,
     /// RomM's API, when an administrator configured it.
     pub romm_api: Answer<Option<RommApiFacts>>,
     /// Each watched root Tangible may delete in.
@@ -318,6 +323,11 @@ pub async fn collect(database: &Database, settings: &DiagnosticsSettings) -> Fac
     } else {
         bounded(tangible_db::identification::identification_summary(pool)).await
     };
+    let orphans = if let Answer::Unavailable(reason) = &database_answer {
+        skipped(reason)
+    } else {
+        bounded(tangible_db::gc_plans::collection_summary(pool)).await
+    };
     let (pending_migrations, workers, drives, failures, sealed_secrets, integrity, romm_api) =
         if let Answer::Unavailable(reason) = &database_answer {
             (
@@ -364,6 +374,7 @@ pub async fn collect(database: &Database, settings: &DiagnosticsSettings) -> Fac
         sealed_secrets,
         integrity,
         identification,
+        orphans,
         romm_api,
         removable_roots,
     }
@@ -415,6 +426,11 @@ pub fn assess(settings: &DiagnosticsSettings, facts: &Facts, now: OffsetDateTime
                 directory_check("Library", &facts.library),
                 directory_check("Staging", &facts.staging),
                 integrity_check(settings.scrub_interval_days, &facts.integrity, now),
+                orphans_check(
+                    settings.orphan_collection_interval_days,
+                    &facts.orphans,
+                    now,
+                ),
                 identification_check(settings.preservation_hashes, &facts.identification),
                 removable_roots_check(&facts.removable_roots),
             ],
@@ -616,6 +632,67 @@ fn integrity_check(
         }
     }
     check("Integrity", status, parts.join("; "))
+}
+
+/// When orphans were last collected, and whether the schedule keeps up
+/// (ADR 0024). Counts and times only.
+fn orphans_check(
+    interval_days: u32,
+    orphans: &Answer<tangible_db::gc_plans::CollectionSummary>,
+    now: OffsetDateTime,
+) -> DiagnosticCheck {
+    let summary = match orphans {
+        Answer::Found(summary) => summary,
+        Answer::Unavailable(reason) => {
+            return check("Orphans", CheckStatus::Warn, reason.clone());
+        }
+    };
+    let mut status = CheckStatus::Ok;
+    let mut parts = Vec::new();
+    match &summary.last_collected {
+        None => parts.push("none collected yet".to_owned()),
+        Some(last) => parts.push(format!(
+            "the last collection, {}, removed {} object(s) ({})",
+            timestamp(last.at),
+            last.removed_count,
+            bytes(u64::try_from(last.removed_bytes).unwrap_or(0))
+        )),
+    }
+    if summary.queued > 0 {
+        parts.push(format!(
+            "{} plan(s) wait to be collected, once imports under way end",
+            summary.queued
+        ));
+    }
+    if interval_days == 0 {
+        parts.push(
+            "none scheduled (TANGIBLE_ORPHAN_COLLECTION_INTERVAL_DAYS); an administrator can \
+             still collect from a plan by hand"
+                .to_owned(),
+        );
+        return check("Orphans", status, parts.join("; "));
+    }
+    parts.push(format!(
+        "collected {interval_days} day(s) after the last collection ends"
+    ));
+    let last_at = summary.last_collected.map(|last| last.at);
+    if let Some((made, false)) = summary.last_scheduled
+        && last_at.is_none_or(|at| made > at)
+    {
+        status = CheckStatus::Warn;
+        parts.push(format!(
+            "the scheduled plan of {} could not read every manifest and import checkpoint, so \
+             nothing was collected; it is tried again daily, and the server log says which",
+            timestamp(made)
+        ));
+    }
+    // Twice the interval with no collection: the schedule is not keeping up.
+    let overdue = time::Duration::days(2 * i64::from(interval_days));
+    if last_at.is_some_and(|at| now - at > overdue) {
+        status = CheckStatus::Warn;
+        parts.push("and the next is overdue".to_owned());
+    }
+    check("Orphans", status, parts.join("; "))
 }
 
 /// How people sign in: by password, through a provider, or both.
@@ -1409,6 +1486,7 @@ mod tests {
             url_imports: None,
             secret_key_id: None,
             scrub_interval_days: 0,
+            orphan_collection_interval_days: 0,
             removable_roots: Vec::new(),
             preservation_hashes: true,
             metrics: MetricsSetting::Off,
@@ -1481,6 +1559,7 @@ mod tests {
                 damaged_artifacts: 0,
             }),
             identification: Answer::Found(IdentificationSummary::default()),
+            orphans: Answer::Found(tangible_db::gc_plans::CollectionSummary::default()),
             romm_api: Answer::Found(None),
             removable_roots: Vec::new(),
         }
@@ -2199,6 +2278,78 @@ mod tests {
         facts.integrity = Answer::Unavailable("not checked: down".to_owned());
         let line = find(&assess(&settings(), &facts, now()), "Integrity").clone();
         assert_eq!(line.status, CheckStatus::Warn);
+    }
+
+    fn orphans_collected(days_ago: i64) -> tangible_db::gc_plans::Collected {
+        tangible_db::gc_plans::Collected {
+            at: now() - time::Duration::days(days_ago),
+            removed_count: 12,
+            removed_bytes: 3 * 1024 * 1024,
+            kept_count: 1,
+            kept_bytes: 10,
+            partial_files_removed: 0,
+        }
+    }
+
+    #[test]
+    fn orphan_collection_says_when_it_last_ran_and_whether_the_schedule_keeps_up() {
+        use tangible_db::gc_plans::CollectionSummary;
+        let mut facts = healthy();
+        let line = |settings: &DiagnosticsSettings, facts: &Facts| {
+            find(&assess(settings, facts, now()), "Orphans").clone()
+        };
+
+        // Off, and never collected: fine, and it says how to collect.
+        let off = line(&settings(), &facts);
+        assert_eq!(off.status, CheckStatus::Ok);
+        assert!(off.detail.contains("none collected yet"));
+        assert!(
+            off.detail
+                .contains("TANGIBLE_ORPHAN_COLLECTION_INTERVAL_DAYS")
+        );
+
+        let mut weekly = settings();
+        weekly.orphan_collection_interval_days = 7;
+        facts.orphans = Answer::Found(CollectionSummary {
+            last_collected: Some(orphans_collected(3)),
+            last_scheduled: Some((now() - time::Duration::days(3), true)),
+            queued: 1,
+        });
+        let fine = line(&weekly, &facts);
+        assert_eq!(fine.status, CheckStatus::Ok, "{}", fine.detail);
+        assert!(
+            fine.detail.contains("removed 12 object(s) (3.0 MiB)"),
+            "{}",
+            fine.detail
+        );
+        assert!(fine.detail.contains("1 plan(s) wait to be collected"));
+        assert!(
+            fine.detail
+                .contains("collected 7 day(s) after the last collection ends")
+        );
+
+        // A scheduled plan since then that could not read every mark.
+        facts.orphans = Answer::Found(CollectionSummary {
+            last_collected: Some(orphans_collected(8)),
+            last_scheduled: Some((now() - time::Duration::hours(2), false)),
+            queued: 0,
+        });
+        let uncertain = line(&weekly, &facts);
+        assert_eq!(uncertain.status, CheckStatus::Warn);
+        assert!(uncertain.detail.contains("could not read every manifest"));
+
+        // Twice the interval with nothing collected.
+        facts.orphans = Answer::Found(CollectionSummary {
+            last_collected: Some(orphans_collected(15)),
+            last_scheduled: None,
+            queued: 0,
+        });
+        let overdue = line(&weekly, &facts);
+        assert_eq!(overdue.status, CheckStatus::Warn);
+        assert!(overdue.detail.contains("overdue"));
+
+        facts.orphans = Answer::Unavailable("not checked: down".to_owned());
+        assert_eq!(line(&weekly, &facts).status, CheckStatus::Warn);
     }
 
     #[test]

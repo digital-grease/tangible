@@ -426,16 +426,55 @@ pub async fn queued_plans(pool: &PgPool) -> Result<Vec<uuid::Uuid>, DbError> {
     .map_err(DbError::Query)
 }
 
-/// When the last collection of a plan ended, by hand or by schedule.
+/// Where orphan collection stands, for the schedule and for diagnostics
+/// (ADR 0024, decision 6).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CollectionSummary {
+    /// The last plan collected, by hand or by schedule, and what it did.
+    pub last_collected: Option<Collected>,
+    /// The last plan the schedule made: when, and whether it could read
+    /// every mark.
+    pub last_scheduled: Option<(OffsetDateTime, bool)>,
+    /// Plans asked to be collected and not collected yet.
+    pub queued: i64,
+}
+
+/// Where orphan collection stands.
 ///
 /// # Errors
 ///
 /// [`DbError::Query`] on a database failure.
-pub async fn last_collected_at(pool: &PgPool) -> Result<Option<OffsetDateTime>, DbError> {
-    sqlx::query_scalar("SELECT max(collected_at) FROM gc_plans")
-        .fetch_one(pool)
-        .await
-        .map_err(DbError::Query)
+pub async fn collection_summary(pool: &PgPool) -> Result<CollectionSummary, DbError> {
+    let last = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {PLAN_COLUMNS} FROM gc_plans WHERE collected_at IS NOT NULL
+         ORDER BY collected_at DESC, id DESC LIMIT 1"
+    )))
+    .fetch_optional(pool)
+    .await
+    .map_err(DbError::Query)?;
+    let last_collected = match last {
+        Some(row) => plan_row(&row)?.collected,
+        None => None,
+    };
+    let last_scheduled: Option<(OffsetDateTime, bool)> = sqlx::query_as(
+        "SELECT created_at, certain FROM gc_plans WHERE planned_by IS NULL
+         ORDER BY created_at DESC, id DESC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(DbError::Query)?;
+    let queued: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM gc_plans
+         WHERE collect_requested_at IS NOT NULL AND collected_at IS NULL",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(DbError::Query)?;
+    Ok(CollectionSummary {
+        last_collected,
+        last_scheduled,
+        queued,
+    })
 }
 
 /// What became of one candidate.
