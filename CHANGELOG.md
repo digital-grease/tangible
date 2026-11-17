@@ -4,7 +4,50 @@ Notable changes to Tangible, newest first. Versions follow semantic
 versioning; during 0.x the API, the manifest schema and the database schema
 may change between minor versions, and the release notes say how.
 
-## Unreleased
+## 0.4.0 (2026-11-17)
+
+Tangible collects the files nothing needs: what an import stored before it
+failed or was canceled, output a derivation never registered, and partial
+files, from a plan that lists each one and where it came from, collected
+when an administrator asks or on a schedule you set. A burn worker can run
+on a machine of its own, and its drive can be named by a name that stays
+with it. The highlights, each detailed below:
+
+- Collecting orphaned files on the Storage page, after a question listing
+  every file and the import it came from, or through the API; or on a
+  schedule, `TANGIBLE_ORPHAN_COLLECTION_INTERVAL_DAYS`, off by default.
+- The garbage collection plan counts what failed imports keep in staging.
+- A burn worker on another machine, from `deploy/compose.worker.yaml`.
+- A drive named by its `/dev/disk/by-id` name, which survives plugging it
+  in again; the Workers page names each drive by its vendor and model.
+- Fixed: a retried import whose stored files were removed meanwhile stores
+  them again, and one whose staged copy is gone says so rather than
+  making an artifact without that file; a worker that cannot reach its
+  server says so first.
+
+### Upgrading from 0.3.0
+
+The usual upgrade, as deploy/README.md ("Upgrading") says: take a backup,
+change the image to this release's digest, pull, migrate, start. One
+migration, 0040, adds the tables for kept garbage collection plans; nothing
+is removed, and no API route or field is gone. 0.3.0 still runs on the
+migrated database, so going back needs no restore: run the digests you
+noted before upgrading again, the workers' included. It leaves the plans
+alone.
+
+Nothing is collected until an administrator asks or you set
+`TANGIBLE_ORPHAN_COLLECTION_INTERVAL_DAYS`. To collect on a schedule, take
+this release's `deploy/compose.yaml`, or its line for that setting, which
+passes it to the server.
+
+This release's worker files, `compose.hardware.yaml` and the new
+`compose.worker.yaml`, map the drive in Compose's long form and need Docker
+Compose 2.29.3 or later; a `.env` naming `/dev/srN` works with them as
+before. `TANGIBLE_WORKER_PLAIN_HTTP` now belongs in `worker.env.example`:
+`compose.hardware.yaml` never passed it. A 0.3.0 worker keeps working with
+a 0.4.0 server; upgrade it too for the clearer message when it cannot reach
+the server. If you built the decryption image, build it again from this
+release.
 
 ### Added
 
@@ -18,7 +61,7 @@ may change between minor versions, and the release notes say how.
   layer onto it. deploy/README.md ("A worker on another machine") goes
   through it. Before, the only worker file was `compose.hardware.yaml`,
   which runs in the server's stack and would not start without it.
-- Orphaned objects can be collected (ADR 0024): bytes an import stored
+- Orphaned objects can be collected: bytes an import stored
   before it failed for good or was canceled, output a derivation never
   registered, and partial files ingests left behind. Until now only a
   deleted artifact's bytes were ever removed, and these stayed for good.

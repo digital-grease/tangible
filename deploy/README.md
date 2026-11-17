@@ -949,7 +949,7 @@ correctly signed image. `cosign version` says which you have.
 
 ```bash
 IMAGE=ghcr.io/digital-grease/tangible@sha256:<digest from the release page>
-TAG=v0.3.0
+TAG=v0.4.0
 
 # The image was signed by this repository's release workflow at this tag.
 cosign verify "$IMAGE" \
@@ -1042,16 +1042,16 @@ check it carries what you expect:
 
 ```bash
 docker build -f deploy/decryption/Dockerfile \
-  --build-arg TANGIBLE_IMAGE=ghcr.io/digital-grease/tangible:v0.3.0 \
-  -t tangible-decryption:v0.3.0 deploy/decryption
-docker run --rm --entrypoint cat tangible-decryption:v0.3.0 /usr/share/tangible/decryption.json
+  --build-arg TANGIBLE_IMAGE=ghcr.io/digital-grease/tangible:v0.4.0 \
+  -t tangible-decryption:v0.4.0 deploy/decryption
+docker run --rm --entrypoint cat tangible-decryption:v0.4.0 /usr/share/tangible/decryption.json
 ```
 
 Run the drive's worker from it with one more override, which changes only
 the image:
 
 ```bash
-TANGIBLE_DECRYPTION_IMAGE=tangible-decryption:v0.3.0 docker compose \
+TANGIBLE_DECRYPTION_IMAGE=tangible-decryption:v0.4.0 docker compose \
   -f deploy/compose.yaml -f deploy/compose.hardware.yaml \
   -f deploy/compose.decryption.yaml up -d
 ```
