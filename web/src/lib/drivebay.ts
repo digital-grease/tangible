@@ -11,7 +11,7 @@
 import { jobStateLabel } from './burns';
 import type { DiscShape } from './disc';
 import { ripStateLabel } from './rips';
-import { erasureStateLabel, workerStatusLabel, type DriveView } from './workers';
+import { driveHardware, erasureStateLabel, workerStatusLabel, type DriveView } from './workers';
 import type { Tone } from './components/ui/tone';
 
 /** How the drawing beside a drive is drawn. */
@@ -27,9 +27,11 @@ export interface BayEntry {
   id: string;
   name: string;
   /**
-   * The drive's worker, and for an administrator its device:
-   * "worker-name · /dev/disc-block". Host device paths are not shown to
-   * anybody else (UX.md 11).
+   * The drive's worker and, when the drive said, its hardware:
+   * "worker-name · Slimtype DVD A DS8A8SH". Never its device path, which
+   * is the one inside its worker's container and the same for every drive
+   * (and a host's device paths are not for anybody but an administrator,
+   * UX.md 11).
    */
   where: string;
   tone: Tone;
@@ -61,18 +63,13 @@ export function profileFamily(profile: string | null | undefined): string | null
   return null;
 }
 
-/**
- * One drive as the bay shows it. `device` adds the host's device path to
- * where it is, for an administrator.
- */
-export function bayEntry(
-  drive: DriveView,
-  { device = false }: { device?: boolean } = {},
-): BayEntry {
+/** One drive as the bay shows it. */
+export function bayEntry(drive: DriveView): BayEntry {
+  const hardware = driveHardware(drive);
   const base = {
     id: drive.id,
     name: drive.name,
-    where: device ? `${drive.worker_name} · ${drive.device}` : drive.worker_name,
+    where: hardware ? `${drive.worker_name} · ${hardware}` : drive.worker_name,
   };
   const activity = drive.activity;
   const empty: BayDisc = {

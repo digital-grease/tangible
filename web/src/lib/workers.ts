@@ -239,9 +239,18 @@ export function anyOpen(erasures: ErasureView[]): boolean {
   return erasures.some((erasure) => erasure.is_open);
 }
 
+/**
+ * A drive's vendor and model, "Slimtype DVD A DS8A8SH", or null when it gave
+ * neither. This names the hardware; its device path, which is the one inside
+ * its worker's container, does not (it is /dev/sr0 whichever drive it is).
+ */
+export function driveHardware(drive: Pick<DriveView, 'vendor' | 'model'>): string | null {
+  return [drive.vendor, drive.model].filter(Boolean).join(' ') || null;
+}
+
 /** What a drive says it is, in one line: "Slimtype DVD A DS8A8SH, firmware KS21". */
 export function driveModel(drive: Pick<DriveView, 'vendor' | 'model' | 'firmware'>): string {
-  const name = [drive.vendor, drive.model].filter(Boolean).join(' ');
+  const name = driveHardware(drive);
   if (!name) return drive.firmware ? `Firmware ${drive.firmware}` : 'Not reported';
   return drive.firmware ? `${name}, firmware ${drive.firmware}` : name;
 }

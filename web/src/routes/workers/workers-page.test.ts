@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 digitalgrease
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { axeViolations } from '$lib/testing/axe';
 
@@ -143,6 +143,33 @@ describe('Workers page', () => {
     const link = await screen.findByRole('link', { name: 'Homebrew compilation, disc 1' });
     expect(link.getAttribute('href')).toBe('/burns/j1');
     expect(screen.getByText('PIONEER BDR-212, firmware 1.10')).toBeTruthy();
+  });
+
+  it('names a drive by its hardware, and its device as the path inside its container', async () => {
+    server({
+      'GET /api/v1/workers?limit=200': {
+        status: 200,
+        body: { items: [worker('online')], next_cursor: null },
+      },
+      'GET /api/v1/drives': { status: 200, body: { items: [drive()] } },
+      'GET /api/v1/erasures?limit=20': { status: 200, body: { items: [] } },
+    });
+    render(WorkersPage);
+    const table = await screen.findByRole('table', { name: 'Every drive a worker has reported' });
+    const named = within(table).getByRole('rowheader');
+    expect(named.textContent).toContain('sr0');
+    expect(named.textContent).toContain('PIONEER BDR-212, firmware 1.10');
+    expect(named.textContent).not.toContain('/dev/');
+    const headers = within(table)
+      .getAllByRole('columnheader')
+      .map((header) => header.textContent?.trim());
+    const column = headers.indexOf('Device in its container');
+    expect(column).toBeGreaterThan(0);
+    const row = named.closest('tr');
+    expect(row?.children[column]?.textContent?.trim()).toBe('/dev/sr0');
+    expect(
+      screen.getByText(/A drive's device is its path inside its worker's container/),
+    ).toBeTruthy();
   });
 
   it('erases only once the loss is understood, taking the keyboard to the question', async () => {

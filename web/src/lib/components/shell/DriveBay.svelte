@@ -36,8 +36,7 @@
   let said = $state('');
   let seen: Map<string, string> | null = null;
 
-  // Host device paths are for administrators (UX.md 11).
-  const entry = (drive: DriveView) => bayEntry(drive, { device: administrator });
+  const entry = (drive: DriveView) => bayEntry(drive);
   const entries = $derived<BayEntry[]>((drives ?? []).map(entry));
   const open = $derived(fold === 'open' || (fold === 'auto' && anyBusy(drives ?? [])));
 

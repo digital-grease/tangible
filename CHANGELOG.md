@@ -25,6 +25,14 @@ may change between minor versions, and the release notes say how.
   `deploy/worker.env.example`. `compose.hardware.yaml`, whose worker reaches
   the server on their shared Compose network, never passed it, so setting
   it there did nothing; `compose.worker.yaml` passes it.
+- The Workers page and the drive bay name each drive by its vendor and
+  model. The device path the Workers page showed under each drive's name,
+  and the drive bay showed administrators, is the one inside its worker's
+  container, `/dev/sr0` for every drive in Tangible's Compose files, and
+  it read as the host's: a drive back on the host as `/dev/sr1` still
+  showed `/dev/sr0`. The Workers page now shows it in a column headed
+  "Device in its container", with a note that the worker's `.env` file
+  names the host's drive; the drive bay no longer shows it.
 
 ### Fixed
 

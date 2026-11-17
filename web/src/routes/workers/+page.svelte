@@ -400,8 +400,8 @@
               <th scope="col">Drive</th>
               <th scope="col">Now</th>
               <th scope="col">Worker</th>
-              <th scope="col">Model</th>
               <th scope="col">Connection</th>
+              <th scope="col">Device in its container</th>
               <th scope="col">Worker last seen</th>
               <th scope="col"><span class="visually-hidden">Actions</span></th>
             </tr>
@@ -423,7 +423,7 @@
                     />
                     <div class="names">
                       <span>{drive.name}</span>
-                      <code class="device">{drive.device}</code>
+                      <span class="small quiet">{driveModel(drive)}</span>
                     </div>
                   </div>
                 </th>
@@ -445,8 +445,8 @@
                     <span class="small quiet">{workerStatusLabel(drive.worker_status)}</span>
                   </div>
                 </td>
-                <td>{driveModel(drive)}</td>
                 <td>{connectionLabel(drive.connection)}</td>
+                <td><code class="device">{drive.device}</code></td>
                 <td>
                   {#if drive.worker_last_seen_at}
                     <time
@@ -472,6 +472,13 @@
             {/each}
           </tbody>
         </Table>
+        <div class="padded footnote">
+          <p>
+            A drive's device is its path inside its worker's container. Tangible's Compose files put
+            the drive there as /dev/sr0, whichever drive on the host it is; the worker's .env file
+            names that one (TANGIBLE_BLOCK_DEVICE).
+          </p>
+        </div>
       {/if}
 
       {#if erasingDrive}

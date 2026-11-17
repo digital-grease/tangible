@@ -57,9 +57,15 @@ describe('the drive bay', () => {
     const idle = bayEntry(drive());
     expect(idle).toMatchObject({ tone: 'idle', state: 'Idle', title: null, showsProgress: false });
     expect(idle.where).toBe('bench-1');
-    expect(bayEntry(drive(), { device: true }).where).toBe('bench-1 · /dev/disc-block');
     expect(idle.disc.mode).toBe('empty');
     expect(bayEntry(drive(null, 'offline')).state).toBe('Not heard from lately');
+  });
+
+  it('names a drive by its worker and hardware, never by its device path', () => {
+    const slimtype = { ...drive(), vendor: 'Slimtype', model: 'DVD A DS8A8SH' };
+    expect(bayEntry(slimtype).where).toBe('bench-1 · Slimtype DVD A DS8A8SH');
+    expect(bayEntry({ ...drive(), model: 'GH24NSD5' }).where).toBe('bench-1 · GH24NSD5');
+    expect(bayEntry(drive()).where).not.toContain('/dev/');
   });
 
   it('shows a burn writing with its progress, its title and the written area', () => {

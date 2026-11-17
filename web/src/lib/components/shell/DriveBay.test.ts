@@ -44,16 +44,17 @@ describe('the drive bay', () => {
     expect(await axeViolations(container)).toEqual([]);
   });
 
-  it("shows a drive's device path to an administrator only", async () => {
-    server(drives([drive('d1', 'Slimtype DS8A8SH', WRITING)]));
+  it("names a drive's hardware, and never its device path, to anybody", async () => {
+    const slimtype = { ...drive('d1', 'Slimtype DS8A8SH', WRITING), vendor: 'Slimtype' };
+    server(drives([{ ...slimtype, model: 'DVD A DS8A8SH' }]));
     const first = render(DriveBay);
-    await screen.findByText('Slimtype DS8A8SH');
+    expect(await screen.findByText('bench-1 · Slimtype DVD A DS8A8SH')).toBeTruthy();
     expect(screen.queryByText(/\/dev\//)).toBeNull();
     first.unmount();
 
     render(DriveBay, { administrator: true });
-    await screen.findByText('Slimtype DS8A8SH');
-    expect(screen.getByText(/\/dev\//)).toBeTruthy();
+    expect(await screen.findByText('bench-1 · Slimtype DVD A DS8A8SH')).toBeTruthy();
+    expect(screen.queryByText(/\/dev\//)).toBeNull();
   });
 
   it('folds to one line while every drive is idle, and opens and folds by hand', async () => {
