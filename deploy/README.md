@@ -1249,10 +1249,12 @@ the middle of storing files; otherwise the removal waits for the next pass,
 within a quarter of an hour. Every step is audited. Backups made before a
 deletion still hold the bytes.
 
-### Finding files nothing needs
+### Collecting files nothing needs
 
-Tangible removes a stored file only when an artifact that had it is
-deleted, as above. It can say which other files nothing needs:
+A deleted artifact's stored files go on their own, as above. Other files
+nothing needs stay until they are collected: what an import stored before
+it failed for good or was canceled, output a derivation never registered,
+and partial files left by interrupted uploads and imports. To see them:
 
 ```bash
 docker compose -f deploy/compose.yaml run --rm server gc
@@ -1266,15 +1268,41 @@ files left by uploads or imports that were interrupted, entries in the
 object tree that are not stored files, and files the catalogue records that
 are missing (`scrub` says which artifacts those belong to). `--limit` sets
 how many files it names, largest first; `--json` prints the same plan the
-API gives administrators (`GET /api/v1/storage/gc-plan`), which the Storage
-page shows when you ask for it. If a manifest or
+API gives administrators (`GET /api/v1/storage/gc-plan`). If a manifest or
 an import's checkpoint cannot be read, the plan says it is uncertain, since
-the unread one might name a listed file.
+the unread one might name a listed file. `gc` only reads.
 
-The plan only reads; it removes nothing. If you remove a listed file by
-hand, stop the server first: an import that has just stored the same bytes
-again may not have recorded them yet. A deleted artifact's kept manifest
-does not mark its files as needed.
+The Storage page shows the same plan when you ask for one, and also counts
+what imports that failed or were canceled keep in staging: the files they
+received, kept so they can be looked into or retried. Nothing removes those.
+
+To collect, plan on the Storage page, then choose "Collect…". It lists
+every file that would go and the import each came from, and asks first.
+Once you confirm, the server removes the listed files that nothing refers
+to still and that are unchanged since the plan, and the stale partial
+files, then shows what became of each file and lists the collection under
+Collections. Only a plan that read every manifest and checkpoint, kept a
+day's grace at least and is less than an hour old can be collected. While
+an import or a derivation is under way the server waits for it, for up to
+six hours, and then holds new ones back for the moment it takes. Every
+collection is audited. The API does the same: `POST
+/api/v1/storage/gc-plans`, then `POST /api/v1/storage/gc-plans/<id>/collect`.
+
+The server can collect on its own: set
+`TANGIBLE_ORPHAN_COLLECTION_INTERVAL_DAYS` to the number of days after a
+collection ends before the next. It plans with a week's grace and collects
+the plan at once. It is off by default, so nothing is removed that nobody
+chose to remove. A plan that could not read every manifest or checkpoint
+collects nothing and is tried again a day later. The Diagnostics page's
+Orphans check says when files were last collected and what that freed, and
+warns when the schedule falls behind.
+
+A collected file is gone; only a backup brings it back. The import that
+stored it keeps what it received, and retried, it stores the file again.
+Only the server collects, because only it knows when an import is between
+storing a file and recording it: do not remove a listed file by hand while
+it runs. A deleted artifact's kept manifest does not mark its files as
+needed.
 
 ## Identifying discs with DATs
 
