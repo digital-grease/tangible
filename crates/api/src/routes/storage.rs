@@ -20,7 +20,9 @@ use time::format_description::well_known::Rfc3339;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::auth::SignedIn;
-use crate::gc::{DEFAULT_GRACE_DAYS, GcPlan, GcSettings, MAX_GRACE_DAYS, Tally, plan};
+use crate::gc::{
+    DEFAULT_GRACE_DAYS, GcPlan, GcSettings, MAX_GRACE_DAYS, Tally, failed_import_staging, plan,
+};
 use crate::orphans::{MIN_GRACE_DAYS, PLAN_LIFETIME, make_plan};
 use crate::problem::{ErrorCode, Problem};
 use crate::state::ApiState;
@@ -57,9 +59,11 @@ pub struct GcPlanQuery {
                    objects nothing refers to (no artifact, published manifest or import under \
                    way, no reference count or retention lock) and older than the grace period, \
                    with what removing them would free. Also counts leftover partial files and \
-                   recorded objects whose file is missing. Nothing is removed: collecting \
-                   takes a plan kept for it (POST /api/v1/storage/gc-plans). Reads every \
-                   directory in the store, so it takes a while on a large library.",
+                   recorded objects whose file is missing, and the staging areas imports that \
+                   failed or were canceled keep, which are never collected. Nothing is \
+                   removed: collecting takes a plan kept for it (POST \
+                   /api/v1/storage/gc-plans). Reads every directory in the store, so it takes \
+                   a while on a large library.",
     params(GcPlanQuery),
     responses(
         (status = 200, description = "The plan", body = GcPlan),
@@ -85,19 +89,27 @@ pub async fn gc_plan(
             "this server has no library configured",
         )
     })?;
-    let planned = plan(
-        state.database(),
-        manifests,
-        GcSettings::days(grace_days, keep),
-    )
-    .await
-    .map_err(|error| {
+    let failed = |error: crate::gc::GcError| {
         tracing::error!(error = ?error, "a collection plan could not be made");
         Problem::new(
             ErrorCode::StorageUnavailable,
             "the store or the catalogue could not be read",
         )
-    })?;
+    };
+    let mut planned = plan(
+        state.database(),
+        manifests,
+        GcSettings::days(grace_days, keep),
+    )
+    .await
+    .map_err(failed)?;
+    if let Some(imports) = state.imports() {
+        planned.failed_import_staging = Some(
+            failed_import_staging(state.database(), imports.pipeline.staging(), keep)
+                .await
+                .map_err(failed)?,
+        );
+    }
     Ok(Json(planned))
 }
 

@@ -350,6 +350,8 @@ pub const API_BASE: &str = "/api/v1";
         gc::GcPlan,
         gc::GcCandidate,
         gc::Tally,
+        gc::FailedImportStaging,
+        gc::FailedImportArea,
         routes::storage::NewGcPlan,
         routes::storage::StoredGcPlanView,
         routes::storage::GcCollectionView,

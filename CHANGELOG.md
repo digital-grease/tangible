@@ -29,6 +29,10 @@ may change between minor versions, and the release notes say how.
   file is the one planned; the plan keeps what became of each. A failed
   import keeps its staging area, so it can still be retried. Migration
   0040 adds the plans' tables. `tangible gc` stays a dry run.
+- The garbage collection plan (`GET /api/v1/storage/gc-plan`) counts the
+  staging areas of imports that failed for good or were canceled, the
+  largest first with each import's name and failure: the evidence they
+  keep, which can outweigh their orphans. Nothing removes them.
 
 ### Changed
 

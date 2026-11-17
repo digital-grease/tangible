@@ -159,17 +159,7 @@ impl StagingManager {
     /// [`StagingError::Escape`] for an unusable identifier, or
     /// [`StagingError::Io`] if the directory cannot be created.
     pub async fn create(&self, kind: StagingKind, id: &str) -> Result<StagingArea, StagingError> {
-        if id.is_empty()
-            || id.contains('/')
-            || id.contains('\\')
-            || id.contains('\0')
-            || id == "."
-            || id == ".."
-        {
-            return Err(StagingError::Escape {
-                path: id.to_owned(),
-            });
-        }
+        plain_id(id)?;
 
         let path = self.root.join(kind.as_str()).join(id);
         fs::create_dir_all(&path)
@@ -241,6 +231,26 @@ impl StagingManager {
         Ok(found)
     }
 
+    /// The bytes the regular files in an area hold, counted without
+    /// following a link; 0 for an area that is not there. What a failed
+    /// import's evidence takes up (ADR 0024, decision 7).
+    ///
+    /// # Errors
+    ///
+    /// [`StagingError::Escape`] for an unusable identifier, or
+    /// [`StagingError::Io`] if a directory in it cannot be read.
+    pub async fn area_bytes(&self, kind: StagingKind, id: &str) -> Result<u64, StagingError> {
+        plain_id(id)?;
+        let area = self.root.join(kind.as_str()).join(id);
+        tokio::task::spawn_blocking(move || tree_bytes(&area))
+            .await
+            .map_err(|error| StagingError::Io {
+                operation: "counting a staging area",
+                path: PathBuf::new(),
+                source: std::io::Error::other(error.to_string()),
+            })?
+    }
+
     /// Delete an area and everything in it.
     ///
     /// # Errors
@@ -258,6 +268,61 @@ impl StagingManager {
             }),
         }
     }
+}
+
+/// Refuse an area identifier that is not a plain directory name: one with a
+/// separator would otherwise place the area somewhere unintended.
+fn plain_id(id: &str) -> Result<(), StagingError> {
+    if id.is_empty()
+        || id.contains('/')
+        || id.contains('\\')
+        || id.contains('\0')
+        || id == "."
+        || id == ".."
+    {
+        return Err(StagingError::Escape {
+            path: id.to_owned(),
+        });
+    }
+    Ok(())
+}
+
+/// The bytes of the regular files under `root`, following no link; 0 when
+/// `root` is not there.
+fn tree_bytes(root: &Path) -> Result<u64, StagingError> {
+    let failed = |operation, path: &Path, source| StagingError::Io {
+        operation,
+        path: path.to_path_buf(),
+        source,
+    };
+    match std::fs::symlink_metadata(root) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => return Ok(0),
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(failed("reading a staging area", root, error)),
+    }
+    let mut total = 0u64;
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            // Gone since it was found: an import finishing discards its area.
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => return Err(failed("listing a staging directory", &directory, error)),
+        };
+        for entry in entries {
+            let entry = entry.map_err(|e| failed("walking a staging directory", &directory, e))?;
+            let path = entry.path();
+            match std::fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.is_dir() => pending.push(path),
+                Ok(metadata) if metadata.is_file() => total += metadata.len(),
+                Ok(_) => {}
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => return Err(failed("reading a staged file's metadata", &path, error)),
+            }
+        }
+    }
+    Ok(total)
 }
 
 /// One job's isolated scratch directory.

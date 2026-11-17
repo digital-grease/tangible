@@ -2106,7 +2106,7 @@ export interface paths {
         /**
          * What garbage collection would remove now. Nothing is removed: collecting
          *     takes a plan kept for it ([`create_gc_plan`]).
-         * @description Plan garbage collection, a dry run: walk the object store and report the objects nothing refers to (no artifact, published manifest or import under way, no reference count or retention lock) and older than the grace period, with what removing them would free. Also counts leftover partial files and recorded objects whose file is missing. Nothing is removed: collecting takes a plan kept for it (POST /api/v1/storage/gc-plans). Reads every directory in the store, so it takes a while on a large library.
+         * @description Plan garbage collection, a dry run: walk the object store and report the objects nothing refers to (no artifact, published manifest or import under way, no reference count or retention lock) and older than the grace period, with what removing them would free. Also counts leftover partial files and recorded objects whose file is missing, and the staging areas imports that failed or were canceled keep, which are never collected. Nothing is removed: collecting takes a plan kept for it (POST /api/v1/storage/gc-plans). Reads every directory in the store, so it takes a while on a large library.
          */
         get: operations["gc_plan"];
         put?: never;
@@ -4437,6 +4437,31 @@ export interface components {
             /** @description When the worker observed it. */
             worker_time: string;
         };
+        /** @description One failed import's staging area. */
+        FailedImportArea: {
+            /**
+             * Format: int64
+             * @description The bytes its staged files hold, an unpacked archive's included.
+             */
+            bytes: number;
+            /** @description When it ended. */
+            ended_at: string;
+            /** @description Its failure code, when it failed. */
+            error_code?: string | null;
+            /** @description The import (`/api/v1/imports/{id}`). */
+            import_id: string;
+            /** @description What it brought in, as its source named it. */
+            name?: string | null;
+            /** @description `failed_terminal` or `canceled`. */
+            state: string;
+        };
+        /** @description What the staging areas of failed imports hold. */
+        FailedImportStaging: {
+            /** @description How many such imports still have staged files, and their bytes. */
+            areas: components["schemas"]["Tally"];
+            /** @description The largest, first, as many as the plan names. */
+            largest: components["schemas"]["FailedImportArea"][];
+        };
         /**
          * @description Why an attempt did not succeed.
          *
@@ -4514,6 +4539,7 @@ export interface components {
              *     collection would remove and free.
              */
             collectable: components["schemas"]["Tally"];
+            failed_import_staging?: components["schemas"]["FailedImportStaging"] | null;
             /**
              * Format: int64
              * @description How young an unreferenced object is kept anyway, in seconds.

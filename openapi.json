@@ -7203,7 +7203,7 @@
           "library"
         ],
         "summary": "What garbage collection would remove now. Nothing is removed: collecting\ntakes a plan kept for it ([`create_gc_plan`]).",
-        "description": "Plan garbage collection, a dry run: walk the object store and report the objects nothing refers to (no artifact, published manifest or import under way, no reference count or retention lock) and older than the grace period, with what removing them would free. Also counts leftover partial files and recorded objects whose file is missing. Nothing is removed: collecting takes a plan kept for it (POST /api/v1/storage/gc-plans). Reads every directory in the store, so it takes a while on a large library.",
+        "description": "Plan garbage collection, a dry run: walk the object store and report the objects nothing refers to (no artifact, published manifest or import under way, no reference count or retention lock) and older than the grace period, with what removing them would free. Also counts leftover partial files and recorded objects whose file is missing, and the staging areas imports that failed or were canceled keep, which are never collected. Nothing is removed: collecting takes a plan kept for it (POST /api/v1/storage/gc-plans). Reads every directory in the store, so it takes a while on a large library.",
         "operationId": "gc_plan",
         "parameters": [
           {
@@ -13111,6 +13111,71 @@
           }
         }
       },
+      "FailedImportArea": {
+        "type": "object",
+        "description": "One failed import's staging area.",
+        "required": [
+          "import_id",
+          "state",
+          "ended_at",
+          "bytes"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The bytes its staged files hold, an unpacked archive's included.",
+            "minimum": 0
+          },
+          "ended_at": {
+            "type": "string",
+            "description": "When it ended."
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its failure code, when it failed."
+          },
+          "import_id": {
+            "type": "string",
+            "description": "The import (`/api/v1/imports/{id}`)."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it brought in, as its source named it."
+          },
+          "state": {
+            "type": "string",
+            "description": "`failed_terminal` or `canceled`."
+          }
+        }
+      },
+      "FailedImportStaging": {
+        "type": "object",
+        "description": "What the staging areas of failed imports hold.",
+        "required": [
+          "areas",
+          "largest"
+        ],
+        "properties": {
+          "areas": {
+            "$ref": "#/components/schemas/Tally",
+            "description": "How many such imports still have staged files, and their bytes."
+          },
+          "largest": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FailedImportArea"
+            },
+            "description": "The largest, first, as many as the plan names."
+          }
+        }
+      },
       "FailureReport": {
         "type": "object",
         "description": "Why an attempt did not succeed.\n\nSent alongside the reports rather than inferred from them, because the\nreports say *what* happened and this says why. Without it a failed burn\ntells an operator only that it failed.",
@@ -13268,6 +13333,17 @@
           "collectable": {
             "$ref": "#/components/schemas/Tally",
             "description": "Objects nothing refers to, older than the grace period: what\ncollection would remove and free."
+          },
+          "failed_import_staging": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FailedImportStaging",
+                "description": "The staging areas of imports that failed for good or were canceled,\nwhich keep the files their orphans are copies of: counted, never\ncollected (ADR 0024, decision 7). `null` where the plan was made\nwithout the staging areas, as `tangible gc` makes it."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "grace_seconds": {
             "type": "integer",

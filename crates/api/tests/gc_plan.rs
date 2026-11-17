@@ -18,9 +18,10 @@ use axum::http::{Request, StatusCode};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use tangible_api::gc::{GcPlan, GcSettings, plan};
+use tangible_api::state::ImportContext;
 use tangible_api::{ApiState, ImportCheckpoint, ImportPipeline, ImportRequest, catalog, router};
 use tangible_domain::{ArtifactId, ImportJobId, LogicalPath, Role, Sha256Digest};
-use tangible_storage::{FilesystemStore, IngestLimits, ManifestStore, StagingManager};
+use tangible_storage::{FilesystemStore, IngestLimits, ManifestStore, StagingManager, WatchRoots};
 use tempfile::TempDir;
 use tower::ServiceExt as _;
 
@@ -281,4 +282,108 @@ async fn administrators_get_the_plan_and_nobody_else_does() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
     assert_eq!(body["code"], "STORAGE_UNAVAILABLE");
     assert!(h.objects.object_path(&orphan).exists());
+}
+
+/// An import in `state`, named `name`, with `bytes` staged and, when asked,
+/// `unpacked` bytes in its unpack area; its id.
+async fn staged_import(
+    h: &Harness,
+    state: &str,
+    name: &str,
+    bytes: usize,
+    unpacked: usize,
+) -> String {
+    let import_id = ImportJobId::generate();
+    sqlx::query(
+        "INSERT INTO import_jobs (id, source_kind, source_descriptor_json, state, error_code,
+             created_by)
+         VALUES ($1, 'upload', $2, $3, $4, 'gc-test')",
+    )
+    .bind(*import_id.as_uuid())
+    .bind(json!({ "filename": name }))
+    .bind(state)
+    .bind((state == "failed_terminal").then_some("IMPORT_DESCRIPTOR_INVALID"))
+    .execute(&h.pool)
+    .await
+    .unwrap();
+    let area = h.pipeline.open_area(import_id).await.unwrap();
+    area.write(&LogicalPath::parse(name).unwrap(), &vec![7u8; bytes])
+        .await
+        .unwrap();
+    if unpacked > 0 {
+        let unpack = h.pipeline.unpack_area(import_id).await.unwrap();
+        unpack
+            .write(
+                &LogicalPath::parse("inner/disc.bin").unwrap(),
+                &vec![8u8; unpacked],
+            )
+            .await
+            .unwrap();
+    }
+    import_id.to_string()
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn failed_imports_staging_areas_are_counted_and_never_removed() {
+    let h = harness().await;
+    let failed = staged_import(&h, "failed_terminal", "Hackers.zip", 3000, 5000).await;
+    let canceled = staged_import(&h, "canceled", "Sneakers.iso", 4000, 0).await;
+    // Not ended: a quarantined import waits for review, a retryable one for
+    // its retry. Neither is counted.
+    staged_import(&h, "quarantined", "held.iso", 9000, 0).await;
+    staged_import(&h, "failed_retryable", "again.iso", 9000, 0).await;
+    // An area no import names is not counted either.
+    h.pipeline
+        .open_area(ImportJobId::generate())
+        .await
+        .unwrap()
+        .write(&LogicalPath::parse("stray.iso").unwrap(), &[1u8; 9000])
+        .await
+        .unwrap();
+
+    let state = ApiState::with_manifests(h.database.clone(), h.manifests.clone()).with_imports(
+        ImportContext {
+            pipeline: h.pipeline.clone(),
+            roots: WatchRoots::new(std::collections::BTreeMap::new()),
+            max_upload_bytes: 1 << 20,
+            outbound: None,
+            upload_part_bytes: 4096,
+        },
+    );
+    let admin = support::administrator(&h.pool).await;
+    let (status, body) = get(state, "/api/v1/storage/gc-plan", &admin).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let staging = &body["failed_import_staging"];
+    assert_eq!(
+        staging["areas"],
+        json!({ "count": 2, "bytes": 12000 }),
+        "{staging}"
+    );
+    let largest = staging["largest"].as_array().unwrap();
+    assert_eq!(largest.len(), 2);
+    assert_eq!(largest[0]["import_id"], failed.as_str());
+    assert_eq!(
+        largest[0]["bytes"], 8000,
+        "its unpacked archive counted too"
+    );
+    assert_eq!(largest[0]["state"], "failed_terminal");
+    assert_eq!(largest[0]["error_code"], "IMPORT_DESCRIPTOR_INVALID");
+    assert_eq!(largest[0]["name"], "Hackers.zip");
+    assert_eq!(largest[1]["import_id"], canceled.as_str());
+    assert_eq!(largest[1]["error_code"], Value::Null);
+
+    // Counted, not removed.
+    let failed_id: ImportJobId = failed.parse().unwrap();
+    let area = h.pipeline.open_area(failed_id).await.unwrap();
+    assert!(area.path().join("Hackers.zip").exists());
+
+    // Without the staging areas, as `tangible gc` plans, it says nothing.
+    let (_, body) = get(
+        ApiState::with_manifests(h.database.clone(), h.manifests.clone()),
+        "/api/v1/storage/gc-plan",
+        &admin,
+    )
+    .await;
+    assert_eq!(body["failed_import_staging"], Value::Null);
 }

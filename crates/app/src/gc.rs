@@ -191,6 +191,7 @@ mod tests {
             manifests_unreadable: 0,
             checkpoints_unreadable: 0,
             certain: true,
+            failed_import_staging: None,
         }
     }
 

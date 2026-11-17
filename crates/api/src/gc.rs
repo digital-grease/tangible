@@ -21,7 +21,10 @@ use serde::Serialize;
 use tangible_db::Database;
 use tangible_db::gc::{CatalogueMarks, catalogue_marks};
 use tangible_domain::Sha256Digest;
-use tangible_storage::{Inventory, ManifestStore, ManifestStoreError, StorageError, StoredObject};
+use tangible_storage::{
+    Inventory, ManifestStore, ManifestStoreError, StagingError, StagingKind, StagingManager,
+    StorageError, StoredObject,
+};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use utoipa::ToSchema;
@@ -122,6 +125,37 @@ pub struct GcPlan {
     /// was not, something unread may name a candidate, and collection
     /// would remove nothing.
     pub certain: bool,
+    /// The staging areas of imports that failed for good or were canceled,
+    /// which keep the files their orphans are copies of: counted, never
+    /// collected (ADR 0024, decision 7). `null` where the plan was made
+    /// without the staging areas, as `tangible gc` makes it.
+    pub failed_import_staging: Option<FailedImportStaging>,
+}
+
+/// What the staging areas of failed imports hold.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct FailedImportStaging {
+    /// How many such imports still have staged files, and their bytes.
+    pub areas: Tally,
+    /// The largest, first, as many as the plan names.
+    pub largest: Vec<FailedImportArea>,
+}
+
+/// One failed import's staging area.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct FailedImportArea {
+    /// The import (`/api/v1/imports/{id}`).
+    pub import_id: String,
+    /// `failed_terminal` or `canceled`.
+    pub state: String,
+    /// Its failure code, when it failed.
+    pub error_code: Option<String>,
+    /// What it brought in, as its source named it.
+    pub name: Option<String>,
+    /// When it ended.
+    pub ended_at: String,
+    /// The bytes its staged files hold, an unpacked archive's included.
+    pub bytes: u64,
 }
 
 /// Why a plan could not be made.
@@ -136,6 +170,9 @@ pub enum GcError {
     /// The manifests could not be listed.
     #[error("the manifests could not be listed")]
     Manifests(#[from] ManifestStoreError),
+    /// The staging areas could not be read.
+    #[error("the staging areas could not be read")]
+    Staging(#[from] StagingError),
 }
 
 /// Everything found to refer to an object, and what could not be read.
@@ -167,6 +204,56 @@ pub async fn plan(
         OffsetDateTime::now_utc(),
         settings,
     ))
+}
+
+/// Count the staging areas of imports that failed for good or were
+/// canceled, naming the `keep` largest. Nothing is removed.
+///
+/// # Errors
+///
+/// [`GcError`] when the staging areas or the catalogue cannot be read.
+pub async fn failed_import_staging(
+    database: &Database,
+    staging: &StagingManager,
+    keep: usize,
+) -> Result<FailedImportStaging, GcError> {
+    let mut ids: Vec<uuid::Uuid> = Vec::new();
+    for kind in [StagingKind::Imports, StagingKind::Unpacks] {
+        ids.extend(
+            staging
+                .list(kind)
+                .await?
+                .iter()
+                .filter_map(|id| id.parse::<uuid::Uuid>().ok()),
+        );
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    let mut areas = Vec::new();
+    let mut total = Tally::default();
+    for origin in tangible_db::gc_plans::orphaning_imports(database.pool(), &ids).await? {
+        let id = origin.id.to_string();
+        let bytes = staging.area_bytes(StagingKind::Imports, &id).await?
+            + staging.area_bytes(StagingKind::Unpacks, &id).await?;
+        if bytes == 0 {
+            continue;
+        }
+        total.add(bytes);
+        areas.push(FailedImportArea {
+            import_id: id,
+            state: origin.state,
+            error_code: origin.error_code,
+            name: origin.name,
+            ended_at: rfc3339(origin.ended_at),
+            bytes,
+        });
+    }
+    areas.sort_unstable_by(|a, b| b.bytes.cmp(&a.bytes).then(a.import_id.cmp(&b.import_id)));
+    areas.truncate(keep);
+    Ok(FailedImportStaging {
+        areas: total,
+        largest: areas,
+    })
 }
 
 /// One candidate of a plan in full, as the tree has it.
@@ -330,6 +417,7 @@ fn assess(
         manifests_unreadable: marks.manifests_unreadable,
         checkpoints_unreadable: marks.checkpoints_unreadable,
         certain: marks.manifests_unreadable == 0 && marks.checkpoints_unreadable == 0,
+        failed_import_staging: None,
     };
 
     let mut candidates = Vec::new();

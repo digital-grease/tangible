@@ -402,6 +402,42 @@ async fn discarding_removes_the_area_and_its_contents() {
 }
 
 #[tokio::test]
+async fn an_area_counts_the_bytes_of_its_files_and_follows_no_link() {
+    let (dir, manager) = manager().await;
+    let area = area(&manager, "import-count").await;
+    let sheet = b"FILE \"disc.bin\" BINARY\n";
+    area.write(&path("disc.cue"), sheet).await.expect("write");
+    area.write(&path("tracks/disc.bin"), &[0u8; 2352])
+        .await
+        .expect("write");
+    // A link to something larger outside counts for nothing.
+    let outside = dir.path().join("outside");
+    std::fs::write(&outside, vec![1u8; 100_000]).expect("write outside");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&outside, area.path().join("link")).expect("link");
+    let bytes = manager
+        .area_bytes(StagingKind::Imports, "import-count")
+        .await
+        .expect("count");
+    assert_eq!(bytes, sheet.len() as u64 + 2352);
+    // An area that is not there holds nothing; a name that is not a plain
+    // directory name is refused.
+    assert_eq!(
+        manager
+            .area_bytes(StagingKind::Unpacks, "import-count")
+            .await
+            .expect("count"),
+        0
+    );
+    for id in ["", ".", "..", "../staging", "a/b"] {
+        assert!(matches!(
+            manager.area_bytes(StagingKind::Imports, id).await,
+            Err(StagingError::Escape { .. })
+        ));
+    }
+}
+
+#[tokio::test]
 async fn discarding_an_absent_area_is_not_an_error() {
     // Cleanup must be safely re-runnable after a partial sweep.
     let (_dir, manager) = manager().await;
