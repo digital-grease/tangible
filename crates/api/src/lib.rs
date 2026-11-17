@@ -809,6 +809,46 @@ mod tests {
     }
 
     #[test]
+    fn no_text_in_the_document_is_left_as_source() {
+        // A description written over several lines continues each with a
+        // single backslash. Ending them with `\\` instead publishes a
+        // backslash, a line break and the next line's indentation, as eleven
+        // operations and a response once did. And a doc comment is published
+        // as written, so a link to an item, [`MAX_LIMIT`], means nothing to a
+        // reader of the API.
+        fn item_link(text: &str) -> bool {
+            text.match_indices("[`").any(|(start, _)| {
+                text[start + 2..].find("`]").is_some_and(|end| {
+                    let after = start + 2 + end + 2;
+                    !text[after..].starts_with('(')
+                })
+            })
+        }
+        fn walk(value: &serde_json::Value, at: &str, found: &mut Vec<String>) {
+            match value {
+                serde_json::Value::String(text) if text.contains("\\\n") || item_link(text) => {
+                    found.push(format!("{at}: {text:?}"));
+                }
+                serde_json::Value::Array(items) => {
+                    for (index, item) in items.iter().enumerate() {
+                        walk(item, &format!("{at}/{index}"), found);
+                    }
+                }
+                serde_json::Value::Object(fields) => {
+                    for (key, item) in fields {
+                        walk(item, &format!("{at}/{key}"), found);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let document = serde_json::to_value(ApiDoc::openapi()).expect("document");
+        let mut found = Vec::new();
+        walk(&document, "", &mut found);
+        assert!(found.is_empty(), "{found:#?}");
+    }
+
+    #[test]
     fn no_schema_is_silently_replaced_by_another_of_the_same_name() {
         // utoipa keys schemas by type name, so two structs called the same in
         // different modules leave one of them out of the document without a

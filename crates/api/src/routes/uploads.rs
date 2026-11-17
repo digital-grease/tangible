@@ -151,8 +151,8 @@ fn database(what: &'static str) -> impl FnOnce(tangible_db::DbError) -> Problem 
     post,
     path = "/api/v1/uploads",
     tag = "imports",
-    description = "Start an upload sent in parts. The answer names the part size; send \\
-                   each part with PUT /uploads/{id}/parts/{n}, ask which have arrived \\
+    description = "Start an upload sent in parts. The answer names the part size; send \
+                   each part with PUT /uploads/{id}/parts/{n}, ask which have arrived \
                    with GET, and complete it to queue the import.",
     request_body = CreateUploadRequest,
     responses(
@@ -298,8 +298,8 @@ pub async fn show_upload(
     put,
     path = "/api/v1/uploads/{upload_id}/parts/{part_number}",
     tag = "imports",
-    description = "Send part n (from 0) as the body: exactly the part's length, with \\
-                   Content-Length, and the part's SHA-256 in X-Content-SHA256 when the \\
+    description = "Send part n (from 0) as the body: exactly the part's length, with \
+                   Content-Length, and the part's SHA-256 in X-Content-SHA256 when the \
                    client can compute it. A part sent again replaces itself.",
     params(
         ("upload_id" = String, Path, description = "Upload identifier"),
@@ -357,7 +357,7 @@ pub async fn put_part(
         && claimed != digest
     {
         return Err(invalid(format!(
-            "UPLOAD_MISMATCH: part {part_number} arrived with SHA-256 {digest}, not {claimed}; \\
+            "UPLOAD_MISMATCH: part {part_number} arrived with SHA-256 {digest}, not {claimed}; \
              send it again"
         )));
     }

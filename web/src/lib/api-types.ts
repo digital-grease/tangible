@@ -297,10 +297,7 @@ export interface paths {
         /**
          * Check one artifact: every object it names read back against its digest,
          *     and its manifest against the catalogue.
-         * @description Check an artifact's stored bytes: every object it names is read back and \
-         *                        compared with its digest, and its manifest with the catalogue. Returns \
-         *                        the check at once; the server reads in the background. Nothing found is \
-         *                        repaired.
+         * @description Check an artifact's stored bytes: every object it names is read back and compared with its digest, and its manifest with the catalogue. Returns the check at once; the server reads in the background. Nothing found is repaired.
          */
         post: operations["validate_artifact"];
         delete?: never;
@@ -318,10 +315,7 @@ export interface paths {
         };
         /**
          * A cover, as fetched and checked.
-         * @description A cover, as Tangible fetched it from a provider and checked it to be a \
-         *                        JPEG, PNG or WebP (ADR 0023). Served as its checked type and never sniffed; \
-         *                        its address changes when it is fetched again, so it is kept as long as a \
-         *                        browser likes. Anyone signed in.
+         * @description A cover, as Tangible fetched it from a provider and checked it to be a JPEG, PNG or WebP (ADR 0023). Served as its checked type and never sniffed; its address changes when it is fetched again, so it is kept as long as a browser likes. Anyone signed in.
          */
         get: operations["get_artwork"];
         put?: never;
@@ -1362,8 +1356,7 @@ export interface paths {
         put?: never;
         /**
          * Make an integration.
-         * @description Make an integration. Secrets are write-only: sealed with the server's \
-         *                        secret key and never answered back.
+         * @description Make an integration. Secrets are write-only: sealed with the server's secret key and never answered back.
          */
         post: operations["create_one"];
         delete?: never;
@@ -1399,9 +1392,7 @@ export interface paths {
         head?: never;
         /**
          * Change an integration.
-         * @description Change an integration. Absent fields stay as they are; a secret set to \
-         *                        null is removed. Changing settings or secrets marks it unconfigured until \
-         *                        it is next tried.
+         * @description Change an integration. Absent fields stay as they are; a secret set to null is removed. Changing settings or secrets marks it unconfigured until it is next tried.
          */
         patch: operations["update_one"];
         trace?: never;
@@ -1417,13 +1408,7 @@ export interface paths {
         put?: never;
         /**
          * Hand a job to a download client.
-         * @description Hand a job the operator already has to a download client, in its \
-         *                        category: a magnet link or a .torrent file (base64) to qBittorrent, an NZB \
-         *                        (base64) to SABnzbd. An import follows it and brings it into the library \
-         *                        when it finishes. No script is asked for, and the job and its data are \
-         *                        removed only once imported, where the integration is set to remove them. \
-         *                        Submitting the same again is safe: the existing import is answered, and the \
-         *                        client is not asked twice.
+         * @description Hand a job the operator already has to a download client, in its category: a magnet link or a .torrent file (base64) to qBittorrent, an NZB (base64) to SABnzbd. An import follows it and brings it into the library when it finishes. No script is asked for, and the job and its data are removed only once imported, where the integration is set to remove them. Submitting the same again is safe: the existing import is answered, and the client is not asked twice.
          */
         post: operations["submit_job"];
         delete?: never;
@@ -1474,9 +1459,7 @@ export interface paths {
         put?: never;
         /**
          * Check the whole library: every object read back against its digest.
-         * @description Check every stored object against its digest: a full scrub, reading every \
-         *                        byte the library holds. One runs at a time; asking while one is queued or \
-         *                        running answers that one.
+         * @description Check every stored object against its digest: a full scrub, reading every byte the library holds. One runs at a time; asking while one is queued or running answers that one.
          */
         post: operations["request_scrub"];
         delete?: never;
@@ -1785,12 +1768,7 @@ export interface paths {
         put?: never;
         /**
          * Grab a release from the search held for a request.
-         * @description Grab a release a person picked from the search held for an approved \
-         *                        request: its .torrent, NZB or magnet link is fetched through Prowlarr, \
-         *                        checked as a submitted job is, and handed to a download client of its \
-         *                        protocol (the one named, or the only one there is) in Tangible's category. \
-         *                        The request then follows the import that brings it in, and is fulfilled \
-         *                        when that completes. Operators and administrators.
+         * @description Grab a release a person picked from the search held for an approved request: its .torrent, NZB or magnet link is fetched through Prowlarr, checked as a submitted job is, and handed to a download client of its protocol (the one named, or the only one there is) in Tangible's category. The request then follows the import that brings it in, and is fulfilled when that completes. Operators and administrators.
          */
         post: operations["grab_release"];
         delete?: never;
@@ -1808,19 +1786,13 @@ export interface paths {
         };
         /**
          * The search held for a request.
-         * @description The search held for a request, for an hour after it was made. Operators and \
-         *                        administrators.
+         * @description The search held for a request, for an hour after it was made. Operators and administrators.
          */
         get: operations["held_search"];
         put?: never;
         /**
          * Search Prowlarr for a request's releases, ranked, and hold them.
-         * @description Search Prowlarr for an approved request's releases: by the request's title, \
-         *                        cleaned, in the categories its kind suits (a film by its IMDb ID first, \
-         *                        where it has one), or by the words given. The results are ranked by how well \
-         *                        they match, each saying why, and held for an hour for a person to pick one \
-         *                        to grab; nothing is grabbed here. A release's link is never answered. \
-         *                        Operators and administrators; at most 60 an hour per account.
+         * @description Search Prowlarr for an approved request's releases: by the request's title, cleaned, in the categories its kind suits (a film by its IMDb ID first, where it has one), or by the words given. The results are ranked by how well they match, each saying why, and held for an hour for a person to pick one to grab; nothing is grabbed here. A release's link is never answered. Operators and administrators; at most 60 an hour per account.
          */
         post: operations["search_releases"];
         delete?: never;
@@ -2105,7 +2077,7 @@ export interface paths {
         };
         /**
          * What garbage collection would remove now. Nothing is removed: collecting
-         *     takes a plan kept for it ([`create_gc_plan`]).
+         *     takes a plan kept for it (POST /storage/gc-plans).
          * @description Plan garbage collection, a dry run: walk the object store and report the objects nothing refers to (no artifact, published manifest or import under way, no reference count or retention lock) and older than the grace period, with what removing them would free. Also counts leftover partial files and recorded objects whose file is missing, and the staging areas imports that failed or were canceled keep, which are never collected. Nothing is removed: collecting takes a plan kept for it (POST /api/v1/storage/gc-plans). Reads every directory in the store, so it takes a while on a large library.
          */
         get: operations["gc_plan"];
@@ -2264,9 +2236,7 @@ export interface paths {
         put?: never;
         /**
          * Start an upload sent in parts.
-         * @description Start an upload sent in parts. The answer names the part size; send \
-         *                        each part with PUT /uploads/{id}/parts/{n}, ask which have arrived \
-         *                        with GET, and complete it to queue the import.
+         * @description Start an upload sent in parts. The answer names the part size; send each part with PUT /uploads/{id}/parts/{n}, ask which have arrived with GET, and complete it to queue the import.
          */
         post: operations["start_upload"];
         delete?: never;
@@ -2338,9 +2308,7 @@ export interface paths {
         get?: never;
         /**
          * Send one part.
-         * @description Send part n (from 0) as the body: exactly the part's length, with \
-         *                        Content-Length, and the part's SHA-256 in X-Content-SHA256 when the \
-         *                        client can compute it. A part sent again replaces itself.
+         * @description Send part n (from 0) as the body: exactly the part's length, with Content-Length, and the part's SHA-256 in X-Content-SHA256 when the client can compute it. A part sent again replaces itself.
          */
         put: operations["put_part"];
         post?: never;
@@ -6572,7 +6540,10 @@ export interface operations {
     list_artifacts: {
         parameters: {
             query?: {
-                /** @description Maximum items to return. Clamped to [`MAX_LIMIT`]. */
+                /**
+                 * @description Maximum items to return: 1 to 500, and 50 when not given. A larger
+                 *     number is taken as 500.
+                 */
                 limit?: number | null;
                 /** @description Opaque cursor from a previous response's `next_cursor`. */
                 cursor?: string | null;
@@ -7287,7 +7258,10 @@ export interface operations {
     list_audit_log: {
         parameters: {
             query?: {
-                /** @description Maximum items to return. Clamped to [`MAX_LIMIT`]. */
+                /**
+                 * @description Maximum items to return: 1 to 500, and 50 when not given. A larger
+                 *     number is taken as 500.
+                 */
                 limit?: number | null;
                 /** @description Opaque cursor from a previous response's `next_cursor`. */
                 cursor?: string | null;
@@ -9923,7 +9897,10 @@ export interface operations {
     list_all_checks: {
         parameters: {
             query?: {
-                /** @description Maximum items to return. Clamped to [`MAX_LIMIT`]. */
+                /**
+                 * @description Maximum items to return: 1 to 500, and 50 when not given. A larger
+                 *     number is taken as 500.
+                 */
                 limit?: number | null;
                 /** @description Opaque cursor from a previous response's `next_cursor`. */
                 cursor?: string | null;
@@ -10654,10 +10631,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /**
-             * @description Not approved, or downloading or ended; the search \
-             *                                           expired (SEARCH_EXPIRED); or no client for it
-             */
+            /** @description Not approved, or downloading or ended; the search expired (SEARCH_EXPIRED); or no client for it */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -11999,7 +11973,10 @@ export interface operations {
     list_accounts: {
         parameters: {
             query?: {
-                /** @description Maximum items to return. Clamped to [`MAX_LIMIT`]. */
+                /**
+                 * @description Maximum items to return: 1 to 500, and 50 when not given. A larger
+                 *     number is taken as 500.
+                 */
                 limit?: number | null;
                 /** @description Opaque cursor from a previous response's `next_cursor`. */
                 cursor?: string | null;
@@ -12186,7 +12163,10 @@ export interface operations {
     list_all_workers: {
         parameters: {
             query?: {
-                /** @description Maximum items to return. Clamped to [`MAX_LIMIT`]. */
+                /**
+                 * @description Maximum items to return: 1 to 500, and 50 when not given. A larger
+                 *     number is taken as 500.
+                 */
                 limit?: number | null;
                 /** @description Opaque cursor from a previous response's `next_cursor`. */
                 cursor?: string | null;

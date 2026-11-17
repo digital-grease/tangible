@@ -36,7 +36,8 @@ pub const MAX_LIMIT: usize = 500;
 /// Query parameters accepted by every list endpoint.
 #[derive(Debug, Clone, Default, Deserialize, IntoParams)]
 pub struct PageQuery {
-    /// Maximum items to return. Clamped to [`MAX_LIMIT`].
+    /// Maximum items to return: 1 to 500, and 50 when not given. A larger
+    /// number is taken as 500.
     pub limit: Option<usize>,
     /// Opaque cursor from a previous response's `next_cursor`.
     pub cursor: Option<String>,
@@ -175,6 +176,21 @@ mod tests {
             .limit(),
             1
         );
+    }
+
+    #[test]
+    fn the_published_limit_says_its_bounds() {
+        // The doc comment is what the API document says of the parameter,
+        // so it gives the numbers, which must stay the constants'.
+        let params = PageQuery::into_params(|| None);
+        let limit = params.iter().find(|p| p.name == "limit").expect("limit");
+        let text = limit.description.as_deref().expect("description");
+        assert!(text.contains(&format!("1 to {MAX_LIMIT}")), "{text}");
+        assert!(
+            text.contains(&format!("{DEFAULT_LIMIT} when not given")),
+            "{text}"
+        );
+        assert!(text.contains(&format!("taken as {MAX_LIMIT}")), "{text}");
     }
 
     #[test]

@@ -98,6 +98,14 @@ may change between minor versions, and the release notes say how.
   from staging, became an artifact of the BIN alone. It now fails with
   `IMPORT_STAGED_COPY_GONE`, and one whose staged copy changed, with
   `IMPORT_STAGED_COPY_CHANGED`; both say to import the source again.
+- The API document described eleven operations, among them validating an
+  artifact, submitting a download job, searching for a request's releases
+  and sending an upload's parts, with a backslash, a line break and a run
+  of spaces at the end of each line, as the source wrote them. The
+  descriptions are now plain text, and so is the refusal of an upload part
+  whose SHA-256 is not the one claimed. A list's `limit` was described as
+  "Clamped to [`MAX_LIMIT`]", the name of a constant in the source; it now
+  says 1 to 500, and 50 when not given.
 
 ## 0.3.0 (2026-11-16)
 

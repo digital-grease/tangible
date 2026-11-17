@@ -202,9 +202,9 @@ fn answered(
     post,
     path = "/api/v1/artifacts/{artifact_id}/validate",
     tag = "library",
-    description = "Check an artifact's stored bytes: every object it names is read back and \\
-                   compared with its digest, and its manifest with the catalogue. Returns \\
-                   the check at once; the server reads in the background. Nothing found is \\
+    description = "Check an artifact's stored bytes: every object it names is read back and \
+                   compared with its digest, and its manifest with the catalogue. Returns \
+                   the check at once; the server reads in the background. Nothing found is \
                    repaired.",
     params(("artifact_id" = String, Path, description = "Artifact identifier")),
     responses(
@@ -237,8 +237,8 @@ pub async fn validate_artifact(
     post,
     path = "/api/v1/integrity-checks",
     tag = "library",
-    description = "Check every stored object against its digest: a full scrub, reading every \\
-                   byte the library holds. One runs at a time; asking while one is queued or \\
+    description = "Check every stored object against its digest: a full scrub, reading every \
+                   byte the library holds. One runs at a time; asking while one is queued or \
                    running answers that one.",
     request_body = RequestIntegrityCheck,
     responses(

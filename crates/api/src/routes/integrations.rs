@@ -356,7 +356,7 @@ pub async fn get_one(
     post,
     path = "/api/v1/integrations",
     tag = "integrations",
-    description = "Make an integration. Secrets are write-only: sealed with the server's \\
+    description = "Make an integration. Secrets are write-only: sealed with the server's \
                    secret key and never answered back.",
     request_body = CreateIntegrationRequest,
     responses(
@@ -436,8 +436,8 @@ fn prompt_romm_sync(state: &ApiState, kind: &str) {
     patch,
     path = "/api/v1/integrations/{integration_id}",
     tag = "integrations",
-    description = "Change an integration. Absent fields stay as they are; a secret set to \\
-                   null is removed. Changing settings or secrets marks it unconfigured until \\
+    description = "Change an integration. Absent fields stay as they are; a secret set to \
+                   null is removed. Changing settings or secrets marks it unconfigured until \
                    it is next tried.",
     params(("integration_id" = String, Path, description = "Integration identifier")),
     request_body = UpdateIntegrationRequest,

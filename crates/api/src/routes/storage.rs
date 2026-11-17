@@ -45,7 +45,7 @@ pub struct GcPlanQuery {
 }
 
 /// What garbage collection would remove now. Nothing is removed: collecting
-/// takes a plan kept for it ([`create_gc_plan`]).
+/// takes a plan kept for it (POST /storage/gc-plans).
 ///
 /// # Errors
 ///

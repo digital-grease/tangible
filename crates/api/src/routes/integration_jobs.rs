@@ -343,12 +343,12 @@ fn respond(
     post,
     path = "/api/v1/integrations/{integration_id}/jobs",
     tag = "integrations",
-    description = "Hand a job the operator already has to a download client, in its \\
-                   category: a magnet link or a .torrent file (base64) to qBittorrent, an NZB \\
-                   (base64) to SABnzbd. An import follows it and brings it into the library \\
-                   when it finishes. No script is asked for, and the job and its data are \\
-                   removed only once imported, where the integration is set to remove them. \\
-                   Submitting the same again is safe: the existing import is answered, and the \\
+    description = "Hand a job the operator already has to a download client, in its \
+                   category: a magnet link or a .torrent file (base64) to qBittorrent, an NZB \
+                   (base64) to SABnzbd. An import follows it and brings it into the library \
+                   when it finishes. No script is asked for, and the job and its data are \
+                   removed only once imported, where the integration is set to remove them. \
+                   Submitting the same again is safe: the existing import is answered, and the \
                    client is not asked twice.",
     params(("integration_id" = String, Path, description = "Integration identifier")),
     request_body = SubmitJobRequest,

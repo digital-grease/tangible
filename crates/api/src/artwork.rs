@@ -336,9 +336,9 @@ impl ArtworkRunner {
     get,
     path = "/api/v1/artwork/{artwork_id}",
     tag = "library",
-    description = "A cover, as Tangible fetched it from a provider and checked it to be a \\
-                   JPEG, PNG or WebP (ADR 0023). Served as its checked type and never sniffed; \\
-                   its address changes when it is fetched again, so it is kept as long as a \\
+    description = "A cover, as Tangible fetched it from a provider and checked it to be a \
+                   JPEG, PNG or WebP (ADR 0023). Served as its checked type and never sniffed; \
+                   its address changes when it is fetched again, so it is kept as long as a \
                    browser likes. Anyone signed in.",
     params(("artwork_id" = String, Path, description = "Artwork identifier")),
     responses(

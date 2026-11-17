@@ -429,11 +429,11 @@ async fn indexer_state(prowlarr: &ProwlarrClient) -> IndexerState {
     post,
     path = "/api/v1/requests/{request_id}/search",
     tag = "requests",
-    description = "Search Prowlarr for an approved request's releases: by the request's title, \\
-                   cleaned, in the categories its kind suits (a film by its IMDb ID first, \\
-                   where it has one), or by the words given. The results are ranked by how well \\
-                   they match, each saying why, and held for an hour for a person to pick one \\
-                   to grab; nothing is grabbed here. A release's link is never answered. \\
+    description = "Search Prowlarr for an approved request's releases: by the request's title, \
+                   cleaned, in the categories its kind suits (a film by its IMDb ID first, \
+                   where it has one), or by the words given. The results are ranked by how well \
+                   they match, each saying why, and held for an hour for a person to pick one \
+                   to grab; nothing is grabbed here. A release's link is never answered. \
                    Operators and administrators; at most 60 an hour per account.",
     params(("request_id" = String, Path, description = "Request identifier")),
     request_body = SearchReleasesRequest,
@@ -512,7 +512,7 @@ pub async fn search_releases(
     get,
     path = "/api/v1/requests/{request_id}/search",
     tag = "requests",
-    description = "The search held for a request, for an hour after it was made. Operators and \\
+    description = "The search held for a request, for an hour after it was made. Operators and \
                    administrators.",
     params(("request_id" = String, Path, description = "Request identifier")),
     responses(
@@ -671,18 +671,18 @@ async fn fetch(
     post,
     path = "/api/v1/requests/{request_id}/grab",
     tag = "requests",
-    description = "Grab a release a person picked from the search held for an approved \\
-                   request: its .torrent, NZB or magnet link is fetched through Prowlarr, \\
-                   checked as a submitted job is, and handed to a download client of its \\
-                   protocol (the one named, or the only one there is) in Tangible's category. \\
-                   The request then follows the import that brings it in, and is fulfilled \\
+    description = "Grab a release a person picked from the search held for an approved \
+                   request: its .torrent, NZB or magnet link is fetched through Prowlarr, \
+                   checked as a submitted job is, and handed to a download client of its \
+                   protocol (the one named, or the only one there is) in Tangible's category. \
+                   The request then follows the import that brings it in, and is fulfilled \
                    when that completes. Operators and administrators.",
     params(("request_id" = String, Path, description = "Request identifier")),
     request_body = GrabReleaseRequest,
     responses(
         (status = 200, description = "Handed over; the request follows its import", body = GrabView),
         (status = 404, description = "No such request", body = Problem),
-        (status = 409, description = "Not approved, or downloading or ended; the search \\
+        (status = 409, description = "Not approved, or downloading or ended; the search \
                                       expired (SEARCH_EXPIRED); or no client for it", body = Problem),
         (status = 422, description = "Ids that will not do, or a client to choose", body = Problem),
         (status = 502, description = "Prowlarr or the client failed, or gave what will not do", body = Problem),

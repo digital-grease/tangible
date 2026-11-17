@@ -1312,12 +1312,15 @@ async fn an_upload_completes_only_whole_and_refuses_parts_that_are_not() {
         .send_part(&upload, 1, &image[4096..8192], Some(&"ab".repeat(32)))
         .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    let detail = refused["detail"].as_str().unwrap();
+    assert!(detail.starts_with("UPLOAD_MISMATCH"), "{refused}");
+    // One line, as written: no backslash, line break or indentation from
+    // the source.
     assert!(
-        refused["detail"]
-            .as_str()
-            .unwrap()
-            .starts_with("UPLOAD_MISMATCH")
+        detail.ends_with(&format!(", not {}; send it again", "ab".repeat(32))),
+        "{refused}"
     );
+    assert!(!detail.contains(['\\', '\n']), "{refused}");
     let (status, _) = harness.send_part(&upload, 10, &image[..4096], None).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     let (_, view) = harness.get(&format!("/api/v1/uploads/{upload}")).await;
