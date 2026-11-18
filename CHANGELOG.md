@@ -4,7 +4,51 @@ Notable changes to Tangible, newest first. Versions follow semantic
 versioning; during 0.x the API, the manifest schema and the database schema
 may change between minor versions, and the release notes say how.
 
-## Unreleased
+## 0.4.1 (2026-11-18)
+
+Tangible installs and upgrades with one command. Download a release's
+`compose.yaml` and run `docker compose up -d`: nothing has to be set first,
+the secrets are made on the first start, and every start copies the
+database and migrates it before the server runs. The Compose files follow
+the release's minor version, so `docker compose pull` takes each patch
+release. The highlights, each detailed below:
+
+- Installing is `curl -fLO .../releases/latest/download/compose.yaml` and
+  `docker compose up -d`; no clone, and no `.env` unless you want one.
+- The database's password and the integration secret key are made on the
+  first start and kept in a `secrets` volume.
+- Every `up` copies the database into a `backups` volume, then migrates it,
+  before the server starts.
+- `docker compose pull` and `up -d` take each 0.4 patch release from now on.
+- The Workers page gives a new worker's `.env` lines with its token.
+
+### Upgrading from 0.4.0
+
+No migration, nothing removed, and no API route or field gone: 0.4.1
+changes how Tangible is installed, not what it does. Take this release's
+`compose.yaml` once, and each worker's file; from then on `docker compose
+pull` and `docker compose up -d` take each 0.4 patch release.
+
+- Keep your `.env`: its `POSTGRES_PASSWORD` is the one your database was
+  created with, and `init` keeps it.
+- If you made an integration secret key yourself, set
+  `TANGIBLE_SECRET_KEY_FILE=/run/secrets/tangible-secret-key` in `.env` and
+  uncomment the `tangible-secret-key` lines in `compose.yaml` before the
+  first `up` with it (deploy/README.md, "Integration secrets"). Otherwise the
+  server opens with a key `init` made, which opens none of your stored
+  passwords; Diagnostics says so, and setting the line then is enough.
+- Back up the library, then `docker compose pull` and `docker compose up -d`:
+  `init`, a copy of the database into the new `backups` volume, nothing to
+  migrate, and the server.
+- Add `--no-deps` to commands you run as `docker compose run --rm server ...`.
+- A 0.4.0 burn worker keeps working with a 0.4.1 server.
+- Going back to 0.4.0 needs no restore: run 0.4.0's own `compose.yaml` with
+  your `.env`, not this one, whose `init` it does not have; Compose then
+  calls this one's `init`, `backup` and `migrate` orphans, which
+  `--remove-orphans` clears. An install 0.4.1 created keeps its database
+  password in the secrets volume, so set
+  `POSTGRES_PASSWORD` in `.env` to it first
+  (`docker compose run --rm backup cat /var/lib/tangible/secrets/postgres-password`).
 
 ### Added
 

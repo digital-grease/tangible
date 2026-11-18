@@ -939,7 +939,7 @@ docker compose -f deploy/compose.yaml run --rm --no-deps --entrypoint cat \
 chmod 0400 tangible-secret-key
 ```
 
-A key of your own, as an install from before 0.5.0 made, goes on being used:
+A key of your own, as an install from before 0.4.1 made, goes on being used:
 set `TANGIBLE_SECRET_KEY_FILE=/run/secrets/tangible-secret-key` in `.env` and
 uncomment the `tangible-secret-key` lines of the two `secrets` blocks in
 `compose.yaml`, which mount it from `deploy/secrets/`. Do it before the first
@@ -1016,7 +1016,7 @@ correctly signed image. `cosign version` says which you have.
 
 ```bash
 IMAGE=ghcr.io/digital-grease/tangible@sha256:<digest from the release page>
-TAG=v0.4.0
+TAG=v0.4.1
 
 # The image was signed by this repository's release workflow at this tag.
 cosign verify "$IMAGE" \
@@ -1112,16 +1112,16 @@ check it carries what you expect:
 
 ```bash
 docker build -f deploy/decryption/Dockerfile \
-  --build-arg TANGIBLE_IMAGE=ghcr.io/digital-grease/tangible:v0.4.0 \
-  -t tangible-decryption:v0.4.0 deploy/decryption
-docker run --rm --entrypoint cat tangible-decryption:v0.4.0 /usr/share/tangible/decryption.json
+  --build-arg TANGIBLE_IMAGE=ghcr.io/digital-grease/tangible:v0.4.1 \
+  -t tangible-decryption:v0.4.1 deploy/decryption
+docker run --rm --entrypoint cat tangible-decryption:v0.4.1 /usr/share/tangible/decryption.json
 ```
 
 Run the drive's worker from it with one more override, which changes only
 the image:
 
 ```bash
-TANGIBLE_DECRYPTION_IMAGE=tangible-decryption:v0.4.0 docker compose \
+TANGIBLE_DECRYPTION_IMAGE=tangible-decryption:v0.4.1 docker compose \
   -f deploy/compose.yaml -f deploy/compose.hardware.yaml \
   -f deploy/compose.decryption.yaml up -d
 ```
