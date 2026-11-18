@@ -31,7 +31,9 @@ services:
       migrate:
         condition: service_completed_successfully
     environment:
-      TANGIBLE_DATABASE_URL: postgres://tangible:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/tangible
+      # The password is the one `init` keeps in the secrets volume.
+      TANGIBLE_DATABASE_URL: postgres://tangible@postgres:5432/tangible
+      TANGIBLE_DATABASE_PASSWORD_FILE: /var/lib/tangible/secrets/postgres-password
       TANGIBLE_BIND: 0.0.0.0:8080
       TANGIBLE_PUBLIC_URL: ${TANGIBLE_PUBLIC_URL:-http://localhost:8080}
       TANGIBLE_STORAGE_KIND: filesystem
@@ -96,10 +98,10 @@ services:
       # matching volume below. Tangible writes only folders it marks as its
       # own there.
       # TANGIBLE_ROMM_EXPORT_ROOT: /var/lib/tangible/romm
-      # The key download-client passwords are sealed with (deploy/README.md,
-      # "Integration secrets"). Off unless set: uncomment this and the two
-      # secrets blocks below once the key file exists.
-      # TANGIBLE_SECRET_KEY_FILE: /run/secrets/tangible-secret-key
+      # The key integrations' passwords and tokens are sealed with
+      # (deploy/README.md, "Integration secrets"): the one `init` made, unless
+      # .env names a key of your own.
+      TANGIBLE_SECRET_KEY_FILE: ${TANGIBLE_SECRET_KEY_FILE:-/var/lib/tangible/secrets/secret-key}
       # Prometheus metrics, on a listener of their own (deploy/README.md,
       # "Metrics"). Off unless set: uncomment the first line. A Prometheus on
       # this Compose network scrapes server:9464 without the port being
@@ -129,6 +131,7 @@ services:
     volumes:
       - library:/var/lib/tangible/library
       - staging:/var/lib/tangible/staging
+      - secrets:/var/lib/tangible/secrets:ro
       # - /path/to/romm/library/roms:/var/lib/tangible/romm
     ports:
       - "${TANGIBLE_HTTP_PORT:-8080}:8080"
@@ -163,9 +166,14 @@ services:
     environment:
       POSTGRES_USER: tangible
       POSTGRES_DB: tangible
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      # Read when the database is first created, and only then.
+      POSTGRES_PASSWORD_FILE: /var/lib/tangible/secrets/postgres-password
+    depends_on:
+      init:
+        condition: service_completed_successfully
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - secrets:/var/lib/tangible/secrets:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U tangible"]
       interval: 10s
@@ -210,12 +218,19 @@ services:
       PGHOST: postgres
       PGUSER: tangible
       PGDATABASE: tangible
-      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
       # How many copies to keep, newest first. 0 takes none.
       TANGIBLE_BACKUPS_KEPT: ${TANGIBLE_BACKUPS_KEPT:-10}
-    entrypoint: ["/bin/sh", "-eu", "-c"]
-    command:
+    # With the database's password from the secrets volume. A command given
+    # to it (`docker compose run --rm backup ls -l /backups`, or pg_restore)
+    # runs in place of taking a copy.
+    entrypoint:
+      - /bin/sh
+      - -eu
+      - -c
       - |
+        PGPASSWORD=$$(cat /var/lib/tangible/secrets/postgres-password)
+        export PGPASSWORD
+        if [ "$$#" -gt 0 ]; then exec "$$@"; fi
         kept=$$TANGIBLE_BACKUPS_KEPT
         case $$kept in ''|*[!0-9]*) echo "TANGIBLE_BACKUPS_KEPT is not a number: $$kept" >&2; exit 2;; esac
         if [ "$$kept" -eq 0 ]; then echo "TANGIBLE_BACKUPS_KEPT is 0: no copy taken"; exit 0; fi
@@ -225,8 +240,11 @@ services:
         mv "/backups/.tangible-$$stamp.part" "/backups/tangible-$$stamp.dump"
         ls -1 /backups/tangible-*.dump | sort -r | tail -n "+$$((kept + 1))" | xargs -r rm -f --
         echo "copied the database to tangible-$$stamp.dump in the backups volume"
+      # The script's name, before any command given to it.
+      - backup
     volumes:
       - backups:/backups
+      - secrets:/var/lib/tangible/secrets:ro
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -244,8 +262,14 @@ services:
       backup:
         condition: service_completed_successfully
     environment:
-      TANGIBLE_DATABASE_URL: postgres://tangible:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/tangible
+      TANGIBLE_DATABASE_URL: postgres://tangible@postgres:5432/tangible
+      TANGIBLE_DATABASE_PASSWORD_FILE: /var/lib/tangible/secrets/postgres-password
       TANGIBLE_LOG: ${TANGIBLE_LOG:-tangible=info,tower_http=info}
+      # A thread per CPU by default, which on a large machine is more than
+      # the process limit below; a short step needs two.
+      TOKIO_WORKER_THREADS: "2"
+    volumes:
+      - secrets:/var/lib/tangible/secrets:ro
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -253,14 +277,42 @@ services:
     read_only: true
     pids_limit: 64
 
+  # First of all, the secrets a new deployment needs, each made once and
+  # kept in the secrets volume: the database's password and the key
+  # integrations' secrets are sealed with, so there is nothing to invent
+  # before the first `up`. An install from before keeps POSTGRES_PASSWORD in
+  # .env, which its database was created with, and init keeps that one.
+  init:
+    image: ${TANGIBLE_IMAGE:-ghcr.io/digital-grease/tangible:v0.4.0}
+    command: ["init"]
+    restart: "no"
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      TANGIBLE_LOG: ${TANGIBLE_LOG:-tangible=info,tower_http=info}
+      # As for migrate: two threads, whatever the machine.
+      TOKIO_WORKER_THREADS: "2"
+    volumes:
+      - secrets:/var/lib/tangible/secrets
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    pids_limit: 32
+
 volumes:
   library:
   staging:
   postgres-data:
   backups:
+  # The database's password and the integration secret key. Back it up apart
+  # from the database (deploy/README.md, "Backups").
+  secrets:
 
-# The integration secret key (deploy/README.md, "Integration secrets"). The
-# file is yours to make and keep; it never goes in the repository or .env.
+# Secrets of your own for the server: the metrics token, the identity
+# provider's client secret, and an integration secret key in place of the one
+# init made (deploy/README.md). Each file is yours to make and keep; none goes
+# in the repository or .env.
 # secrets:
 #   tangible-secret-key:
 #     file: ./secrets/tangible-secret-key

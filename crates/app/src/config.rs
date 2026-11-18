@@ -78,6 +78,12 @@ pub struct CommonConfig {
     )]
     pub database_url: SecretString,
 
+    /// A file holding the database password, which then takes the place of
+    /// any password in the connection URL: compose.yaml points it at the one
+    /// `tangible init` keeps in the secrets volume.
+    #[arg(long, env = "TANGIBLE_DATABASE_PASSWORD_FILE")]
+    pub database_password_file: Option<PathBuf>,
+
     /// Tracing filter directive.
     #[arg(
         long,
@@ -534,6 +540,24 @@ pub enum SecretsCommand {
     /// `TANGIBLE_SECRET_KEY_FILE`, opening each with the old key. All or
     /// nothing, and safe to run again.
     Rotate(RotateConfig),
+}
+
+/// Settings for `tangible init`.
+#[derive(Debug, Clone, Args)]
+pub struct InitConfig {
+    /// The directory the secrets are kept in: compose.yaml's secrets volume.
+    #[arg(
+        long,
+        env = "TANGIBLE_SECRETS_DIR",
+        default_value = "/var/lib/tangible/secrets"
+    )]
+    pub secrets_dir: PathBuf,
+
+    /// The PostgreSQL password to keep, in place of making one: that of an
+    /// install from before `tangible init`, whose database was created with
+    /// it. Empty is the same as unset.
+    #[arg(long, env = "POSTGRES_PASSWORD", hide_env_values = true)]
+    pub postgres_password: Option<SecretString>,
 }
 
 /// Settings for `tangible secrets rotate`.

@@ -9,6 +9,7 @@
 
 mod config;
 mod gc;
+mod init;
 mod manifest;
 mod restore_check;
 mod scrub;
@@ -35,9 +36,9 @@ use tangible_api::auth::PasswordSignIn;
 use tangible_integrations::outbound::OutboundClient;
 
 use crate::config::{
-    BurnEngineKind, CommonConfig, DerivationEngineKind, DoctorConfig, GcConfig, ManifestCommand,
-    PasswordSignInKind, RestoreCheckConfig, RotateConfig, ScrubConfig, SecretsCommand, ServeConfig,
-    WorkerConfig,
+    BurnEngineKind, CommonConfig, DerivationEngineKind, DoctorConfig, GcConfig, InitConfig,
+    ManifestCommand, PasswordSignInKind, RestoreCheckConfig, RotateConfig, ScrubConfig,
+    SecretsCommand, ServeConfig, WorkerConfig,
 };
 
 /// Self-hosted disc-image preservation, management, and burning.
@@ -63,6 +64,10 @@ enum Command {
     /// refers to, and what removing them would free. A dry run; nothing is
     /// removed. Only the server collects (ADR 0024).
     Gc(Box<GcConfig>),
+    /// Make the secrets a new deployment needs, each once: the PostgreSQL
+    /// password and the key integration secrets are sealed with, kept in the
+    /// secrets directory and never printed.
+    Init(Box<InitConfig>),
     /// Inspect and validate artifact manifests.
     #[command(subcommand)]
     Manifest(ManifestCommand),
@@ -85,15 +90,19 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
     telemetry::init(&cli.common)?;
     warn_of_unknown_variables();
+    if let Some(file) = &cli.common.database_password_file {
+        cli.common.database_url = with_password_from(&cli.common.database_url, file)?;
+    }
 
     match cli.command {
         Command::Serve(serve) => serve_command(&cli.common, &serve).await,
         Command::Migrate => migrate_command(&cli.common).await,
         Command::Openapi => openapi_command(),
         Command::Gc(gc) => gc::gc_command(&cli.common, &gc).await,
+        Command::Init(init) => init::init_command(&init),
         Command::Scrub(scrub) => scrub::scrub_command(&cli.common, &scrub).await,
         Command::RestoreCheck(check) => {
             restore_check::restore_check_command(&cli.common, &check).await
@@ -109,6 +118,34 @@ async fn main() -> Result<()> {
             manifest::validate_command(&validate)
         }
     }
+}
+
+/// The connection URL with the password in `file` in place of its own.
+///
+/// Neither the URL nor the password is ever said: an error names the file.
+fn with_password_from(
+    url: &tangible_domain::SecretString,
+    file: &std::path::Path,
+) -> Result<tangible_domain::SecretString> {
+    let text = std::fs::read_to_string(file).with_context(|| {
+        format!(
+            "reading the database password (TANGIBLE_DATABASE_PASSWORD_FILE, {})",
+            file.display()
+        )
+    })?;
+    let password = text.trim_end_matches(['\r', '\n']);
+    if password.is_empty() {
+        anyhow::bail!(
+            "the database password file (TANGIBLE_DATABASE_PASSWORD_FILE, {}) is empty",
+            file.display()
+        );
+    }
+    let mut parsed = url::Url::parse(url.expose())
+        .map_err(|_| anyhow::anyhow!("TANGIBLE_DATABASE_URL is not a URL"))?;
+    parsed
+        .set_password(Some(password))
+        .map_err(|()| anyhow::anyhow!("TANGIBLE_DATABASE_URL cannot carry a password"))?;
+    Ok(tangible_domain::SecretString::from(String::from(parsed)))
 }
 
 /// Name the project's environment variables nothing reads, which are most
@@ -1541,6 +1578,8 @@ mod tests {
     /// Their values must never appear in `--help`, which shows the live value
     /// of every variable that is set unless told not to.
     const SECRET_ENV: &[&str] = &[
+        // `tangible init` keeps an older install's password from .env.
+        "POSTGRES_PASSWORD",
         "TANGIBLE_DATABASE_URL",
         "TANGIBLE_ENROLLMENT_TOKEN",
         // A proxy's URL may carry its username and password.
@@ -1556,6 +1595,8 @@ mod tests {
         "TANGIBLE_BUILD_REVISION",
         "TANGIBLE_BUILD_VERSION",
         "TANGIBLE_BURN_ENGINE",
+        // A path to the password, not the password.
+        "TANGIBLE_DATABASE_PASSWORD_FILE",
         "TANGIBLE_DELETION_GRACE_DAYS",
         "TANGIBLE_DERIVATION_ENGINE",
         "TANGIBLE_LOG",
@@ -1587,6 +1628,8 @@ mod tests {
         "TANGIBLE_ORPHAN_COLLECTION_INTERVAL_DAYS",
         // The path to the key file, which is secret; the path is not.
         "TANGIBLE_SECRET_KEY_FILE",
+        // Where `tangible init` keeps the secrets, not the secrets.
+        "TANGIBLE_SECRETS_DIR",
         "TANGIBLE_SERVER_URL",
         "TANGIBLE_STAGING_ROOT",
         "TANGIBLE_STORAGE_KIND",
@@ -1684,6 +1727,38 @@ mod tests {
              each, or to NOT_IN_HARDWARE_COMPOSE with why"
         );
         assert!(compose_lists(COMPOSE_WORKER, "TANGIBLE_WORKER_PLAIN_HTTP"));
+    }
+
+    #[test]
+    fn the_password_file_takes_the_place_of_the_urls_password() {
+        use tangible_domain::SecretString;
+        let dir = std::env::temp_dir().join(format!("tangible-pw-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&dir).unwrap();
+        let file = dir.join("postgres-password");
+        std::fs::write(&file, "n3w/p@ss:word\n").unwrap();
+        let url = SecretString::from(
+            "postgres://tangible:urlsecret@postgres:5432/tangible?sslmode=disable".to_owned(),
+        );
+        let with = with_password_from(&url, &file).unwrap();
+        let parsed = url::Url::parse(with.expose()).unwrap();
+        assert_eq!(parsed.username(), "tangible");
+        // Escaped, where the URL compose.yaml used to build took it raw.
+        assert_eq!(parsed.password(), Some("n3w%2Fp%40ss%3Aword"));
+        assert_eq!(parsed.host_str(), Some("postgres"));
+        assert_eq!(parsed.query(), Some("sslmode=disable"));
+        // compose.yaml's URL has no password of its own.
+        let bare = SecretString::from("postgres://tangible@postgres:5432/tangible".to_owned());
+        assert_eq!(
+            with_password_from(&bare, &file).unwrap().expose(),
+            "postgres://tangible:n3w%2Fp%40ss%3Aword@postgres:5432/tangible"
+        );
+        // An empty file is refused, naming the file, never the URL.
+        std::fs::write(&file, "\n").unwrap();
+        let error = with_password_from(&url, &file).unwrap_err().to_string();
+        assert!(error.contains("is empty"), "{error}");
+        assert!(error.contains("postgres-password"), "{error}");
+        assert!(!error.contains("urlsecret"), "{error}");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -28,9 +28,14 @@ services:
     image: tangible:dev
     pull_policy: never
 
+  init:
+    image: tangible:dev
+    pull_policy: never
+    # The password `just dev-server`, outside the stack, connects with.
+    environment:
+      POSTGRES_PASSWORD: tangible
+
   postgres:
     # Exposed on the host so `just dev-server` can run outside the stack.
     ports:
       - "${TANGIBLE_DEV_DB_PORT:-5432}:5432"
-    environment:
-      POSTGRES_PASSWORD: tangible

@@ -144,6 +144,20 @@ impl SecretKey {
         ))
     }
 
+    /// A new random password, 24 bytes written in hex: letters and digits
+    /// only, so it is the same in a URL, an environment variable and a file.
+    ///
+    /// # Errors
+    ///
+    /// [`SecretError::Random`] when the system has no randomness to give.
+    pub fn generate_password() -> Result<SecretString, SecretError> {
+        let mut bytes = [0_u8; 24];
+        SystemRandom::new()
+            .fill(&mut bytes)
+            .map_err(|_| SecretError::Random)?;
+        Ok(SecretString::from(hex::encode(bytes)))
+    }
+
     /// This key's id: the first 8 bytes of its SHA-256, in hex. Not secret.
     #[must_use]
     pub fn id(&self) -> &str {

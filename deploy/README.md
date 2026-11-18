@@ -29,7 +29,7 @@ open the address it prints; it forwards API requests to the server on port
 ## Production
 
 ```bash
-cp deploy/.env.example deploy/.env                           # set POSTGRES_PASSWORD
+cp deploy/.env.example deploy/.env                           # optional: each setting has a default
 docker compose -f deploy/compose.yaml config                 # read the rendered output
 docker compose -f deploy/compose.yaml up -d
 ```
@@ -38,16 +38,19 @@ Review the rendered configuration before starting: image references, volume
 mappings, ports, and the env file. To run exactly the image you verified, set
 `TANGIBLE_IMAGE` in `.env` to its digest ("Verifying a release").
 
-`up` starts PostgreSQL, then two short steps before the server. `backup` copies
-the database into the `backups` volume ("Backups"), and `migrate` applies
-the migrations this version needs, usually none. Only once both have finished
-does the server start. If either fails, `up` stops there and says which. A
+`up` first runs `init`, which makes the database's password and the
+integration secret key the first time and keeps them in the `secrets` volume
+("Integration secrets"), so there is nothing to choose before starting. Then
+PostgreSQL, then two short steps before the server: `backup` copies the
+database into the `backups` volume ("Backups"), and `migrate` applies the
+migrations this version needs, usually none. Only once these have finished
+does the server start. If one fails, `up` stops there and says which. A
 server whose image did not change keeps running; on an upgrade, Compose has
 already stopped the old one, so that it does not serve while its database is
 migrated, and nothing serves until the cause is fixed and `up` runs again, or
-you go back to the image you ran ("Upgrading"). `docker compose ps -a` lists both
-as exited (0) once done, and `docker compose logs backup migrate` says what
-they did. They run again at every `up`, which is how an upgrade gets its
+you go back to the image you ran ("Upgrading"). `docker compose ps -a` lists the
+three as exited (0) once done, and `docker compose logs init backup migrate`
+says what they did. They run again at every `up`, which is how an upgrade gets its
 migrations, with a copy taken just before. The commands in this guide that run
 the server's image once, `docker compose run --rm --no-deps server ...`, say
 `--no-deps` so that Compose does not start them as well.
@@ -883,10 +886,34 @@ you are, is yours to determine.
 Download clients, S3, RomM's API, Prowlarr and the metadata providers sign in
 with a password or a key. You enter it once, as an administrator, and
 Tangible stores it sealed with a key kept outside the database; nobody can
-read it back, through the web UI or the API. Without a key the server runs,
-and an integration cannot be given a password.
+read it back, through the web UI or the API.
 
-Make the key once, readable only by the server's user (10001 in the image):
+The first `docker compose up` makes that key: `init` writes it to the
+`secrets` volume, readable only by the server's user (10001 in the image),
+beside the database's password, and keeps it from then on. Diagnostics says
+whether a key is loaded and whether it opens every stored password.
+
+Back the key up apart from the database: a database backup holds the
+passwords sealed, and the key is what opens them. A lost key loses only those
+passwords; enter them again. To copy it out:
+
+```bash
+docker compose -f deploy/compose.yaml run --rm --no-deps --entrypoint cat \
+  server /var/lib/tangible/secrets/secret-key > tangible-secret-key
+chmod 0400 tangible-secret-key
+```
+
+A key of your own, as an install from before 0.5.0 made, goes on being used:
+set `TANGIBLE_SECRET_KEY_FILE=/run/secrets/tangible-secret-key` in `.env` and
+uncomment the `tangible-secret-key` lines of the two `secrets` blocks in
+`compose.yaml`, which mount it from `deploy/secrets/`. Do it before the first
+`up` with this version's `compose.yaml`, or the server opens with the key
+`init` made, which opens none of the stored passwords; Diagnostics says so,
+and setting the line then is enough.
+
+To move to a new key, make one, readable only by the server's user, seal
+everything again under it, then point `TANGIBLE_SECRET_KEY_FILE` at it as
+above:
 
 ```bash
 mkdir -p deploy/secrets
@@ -894,25 +921,14 @@ docker compose -f deploy/compose.yaml run --rm --no-deps server \
   secrets generate > deploy/secrets/tangible-secret-key
 chmod 0400 deploy/secrets/tangible-secret-key
 sudo chown 10001 deploy/secrets/tangible-secret-key
-```
-
-Then uncomment `TANGIBLE_SECRET_KEY_FILE` and the two `secrets` blocks in
-`compose.yaml`, and restart the server. Diagnostics says whether a key is
-loaded and whether it opens every stored password.
-
-Back the key up apart from the database: a database backup holds the
-passwords sealed, and the key is what opens them. A lost key loses only those
-passwords; enter them again. To move to a new key, make one as above under
-another name, then:
-
-```bash
 docker compose -f deploy/compose.yaml run --rm --no-deps \
   -v "$PWD/deploy/secrets:/keys:ro" server \
-  secrets rotate --old-key-file /keys/old-key --key-file /keys/new-key
+  secrets rotate --old-key-file /var/lib/tangible/secrets/secret-key \
+  --key-file /keys/tangible-secret-key
 ```
 
-and point `compose.yaml` at the new file. A rotation changes everything or
-nothing, and can be run again.
+A rotation changes everything or nothing, and can be run again. (A key of
+your own already in use is the old one: `--old-key-file` names it instead.)
 
 ## Issue reports
 
@@ -1154,6 +1170,7 @@ Three volumes hold everything that cannot be rebuilt:
 |---|---|
 | `postgres-data` | the catalogue, jobs, burn history, physical copies, accounts, audit trail |
 | `library` | every stored file and every artifact's manifest |
+| `secrets` | the database's password, and the key integration passwords are sealed with ("Integration secrets") |
 | each worker's `burner-*-cache` | its credential, and its recovery record while a burn is in progress |
 
 `staging` holds only work in progress and needs no backup. `backups` holds
@@ -1167,10 +1184,15 @@ for example from cron, list them, and copy one out of the volume:
 
 ```bash
 docker compose -f deploy/compose.yaml run --rm backup
-docker compose -f deploy/compose.yaml run --rm --entrypoint ls backup -l /backups
-docker compose -f deploy/compose.yaml run --rm --entrypoint cat backup \
-  /backups/tangible-20261117T210000Z.dump > tangible-20261117T210000Z.dump
+docker compose -f deploy/compose.yaml run --rm backup ls -l /backups
+docker compose -f deploy/compose.yaml run --rm backup \
+  cat /backups/tangible-20261117T210000Z.dump > tangible-20261117T210000Z.dump
 ```
+
+Keep a copy of the integration secret key elsewhere too ("Integration
+secrets" says how to copy it out): without it, a restored database's
+integration passwords do not open. The database's password needs no copy: a
+copy of the database restores into one made with any password.
 
 Back up the library with whatever you use for large files; it only ever grows,
 and nothing in it is rewritten. Copy the database before the library, so every
@@ -1180,11 +1202,11 @@ restore from it has been tried.
 To restore: stop the stack, restore the `library` volume, start only
 PostgreSQL, restore a copy with `pg_restore --clean --if-exists`, then check
 that the two agree before starting the rest. The `backup` service runs
-`pg_restore` as well, against this stack's database, for a copy in its volume:
+`pg_restore` too, against this stack's database, for a copy in its volume:
 
 ```bash
 docker compose -f deploy/compose.yaml stop server
-docker compose -f deploy/compose.yaml run --rm --entrypoint pg_restore backup \
+docker compose -f deploy/compose.yaml run --rm backup pg_restore \
   --clean --if-exists --no-owner --dbname=tangible /backups/tangible-20261117T210000Z.dump
 ```
 

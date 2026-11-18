@@ -23,6 +23,16 @@ may change between minor versions, and the release notes say how.
 - `TANGIBLE_IMAGE` in `.env` names the image the server, its migrations and a
   burn worker run, so pinning a verified digest, or upgrading to one, changes
   that line and not the Compose files.
+- Nothing has to be set before the first `docker compose up`, so `.env` is
+  optional. `compose.yaml`'s first service, `init`, runs `tangible init`,
+  which makes the database's password and the integration secret key once and
+  keeps them in a new `secrets` volume; PostgreSQL is created with that
+  password, the server and its migrations read it
+  (`TANGIBLE_DATABASE_PASSWORD_FILE`, new), and the server seals integration
+  secrets with that key, so they work without making one. An install with
+  `POSTGRES_PASSWORD` in `.env` keeps it: `init` writes it to the volume
+  instead, since its database was created with it. Back up the key apart from
+  the database (deploy/README.md, "Integration secrets").
 
 ### Changed
 
@@ -35,6 +45,15 @@ may change between minor versions, and the release notes say how.
 - The deploy guide's `docker compose run --rm server ...` commands say
   `--no-deps`, so that running one does not take a copy of the database and
   migrate it first.
+- `POSTGRES_PASSWORD` in `deploy/.env.example` is commented out: a copy of
+  the file no longer sets every new install's password to `change-me`. A
+  password with characters a URL reserves, such as `@` or `/`, now works:
+  `compose.yaml` put it in the server's connection URL as it was.
+- An install that made its own integration secret key keeps using it with
+  `TANGIBLE_SECRET_KEY_FILE` in `.env` and the `tangible-secret-key` lines in
+  `compose.yaml`, set before the first `up` with this version's file; without
+  them the server uses the key `init` made, which opens none of the stored
+  passwords, and Diagnostics says so.
 
 ## 0.4.0 (2026-11-17)
 

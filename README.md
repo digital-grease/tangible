@@ -171,14 +171,14 @@ Tangible runs under Docker Compose on Linux; a drive's worker needs Compose
 ```bash
 git clone --branch vX.Y.Z --depth 1 https://github.com/digital-grease/tangible.git
 cd tangible/deploy
-cp .env.example .env
-editor .env                 # at least POSTGRES_PASSWORD
 docker compose config       # read what will run
-docker compose up -d        # copies and migrates the database, then starts the server
+docker compose up -d        # makes its secrets, copies and migrates the database, then starts
 ```
 
-`TANGIBLE_PUBLIC_URL` matters once Tangible is reached over HTTPS or signs in
-through an identity provider; on a LAN over plain HTTP the default works.
+Then open `http://<this machine>:8080` and make the first administrator.
+Nothing has to be set first: settings go in `.env` (copy `.env.example`), and
+each has a default. `TANGIBLE_PUBLIC_URL` matters once Tangible is reached
+over HTTPS or signs in through an identity provider.
 
 Review the Compose file, environment file, volume mappings, device mappings,
 ports and image references before starting the stack. [`deploy/README.md`](deploy/README.md)
