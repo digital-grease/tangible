@@ -163,20 +163,6 @@ The normal deployment is Linux and Docker Compose. The server container does not
 9. Do not use remote-code shell pipelines.
 10. Do not bundle content indexers, decryption keys, or decryption code.
 
-## Where the design lives
-
-The architecture is described above, and the ten principles are the rules
-everything else follows from. Beyond that, the code is the specification: the
-domain crate carries the entity model and state machines, the migrations carry
-the storage constraints, and `openapi.json` is generated from the running API
-rather than written by hand.
-
-Structural invariants are enforced rather than documented. Prohibited constructs
-fail the build through workspace lints, the database rejects states the domain
-model forbids, and CI asserts that no default deployment can reach an optical
-drive and that every container stays confined. Where a rule matters, there is a
-test named after it.
-
 ## Installing
 
 Tangible runs under Docker Compose on Linux; a drive's worker needs Compose
