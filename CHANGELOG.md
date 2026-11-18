@@ -23,6 +23,13 @@ may change between minor versions, and the release notes say how.
 - `TANGIBLE_IMAGE` in `.env` names the image the server, its migrations and a
   burn worker run, so pinning a verified digest, or upgrading to one, changes
   that line and not the Compose files.
+- Each release carries `compose.yaml`, `compose.hardware.yaml`,
+  `compose.hardware-sg.yaml`, `compose.worker.yaml`, `compose.decryption.yaml`,
+  `env.example` and `worker.env.example` as files of their own, named the
+  same in every release, in its signed `SHA256SUMS` and attested, so
+  `.../releases/latest/download/compose.yaml` is always the newest release's.
+  Installing is downloading it, then `docker compose up -d`; no clone is
+  needed. `env.example` is `.env.example`, which GitHub would rename.
 - Nothing has to be set before the first `docker compose up`, so `.env` is
   optional. `compose.yaml`'s first service, `init`, runs `tangible init`,
   which makes the database's password and the integration secret key once and

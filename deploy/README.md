@@ -28,11 +28,29 @@ open the address it prints; it forwards API requests to the server on port
 
 ## Production
 
+From the newest release, in a directory of its own:
+
+```bash
+curl -fLO https://github.com/digital-grease/tangible/releases/latest/download/compose.yaml
+docker compose config                                        # read the rendered output
+docker compose up -d
+```
+
+Or from a clone of a release tag, or the release's deploy archive unpacked
+(`tangible-deploy-vX.Y.Z.tar.gz`), at its top:
+
 ```bash
 cp deploy/.env.example deploy/.env                           # optional: each setting has a default
 docker compose -f deploy/compose.yaml config                 # read the rendered output
 docker compose -f deploy/compose.yaml up -d
 ```
+
+The commands in this guide name `deploy/compose.yaml`, as from a clone; beside
+a downloaded `compose.yaml`, leave out `-f deploy/compose.yaml`. Settings go in
+`.env` beside it: `env.example` lists them, downloaded the same way
+(`curl -fL -o .env .../latest/download/env.example`), or `.env.example` in a
+clone. Each release's files are in its signed `SHA256SUMS` ("Verifying a
+release").
 
 Review the rendered configuration before starting: image references, volume
 mappings, ports, and the env file. To run exactly the image you verified, set
@@ -225,12 +243,13 @@ starting new work before maintenance, drain it first (below).
 When the drive is in a machine other than the server's, run the worker
 there on its own, from `compose.worker.yaml`. It is the same worker, as
 confined, without the server's stack: it reaches the server across the
-network, at its `https://` address. On the drive's machine, in this
-release's `deploy/` directory (in a clone of the tag, or unpacked from the
-release's `tangible-deploy-<tag>.tar.gz`, as `tangible-deploy-<tag>/`):
+network, at its `https://` address. On the drive's machine, in a directory
+of its own, with the newest release's two files (or in `deploy/` of a clone
+of the tag, or of the release's `tangible-deploy-<tag>.tar.gz` unpacked):
 
 ```bash
-cp worker.env.example .env
+curl -fLO https://github.com/digital-grease/tangible/releases/latest/download/compose.worker.yaml
+curl -fL -o .env https://github.com/digital-grease/tangible/releases/latest/download/worker.env.example
 editor .env              # the server's URL, the drive, its group, a name
 ls -l /dev/disk/by-id/ | grep -E 'sr[0-9]+$'   # identify your drive
 stat -L -c %g /dev/disk/by-id/NAME             # the group that owns it
@@ -988,7 +1007,10 @@ cosign verify "$IMAGE" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
-The release files are covered by `SHA256SUMS`, which is signed the same way:
+The release files are covered by `SHA256SUMS`, which is signed the same way,
+`compose.yaml`, `env.example` and the worker files included; beside one
+downloaded on its own, `sha256sum --check --ignore-missing SHA256SUMS` checks
+just that:
 
 ```bash
 cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json \

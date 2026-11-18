@@ -6,8 +6,9 @@
 # own machine use compose.hardware.yaml instead, which joins the server's
 # stack (deploy/README.md, "Adding a real drive").
 #
-# On the drive's machine, in this directory (deploy/ in a clone of a release
-# tag, or the release's tangible-deploy-<tag>.tar.gz unpacked):
+# On the drive's machine, beside this file, downloaded from the release with
+# its worker.env.example (or in deploy/ of a clone of a release tag, or of the
+# release's tangible-deploy-<tag>.tar.gz unpacked):
 #
 #   cp worker.env.example .env      # then set the server URL and the drive
 #   docker compose -f compose.worker.yaml config

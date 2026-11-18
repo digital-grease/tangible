@@ -166,26 +166,29 @@ The normal deployment is Linux and Docker Compose. The server container does not
 ## Installing
 
 Tangible runs under Docker Compose on Linux; a drive's worker needs Compose
-2.29.3 or later. From a release:
+2.29.3 or later. In a directory of its own:
 
 ```bash
-git clone --branch vX.Y.Z --depth 1 https://github.com/digital-grease/tangible.git
-cd tangible/deploy
+curl -fLO https://github.com/digital-grease/tangible/releases/latest/download/compose.yaml
 docker compose config       # read what will run
 docker compose up -d        # makes its secrets, copies and migrates the database, then starts
 ```
 
 Then open `http://<this machine>:8080` and make the first administrator.
-Nothing has to be set first: settings go in `.env` (copy `.env.example`), and
-each has a default. `TANGIBLE_PUBLIC_URL` matters once Tangible is reached
-over HTTPS or signs in through an identity provider.
+Nothing has to be set first. Settings go in `.env`, each with a default:
+`curl -fL -o .env https://github.com/digital-grease/tangible/releases/latest/download/env.example`
+gives the list. `TANGIBLE_PUBLIC_URL` matters once Tangible is reached over
+HTTPS or signs in through an identity provider.
 
-Review the Compose file, environment file, volume mappings, device mappings,
-ports and image references before starting the stack. [`deploy/README.md`](deploy/README.md)
-covers first sign-in, adding a drive (on the server's machine, or on another
-one with `deploy/compose.worker.yaml`), RomM, CHDs, backups, collecting files
-nothing needs, upgrades, and verifying a release's signatures. No installation step pipes a downloaded
-script into a shell, and none ever will.
+`docker compose pull` and `docker compose up -d` then take each patch release
+as it comes; a new minor version is its own `compose.yaml`, downloaded the
+same way. Every release file, `compose.yaml` included, is listed in the
+release's signed `SHA256SUMS`, and a tagged clone or the signed deploy archive
+installs the same way. [`deploy/README.md`](deploy/README.md) covers first
+sign-in, adding a drive (on the server's machine, or on another one with
+`compose.worker.yaml`), RomM, CHDs, backups, collecting files nothing needs,
+upgrades, and verifying a release's signatures. No installation step pipes a
+downloaded script into a shell, and none ever will.
 
 ## Developing
 

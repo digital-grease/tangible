@@ -189,6 +189,15 @@ jobs:
             -o "dist/tangible-$TAG-source.tar.gz" "$TAG"
           git archive --format=tar.gz --prefix="tangible-deploy-$TAG/" \
             -o "dist/tangible-deploy-$TAG.tar.gz" "$TAG:deploy"
+          # The files an install downloads, again under names that are the
+          # same in every release, so .../releases/latest/download/compose.yaml
+          # is always the newest release's (README.md, "Installing"). GitHub
+          # renames a file whose name starts with a dot: env.example.
+          for file in compose.yaml compose.hardware.yaml compose.hardware-sg.yaml \
+              compose.worker.yaml compose.decryption.yaml worker.env.example; do
+            git show "$TAG:deploy/$file" > "dist/$file"
+          done
+          git show "$TAG:deploy/.env.example" > dist/env.example
           docker pull --quiet "$REF"
           deploy/sources.sh "$REF" "$TAG" > dist/SOURCES.md
           docker buildx imagetools inspect "$REF" --format '{{ json .SBOM.SPDX }}' \
@@ -212,6 +221,8 @@ jobs:
         with:
           subject-path: |
             dist/tangible-*.tar.gz
+            dist/compose*.yaml
+            dist/*env.example
             dist/SOURCES.md
             dist/sbom.spdx.json
             dist/THIRD_PARTY_NOTICES-*.txt
