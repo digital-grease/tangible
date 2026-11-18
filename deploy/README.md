@@ -198,16 +198,32 @@ stack can reach a drive by accident. This adds a worker for a drive in the
 server's own machine; for a drive in another machine, see "A worker on
 another machine" below.
 
+On the Workers page, "Issue an enrollment token" gives the lines the worker
+needs in `.env`, the token in them, for a drive in this machine or another.
+Beside a downloaded `compose.yaml`:
+
 ```bash
+curl -fLO https://github.com/digital-grease/tangible/releases/latest/download/compose.hardware.yaml
 ls -l /dev/disk/by-id/ | grep -E 'sr[0-9]+$'   # identify your drive
 stat -L -c %g /dev/disk/by-id/NAME             # the group that owns it
-# set TANGIBLE_BLOCK_DEVICE (/dev/disk/by-id/NAME), TANGIBLE_OPTICAL_GID
-# and TANGIBLE_WORKER_NAME in .env
+# add the Workers page's lines to .env, with TANGIBLE_BLOCK_DEVICE
+# (/dev/disk/by-id/NAME) and TANGIBLE_OPTICAL_GID filled in
 
-docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml config
+docker compose config
 # read the rendered output, confirm the device mappings are the drive you meant
+docker compose up -d
+```
+
+Their first line, `COMPOSE_FILE=compose.yaml:compose.hardware.yaml`, is what
+makes plain `docker compose` include the worker from then on, `pull` and `up`
+included. In a clone, the same without that line is:
+
+```bash
+docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml config
 docker compose -f deploy/compose.yaml -f deploy/compose.hardware.yaml up -d
 ```
+
+Once the worker's log says `enrolled`, take the token line out of `.env`.
 
 Name the drive by its `/dev/disk/by-id` name rather than `/dev/srN`. The
 number can change when a USB drive is plugged in again or the machine
@@ -259,8 +275,9 @@ docker compose -f compose.worker.yaml up -d
 docker compose -f compose.worker.yaml logs -f
 ```
 
-Issue an enrollment token on the server's Workers page and put it in `.env`
-as `TANGIBLE_ENROLLMENT_TOKEN` before the first start. The log says
+Issue an enrollment token on the server's Workers page, choosing "In another
+machine": it gives the lines for this `.env`, the token and the server's
+address in them, before the first start. The log says
 `enrolled` once the worker holds its credential; remove the token from
 `.env` then. The worker appears on the Workers page under its name.
 

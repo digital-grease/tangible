@@ -18,6 +18,56 @@ export function issueEnrollment(
   return apiCall(fetcher, '/api/v1/worker-enrollments', 'POST', { expires_in_minutes: minutes });
 }
 
+/** Where a new worker's drive is: in the server's machine, or another. */
+export type WorkerPlace = 'here' | 'elsewhere';
+
+/** A worker's name as `.env` can carry it: no spaces, quotes or `#`. */
+export function workerEnvName(name: string): string {
+  const safe = name
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/[^A-Za-z0-9._-]/g, '')
+    .slice(0, 64);
+  return safe || 'drive-1';
+}
+
+/**
+ * The lines a new worker's `.env` needs, its enrollment token among them
+ * (deploy/README.md, "Adding a real drive"). In the server's machine they go
+ * in the `.env` beside `compose.yaml`, and `COMPOSE_FILE` makes plain `docker
+ * compose` include `compose.hardware.yaml`; in another, in the `.env` beside
+ * `compose.worker.yaml`, which reaches the server at `serverUrl`. The drive
+ * and its group are left to fill in, each with the command that finds it.
+ */
+export function workerEnvLines(
+  place: WorkerPlace,
+  token: string,
+  name: string,
+  serverUrl: string,
+): string {
+  const lines: string[] = [];
+  if (place === 'here') {
+    lines.push('COMPOSE_FILE=compose.yaml:compose.hardware.yaml');
+  } else {
+    lines.push(`TANGIBLE_SERVER_URL=${serverUrl}`);
+    if (serverUrl.startsWith('http://')) {
+      lines.push(
+        '# Plain http: the worker refuses it across the network unless this is true, and it should be only on a network you trust.',
+        '# TANGIBLE_WORKER_PLAIN_HTTP=true',
+      );
+    }
+  }
+  lines.push(
+    `TANGIBLE_WORKER_NAME=${workerEnvName(name)}`,
+    `TANGIBLE_ENROLLMENT_TOKEN=${token}`,
+    "# The drive, from: ls -l /dev/disk/by-id/ | grep -E 'sr[0-9]+$'",
+    'TANGIBLE_BLOCK_DEVICE=/dev/disk/by-id/NAME',
+    '# The group that owns it, from: stat -L -c %g /dev/disk/by-id/NAME',
+    'TANGIBLE_OPTICAL_GID=',
+  );
+  return `${lines.join('\n')}\n`;
+}
+
 export type WorkerView = components['schemas']['WorkerView'];
 
 /** How many workers the page asks for at once: more than a deployment has. */

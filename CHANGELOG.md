@@ -30,6 +30,13 @@ may change between minor versions, and the release notes say how.
   `.../releases/latest/download/compose.yaml` is always the newest release's.
   Installing is downloading it, then `docker compose up -d`; no clone is
   needed. `env.example` is `.env.example`, which GitHub would rename.
+- Issuing an enrollment token on the Workers page gives the lines the new
+  worker's `.env` needs, the token in them, for a drive in the server's
+  machine or in another (with the server's address), the drive's name
+  chosen there, and the two commands that find the drive and its group; a
+  button copies them. For the server's machine they begin
+  `COMPOSE_FILE=compose.yaml:compose.hardware.yaml`, so plain `docker compose`
+  commands include the worker from then on, with no `-f` each time.
 - Nothing has to be set before the first `docker compose up`, so `.env` is
   optional. `compose.yaml`'s first service, `init`, runs `tangible init`,
   which makes the database's password and the integration secret key once and

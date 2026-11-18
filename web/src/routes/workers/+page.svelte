@@ -36,6 +36,7 @@
     loadWorkers,
     requestErasure,
     workerActions,
+    workerEnvLines,
     workerStatusLabel,
     workerStatusTone,
     type DriveView,
@@ -43,8 +44,10 @@
     type ErasureView,
     type IssuedEnrollment,
     type WorkerAction,
+    type WorkerPlace,
     type WorkerView,
   } from '$lib/workers';
+  import { copyText } from '$lib/report';
   import { onDestroy, onMount } from 'svelte';
 
   type Load<T> =
@@ -170,6 +173,21 @@
   let issued = $state<IssuedEnrollment | null>(null);
   let problem = $state<Problem | null>(null);
   let submitting = $state(false);
+  let place = $state<WorkerPlace>('here');
+  let driveName = $state('');
+  let copied = $state('');
+  // The server's address as this browser reaches it, which is what another
+  // machine on the same network reaches it at too, as a rule.
+  const serverUrl = typeof location === 'undefined' ? '' : location.origin;
+  const envLines = $derived(
+    issued ? workerEnvLines(place, issued.enrollment_token, driveName, serverUrl) : '',
+  );
+
+  async function copyLines() {
+    copied = (await copyText(envLines))
+      ? 'Copied.'
+      : 'It could not be copied automatically: select the lines and copy them.';
+  }
 
   async function issue(event: SubmitEvent) {
     event.preventDefault();
@@ -177,6 +195,7 @@
     submitting = true;
     problem = null;
     issued = null;
+    copied = '';
     const result = await issueEnrollment(minutes);
     submitting = false;
     if (result.kind === 'error') {
@@ -664,10 +683,47 @@
               />
             {/snippet}
           </Field>
+          <fieldset class="place">
+            <legend>Where is the drive?</legend>
+            <label class="choice">
+              <input type="radio" name="place" value="here" bind:group={place} />
+              <span>In this server's machine, with <code>compose.hardware.yaml</code></span>
+            </label>
+            <label class="choice">
+              <input type="radio" name="place" value="elsewhere" bind:group={place} />
+              <span>In another machine, with <code>compose.worker.yaml</code></span>
+            </label>
+          </fieldset>
+          <Field label="A name for the drive" hint="What this page will call it.">
+            {#snippet children({ id, describedBy })}
+              <input
+                {id}
+                name="drive-name"
+                bind:value={driveName}
+                placeholder="drive-1"
+                aria-describedby={describedBy}
+                spellcheck="false"
+              />
+            {/snippet}
+          </Field>
           <p>
-            Set it as <code>TANGIBLE_ENROLLMENT_TOKEN</code> in the worker's environment, start the worker,
-            then remove the setting again.
+            {#if place === 'here'}
+              Add these lines to the <code>.env</code> beside <code>compose.yaml</code>, with
+              <code>compose.hardware.yaml</code> downloaded beside it, fill in the drive and its
+              group, then <code>docker compose up -d</code>.
+            {:else}
+              On the drive's machine, put these lines in the <code>.env</code> beside
+              <code>compose.worker.yaml</code>, fill in the drive and its group, then
+              <code>docker compose -f compose.worker.yaml up -d</code>.
+            {/if}
+            Once the worker's log says it enrolled, take the token line out again. The deploy guide's
+            "Adding a real drive" says more.
           </p>
+          <pre class="env" aria-label="The worker's .env lines"><code>{envLines}</code></pre>
+          <div class="inline">
+            <Button onclick={copyLines}>Copy the lines</Button>
+            <span role="status">{copied}</span>
+          </div>
         </div>
       {/if}
     </Panel>
@@ -782,6 +838,19 @@
   }
   .token {
     width: 100%;
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+  }
+  .place {
+    margin: var(--space-3) 0;
+  }
+  .env {
+    margin: var(--space-3) 0;
+    padding: var(--space-3);
+    overflow-x: auto;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
     font-family: var(--font-mono);
     font-size: var(--text-sm);
   }

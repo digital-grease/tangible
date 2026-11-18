@@ -292,4 +292,30 @@ describe('Workers page', () => {
     await fireEvent.click(await screen.findByRole('button', { name: 'Drain bench' }));
     expect(await screen.findByText('Only an administrator can change workers.')).toBeTruthy();
   });
+
+  it("gives a new worker's .env lines with its token, for either machine", async () => {
+    page('online', {
+      'POST /api/v1/worker-enrollments': {
+        status: 201,
+        body: { enrollment_token: 'tangible-enroll-abc', expires_at: '2026-10-28T12:15:00Z' },
+      },
+    });
+    const { container } = render(WorkersPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Issue an enrollment token' }));
+    const lines = await screen.findByLabelText("The worker's .env lines");
+    expect(lines.textContent).toContain('COMPOSE_FILE=compose.yaml:compose.hardware.yaml');
+    expect(lines.textContent).toContain('TANGIBLE_ENROLLMENT_TOKEN=tangible-enroll-abc');
+    expect(lines.textContent).toContain('TANGIBLE_WORKER_NAME=drive-1');
+    expect(lines.textContent).not.toContain('TANGIBLE_SERVER_URL');
+
+    await fireEvent.input(screen.getByLabelText('A name for the drive'), {
+      target: { value: 'office bdr' },
+    });
+    expect(lines.textContent).toContain('TANGIBLE_WORKER_NAME=office-bdr');
+    await fireEvent.click(screen.getByRole('radio', { name: /In another machine/ }));
+    expect(lines.textContent).toContain(`TANGIBLE_SERVER_URL=${location.origin}`);
+    expect(lines.textContent).not.toContain('COMPOSE_FILE');
+    expect(screen.getByText(/docker compose -f compose.worker.yaml up -d/)).toBeTruthy();
+    expect(await axeViolations(container)).toEqual([]);
+  });
 });

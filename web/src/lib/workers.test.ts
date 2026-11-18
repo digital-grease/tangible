@@ -18,6 +18,8 @@ import {
   erasureStateTone,
   issueEnrollment,
   requestErasure,
+  workerEnvLines,
+  workerEnvName,
   type ErasureView,
 } from './workers';
 
@@ -255,5 +257,40 @@ describe('a worker credential in words', () => {
       credentialTone({ ...base, credential_rotation_requested_at: '2026-11-02T10:00:00Z' }),
     ).toBe('busy');
     expect(credentialTone({ ...base, status: 'revoked' })).toBe('idle');
+  });
+});
+
+describe("a new worker's .env lines", () => {
+  it('for the server machine, include the hardware file and leave the drive to fill in', () => {
+    const lines = workerEnvLines('here', 'tok-123', 'Pioneer BDR', 'http://tangible.lan:8080');
+    expect(lines.split('\n')).toEqual([
+      'COMPOSE_FILE=compose.yaml:compose.hardware.yaml',
+      'TANGIBLE_WORKER_NAME=Pioneer-BDR',
+      'TANGIBLE_ENROLLMENT_TOKEN=tok-123',
+      "# The drive, from: ls -l /dev/disk/by-id/ | grep -E 'sr[0-9]+$'",
+      'TANGIBLE_BLOCK_DEVICE=/dev/disk/by-id/NAME',
+      '# The group that owns it, from: stat -L -c %g /dev/disk/by-id/NAME',
+      'TANGIBLE_OPTICAL_GID=',
+      '',
+    ]);
+    // The server's own machine reaches it on the Compose network.
+    expect(lines).not.toContain('TANGIBLE_SERVER_URL');
+  });
+
+  it('for another machine, name the server, and warn of plain http without turning it on', () => {
+    const https = workerEnvLines('elsewhere', 'tok', 'drive', 'https://tangible.example');
+    expect(https.split('\n')[0]).toBe('TANGIBLE_SERVER_URL=https://tangible.example');
+    expect(https).not.toContain('PLAIN_HTTP');
+    expect(https).not.toContain('COMPOSE_FILE');
+    const http = workerEnvLines('elsewhere', 'tok', 'drive', 'http://192.168.1.5:8080');
+    expect(http).toContain('# TANGIBLE_WORKER_PLAIN_HTTP=true');
+    expect(http).not.toMatch(/^TANGIBLE_WORKER_PLAIN_HTTP/m);
+  });
+
+  it('keeps a name .env can carry', () => {
+    expect(workerEnvName('  bd drive #2 "office"  ')).toBe('bd-drive-2-office');
+    expect(workerEnvName('slimtype_dvd.1')).toBe('slimtype_dvd.1');
+    expect(workerEnvName('   ')).toBe('drive-1');
+    expect(workerEnvName('x'.repeat(80))).toHaveLength(64);
   });
 });
