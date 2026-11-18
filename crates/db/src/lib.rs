@@ -81,6 +81,31 @@ pub enum DbError {
         /// What was stored. Enum values are not secrets.
         value: String,
     },
+    /// The database has migrations this build does not know and lacks some
+    /// it does: not the schema of this version, an earlier one or a later
+    /// one, so nothing is applied.
+    #[error(
+        "the database's migrations do not follow this version's: it lacks {pending:?} and \
+         has {unknown:?}, which this version does not know"
+    )]
+    MigrationsDiverged {
+        /// This build's migrations the database has not applied.
+        pending: Vec<i64>,
+        /// Migrations the database applied that this build does not have.
+        unknown: Vec<i64>,
+    },
+}
+
+/// What [`Database::migrate`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Migrated {
+    /// These migrations were applied, oldest first; none when the schema was
+    /// current.
+    Applied(Vec<i64>),
+    /// The database has every migration this build has, and these too: a
+    /// later version migrated it, and an earlier one is running again.
+    /// Nothing was applied.
+    Ahead(Vec<i64>),
 }
 
 /// Pool configuration. Defaults suit development; production overrides come
@@ -236,12 +261,38 @@ impl Database {
     /// Apply all pending migrations.
     ///
     /// Migrations are forward-only in production; rollback is restore-based.
+    /// A database a later version migrated, which has every migration this
+    /// build has and more, is left alone: going back to an earlier release
+    /// runs its `migrate` again, and that must not stop it starting.
     ///
     /// # Errors
     ///
-    /// Returns [`DbError::Migrate`] if any migration fails to apply.
-    pub async fn migrate(&self) -> Result<(), DbError> {
-        MIGRATOR.run(&self.pool).await.map_err(DbError::Migrate)
+    /// Returns [`DbError::Migrate`] if any migration fails to apply, and
+    /// [`DbError::MigrationsDiverged`] if the database has migrations this
+    /// build does not know while it lacks some this build has.
+    pub async fn migrate(&self) -> Result<Migrated, DbError> {
+        let applied = self.applied_migrations().await?;
+        let known: Vec<i64> = MIGRATOR.iter().map(|migration| migration.version).collect();
+        let pending: Vec<i64> = known
+            .iter()
+            .copied()
+            .filter(|version| !applied.contains(version))
+            .collect();
+        let mut unknown: Vec<i64> = applied
+            .iter()
+            .copied()
+            .filter(|version| !known.contains(version))
+            .collect();
+        unknown.sort_unstable();
+        if !unknown.is_empty() {
+            return if pending.is_empty() {
+                Ok(Migrated::Ahead(unknown))
+            } else {
+                Err(DbError::MigrationsDiverged { pending, unknown })
+            };
+        }
+        MIGRATOR.run(&self.pool).await.map_err(DbError::Migrate)?;
+        Ok(Migrated::Applied(pending))
     }
 
     /// The versions of this build's migrations the database has not applied,
@@ -255,24 +306,29 @@ impl Database {
     ///
     /// [`DbError::Query`] on a database failure.
     pub async fn pending_migrations(&self) -> Result<Vec<i64>, DbError> {
-        let table: Option<String> =
-            sqlx::query_scalar("SELECT to_regclass('_sqlx_migrations')::text")
-                .fetch_one(&self.pool)
-                .await
-                .map_err(DbError::Query)?;
-        let applied: Vec<i64> = if table.is_some() {
-            sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE success")
-                .fetch_all(&self.pool)
-                .await
-                .map_err(DbError::Query)?
-        } else {
-            Vec::new()
-        };
+        let applied = self.applied_migrations().await?;
         Ok(MIGRATOR
             .iter()
             .map(|migration| migration.version)
             .filter(|version| !applied.contains(version))
             .collect())
+    }
+
+    /// The versions of the migrations the database records as applied, none
+    /// before its first.
+    async fn applied_migrations(&self) -> Result<Vec<i64>, DbError> {
+        let table: Option<String> =
+            sqlx::query_scalar("SELECT to_regclass('_sqlx_migrations')::text")
+                .fetch_one(&self.pool)
+                .await
+                .map_err(DbError::Query)?;
+        if table.is_none() {
+            return Ok(Vec::new());
+        }
+        sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE success")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(DbError::Query)
     }
 }
 

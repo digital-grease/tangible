@@ -29,21 +29,32 @@ open the address it prints; it forwards API requests to the server on port
 ## Production
 
 ```bash
-cp deploy/.env.example deploy/.env
+cp deploy/.env.example deploy/.env                           # set POSTGRES_PASSWORD
 docker compose -f deploy/compose.yaml config                 # read the rendered output
-docker compose -f deploy/compose.yaml up -d postgres
-docker compose -f deploy/compose.yaml run --rm server migrate
 docker compose -f deploy/compose.yaml up -d
 ```
 
 Review the rendered configuration before starting: image references, volume
-mappings, ports, and the env file. Pin an image digest rather than a tag for a
-real deployment.
+mappings, ports, and the env file. To run exactly the image you verified, set
+`TANGIBLE_IMAGE` in `.env` to its digest ("Verifying a release").
 
-Migrations are a step of their own, never run behind your back. Until they are
-applied the server says so in its log at every start, and its healthcheck
-fails, so `docker compose ps` shows it unhealthy and no burn worker starts
-against it.
+`up` starts PostgreSQL, then two short steps before the server. `backup` copies
+the database into the `backups` volume ("Backups"), and `migrate` applies
+the migrations this version needs, usually none. Only once both have finished
+does the server start. If either fails, `up` stops there and says which. A
+server whose image did not change keeps running; on an upgrade, Compose has
+already stopped the old one, so that it does not serve while its database is
+migrated, and nothing serves until the cause is fixed and `up` runs again, or
+you go back to the image you ran ("Upgrading"). `docker compose ps -a` lists both
+as exited (0) once done, and `docker compose logs backup migrate` says what
+they did. They run again at every `up`, which is how an upgrade gets its
+migrations, with a copy taken just before. The commands in this guide that run
+the server's image once, `docker compose run --rm --no-deps server ...`, say
+`--no-deps` so that Compose does not start them as well.
+
+Until the migrations are applied the server says so in its log at every
+start, and its healthcheck fails, so `docker compose ps` shows it unhealthy and
+no burn worker starts against it.
 
 The web UI and the API share one address, `TANGIBLE_PUBLIC_URL`: the server
 serves the UI's built files itself, so there is no separate web container and
@@ -895,7 +906,7 @@ passwords; enter them again. To move to a new key, make one as above under
 another name, then:
 
 ```bash
-docker compose -f deploy/compose.yaml run --rm \
+docker compose -f deploy/compose.yaml run --rm --no-deps \
   -v "$PWD/deploy/secrets:/keys:ro" server \
   secrets rotate --old-key-file /keys/old-key --key-file /keys/new-key
 ```
@@ -1097,7 +1108,7 @@ When something is wrong and the cause is not obvious, ask for the whole
 picture:
 
 ```bash
-docker compose -f deploy/compose.yaml run --rm server doctor --report
+docker compose -f deploy/compose.yaml run --rm --no-deps server doctor --report
 ```
 
 It works when the web UI does not, and prints a checklist: the database and
@@ -1145,26 +1156,42 @@ Three volumes hold everything that cannot be rebuilt:
 | `library` | every stored file and every artifact's manifest |
 | each worker's `burner-*-cache` | its credential, and its recovery record while a burn is in progress |
 
-`staging` holds only work in progress and needs no backup.
+`staging` holds only work in progress and needs no backup. `backups` holds
+copies of the database (below): useful, but on the same disk as the database,
+so keep one elsewhere too.
 
-Back up the database with PostgreSQL's own tool, and the library with whatever
-you use for large files; it only ever grows, and nothing in it is rewritten:
+Every `docker compose up` copies the database into the `backups` volume before
+anything else, with PostgreSQL's own `pg_dump`, and keeps the newest ten
+(`TANGIBLE_BACKUPS_KEPT` in `.env`; 0 takes none). Take one whenever you like,
+for example from cron, list them, and copy one out of the volume:
 
 ```bash
-docker compose -f deploy/compose.yaml exec -T postgres \
-  pg_dump -U tangible -Fc tangible > tangible-$(date +%F).dump
+docker compose -f deploy/compose.yaml run --rm backup
+docker compose -f deploy/compose.yaml run --rm --entrypoint ls backup -l /backups
+docker compose -f deploy/compose.yaml run --rm --entrypoint cat backup \
+  /backups/tangible-20261117T210000Z.dump > tangible-20261117T210000Z.dump
 ```
 
-Take the database dump before the library copy, so every artifact the
-database names is in the copy. A backup is not a backup until a restore from
-it has been tried.
+Back up the library with whatever you use for large files; it only ever grows,
+and nothing in it is rewritten. Copy the database before the library, so every
+artifact the database names is in the copy. A backup is not a backup until a
+restore from it has been tried.
 
 To restore: stop the stack, restore the `library` volume, start only
-PostgreSQL, restore the dump with `pg_restore --clean --if-exists`, then check
-that the two agree before starting the rest:
+PostgreSQL, restore a copy with `pg_restore --clean --if-exists`, then check
+that the two agree before starting the rest. The `backup` service runs
+`pg_restore` as well, against this stack's database, for a copy in its volume:
 
 ```bash
-docker compose -f deploy/compose.yaml run --rm server restore-check
+docker compose -f deploy/compose.yaml stop server
+docker compose -f deploy/compose.yaml run --rm --entrypoint pg_restore backup \
+  --clean --if-exists --no-owner --dbname=tangible /backups/tangible-20261117T210000Z.dump
+```
+
+Then:
+
+```bash
+docker compose -f deploy/compose.yaml run --rm --no-deps server restore-check
 ```
 
 It looks at every object and manifest the catalogue names, at the size
@@ -1190,8 +1217,8 @@ ever repaired: originals are never rewritten, so the remedy is your backup.
 From the command line, the whole library or one artifact:
 
 ```bash
-docker compose -f deploy/compose.yaml run --rm server scrub
-docker compose -f deploy/compose.yaml run --rm server scrub --artifact <artifact id>
+docker compose -f deploy/compose.yaml run --rm --no-deps server scrub
+docker compose -f deploy/compose.yaml run --rm --no-deps server scrub --artifact <artifact id>
 ```
 
 It says how far it has got, lists what it found, and exits non-zero when it
@@ -1259,7 +1286,7 @@ it failed for good or was canceled, output a derivation never registered,
 and partial files left by interrupted uploads and imports. To see them:
 
 ```bash
-docker compose -f deploy/compose.yaml run --rm server gc
+docker compose -f deploy/compose.yaml run --rm --no-deps server gc
 ```
 
 It lists stored files that nothing refers to (no catalogued artifact,
@@ -1412,17 +1439,23 @@ metrics: import it and choose your Prometheus data source.
 ## Upgrading
 
 1. Read the release notes, especially anything about migrations.
-2. Take a backup, as above.
+2. Back up the library, as above. The database is copied for you in step 5.
 3. Note the image digests you are running now (`docker compose images`).
-4. Change the image reference in `compose.yaml` to the new version's digest,
-   from its release page, and check it with `docker compose config`.
-5. `docker compose pull`, then `docker compose run --rm server migrate`.
-6. `docker compose up -d`, and check the server becomes healthy.
+4. Take the new release's `compose.yaml`, or set `TANGIBLE_IMAGE` in `.env` to
+   the new version's digest from its release page, and check it with
+   `docker compose config`.
+5. `docker compose pull`, then `docker compose up -d`: the database is copied,
+   the migrations applied, and the server started on the new image. Check it
+   becomes healthy, and `docker compose logs migrate` for what was applied.
 
-Migrations only ever move forward. Rolling back to the previous version is
-possible only if it understands the migrated schema, which the release notes
-say; otherwise roll back by restoring the backup from step 2 and running the
-digests from step 3.
+Migrations only ever move forward. Going back to the previous version is
+possible when it runs on the migrated schema, which the release notes say:
+set `TANGIBLE_IMAGE` to the digests from step 3 and `docker compose up -d`; its
+`migrate` finds nothing to apply. A release from before the `backup` and
+`migrate` services (0.4.0 and earlier) is gone back to with its own
+`compose.yaml`. Otherwise restore the copy step 5 took, the newest in the
+backups volume from before the upgrade ("Backups"), and run the digests from
+step 3.
 
 ## What this deployment will not do
 

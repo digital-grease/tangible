@@ -1227,8 +1227,19 @@ async fn migrate_command(common: &CommonConfig) -> Result<()> {
     let database = Database::connect(&DbConfig::new(common.database_url.expose()))
         .await
         .context("connecting to the database")?;
-    database.migrate().await.context("applying migrations")?;
-    tracing::info!("migrations applied");
+    match database.migrate().await.context("applying migrations")? {
+        tangible_db::Migrated::Applied(applied) if applied.is_empty() => {
+            tracing::info!("the database schema is current; nothing to migrate");
+        }
+        tangible_db::Migrated::Applied(applied) => {
+            tracing::info!(?applied, "migrations applied");
+        }
+        tangible_db::Migrated::Ahead(later) => tracing::warn!(
+            ?later,
+            "the database was migrated by a later version of Tangible, which applied these \
+             migrations; this version has nothing to apply and runs on it as it is"
+        ),
+    }
     Ok(())
 }
 
@@ -1677,8 +1688,10 @@ mod tests {
 
     #[test]
     fn every_compose_file_runs_this_release() {
+        // TANGIBLE_IMAGE in .env overrides it, and the server's migrations run
+        // the same image as the server.
         let expected = format!(
-            "image: ghcr.io/digital-grease/tangible:v{}",
+            "image: ${{TANGIBLE_IMAGE:-ghcr.io/digital-grease/tangible:v{}}}",
             env!("CARGO_PKG_VERSION")
         );
         for (file, compose) in [
@@ -1689,7 +1702,9 @@ mod tests {
             let images: Vec<&str> = compose
                 .lines()
                 .map(str::trim)
-                .filter(|line| line.starts_with("image: ghcr.io/digital-grease/tangible"))
+                .filter(|line| {
+                    line.starts_with("image:") && line.contains("ghcr.io/digital-grease/tangible")
+                })
                 .collect();
             assert!(!images.is_empty(), "deploy/{file} names Tangible's image");
             for image in images {

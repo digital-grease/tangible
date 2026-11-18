@@ -22,6 +22,12 @@ services:
     # A development tree changes constantly; a read-only rootfs gets in the way.
     read_only: false
 
+  migrate:
+    # The tree's migrations, from the image built above: the published
+    # image's would refuse a database the tree has migrated further.
+    image: tangible:dev
+    pull_policy: never
+
   postgres:
     # Exposed on the host so `just dev-server` can run outside the stack.
     ports:

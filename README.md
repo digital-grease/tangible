@@ -172,12 +172,13 @@ Tangible runs under Docker Compose on Linux; a drive's worker needs Compose
 git clone --branch vX.Y.Z --depth 1 https://github.com/digital-grease/tangible.git
 cd tangible/deploy
 cp .env.example .env
-editor .env                 # at least POSTGRES_PASSWORD and TANGIBLE_PUBLIC_URL
+editor .env                 # at least POSTGRES_PASSWORD
 docker compose config       # read what will run
-docker compose up -d postgres
-docker compose run --rm server migrate
-docker compose up -d
+docker compose up -d        # copies and migrates the database, then starts the server
 ```
+
+`TANGIBLE_PUBLIC_URL` matters once Tangible is reached over HTTPS or signs in
+through an identity provider; on a LAN over plain HTTP the default works.
 
 Review the Compose file, environment file, volume mappings, device mappings,
 ports and image references before starting the stack. [`deploy/README.md`](deploy/README.md)

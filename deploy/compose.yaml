@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: 2026 digitalgrease
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Base Compose topology: server plus database.
+# Base Compose topology: server plus database, and before the server starts,
+# a copy of the database and its migrations. `docker compose up -d` does all
+# of it, in that order.
 #
 # This file deliberately contains NO optical-device mapping. Burn workers live
 # in compose.hardware.yaml and are opted into explicitly, so that neither the
@@ -14,7 +16,7 @@ name: tangible
 
 services:
   server:
-    image: ghcr.io/digital-grease/tangible:v0.4.0
+    image: ${TANGIBLE_IMAGE:-ghcr.io/digital-grease/tangible:v0.4.0}
     command: ["serve"]
     restart: unless-stopped
     # Asked to stop, the server gives requests under way 30 seconds, then
@@ -25,6 +27,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      # The database copied and migrated first, every `up`.
+      migrate:
+        condition: service_completed_successfully
     environment:
       TANGIBLE_DATABASE_URL: postgres://tangible:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/tangible
       TANGIBLE_BIND: 0.0.0.0:8080
@@ -187,10 +192,72 @@ services:
     # One process per connection; the server's pool holds ten.
     pids_limit: 256
 
+  # Each `docker compose up` copies the database before anything else, so an
+  # upgrade (`docker compose pull`, then `up -d`) has a backup from just
+  # before its migrations (deploy/README.md, "Backups"). The copy is
+  # PostgreSQL's own, taken with this stack's PostgreSQL image, into the
+  # backups volume; the newest ten are kept.
+  backup:
+    image: postgres:17-alpine
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Root with no capability at all: the owner of the backups volume, as
+    # Docker makes it, and nothing more.
+    user: "0:0"
+    environment:
+      PGHOST: postgres
+      PGUSER: tangible
+      PGDATABASE: tangible
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      # How many copies to keep, newest first. 0 takes none.
+      TANGIBLE_BACKUPS_KEPT: ${TANGIBLE_BACKUPS_KEPT:-10}
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - |
+        kept=$$TANGIBLE_BACKUPS_KEPT
+        case $$kept in ''|*[!0-9]*) echo "TANGIBLE_BACKUPS_KEPT is not a number: $$kept" >&2; exit 2;; esac
+        if [ "$$kept" -eq 0 ]; then echo "TANGIBLE_BACKUPS_KEPT is 0: no copy taken"; exit 0; fi
+        rm -f /backups/.tangible-*.part
+        stamp=$$(date -u +%Y%m%dT%H%M%SZ)
+        pg_dump --format=custom --no-password --file="/backups/.tangible-$$stamp.part"
+        mv "/backups/.tangible-$$stamp.part" "/backups/tangible-$$stamp.dump"
+        ls -1 /backups/tangible-*.dump | sort -r | tail -n "+$$((kept + 1))" | xargs -r rm -f --
+        echo "copied the database to tangible-$$stamp.dump in the backups volume"
+    volumes:
+      - backups:/backups
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    pids_limit: 16
+
+  # Then the migrations this version needs, if any, before the server
+  # starts. Nothing to apply is the usual case, and quick.
+  migrate:
+    image: ${TANGIBLE_IMAGE:-ghcr.io/digital-grease/tangible:v0.4.0}
+    command: ["migrate"]
+    restart: "no"
+    depends_on:
+      backup:
+        condition: service_completed_successfully
+    environment:
+      TANGIBLE_DATABASE_URL: postgres://tangible:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/tangible
+      TANGIBLE_LOG: ${TANGIBLE_LOG:-tangible=info,tower_http=info}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    pids_limit: 64
+
 volumes:
   library:
   staging:
   postgres-data:
+  backups:
 
 # The integration secret key (deploy/README.md, "Integration secrets"). The
 # file is yours to make and keep; it never goes in the repository or .env.

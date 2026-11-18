@@ -4,6 +4,38 @@ Notable changes to Tangible, newest first. Versions follow semantic
 versioning; during 0.x the API, the manifest schema and the database schema
 may change between minor versions, and the release notes say how.
 
+## Unreleased
+
+### Added
+
+- `docker compose up -d` copies the database and applies its migrations
+  before it starts the server, so installing is that one command, and
+  upgrading is `docker compose pull` and the same. `compose.yaml` has two
+  short services the server waits for: `backup`, which takes a copy of the
+  database with PostgreSQL's own `pg_dump`, from the stack's own PostgreSQL
+  image, into a new `backups` volume and keeps the newest ten
+  (`TANGIBLE_BACKUPS_KEPT`; 0 takes none); then `migrate`. If either fails,
+  the server is not started: one whose image did not change keeps running,
+  and on an upgrade the old one has been stopped already, so that it does not
+  serve while its database is migrated.
+  `docker compose run --rm backup` takes a copy at any time; deploy/README.md
+  ("Backups") says how to list one, copy it out and restore from it.
+- `TANGIBLE_IMAGE` in `.env` names the image the server, its migrations and a
+  burn worker run, so pinning a verified digest, or upgrading to one, changes
+  that line and not the Compose files.
+
+### Changed
+
+- `tangible migrate` leaves a database a later version migrated as it is, one
+  with every migration it has and newer ones too, and says so, where it
+  failed with "previously applied but missing". Going back to an earlier
+  release runs its `migrate` again before its server starts. A database
+  lacking one of its migrations while holding one it does not know is
+  refused, naming both.
+- The deploy guide's `docker compose run --rm server ...` commands say
+  `--no-deps`, so that running one does not take a copy of the database and
+  migrate it first.
+
 ## 0.4.0 (2026-11-17)
 
 Tangible collects the files nothing needs: what an import stored before it
