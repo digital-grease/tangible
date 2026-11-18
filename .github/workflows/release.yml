@@ -238,8 +238,9 @@ jobs:
 
           Digest: \`$IMAGE@$DIGEST\`
 
-          Pin the digest in your Compose file, and verify it before use, with
-          cosign 3.0 or later; see "Verifying a release" in deploy/README.md.
+          To run exactly this image, set \`TANGIBLE_IMAGE\` in \`.env\` to the
+          digest, and verify it before use, with cosign 3.0 or later; see
+          "Verifying a release" in deploy/README.md.
 
           \`\`\`bash
           cosign verify "$IMAGE@$DIGEST" \\
