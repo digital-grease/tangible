@@ -54,6 +54,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The tags too, for the patch release check below.
+          fetch-depth: 0
 
       - name: The tag is the workspace version
         run: |
@@ -62,6 +64,37 @@ jobs:
             echo "::error::tag $TAG does not match the workspace version $version"
             exit 1
           fi
+
+      # A patch release reaches installs on its own: the Compose files name
+      # the minor tag, which publishing it moves (minor-tag.yml), and their
+      # `migrate` applies what it brings. So it changes no migration, and adds
+      # one only when the release before it runs on the migrated database,
+      # which the migration says in a line opening `-- Additive:`
+      # (docs/RELEASE_CHECKLIST.md). A minor release may do either.
+      - name: A patch release migrates only what the release before runs on
+        run: |
+          patch=${TAG##*.}
+          if [ "$patch" = 0 ]; then
+            echo "$TAG is a minor release"
+            exit 0
+          fi
+          base="${TAG%.*}.0"
+          git rev-parse --verify --quiet "refs/tags/$base" >/dev/null || {
+            echo "::error::$TAG is a patch release, and $base is not tagged"
+            exit 1
+          }
+          changed=$(git diff --name-only --diff-filter=MDRT "$base" "$TAG" -- migrations/)
+          if [ -n "$changed" ]; then
+            echo "::error::$TAG changes migrations $base already had: $changed"
+            exit 1
+          fi
+          for file in $(git diff --name-only --diff-filter=A "$base" "$TAG" -- migrations/); do
+            if ! grep -q '^-- Additive:' "$file"; then
+              echo "::error file=$file::new in a patch release, and does not say why the release before runs on it (-- Additive:)"
+              exit 1
+            fi
+            echo "$file: additive"
+          done
 
       - name: Image name
         id: image

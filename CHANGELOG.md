@@ -36,6 +36,16 @@ may change between minor versions, and the release notes say how.
 
 ### Changed
 
+- The Compose files run the release's minor version, `tangible:v0.4`, which
+  publishing each patch release moves to its image
+  (`.github/workflows/minor-tag.yml`, new), so `docker compose pull` and `up
+  -d` take the newest patch, and a new minor version is a new `compose.yaml`.
+  The tag moves only once a release is published, never to an older patch
+  or a prerelease, and names the release's own image, digest, signature and
+  attestations unchanged. A patch release changes no migration and adds one
+  only when the release before runs on the migrated database, which the
+  release workflow checks; set `TANGIBLE_IMAGE` to a digest to run exactly
+  the image you verified.
 - `tangible migrate` leaves a database a later version migrated as it is, one
   with every migration it has and newer ones too, and says so, where it
   failed with "previously applied but missing". Going back to an earlier

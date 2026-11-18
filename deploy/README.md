@@ -965,8 +965,12 @@ Each release is built by `.github/workflows/release.yml` from its tag, and
 signed by that workflow with a short-lived Sigstore certificate: there is no
 long-lived key to steal, and a signature proves which workflow, at which tag,
 in which repository, built the bytes. The release page gives the image's
-digest. Use the digest, not the tag, in `compose.yaml`; a tag can be moved,
-a digest cannot.
+digest. To run exactly what you verified, set `TANGIBLE_IMAGE` in `.env` to
+that digest: a tag can be moved, and the minor tag the Compose files name is
+moved by every patch release, while a digest cannot. The minor tag, like the
+release's own, only ever names a published release's image, so verifying it
+(`cosign verify ghcr.io/digital-grease/tangible:v0.4 ...`) checks the image it
+names now.
 
 With [cosign](https://docs.sigstore.dev/cosign/system_config/installation/)
 3.0 or later, from your distribution or its release page. Releases are signed
@@ -1460,15 +1464,34 @@ metrics: import it and choose your Prometheus data source.
 
 ## Upgrading
 
-1. Read the release notes, especially anything about migrations.
+The Compose files name the release's minor version, `ghcr.io/digital-grease/tangible:v0.4`,
+which each published patch release of it (0.4.1, 0.4.2) moves to its own
+image. A patch release fixes, changes nothing you set, and migrates only in
+ways its predecessor still runs on. So within a minor version:
+
+```bash
+docker compose -f deploy/compose.yaml pull
+docker compose -f deploy/compose.yaml up -d
+```
+
+takes the newest patch: the database is copied, anything to migrate is, and
+the server starts on the new image. Check it becomes healthy, and
+`docker compose logs migrate` for what was applied. Note the digest you run
+first (`docker compose images`) if you might want it back.
+
+A new minor version (0.5.0) is a step of its own, since it may migrate in
+ways the one before cannot run on, and its `compose.yaml` names it:
+
+1. Read the release notes, especially "Upgrading from".
 2. Back up the library, as above. The database is copied for you in step 5.
 3. Note the image digests you are running now (`docker compose images`).
-4. Take the new release's `compose.yaml`, or set `TANGIBLE_IMAGE` in `.env` to
-   the new version's digest from its release page, and check it with
-   `docker compose config`.
-5. `docker compose pull`, then `docker compose up -d`: the database is copied,
-   the migrations applied, and the server started on the new image. Check it
-   becomes healthy, and `docker compose logs migrate` for what was applied.
+4. Take the new release's `compose.yaml` (and a worker's file, for each
+   worker), and check it with `docker compose config`.
+5. `docker compose pull`, then `docker compose up -d`, as above.
+
+To run exactly the image you verified rather than whatever the minor tag
+names, set `TANGIBLE_IMAGE` in `.env` to its digest, from the release page;
+then an upgrade is setting it to the next one's.
 
 Migrations only ever move forward. Going back to the previous version is
 possible when it runs on the migrated schema, which the release notes say:

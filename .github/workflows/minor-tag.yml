@@ -1,0 +1,118 @@
+# SPDX-FileCopyrightText: 2026 digitalgrease
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Moves the image's minor tag (v0.4) to a release's image once the release is
+# published. The Compose files name the minor tag, so a published patch
+# release is what `docker compose pull` then fetches (docs/plans/install.md,
+# I3). Not when the image is built: release.yml pushes it before scanning and
+# signing it, and a draft is read by a person before it is published, so the
+# minor tag only ever names an image someone published.
+#
+# The manifest is put under the minor tag exactly as the release's tag has
+# it, so the digest, and with it the signature and the attestations, is the
+# release's own; the step checks that it is. A release older than the newest
+# of its minor version, or a prerelease, leaves the tag where it is. Run it by
+# hand with a published release's tag to point the minor tag at it again.
+
+name: Minor tag
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: A published release's tag (vX.Y.Z)
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minor-tag
+  cancel-in-progress: false
+
+jobs:
+  minor-tag:
+    name: Move the minor tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # GHCR
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: The release, and whether it is the newest of its minor version
+        id: release
+        run: |
+          if ! [[ "$TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::$TAG is not a release tag (vX.Y.Z)"
+            exit 1
+          fi
+          minor="v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+          state=$(gh release view "$TAG" --repo "$REPO" --json isDraft,isPrerelease \
+            --jq '"\(.isDraft) \(.isPrerelease)"')
+          if [ "$state" != "false false" ]; then
+            echo "::notice::$TAG is a draft or a prerelease; $minor stays as it is"
+            echo "move=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          newest=$(gh release list --repo "$REPO" --exclude-drafts --exclude-pre-releases \
+              --limit 200 --json tagName --jq '.[].tagName' \
+            | grep -E "^${minor//./\\.}\.[0-9]+$" | sort -V | tail -1)
+          if [ "$newest" != "$TAG" ]; then
+            echo "::notice::$newest is newer than $TAG; $minor stays on it"
+            echo "move=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          {
+            echo "minor=$minor"
+            echo "move=true"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Point the minor tag at the release's image
+        if: steps.release.outputs.move == 'true'
+        env:
+          MINOR: ${{ steps.release.outputs.minor }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          image="${REPO,,}"
+          # Credentials through curl's config files, never on its command line.
+          printf 'user = "%s:%s"\n' "$GITHUB_ACTOR" "$TOKEN" > basic.conf
+          bearer=$(curl -fsS -K basic.conf \
+            "https://ghcr.io/token?service=ghcr.io&scope=repository:${image}:pull,push" | jq -r .token)
+          rm -f basic.conf
+          echo "::add-mask::$bearer"
+          printf 'header = "Authorization: Bearer %s"\n' "$bearer" > bearer.conf
+          accept='application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json'
+          header() { awk -v name="$1" 'tolower($1) == name {print $2}' "$2" | tr -d '\r'; }
+
+          curl -fsS -K bearer.conf -H "Accept: $accept" -D release.headers -o manifest.json \
+            "https://ghcr.io/v2/${image}/manifests/${TAG}"
+          type=$(header content-type: release.headers)
+          digest=$(header docker-content-digest: release.headers)
+          if [ "$digest" != "sha256:$(sha256sum manifest.json | cut -d' ' -f1)" ]; then
+            echo "::error::the registry's digest for $TAG is not that of the manifest it sent"
+            exit 1
+          fi
+
+          curl -fsS -K bearer.conf -X PUT -H "Content-Type: $type" \
+            --data-binary @manifest.json -o /dev/null \
+            "https://ghcr.io/v2/${image}/manifests/${MINOR}"
+          curl -fsS -K bearer.conf -I -H "Accept: $accept" -D minor.headers -o /dev/null \
+            "https://ghcr.io/v2/${image}/manifests/${MINOR}"
+          rm -f bearer.conf
+          moved=$(header docker-content-digest: minor.headers)
+          if [ "$moved" != "$digest" ]; then
+            echo "::error::$MINOR names $moved, not $TAG's $digest"
+            exit 1
+          fi
+          {
+            echo "### $MINOR now names $TAG"
+            echo
+            echo "\`ghcr.io/${image}@${digest}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

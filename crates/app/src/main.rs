@@ -1763,12 +1763,17 @@ mod tests {
 
     #[test]
     fn every_compose_file_runs_this_release() {
-        // TANGIBLE_IMAGE in .env overrides it, and the server's migrations run
-        // the same image as the server.
-        let expected = format!(
-            "image: ${{TANGIBLE_IMAGE:-ghcr.io/digital-grease/tangible:v{}}}",
-            env!("CARGO_PKG_VERSION")
+        // The release's minor tag, which publishing each patch release moves
+        // to it (.github/workflows/minor-tag.yml), so a patch is a `docker
+        // compose pull` away and a new minor is a new compose.yaml. TANGIBLE_IMAGE
+        // in .env overrides it, and init and migrate run the server's image.
+        let minor = format!(
+            "v{}.{}",
+            env!("CARGO_PKG_VERSION_MAJOR"),
+            env!("CARGO_PKG_VERSION_MINOR")
         );
+        let expected =
+            format!("image: ${{TANGIBLE_IMAGE:-ghcr.io/digital-grease/tangible:{minor}}}");
         for (file, compose) in [
             ("compose.yaml", COMPOSE_SERVER),
             ("compose.hardware.yaml", COMPOSE_HARDWARE),

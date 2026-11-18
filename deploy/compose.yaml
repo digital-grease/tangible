@@ -16,7 +16,7 @@ name: tangible
 
 services:
   server:
-    image: ${TANGIBLE_IMAGE:-ghcr.io/digital-grease/tangible:v0.4.0}
+    image: ${TANGIBLE_IMAGE:-ghcr.io/digital-grease/tangible:v0.4}
     command: ["serve"]
     restart: unless-stopped
     # Asked to stop, the server gives requests under way 30 seconds, then
@@ -255,7 +255,7 @@ services:
   # Then the migrations this version needs, if any, before the server
   # starts. Nothing to apply is the usual case, and quick.
   migrate:
-    image: ${TANGIBLE_IMAGE:-ghcr.io/digital-grease/tangible:v0.4.0}
+    image: ${TANGIBLE_IMAGE:-ghcr.io/digital-grease/tangible:v0.4}
     command: ["migrate"]
     restart: "no"
     depends_on:
@@ -283,7 +283,7 @@ services:
   # before the first `up`. An install from before keeps POSTGRES_PASSWORD in
   # .env, which its database was created with, and init keeps that one.
   init:
-    image: ${TANGIBLE_IMAGE:-ghcr.io/digital-grease/tangible:v0.4.0}
+    image: ${TANGIBLE_IMAGE:-ghcr.io/digital-grease/tangible:v0.4}
     command: ["init"]
     restart: "no"
     environment:
