@@ -49,7 +49,7 @@ use utoipa::{IntoParams, ToSchema};
 use crate::auth::SignedIn;
 use crate::pagination::{decode_cursor, encode_cursor};
 use crate::problem::{ErrorCode, Problem};
-use crate::routes::requests::RequestLinkView;
+use crate::routes::requests::{RequestLinkView, scope_of};
 use crate::state::ApiState;
 
 /// Largest page a caller may ask for.
@@ -182,15 +182,22 @@ impl ImportView {
     }
 }
 
-/// The requests `ids` bring in. Names, not the import: a database that
+/// The requests `ids` bring in, those `scope` may see (a viewer's own, or
+/// `None` for all: requests.md 3). Names, not the import: a database that
 /// cannot answer leaves them out rather than failing the read.
-async fn requests_of(state: &ApiState, ids: &[uuid::Uuid]) -> HashMap<uuid::Uuid, RequestLink> {
-    requests_of_imports(state.database().pool(), ids)
+async fn requests_of(
+    state: &ApiState,
+    ids: &[uuid::Uuid],
+    scope: Option<uuid::Uuid>,
+) -> HashMap<uuid::Uuid, RequestLink> {
+    let mut links = requests_of_imports(state.database().pool(), ids)
         .await
         .unwrap_or_else(|error| {
             tracing::warn!(error = ?error, "the imports' requests could not be read");
             HashMap::new()
-        })
+        });
+    links.retain(|_, link| scope.is_none_or(|own| link.requester_id == own));
+    links
 }
 
 impl From<ImportJobRecord> for ImportView {
@@ -913,6 +920,7 @@ pub async fn upload_import(
 )]
 pub async fn list_imports(
     State(state): State<ApiState>,
+    SignedIn(user): SignedIn,
     Query(query): Query<ImportQuery>,
 ) -> Result<Json<ImportPage>, Problem> {
     let limit = limit_of(query.limit);
@@ -970,7 +978,7 @@ pub async fn list_imports(
             tracing::error!(error = ?error, "could not read source removals");
             unavailable("the imports could not be read")
         })?;
-    let mut requests = requests_of(&state, &ids).await;
+    let mut requests = requests_of(&state, &ids, scope_of(&user)).await;
     Ok(Json(ImportPage {
         items: jobs
             .into_iter()
@@ -981,7 +989,11 @@ pub async fn list_imports(
 }
 
 /// One import as shown, with its source's removal.
-async fn shown(state: &ApiState, id: ImportJobId) -> Result<ImportView, Problem> {
+async fn shown(
+    state: &ApiState,
+    id: ImportJobId,
+    scope: Option<uuid::Uuid>,
+) -> Result<ImportView, Problem> {
     let record = load(state, id).await?;
     let mut removals = removals_for_imports(state.database().pool(), &[*id.as_uuid()])
         .await
@@ -989,7 +1001,7 @@ async fn shown(state: &ApiState, id: ImportJobId) -> Result<ImportView, Problem>
             tracing::error!(error = ?error, "could not read a source removal");
             unavailable("the import could not be read")
         })?;
-    let mut requests = requests_of(state, &[*id.as_uuid()]).await;
+    let mut requests = requests_of(state, &[*id.as_uuid()], scope).await;
     Ok(ImportView::with_removal(
         record,
         &mut removals,
@@ -1026,10 +1038,11 @@ async fn load(state: &ApiState, id: ImportJobId) -> Result<ImportJobRecord, Prob
 )]
 pub async fn get_import(
     State(state): State<ApiState>,
+    SignedIn(user): SignedIn,
     Path(import_id): Path<String>,
 ) -> Result<Json<ImportView>, Problem> {
     let id = parse_import(&import_id)?;
-    Ok(Json(shown(&state, id).await?))
+    Ok(Json(shown(&state, id, scope_of(&user)).await?))
 }
 
 /// Stop an import.

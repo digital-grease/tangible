@@ -128,6 +128,8 @@ fn parse<T: FromStr>(column: &'static str, value: &str) -> Result<T, DbError> {
 pub struct RequestLink {
     /// The request.
     pub id: RequestId,
+    /// Who asked for it: a viewer is shown only their own (requests.md 3).
+    pub requester_id: uuid::Uuid,
     /// The item, as its requester named it.
     pub title: String,
     /// What kind of item.
@@ -142,6 +144,7 @@ fn link_from_row(row: &sqlx::postgres::PgRow) -> Result<RequestLink, DbError> {
     let kind: String = row.try_get("kind").map_err(DbError::Query)?;
     Ok(RequestLink {
         id: RequestId::from_uuid(row.try_get("id").map_err(DbError::Query)?),
+        requester_id: row.try_get("requester_id").map_err(DbError::Query)?,
         title: row.try_get("title").map_err(DbError::Query)?,
         kind: parse("kind", &kind)?,
         refs: row.try_get("refs").map_err(DbError::Query)?,
@@ -162,7 +165,7 @@ pub async fn requests_of_imports(
     import_ids: &[uuid::Uuid],
 ) -> Result<HashMap<uuid::Uuid, RequestLink>, DbError> {
     let rows = sqlx::query(
-        "SELECT import_id, id, title, kind, refs, details->>'year' AS year
+        "SELECT import_id, id, requester_id, title, kind, refs, details->>'year' AS year
          FROM requests WHERE import_id = ANY($1)",
     )
     .bind(import_ids)
@@ -188,7 +191,7 @@ pub async fn requests_of_artifacts(
     artifact_ids: &[uuid::Uuid],
 ) -> Result<HashMap<uuid::Uuid, RequestLink>, DbError> {
     let rows = sqlx::query(
-        "SELECT DISTINCT ON (artifact_id) artifact_id, id, title, kind, refs,
+        "SELECT DISTINCT ON (artifact_id) artifact_id, id, requester_id, title, kind, refs,
                 details->>'year' AS year
          FROM requests
          WHERE artifact_id = ANY($1)

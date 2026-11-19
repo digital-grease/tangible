@@ -29,9 +29,10 @@ use tangible_domain::manifest::{ArtifactManifest, CdReadRecord, DecryptionRecord
 use time::OffsetDateTime;
 use utoipa::{IntoParams, ToSchema};
 
+use crate::auth::SignedIn;
 use crate::pagination::{Page, PageQuery};
 use crate::problem::{ErrorCode, Problem};
-use crate::routes::requests::RequestLinkView;
+use crate::routes::requests::{RequestLinkView, scope_of};
 use crate::state::ApiState;
 
 /// An artifact as it appears in a listing.
@@ -242,6 +243,7 @@ async fn with_requests_and_covers(
     state: &ApiState,
     summaries: &mut [ArtifactSummary],
     ids: &[uuid::Uuid],
+    scope: Option<uuid::Uuid>,
 ) {
     let pool = state.database().pool();
     let mut requests = tangible_db::requests::requests_of_artifacts(pool, ids)
@@ -263,7 +265,11 @@ async fn with_requests_and_covers(
         let from_request = link
             .as_ref()
             .and_then(|link| crate::artwork::preferred(&link.refs));
-        summary.request = link.map(RequestLinkView::from);
+        // A viewer is told only of their own requests (requests.md 3); the
+        // cover a request chose is the artifact's, and names nobody.
+        summary.request = link
+            .filter(|link| scope.is_none_or(|own| link.requester_id == own))
+            .map(RequestLinkView::from);
         let pick = id.and_then(|id| picked.get(&id)).cloned();
         summary.cover_picked = pick.is_some();
         let box_art = || {
@@ -289,7 +295,12 @@ async fn with_requests_and_covers(
 /// called it and the request it fulfilled, from the catalogue. A database
 /// that cannot answer leaves them unchecked, unmatched and unnamed rather
 /// than failing the read: the manifests are the library.
-async fn with_integrity(state: &ApiState, summaries: &mut [ArtifactSummary]) {
+/// `scope`: whose requests may be named, a viewer's own or `None` for all.
+async fn with_integrity(
+    state: &ApiState,
+    summaries: &mut [ArtifactSummary],
+    scope: Option<uuid::Uuid>,
+) {
     use time::format_description::well_known::Rfc3339;
     let ids: Vec<uuid::Uuid> = summaries
         .iter()
@@ -339,7 +350,7 @@ async fn with_integrity(state: &ApiState, summaries: &mut [ArtifactSummary]) {
         }
         Err(error) => tracing::warn!(error = ?error, "import names could not be read"),
     }
-    with_requests_and_covers(state, summaries, &ids).await;
+    with_requests_and_covers(state, summaries, &ids, scope).await;
     match tangible_db::library::deletions_of(state.database().pool(), &ids).await {
         Ok(mut found) => {
             for summary in summaries {
@@ -797,6 +808,7 @@ fn instant(value: Option<&String>, name: &'static str) -> Result<Option<OffsetDa
 )]
 pub async fn list_artifacts(
     State(state): State<ApiState>,
+    SignedIn(user): SignedIn,
     Query(query): Query<PageQuery>,
     Query(filter): Query<ArtifactFilterQuery>,
 ) -> Result<Json<ArtifactSummaryPage>, Problem> {
@@ -822,6 +834,7 @@ pub async fn list_artifacts(
         created_before: instant(filter.created_before.as_ref(), "created_before")?,
         deleted: filter.deleted,
         name: name_filter(filter.name.as_ref())?,
+        requester: scope_of(&user),
     };
 
     let ids: Vec<ArtifactId> = if catalogue_filter.is_empty() {
@@ -881,7 +894,7 @@ pub async fn list_artifacts(
         }
     }
 
-    with_integrity(&state, &mut items).await;
+    with_integrity(&state, &mut items, scope_of(&user)).await;
     Ok(Json(Page::new(items, limit, |item| item.id.clone()).into()))
 }
 
@@ -907,6 +920,7 @@ pub async fn list_artifacts(
 )]
 pub async fn get_artifact(
     State(state): State<ApiState>,
+    SignedIn(user): SignedIn,
     Path(artifact_id): Path<String>,
 ) -> Result<Json<ArtifactDetail>, Problem> {
     let id = parse_id(&artifact_id)?;
@@ -925,7 +939,7 @@ pub async fn get_artifact(
         .collect();
 
     let mut summary = [ArtifactSummary::from(&manifest)];
-    with_integrity(&state, &mut summary).await;
+    with_integrity(&state, &mut summary, scope_of(&user)).await;
     let [summary] = summary;
     Ok(Json(ArtifactDetail {
         summary,

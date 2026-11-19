@@ -846,6 +846,49 @@ async fn a_request_is_searched_for_grabbed_and_fulfilled_by_its_import() {
             .unwrap_or_else(|| panic!("{name} did not find it: {listed}"));
         assert_eq!(item["request"]["title"], "Big Buck Bunny");
     }
+
+    // Another viewer sees the import and the artifact, which are the
+    // library's, but not whose request they came from or what it said: a
+    // viewer sees only their own requests (docs/plans/requests.md 3).
+    let stranger = support::sign_in(&harness.pool, Role::Viewer).await;
+    for uri in [
+        format!("/api/v1/imports/{import_id}"),
+        format!("/api/v1/artifacts/{artifact_id}"),
+    ] {
+        let (status, body, _) = harness.send(&stranger, Method::GET, &uri, None).await;
+        assert_eq!(status, StatusCode::OK, "{uri}: {body}");
+        assert!(body["request"].is_null(), "{uri}: {body}");
+    }
+    // A title only the request carries finds the artifact for its
+    // requester and an administrator, and not for another viewer.
+    sqlx::query("UPDATE requests SET title = 'Zebra Quartz Pavilion' WHERE id = $1")
+        .bind(uuid::Uuid::parse_str(&id).unwrap())
+        .execute(&harness.pool)
+        .await
+        .unwrap();
+    let found_by = |session: &support::Session| {
+        let session = session.clone();
+        let harness = &harness;
+        async move {
+            let (status, listed, _) = harness
+                .send(
+                    &session,
+                    Method::GET,
+                    "/api/v1/artifacts?name=zebra%20quartz&limit=200",
+                    None,
+                )
+                .await;
+            assert_eq!(status, StatusCode::OK, "{listed}");
+            listed["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["id"] == artifact_id)
+        }
+    };
+    assert!(found_by(&harness.viewer).await, "its requester finds it");
+    assert!(found_by(&harness.admin).await, "an administrator finds it");
+    assert!(!found_by(&stranger).await, "another viewer does not");
     remove_prowlarrs(&harness.pool).await;
 }
 

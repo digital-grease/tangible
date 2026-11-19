@@ -71,6 +71,12 @@ may change between minor versions, and the release notes say how.
   send a request to any address on its network. Past Prowlarr's own
   address, a link now reaches only public addresses, unless its block is
   in `TANGIBLE_OUTBOUND_ALLOW`.
+- A viewer sees only their own requests on the Requests page, but once a
+  release was grabbed for someone else's, its import and the artifact it
+  became named that request, with its title, kind and year, to every
+  viewer, and a library search found the artifact by the request's title.
+  A viewer is now told only of their own requests there too; the import,
+  the artifact and its cover are the library's and stay visible.
 
 ## 0.4.1 (2026-11-18)
 

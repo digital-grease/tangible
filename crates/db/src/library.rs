@@ -72,6 +72,10 @@ pub struct ArtifactFilter<'a> {
     /// the title of the request it fulfilled, in any case. Matched
     /// literally: `%` and `_` are not wildcards.
     pub name: Option<&'a str>,
+    /// Whose requests' titles `name` may match: a viewer's own, as a viewer
+    /// sees only their own requests (docs/plans/requests.md 3); `None` for
+    /// everyone's. Not a filter of its own.
+    pub requester: Option<uuid::Uuid>,
 }
 
 /// A name filter as a `LIKE` pattern matching it anywhere, with the
@@ -95,6 +99,7 @@ impl ArtifactFilter<'_> {
     pub fn is_empty(&self) -> bool {
         Self {
             deleted: None,
+            requester: None,
             ..*self
         } == Self::default()
             && self.deleted != Some(true)
@@ -137,7 +142,8 @@ pub async fn filtered_artifact_ids(
                    AND i.source_descriptor_json ->> 'name' ILIKE $11 ESCAPE '\\')
                 OR EXISTS (
                  SELECT 1 FROM requests r
-                 WHERE r.artifact_id = a.id AND r.title ILIKE $11 ESCAPE '\\'))
+                 WHERE r.artifact_id = a.id AND r.title ILIKE $11 ESCAPE '\\'
+                   AND ($12::uuid IS NULL OR r.requester_id = $12)))
          ORDER BY a.id
          LIMIT $9",
     )
@@ -152,6 +158,7 @@ pub async fn filtered_artifact_ids(
     .bind(limit)
     .bind(filter.deleted.unwrap_or(false))
     .bind(filter.name.map(contains_pattern))
+    .bind(filter.requester)
     .fetch_all(pool)
     .await
     .map_err(DbError::Query)
