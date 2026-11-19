@@ -184,7 +184,8 @@ pub enum Access {
 use Access::{Public, Signed, SignedOrLeaseholder, Worker};
 use Permission::{
     Burn, Catalog, DecideRequests, DeleteArtifacts, Diagnose, Erase, Import, ImportUrl,
-    MaintainStorage, ManageDats, ManageIntegrations, ManageUsers, ManageWorkers, Read, ReadAudit,
+    MaintainStorage, ManageBackups, ManageDats, ManageIntegrations, ManageUsers, ManageWorkers,
+    Read, ReadAudit,
 };
 
 /// Every operation the server answers, and what it requires.
@@ -257,6 +258,17 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
         "/api/v1/storage/gc-plans/{plan_id}/collect",
         Signed(MaintainStorage),
     ),
+    // Copies of the database (ADR 0026): each holds every account's
+    // password hash, and restoring one replaces the catalogue.
+    ("GET", "/api/v1/backups", Signed(ManageBackups)),
+    ("POST", "/api/v1/backups", Signed(ManageBackups)),
+    ("PUT", "/api/v1/backups/uploads", Signed(ManageBackups)),
+    (
+        "GET",
+        "/api/v1/backups/{name}/download",
+        Signed(ManageBackups),
+    ),
+    ("DELETE", "/api/v1/backups/{name}", Signed(ManageBackups)),
     // The catalog.
     ("GET", "/api/v1/titles", Signed(Read)),
     ("POST", "/api/v1/titles", Signed(Catalog)),

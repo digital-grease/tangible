@@ -344,6 +344,43 @@ pub struct ServeConfig {
     )]
     pub orphan_collection_interval_days: u32,
 
+    /// The backups volume, where the server takes and keeps copies of the
+    /// database beside the `backup` service's (ADR 0026). Without it the
+    /// server keeps none, and says so.
+    #[arg(
+        long,
+        env = "TANGIBLE_BACKUPS_DIR",
+        default_value = "/var/lib/tangible/backups"
+    )]
+    pub backups_dir: PathBuf,
+
+    /// How many of the copies Tangible takes are kept, newest first, as the
+    /// `backup` service keeps them. 0 takes none.
+    #[arg(
+        long,
+        env = "TANGIBLE_BACKUPS_KEPT",
+        default_value_t = 10,
+        value_parser = clap::value_parser!(u32).range(0..=99_999)
+    )]
+    pub backups_kept: u32,
+
+    /// The directory holding PostgreSQL's `pg_dump` and `pg_restore`.
+    #[arg(
+        long,
+        env = "TANGIBLE_POSTGRES_TOOLS_DIR",
+        default_value = tangible_api::backups::DEFAULT_TOOLS_DIR
+    )]
+    pub postgres_tools_dir: PathBuf,
+
+    /// The largest copy of the database an administrator may upload, in
+    /// bytes: 4 GiB unless set.
+    #[arg(
+        long,
+        env = "TANGIBLE_MAX_BACKUP_UPLOAD_BYTES",
+        default_value_t = tangible_api::backups::DEFAULT_MAX_UPLOAD_BYTES
+    )]
+    pub max_backup_upload_bytes: u64,
+
     /// Whether to compute every artifact's preservation hashes (CRC32, MD5
     /// and SHA-1 of its files and CD tracks) in the background, for matching
     /// against DATs. On by default; each artifact's stored bytes are read

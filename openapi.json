@@ -1309,6 +1309,294 @@
         ]
       }
     },
+    "/api/v1/backups": {
+      "get": {
+        "tags": [
+          "backups"
+        ],
+        "summary": "The copies of the database, and what the server can do with them.",
+        "description": "The copies of the database in the backups volume, newest first: those Tangible took (`tangible-*.dump`: before every start, on the schedule, or asked for here), counted and pruned to `kept`, and those uploaded or put there at the machine, which are never pruned. Also whether the server can write there and its dump tools can copy this database, and what is under way. Needs `manage_backups`.",
+        "operationId": "list_backups",
+        "responses": {
+          "200": {
+            "description": "The copies",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupsView"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This server keeps no copies, or cannot read them",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "backups"
+        ],
+        "summary": "Take a copy of the database now.",
+        "description": "Take a copy of the database now, in the background: `operation` says it is under way, and `last_outcome` how it went. It is named as every copy Tangible takes, and the oldest beyond `kept` go. Audited as `backup.taken`. Needs `manage_backups`.",
+        "operationId": "take_backup",
+        "responses": {
+          "202": {
+            "description": "Being taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupsView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Copies are turned off, or something is under way",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The tools or the volume are not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/backups/uploads": {
+      "put": {
+        "tags": [
+          "backups"
+        ],
+        "summary": "Add a copy: the request's body is the file.",
+        "description": "Add a copy of the database, from another install or one downloaded earlier: the request's body is the file, a PostgreSQL custom-format archive (`pg_dump --format=custom`), at most `max_upload_bytes`. It is kept as `uploaded-YYYYMMDDTHHMMSSZ.dump`, never pruned, once whole and read by `pg_restore` as an archive; nothing in it is run. Audited as `backup.uploaded`. Needs `manage_backups`.",
+        "operationId": "upload_backup",
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Kept",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CopyEntry"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Something is under way",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Larger than this server accepts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not a copy of a database",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The tools or the volume are not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/backups/{name}": {
+      "delete": {
+        "tags": [
+          "backups"
+        ],
+        "summary": "Remove a copy.",
+        "description": "Remove a copy from the backups volume, whoever took or added it. Audited as `backup.deleted`. Needs `manage_backups`.",
+        "operationId": "delete_backup",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The copy's name, as listed",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "404": {
+            "description": "No copy is named that",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Something is under way",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This server keeps no copies, or cannot remove it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/backups/{name}/download": {
+      "get": {
+        "tags": [
+          "backups"
+        ],
+        "summary": "Fetch a copy.",
+        "description": "The copy's file, as a download. It holds every account's password hash, the integration passwords sealed with the server's key (not the key), and the audit trail: keep it where only you can read it. Audited as `backup.downloaded`. Needs `manage_backups`.",
+        "operationId": "download_backup",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The copy's name, as listed",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The copy",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No copy is named that",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This server keeps no copies",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/burn-attempts/{attempt_id}": {
       "get": {
         "tags": [
@@ -9667,6 +9955,68 @@
           }
         }
       },
+      "BackupsView": {
+        "type": "object",
+        "description": "The copies, and what the server can do with them.",
+        "required": [
+          "copies",
+          "kept",
+          "writable",
+          "tools",
+          "max_upload_bytes"
+        ],
+        "properties": {
+          "copies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CopyEntry"
+            },
+            "description": "Every copy in the backups volume, newest first."
+          },
+          "kept": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many of the copies Tangible names are kept\n(`TANGIBLE_BACKUPS_KEPT`); 0 when copies are turned off.",
+            "minimum": 0
+          },
+          "last_outcome": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Outcome",
+                "description": "How the last copy taken or added since the server started went."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_upload_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The largest copy an upload may be, in bytes.",
+            "minimum": 0
+          },
+          "operation": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Operation",
+                "description": "What is under way, if anything."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tools": {
+            "$ref": "#/components/schemas/ToolsStatus",
+            "description": "Whether the dump tools can copy the database."
+          },
+          "writable": {
+            "type": "boolean",
+            "description": "Whether the server can write copies into the volume."
+          }
+        }
+      },
       "BestMatchView": {
         "type": "object",
         "description": "The game of a loaded DAT an artifact best matches: an exact match\nfirst, then the one with the most files matched.",
@@ -10640,6 +10990,46 @@
             "description": "Content digest, as lowercase hex."
           }
         }
+      },
+      "CopyEntry": {
+        "type": "object",
+        "description": "One copy in the backups volume.",
+        "required": [
+          "name",
+          "kind",
+          "taken_at",
+          "size_bytes"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/CopyKind",
+            "description": "Who took or added it."
+          },
+          "name": {
+            "type": "string",
+            "description": "The file's name, which names it in every route."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its size in bytes.",
+            "minimum": 0
+          },
+          "taken_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was taken, from its name; for a copy added at the machine,\nwhen its file was last written."
+          }
+        }
+      },
+      "CopyKind": {
+        "type": "string",
+        "description": "Who took or added a copy.",
+        "enum": [
+          "taken",
+          "uploaded",
+          "added"
+        ]
       },
       "CoverView": {
         "type": "object",
@@ -14697,6 +15087,91 @@
           }
         }
       },
+      "Operation": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A copy being taken.",
+            "required": [
+              "started_at",
+              "by",
+              "kind"
+            ],
+            "properties": {
+              "by": {
+                "type": "string",
+                "description": "By whom: a username, or `schedule`."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "taking"
+                ]
+              },
+              "started_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Since when."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A copy being uploaded.",
+            "required": [
+              "started_at",
+              "by",
+              "kind"
+            ],
+            "properties": {
+              "by": {
+                "type": "string",
+                "description": "By whom."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "uploading"
+                ]
+              },
+              "started_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Since when."
+              }
+            }
+          }
+        ],
+        "description": "What is under way."
+      },
+      "Outcome": {
+        "type": "object",
+        "description": "How the last copy the server took or added since it started went.",
+        "required": [
+          "finished_at"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it failed, when it did."
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it ended."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The copy, when there is one."
+          }
+        }
+      },
       "PausedIndexerView": {
         "type": "object",
         "description": "An indexer Prowlarr has paused after it failed.",
@@ -17074,6 +17549,44 @@
           }
         }
       },
+      "ToolsStatus": {
+        "type": "object",
+        "description": "Whether the dump tools can copy this database.",
+        "required": [
+          "ready"
+        ],
+        "properties": {
+          "database_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The database server's major version, when it answers.",
+            "minimum": 0
+          },
+          "problem": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What stands in the way, when something does."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "Whether copies can be taken and restored."
+          },
+          "tools_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The tools' major version, when they answer.",
+            "minimum": 0
+          }
+        }
+      },
       "TrackHashesView": {
         "allOf": [
           {
@@ -17854,6 +18367,10 @@
     {
       "name": "events",
       "description": "What changes, as it changes: a server-sent event stream"
+    },
+    {
+      "name": "backups",
+      "description": "Copies of the database, taken and restored by administrators"
     }
   ]
 }

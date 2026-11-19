@@ -141,6 +141,9 @@ jobs:
           --health-retries 10
     env:
       TANGIBLE_DATABASE_URL: postgres://tangible:tangible@localhost:5432/tangible
+      # PostgreSQL 17's pg_dump and pg_restore for the tests of copies of the
+      # database (ADR 0026), run from the service's own image, pinned above.
+      TANGIBLE_TEST_POSTGRES_TOOLS_DIR: ${{ github.workspace }}/crates/api/tests/support/pg-tools
       # An S3-compatible server for the S3 import tests: SeaweedFS's gateway,
       # started below (a service cannot be given its command). Throwaway
       # credentials for a throwaway container.

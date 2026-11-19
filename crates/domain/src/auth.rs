@@ -90,6 +90,12 @@ pub enum Permission {
     /// Operators and administrators: the same people who may hand a job to
     /// a download client by hand.
     DecideRequests,
+    /// Take, download, upload, delete and restore copies of the database,
+    /// and set when they are taken (ADR 0026, docs/plans/backups-ui.md).
+    ///
+    /// Administrators only: a copy holds every account's password hash and
+    /// the audit trail, and restoring one replaces the whole catalogue.
+    ManageBackups,
 }
 
 impl Permission {
@@ -113,6 +119,7 @@ impl Permission {
             Self::DeleteArtifacts => "delete_artifacts",
             Self::Request => "request",
             Self::DecideRequests => "decide_requests",
+            Self::ManageBackups => "manage_backups",
         }
     }
 
@@ -132,7 +139,8 @@ impl Permission {
             | Self::MaintainStorage
             | Self::ManageDats
             | Self::ReadAudit
-            | Self::DeleteArtifacts => Role::Administrator,
+            | Self::DeleteArtifacts
+            | Self::ManageBackups => Role::Administrator,
         }
     }
 }
@@ -233,6 +241,7 @@ mod tests {
             Permission::ManageDats,
             Permission::ReadAudit,
             Permission::DeleteArtifacts,
+            Permission::ManageBackups,
         ] {
             assert!(!Role::Viewer.allows(permission), "{permission:?}");
         }
@@ -259,6 +268,7 @@ mod tests {
         assert!(!Role::Operator.allows(Permission::ManageDats));
         assert!(!Role::Operator.allows(Permission::ReadAudit));
         assert!(!Role::Operator.allows(Permission::DeleteArtifacts));
+        assert!(!Role::Operator.allows(Permission::ManageBackups));
     }
 
     #[test]
@@ -278,6 +288,7 @@ mod tests {
             Permission::DeleteArtifacts,
             Permission::Request,
             Permission::DecideRequests,
+            Permission::ManageBackups,
         ] {
             assert!(Role::Administrator.allows(permission), "{permission:?}");
         }

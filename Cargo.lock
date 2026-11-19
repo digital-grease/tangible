@@ -2433,6 +2433,7 @@ version = "0.4.1"
 dependencies = [
  "anyhow",
  "clap",
+ "percent-encoding",
  "serde",
  "serde_json",
  "tangible-api",

@@ -95,6 +95,8 @@ struct Inner {
     deletion_nudge: Arc<tokio::sync::Notify>,
     /// Wakes the artwork runner, as a new request does (ADR 0023).
     artwork_nudge: Arc<tokio::sync::Notify>,
+    /// Copies of the database, when this server keeps them (ADR 0026).
+    backups: Option<crate::backups::Backups>,
 }
 
 /// How long a worker credential is used before rotation, unless configured.
@@ -156,6 +158,7 @@ impl ApiState {
                 deletion_grace_days: crate::deletion::DEFAULT_GRACE_DAYS,
                 deletion_nudge: Arc::new(tokio::sync::Notify::new()),
                 artwork_nudge: Arc::new(tokio::sync::Notify::new()),
+                backups: None,
             }),
         }
     }
@@ -194,6 +197,7 @@ impl ApiState {
                 deletion_grace_days: crate::deletion::DEFAULT_GRACE_DAYS,
                 deletion_nudge: Arc::new(tokio::sync::Notify::new()),
                 artwork_nudge: Arc::new(tokio::sync::Notify::new()),
+                backups: None,
             }),
         }
     }
@@ -294,6 +298,22 @@ impl ApiState {
     #[must_use]
     pub fn deletion_grace_days(&self) -> u32 {
         self.inner.deletion_grace_days
+    }
+
+    /// Keep copies of the database through `backups` (ADR 0026).
+    #[must_use]
+    pub fn with_backups(self, backups: crate::backups::Backups) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.backups = Some(backups);
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Copies of the database, when this server keeps them.
+    #[must_use]
+    pub fn backups(&self) -> Option<&crate::backups::Backups> {
+        self.inner.backups.as_ref()
     }
 
     /// What wakes the artwork runner, when something wants a cover.

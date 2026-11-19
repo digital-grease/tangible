@@ -11,6 +11,7 @@
 pub mod artwork;
 pub mod auth;
 pub mod background;
+pub mod backups;
 pub mod burn_report;
 pub mod catalog;
 pub mod deletion;
@@ -180,6 +181,11 @@ pub const API_BASE: &str = "/api/v1";
         routes::storage::list_gc_plans,
         routes::storage::get_gc_plan,
         routes::storage::collect_gc_plan,
+        routes::backups::list_backups,
+        routes::backups::take_backup,
+        routes::backups::upload_backup,
+        routes::backups::download_backup,
+        routes::backups::delete_backup,
         routes::integrations::list_all,
         routes::integrations::create_one,
         routes::integrations::get_one,
@@ -357,6 +363,12 @@ pub const API_BASE: &str = "/api/v1";
         routes::storage::GcCollectionView,
         routes::storage::GcPlanObjectView,
         routes::storage::GcOriginView,
+        routes::backups::BackupsView,
+        backups::CopyEntry,
+        backups::CopyKind,
+        backups::Operation,
+        backups::Outcome,
+        backups::ToolsStatus,
         routes::storage::GcPlanDetail,
         routes::storage::GcPlanList,
         routes::integrations::IntegrationView,
@@ -465,6 +477,7 @@ pub const API_BASE: &str = "/api/v1";
         (name = "integrations", description = "Download clients and other services, configured by administrators"),
         (name = "requests", description = "Items people ask for, approved before anything is searched for"),
         (name = "events", description = "What changes, as it changes: a server-sent event stream"),
+        (name = "backups", description = "Copies of the database, taken and restored by administrators"),
     ),
 )]
 pub struct ApiDoc;
@@ -643,6 +656,7 @@ pub fn router(state: ApiState) -> Router {
         .nest(API_BASE, routes::integrations::router())
         .nest(API_BASE, routes::integrity::router())
         .nest(API_BASE, routes::storage::router())
+        .nest(API_BASE, routes::backups::router())
         .nest(API_BASE, routes::romm::router())
         .nest(API_BASE, routes::reports::router())
         .nest(API_BASE, routes::diagnostics::router())

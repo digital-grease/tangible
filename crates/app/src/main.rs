@@ -148,6 +148,86 @@ fn with_password_from(
     Ok(tangible_domain::SecretString::from(String::from(parsed)))
 }
 
+/// Copies of the database in the backups volume (ADR 0026), when the server
+/// has the volume: without it, the server keeps none and its page says so.
+fn backups_for(
+    common: &CommonConfig,
+    serve: &ServeConfig,
+) -> Result<Option<tangible_api::backups::Backups>> {
+    if !serve.backups_dir.is_dir() {
+        tracing::info!(
+            dir = %serve.backups_dir.display(),
+            "no backups volume, so the server keeps no copies of the database \
+             (TANGIBLE_BACKUPS_DIR)"
+        );
+        return Ok(None);
+    }
+    Ok(Some(tangible_api::backups::Backups::new(
+        tangible_api::backups::BackupSettings {
+            dir: serve.backups_dir.clone(),
+            kept: serve.backups_kept,
+            tools: serve.postgres_tools_dir.clone(),
+            connection: tool_connection(&common.database_url)?,
+            max_upload_bytes: serve.max_backup_upload_bytes,
+        },
+    )))
+}
+
+/// How PostgreSQL's own tools reach the database the server's URL names:
+/// libpq's settings, each decoded from the URL. The password goes only to
+/// the tools' environment.
+fn tool_connection(
+    url: &tangible_domain::SecretString,
+) -> Result<tangible_api::backups::ToolConnection> {
+    let parsed = url::Url::parse(url.expose())
+        .map_err(|_| anyhow::anyhow!("TANGIBLE_DATABASE_URL is not a URL"))?;
+    let decode = |text: &str| {
+        percent_encoding::percent_decode_str(text)
+            .decode_utf8()
+            .map(std::borrow::Cow::into_owned)
+            .map_err(|_| anyhow::anyhow!("TANGIBLE_DATABASE_URL is not UTF-8 once decoded"))
+    };
+    let query = |name: &str| {
+        parsed
+            .query_pairs()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.into_owned())
+    };
+    // A socket directory is given as `host=` in the query, as libpq takes
+    // it; otherwise the URL's host, without an IPv6 address's brackets.
+    let host = match query("host") {
+        Some(host) => host,
+        None => decode(
+            parsed
+                .host_str()
+                .unwrap_or("localhost")
+                .trim_start_matches('[')
+                .trim_end_matches(']'),
+        )?,
+    };
+    let user = match parsed.username() {
+        "" => "postgres".to_owned(),
+        user => decode(user)?,
+    };
+    let password = parsed
+        .password()
+        .map(decode)
+        .transpose()?
+        .map(tangible_domain::SecretString::from);
+    let database = match parsed.path().trim_start_matches('/') {
+        "" => user.clone(),
+        name => decode(name)?,
+    };
+    Ok(tangible_api::backups::ToolConnection {
+        host,
+        port: parsed.port().unwrap_or(5432),
+        user,
+        password,
+        database,
+        sslmode: query("sslmode"),
+    })
+}
+
 /// Name the project's environment variables nothing reads, which are most
 /// often a typo of one that something does (ARCHITECTURE.md 11): a setting
 /// mistyped would otherwise be silently ignored. Only the name is said,
@@ -291,7 +371,7 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         .with_oidc_if(oidc)
         .with_reports(reports)
         .with_diagnostics(diagnostics);
-    let state = with_policies(state, serve);
+    let state = with_policies(state, serve, backups_for(common, serve)?);
     let state = match &secret_key {
         Some(key) => state.with_secret_key(Arc::clone(key)),
         None => state,
@@ -620,11 +700,19 @@ fn start_source_remover(
 
 /// The server's policies that are plain settings: decryption, worker
 /// credential rotation, how long deleted artifacts' bytes are kept.
-fn with_policies(state: ApiState, serve: &ServeConfig) -> ApiState {
-    state
+fn with_policies(
+    state: ApiState,
+    serve: &ServeConfig,
+    backups: Option<tangible_api::backups::Backups>,
+) -> ApiState {
+    let state = state
         .with_decryption_allowed(serve.allow_decryption)
         .with_worker_credential_max_age_days(serve.worker_credential_max_age_days)
-        .with_deletion_grace_days(serve.deletion_grace_days)
+        .with_deletion_grace_days(serve.deletion_grace_days);
+    match backups {
+        Some(backups) => state.with_backups(backups),
+        None => state,
+    }
 }
 
 /// Start the runners that keep the library tidy and dressed: deletions
@@ -1590,6 +1678,10 @@ mod tests {
     const PUBLIC_ENV: &[&str] = &[
         "TANGIBLE_ALLOW_DECRYPTION",
         "TANGIBLE_ARTWORK",
+        "TANGIBLE_BACKUPS_DIR",
+        "TANGIBLE_BACKUPS_KEPT",
+        "TANGIBLE_POSTGRES_TOOLS_DIR",
+        "TANGIBLE_MAX_BACKUP_UPLOAD_BYTES",
         "TANGIBLE_BIND",
         "TANGIBLE_BLOCK_DEVICE",
         "TANGIBLE_BUILD_REVISION",
@@ -1658,6 +1750,10 @@ mod tests {
         // Compose migrates as a step of its own (deploy/README.md,
         // "Upgrading"), not as the server starts.
         "TANGIBLE_MIGRATE_ON_START",
+        // compose.yaml mounts the backups volume where the server looks by
+        // default, and the image's own tools are where it looks for them.
+        "TANGIBLE_BACKUPS_DIR",
+        "TANGIBLE_POSTGRES_TOOLS_DIR",
     ];
 
     /// The worker's variables `deploy/compose.hardware.yaml` leaves out,
@@ -1944,6 +2040,44 @@ mod tests {
             Path::new("/var/lib/tangible/database-password")
         );
         assert_eq!(given.secrets_dir, Path::new("/var/lib/tangible/secrets"));
+    }
+
+    #[test]
+    fn the_dump_tools_reach_the_database_the_url_names() {
+        let connection = tool_connection(&tangible_domain::SecretString::from(
+            "postgres://tangible:p%40ss%2Fword@db.internal:6543/tangible?sslmode=require"
+                .to_owned(),
+        ))
+        .expect("parse");
+        assert_eq!(connection.host, "db.internal");
+        assert_eq!(connection.port, 6543);
+        assert_eq!(connection.user, "tangible");
+        assert_eq!(
+            connection.password.as_ref().map(|p| p.expose().to_owned()),
+            Some("p@ss/word".to_owned())
+        );
+        assert_eq!(connection.database, "tangible");
+        assert_eq!(connection.sslmode.as_deref(), Some("require"));
+
+        let plain = tool_connection(&tangible_domain::SecretString::from(
+            "postgres://tangible@postgres/tangible".to_owned(),
+        ))
+        .expect("parse");
+        assert_eq!((plain.host.as_str(), plain.port), ("postgres", 5432));
+        assert!(plain.password.is_none());
+        assert!(plain.sslmode.is_none());
+
+        let socket = tool_connection(&tangible_domain::SecretString::from(
+            "postgres://tangible@localhost/tangible?host=/var/run/postgresql".to_owned(),
+        ))
+        .expect("parse");
+        assert_eq!(socket.host, "/var/run/postgresql");
+
+        let six = tool_connection(&tangible_domain::SecretString::from(
+            "postgres://tangible@[::1]:5432/tangible".to_owned(),
+        ))
+        .expect("parse");
+        assert_eq!(six.host, "::1");
     }
 
     #[test]

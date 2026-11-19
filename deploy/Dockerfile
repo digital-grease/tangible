@@ -43,6 +43,9 @@ FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1de
 # mame-tools for chdman, which makes CHD derivatives (it brings SDL2 and its
 # libraries, about 75 MB; Debian builds chdman only in that package).
 # ca-certificates for TLS to the database and integration endpoints.
+# postgresql-client-17 for pg_dump and pg_restore, which take and restore
+# copies of the database (ADR 0026): 17, the major version of the
+# PostgreSQL the Compose files run, since pg_dump copies no newer server.
 #
 # Installed from distro packages on purpose: publishing this image conveys
 # object code for every GPL binary in it, and distro packaging means the
@@ -75,11 +78,15 @@ RUN apt-get update \
       cdrdao \
       mame-tools \
       ca-certificates \
+      postgresql-client-17 \
  && rm -rf /var/lib/apt/lists/*
 
 # Unprivileged by default. The worker gains device access through the device
-# mapping in compose.hardware.yaml, not through user privilege.
-RUN useradd --system --create-home --uid 10001 tangible
+# mapping in compose.hardware.yaml, not through user privilege. The group's
+# number is fixed too, as it always was: compose.yaml's backup service joins
+# it to share the backups volume with the server (ADR 0026).
+RUN groupadd --system --gid 999 tangible \
+ && useradd --system --create-home --uid 10001 --gid tangible tangible
 
 # The directories the Compose files mount named volumes on, created here and
 # owned by the user the process runs as. Docker gives a new named volume the
@@ -89,10 +96,13 @@ RUN useradd --system --create-home --uid 10001 tangible
 # and the worker's state volume would have failed the same way.
 # The database-password directory stays readable by others: PostgreSQL reads
 # its password there as its own user. `tangible init` makes the key in the
-# secrets directory readable by this user alone.
+# secrets directory readable by this user alone. The backups directory is
+# its group's and setgid, as the backup service makes the volume, so a volume
+# made from it is shared the same way.
 RUN mkdir -p /var/lib/tangible/library /var/lib/tangible/staging /var/lib/tangible/secrets \
-      /var/lib/tangible/database-password /var/lib/tangible-worker \
- && chown -R tangible:tangible /var/lib/tangible /var/lib/tangible-worker
+      /var/lib/tangible/database-password /var/lib/tangible/backups /var/lib/tangible-worker \
+ && chown -R tangible:tangible /var/lib/tangible /var/lib/tangible-worker \
+ && chmod 2770 /var/lib/tangible/backups
 USER tangible
 
 COPY --from=build /src/target/release/tangible /usr/local/bin/tangible

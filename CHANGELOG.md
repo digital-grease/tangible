@@ -6,6 +6,22 @@ may change between minor versions, and the release notes say how.
 
 ## Unreleased
 
+### Added
+
+- A **Backups** page, for administrators, for the copies of the database
+  in the `backups` volume (ADR 0026): it lists them, takes one now,
+  downloads one, uploads one from another install, and removes one, each
+  audited (`backup.taken`, `backup.downloaded`, `backup.uploaded`,
+  `backup.deleted`) and needing the new `manage_backups` permission. The
+  server image carries PostgreSQL 17's client tools for it, and the server
+  mounts the `backups` volume, which the `backup` service now makes the
+  image group's (999), setgid, with every copy readable by that group
+  alone. Copies the server takes are named and pruned as the `backup`
+  service's are (`TANGIBLE_BACKUPS_KEPT`); one uploaded is kept as
+  `uploaded-<time>.dump`, never pruned, up to
+  `TANGIBLE_MAX_BACKUP_UPLOAD_BYTES` (4 GiB), and only once `pg_restore`
+  reads it as an archive.
+
 ### Fixed
 
 - "Delete now" set an artifact's deletion due by the server's clock, and

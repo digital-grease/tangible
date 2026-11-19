@@ -144,6 +144,18 @@ pub enum ErrorCode {
     GcPlanExpired,
     /// Collecting the plan was asked for already (ADR 0024).
     GcPlanCollected,
+    /// This server cannot take or restore copies of the database: none are
+    /// configured, the dump tools are missing or older than the database,
+    /// or the backups volume cannot be written (ADR 0026).
+    BackupsUnavailable,
+    /// Copies are turned off: `TANGIBLE_BACKUPS_KEPT` is 0 (ADR 0026).
+    BackupsOff,
+    /// A copy is being taken or added, or a restore is under way
+    /// (ADR 0026).
+    BackupBusy,
+    /// An uploaded file is not a copy of a database: not a PostgreSQL
+    /// custom-format archive (ADR 0026).
+    BackupNotACopy,
     /// Anything unanticipated.
     Internal,
 }
@@ -194,6 +206,10 @@ impl ErrorCode {
             Self::GcPlanUncertain => "GC_PLAN_UNCERTAIN",
             Self::GcPlanExpired => "GC_PLAN_EXPIRED",
             Self::GcPlanCollected => "GC_PLAN_COLLECTED",
+            Self::BackupsUnavailable => "BACKUPS_UNAVAILABLE",
+            Self::BackupsOff => "BACKUPS_OFF",
+            Self::BackupBusy => "BACKUP_BUSY",
+            Self::BackupNotACopy => "BACKUP_NOT_A_COPY",
             Self::Internal => "INTERNAL",
         }
     }
@@ -209,7 +225,7 @@ impl ErrorCode {
             // 503 rather than 500: the library being unreadable is usually a
             // mount or permissions problem an operator can fix, and it is
             // worth retrying.
-            Self::StorageUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            Self::StorageUnavailable | Self::BackupsUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             // Three readings of the same status. The request was fine and the
             // stored data is not; or the request was well formed and the
             // server will not act on it; or it named something that does not
@@ -221,7 +237,8 @@ impl ErrorCode {
             | Self::ImportSsrfBlocked
             | Self::IntegrationAddressRefused
             | Self::DatInvalid
-            | Self::AttestationRequired => StatusCode::UNPROCESSABLE_ENTITY,
+            | Self::AttestationRequired
+            | Self::BackupNotACopy => StatusCode::UNPROCESSABLE_ENTITY,
             // Worker routes only ever answer 401: they have no notion of an
             // authenticated-but-unauthorised caller. Operator routes answer
             // 403 when the account is known and its role is not enough.
@@ -249,7 +266,9 @@ impl ErrorCode {
             | Self::SearchExpired
             | Self::GcPlanUncertain
             | Self::GcPlanExpired
-            | Self::GcPlanCollected => StatusCode::CONFLICT,
+            | Self::GcPlanCollected
+            | Self::BackupsOff
+            | Self::BackupBusy => StatusCode::CONFLICT,
             // The server is a gateway to the client here: the request was
             // fine, and what stands behind it failed.
             Self::IntegrationUnreachable
@@ -305,6 +324,10 @@ impl ErrorCode {
             Self::GcPlanUncertain => "The plan is not certain",
             Self::GcPlanExpired => "The plan is too old",
             Self::GcPlanCollected => "The plan is collected already",
+            Self::BackupsUnavailable => "Copies of the database cannot be taken here",
+            Self::BackupsOff => "Copies of the database are turned off",
+            Self::BackupBusy => "Something is already being done with the copies",
+            Self::BackupNotACopy => "Not a copy of a database",
             Self::Internal => "Internal error",
         }
     }
@@ -471,6 +494,10 @@ mod tests {
             ErrorCode::GcPlanUncertain,
             ErrorCode::GcPlanExpired,
             ErrorCode::GcPlanCollected,
+            ErrorCode::BackupsUnavailable,
+            ErrorCode::BackupsOff,
+            ErrorCode::BackupBusy,
+            ErrorCode::BackupNotACopy,
             ErrorCode::IntegrationAddressRefused,
             ErrorCode::InsufficientSpace,
             ErrorCode::DatInvalid,

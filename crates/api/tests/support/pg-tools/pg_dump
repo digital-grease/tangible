@@ -1,0 +1,20 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 digitalgrease
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# PostgreSQL 17's pg_dump or pg_restore, by this script's name, from the
+# image CI runs PostgreSQL from, for the tests of copies of the database on
+# a machine without PostgreSQL's client tools: TANGIBLE_TEST_POSTGRES_TOOLS_DIR
+# names this directory. The server runs its tools with libpq's settings
+# alone in the environment, which are passed on; /tmp, where the tests'
+# files are, is the same path inside.
+set -eu
+PATH=/usr/local/bin:/usr/bin:/bin
+HOME=${HOME:-$(getent passwd "$(id -u)" | cut -d: -f6)}
+export PATH HOME
+exec docker run --rm --network host --user "$(id -u):$(id -g)" \
+  -e PGHOST -e PGPORT -e PGUSER -e PGPASSWORD -e PGDATABASE -e PGSSLMODE \
+  -e PGAPPNAME -e PGCONNECT_TIMEOUT -e PGTZ -e LC_ALL \
+  -v /tmp:/tmp \
+  postgres:17-alpine@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b \
+  "$(basename "$0")" "$@"

@@ -21,6 +21,7 @@ tangible-db = { version = "0.4.1", path = "../db" }
 tangible-domain = { version = "0.4.1", path = "../domain" }
 tangible-image = { version = "0.4.1", path = "../image" }
 tangible-integrations = { version = "0.4.1", path = "../integrations" }
+percent-encoding = "2.3.2"
 url = "2.5.7"
 tangible-storage = { version = "0.4.1", path = "../storage" }
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "signal"] }

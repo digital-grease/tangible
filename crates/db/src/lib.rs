@@ -16,6 +16,7 @@
 pub mod accounts;
 pub mod artwork;
 pub mod audit;
+pub mod backups;
 pub mod catalog_discs;
 pub mod catalog_edits;
 pub mod changes;

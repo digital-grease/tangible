@@ -1236,9 +1236,18 @@ so keep one elsewhere too.
 Every `docker compose up` copies the database into the `backups` volume before
 anything else, with PostgreSQL's own `pg_dump`, and keeps the newest ten of
 the copies it takes (`TANGIBLE_BACKUPS_KEPT` in `.env`; 0 takes none). A file
-you put in the volume under another name is never counted or removed. Take
-one whenever you like, for example from cron, list them, and copy one out of
-the volume:
+you put in the volume under another name is never counted or removed.
+
+The **Backups** page, for administrators, lists the copies, takes one now,
+downloads one, uploads one from another install (kept as
+`uploaded-<time>.dump` and never removed to make room; up to
+`TANGIBLE_MAX_BACKUP_UPLOAD_BYTES`, 4 GiB unless set) and removes one. Each
+is in the audit log. The server shares the volume with the `backup` service
+through its image's group: `backup` makes the volume that group's on every
+run, so the page can write there once this release's `compose.yaml` has run.
+
+At the machine, take one whenever you like, for example from cron, list
+them, and copy one out of the volume:
 
 ```bash
 docker compose -f deploy/compose.yaml run --rm backup

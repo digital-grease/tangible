@@ -368,6 +368,90 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/backups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The copies of the database, and what the server can do with them.
+         * @description The copies of the database in the backups volume, newest first: those Tangible took (`tangible-*.dump`: before every start, on the schedule, or asked for here), counted and pruned to `kept`, and those uploaded or put there at the machine, which are never pruned. Also whether the server can write there and its dump tools can copy this database, and what is under way. Needs `manage_backups`.
+         */
+        get: operations["list_backups"];
+        put?: never;
+        /**
+         * Take a copy of the database now.
+         * @description Take a copy of the database now, in the background: `operation` says it is under way, and `last_outcome` how it went. It is named as every copy Tangible takes, and the oldest beyond `kept` go. Audited as `backup.taken`. Needs `manage_backups`.
+         */
+        post: operations["take_backup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Add a copy: the request's body is the file.
+         * @description Add a copy of the database, from another install or one downloaded earlier: the request's body is the file, a PostgreSQL custom-format archive (`pg_dump --format=custom`), at most `max_upload_bytes`. It is kept as `uploaded-YYYYMMDDTHHMMSSZ.dump`, never pruned, once whole and read by `pg_restore` as an archive; nothing in it is run. Audited as `backup.uploaded`. Needs `manage_backups`.
+         */
+        put: operations["upload_backup"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a copy.
+         * @description Remove a copy from the backups volume, whoever took or added it. Audited as `backup.deleted`. Needs `manage_backups`.
+         */
+        delete: operations["delete_backup"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/{name}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fetch a copy.
+         * @description The copy's file, as a download. It holds every account's password hash, the integration passwords sealed with the server's key (not the key), and the audit trail: keep it where only you can read it. Audited as `backup.downloaded`. Needs `manage_backups`.
+         */
+        get: operations["download_backup"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/burn-attempts/{attempt_id}": {
         parameters: {
             query?: never;
@@ -2848,6 +2932,28 @@ export interface components {
             /** @description What kind of thing it was done to. */
             target_type: string;
         };
+        /** @description The copies, and what the server can do with them. */
+        BackupsView: {
+            /** @description Every copy in the backups volume, newest first. */
+            copies: components["schemas"]["CopyEntry"][];
+            /**
+             * Format: int32
+             * @description How many of the copies Tangible names are kept
+             *     (`TANGIBLE_BACKUPS_KEPT`); 0 when copies are turned off.
+             */
+            kept: number;
+            last_outcome?: components["schemas"]["Outcome"] | null;
+            /**
+             * Format: int64
+             * @description The largest copy an upload may be, in bytes.
+             */
+            max_upload_bytes: number;
+            operation?: components["schemas"]["Operation"] | null;
+            /** @description Whether the dump tools can copy the database. */
+            tools: components["schemas"]["ToolsStatus"];
+            /** @description Whether the server can write copies into the volume. */
+            writable: boolean;
+        };
         /**
          * @description The game of a loaded DAT an artifact best matches: an exact match
          *     first, then the one with the most files matched.
@@ -3290,6 +3396,29 @@ export interface components {
             /** @description Content digest, as lowercase hex. */
             sha256: string;
         };
+        /** @description One copy in the backups volume. */
+        CopyEntry: {
+            /** @description Who took or added it. */
+            kind: components["schemas"]["CopyKind"];
+            /** @description The file's name, which names it in every route. */
+            name: string;
+            /**
+             * Format: int64
+             * @description Its size in bytes.
+             */
+            size_bytes: number;
+            /**
+             * Format: date-time
+             * @description When it was taken, from its name; for a copy added at the machine,
+             *     when its file was last written.
+             */
+            taken_at: string;
+        };
+        /**
+         * @description Who took or added a copy.
+         * @enum {string}
+         */
+        CopyKind: "taken" | "uploaded" | "added";
         /** @description A cover, as a page shows it. */
         CoverView: {
             /**
@@ -5135,6 +5264,40 @@ export interface components {
              */
             password_sign_in: string;
         };
+        /** @description What is under way. */
+        Operation: {
+            /** @description By whom: a username, or `schedule`. */
+            by: string;
+            /** @enum {string} */
+            kind: "taking";
+            /**
+             * Format: date-time
+             * @description Since when.
+             */
+            started_at: string;
+        } | {
+            /** @description By whom. */
+            by: string;
+            /** @enum {string} */
+            kind: "uploading";
+            /**
+             * Format: date-time
+             * @description Since when.
+             */
+            started_at: string;
+        };
+        /** @description How the last copy the server took or added since it started went. */
+        Outcome: {
+            /** @description Why it failed, when it did. */
+            error?: string | null;
+            /**
+             * Format: date-time
+             * @description When it ended.
+             */
+            finished_at: string;
+            /** @description The copy, when there is one. */
+            name?: string | null;
+        };
         /** @description An indexer Prowlarr has paused after it failed. */
         PausedIndexerView: {
             /** @description Its name, in Prowlarr. */
@@ -6188,6 +6351,23 @@ export interface components {
              *     edit. Send it as `If-Match` to change it only as read.
              */
             version: number;
+        };
+        /** @description Whether the dump tools can copy this database. */
+        ToolsStatus: {
+            /**
+             * Format: int32
+             * @description The database server's major version, when it answers.
+             */
+            database_version?: number | null;
+            /** @description What stands in the way, when something does. */
+            problem?: string | null;
+            /** @description Whether copies can be taken and restored. */
+            ready: boolean;
+            /**
+             * Format: int32
+             * @description The tools' major version, when they answer.
+             */
+            tools_version?: number | null;
         };
         /**
          * @description One CD track's hashes: of its bytes from its first in the file (its
@@ -7346,6 +7526,222 @@ export interface operations {
             };
             /** @description No such event */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_backups: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The copies */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupsView"];
+                };
+            };
+            /** @description This server keeps no copies, or cannot read them */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    take_backup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Being taken */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupsView"];
+                };
+            };
+            /** @description Copies are turned off, or something is under way */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The tools or the volume are not ready */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    upload_backup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": number[];
+            };
+        };
+        responses: {
+            /** @description Kept */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CopyEntry"];
+                };
+            };
+            /** @description Something is under way */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Larger than this server accepts */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not a copy of a database */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The tools or the volume are not ready */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    delete_backup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The copy's name, as listed */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No copy is named that */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Something is under way */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description This server keeps no copies, or cannot remove it */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    download_backup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The copy's name, as listed */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The copy */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": number[];
+                };
+            };
+            /** @description No copy is named that */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description This server keeps no copies */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

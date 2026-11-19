@@ -55,6 +55,7 @@ export const NAV: readonly NavGroup[] = [
       { href: '/users', label: 'Accounts', icon: 'user' },
       { href: '/integrations', label: 'Integrations', icon: 'integration' },
       { href: '/storage', label: 'Storage', icon: 'storage' },
+      { href: '/backups', label: 'Backups', icon: 'backup' },
       { href: '/dats', label: 'DATs', icon: 'dat' },
       { href: '/audit', label: 'Audit log', icon: 'audit' },
       { href: '/diagnostics', label: 'Diagnostics', icon: 'diagnostics' },
