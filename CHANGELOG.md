@@ -54,6 +54,13 @@ may change between minor versions, and the release notes say how.
   server mount `secrets`. On the first `up`, `init` copies an existing
   password from `secrets` and leaves it there, so 0.4.1 still runs on the
   same volumes. `init` also runs with no network now.
+- Grabbing a release fetched its link through Prowlarr and followed the
+  redirects there to wherever they led, under the rules for addresses an
+  administrator configured: private networks and any port. An indexer,
+  which chooses where Prowlarr's link redirects, could make the server
+  send a request to any address on its network. Past Prowlarr's own
+  address, a link now reaches only public addresses, unless its block is
+  in `TANGIBLE_OUTBOUND_ALLOW`.
 
 ## 0.4.1 (2026-11-18)
 

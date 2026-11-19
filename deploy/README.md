@@ -918,6 +918,10 @@ a game a loaded DAT matches exactly gets libretro's box art from
 Prowlarr's download links carry its API key: Tangible never shows, logs or
 audits them, and holds a search's links sealed with the secret key below,
 for the hour a release may be picked. A restart forgets them; search again.
+Where a link leads beyond Prowlarr's own address, to an indexer's, is the
+indexer's choice, so it may reach only public addresses, as a URL an
+operator gives may; an indexer on your own network needs its block in
+`TANGIBLE_OUTBOUND_ALLOW`.
 Which indexers you search, and whether downloading a release is lawful where
 you are, is yours to determine.
 

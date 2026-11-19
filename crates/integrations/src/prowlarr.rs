@@ -470,12 +470,23 @@ impl ProwlarrClient {
     }
 
     async fn fetch_now(&self, link: &Url) -> Result<Fetched, ClientError> {
-        let http = self.http.without_redirects().map_err(outbound)?;
+        // Prowlarr's own address is the administrator's, on their network;
+        // where a link leads from there (an indexer's, chosen by the
+        // indexer) may not reach a private network unless its block is
+        // allowed, or an indexer could make the server ask anything on the
+        // LAN.
+        let at_prowlarr = self.http.without_redirects().map_err(outbound)?;
+        let beyond = at_prowlarr.without_private_networks().map_err(outbound)?;
         let mut url = link.clone();
         for _ in 0..=MAX_REDIRECTS {
             if url.scheme() == "magnet" {
                 return magnet(url.as_str());
             }
+            let http = if same_origin(&url, &self.base) {
+                &at_prowlarr
+            } else {
+                &beyond
+            };
             let request = http.get(&url).map_err(outbound)?;
             let response = http.send(request).await.map_err(outbound)?;
             let status = response.status();
@@ -526,6 +537,13 @@ impl ProwlarrClient {
         }
         Err(ClientError::Refused(Refusal::TooManyRedirects))
     }
+}
+
+/// Whether two addresses have one scheme, host and port.
+fn same_origin(a: &Url, b: &Url) -> bool {
+    a.scheme() == b.scheme()
+        && a.host_str() == b.host_str()
+        && a.port_or_known_default() == b.port_or_known_default()
 }
 
 fn magnet(link: &str) -> Result<Fetched, ClientError> {
@@ -1017,6 +1035,52 @@ mod tests {
         // A redirect to an address the policy refuses is not followed.
         let error = prowlarr.fetch(&at("/elsewhere")).await.unwrap_err();
         assert_eq!(error.code(), "INTEGRATION_ADDRESS_REFUSED");
+    }
+
+    #[tokio::test]
+    async fn a_link_leading_away_from_prowlarr_reaches_no_private_network() {
+        // An indexer's link chosen by the indexer: from Prowlarr's address,
+        // which may be on the LAN, a redirect to a private address is
+        // refused, though Prowlarr's own private address is not. Here the
+        // test's Prowlarr is at 127.0.0.1, allowed by block.
+        let (address, heads) = server(vec![
+            ("/lan", redirect("http://10.0.0.5:8080/reboot")),
+            ("/router", redirect("http://192.168.1.1/")),
+        ])
+        .await;
+        let prowlarr = prowlarr_at(address);
+        let at =
+            |path: &str| Url::parse(&format!("http://127.0.0.1:{}{path}", address.port())).unwrap();
+        for path in ["/lan", "/router"] {
+            let error = prowlarr.fetch(&at(path)).await.unwrap_err();
+            assert_eq!(
+                error.code(),
+                "INTEGRATION_ADDRESS_REFUSED",
+                "{path}: {error}"
+            );
+        }
+        assert_eq!(heads.lock().unwrap().len(), 2, "only Prowlarr was asked");
+
+        // Its block allowed, as for an indexer on the LAN, it is reached.
+        let policy = crate::outbound::OutboundPolicy::for_integrations(
+            vec![
+                "127.0.0.1/32".parse().unwrap(),
+                "10.0.0.0/8".parse().unwrap(),
+            ],
+            None,
+        );
+        let base = Url::parse(&format!("http://127.0.0.1:{}/prowlarr", address.port())).unwrap();
+        let allowing = ProwlarrClient::new(
+            OutboundClient::new(policy, "tangible-test").unwrap(),
+            base,
+            SecretString::new("the-key"),
+        );
+        let checked = allowing
+            .http
+            .without_private_networks()
+            .unwrap()
+            .get(&Url::parse("http://10.0.0.5:8080/reboot").unwrap());
+        assert!(checked.is_ok(), "an allowed block is reachable");
     }
 
     #[tokio::test]

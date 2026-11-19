@@ -587,6 +587,27 @@ impl OutboundClient {
         )
     }
 
+    /// The same client, refusing private networks but for the allowed
+    /// blocks: for an address a third party chose, reached from one an
+    /// administrator configured, such as the indexer's link Prowlarr
+    /// redirects a grab to. Any port and plain http stay as they were.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`].
+    pub fn without_private_networks(&self) -> Result<Self, OutboundError> {
+        let policy = OutboundPolicy {
+            allow_private_networks: false,
+            ..(*self.policy).clone()
+        };
+        Self::build(
+            Arc::new(policy),
+            Arc::clone(&self.user_agent),
+            Arc::clone(&self.lookup),
+            self.follows_redirects,
+        )
+    }
+
     /// Whether this client follows redirects itself.
     #[must_use]
     pub const fn follows_redirects(&self) -> bool {
