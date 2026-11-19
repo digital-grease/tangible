@@ -89,6 +89,10 @@ may change between minor versions, and the release notes say how.
   out of their volumes, or make a key or the metrics token, now set
   `umask 077` first: with the usual umask the files were readable by
   everyone on the machine, a backup for good.
+- The minor tag (`v0.4`), which the Compose files name, is moved to a
+  published release's image only once that image's signature checks out
+  as the release workflow's at that release's tag; before, the tag
+  followed whatever the release's version tag named in the registry.
 
 ## 0.4.1 (2026-11-18)
 
