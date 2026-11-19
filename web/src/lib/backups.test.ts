@@ -7,7 +7,10 @@ import {
   kindLabel,
   operationLabel,
   readiness,
+  reportFindings,
   scheduleLabel,
+  stepLabel,
+  uncataloguedCount,
   uploadCopy,
   type Backups,
 } from './backups';
@@ -22,6 +25,8 @@ function backups(extra: Partial<Backups> = {}): Backups {
     last_outcome: null,
     max_upload_bytes: 1024,
     schedule: { enabled: true, time: '03:00', next_at: null, updated_by: null, updated_at: null },
+    last_restore: null,
+    can_restore: true,
     ...extra,
   };
 }
@@ -49,6 +54,28 @@ describe('copies of the database', () => {
     expect(scheduleLabel({ ...schedule, enabled: false }, 10)).toBe(
       'Copies are taken only at a start and when asked for',
     );
+  });
+
+  it('says where a restore is, and what its check found', () => {
+    expect(stepLabel('rows')).toBe("Loading the copy's rows");
+    expect(reportFindings(null)).toEqual([]);
+    expect(
+      reportFindings({ missing_objects: { count: 0 }, uncatalogued: { count: 0 }, unfinished: [] }),
+    ).toEqual([{ tone: 'ok', text: 'The catalogue and the library agree.' }]);
+    const findings = reportFindings({
+      missing_objects: { count: 2 },
+      wrong_size: { count: 0 },
+      missing_manifests: { count: 1 },
+      uncatalogued: { count: 3 },
+      registered: 1,
+      unfinished: [['burn', 'writing', 1]],
+    });
+    expect(findings.map((f) => f.tone)).toEqual(['bad', 'bad', 'warn', 'idle']);
+    expect(findings[0]?.text).toMatch(/^2 files the catalogue names are not in the library/);
+    expect(findings[2]?.text).toMatch(/^2 artifacts were imported after the copy was taken/);
+    expect(findings[3]?.text).toMatch(/^1 burn writing, as the copy recorded it/);
+    expect(uncataloguedCount({ uncatalogued: { count: 3 }, registered: 1 })).toBe(2);
+    expect(uncataloguedCount(undefined)).toBe(0);
   });
 
   it('says what is under way', () => {

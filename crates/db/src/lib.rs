@@ -38,6 +38,7 @@ pub mod oidc;
 pub mod repositories;
 pub mod requests;
 pub mod restore;
+pub mod restores;
 pub mod rips;
 pub mod romm;
 pub mod romm_api;

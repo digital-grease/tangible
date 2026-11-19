@@ -1272,9 +1272,39 @@ and nothing in it is rewritten. Copy the database before the library, so every
 artifact the database names is in the copy. A backup is not a backup until a
 restore from it has been tried.
 
+### Restoring from the Backups page
+
+**Restore** beside a copy replaces the database with it, once you type the
+copy's name: everything since it was taken goes from the catalogue, the
+library's files stay, and everyone signs in again. It is refused while a
+burn, rip, erasure, import or derivation is under way, or a collection
+queued; wait for them. First the server takes a copy of the database as it
+is, which is the way back. Then it makes a new database beside the one in
+use, gives it this version's own schema, loads only the copy's rows into it
+as a database role made for that alone and allowed nothing but inserting
+them, checks every row against the foreign keys, applies any migrations the
+copy is behind, and checks it against the library. Only then do the two
+swap names. The server answers nothing else meanwhile, and exits when it is
+done; Compose's `restart: unless-stopped` starts it again on the restored
+database. A copy taken by a later version, or not of a Tangible database, is
+refused, and a restore that fails leaves the database as it was and says
+why on the page. The page then shows what the restored catalogue and the
+library disagree on, and catalogues the artifacts imported after the copy
+was taken from their manifests, as `restore-check --register-missing` does.
+A worker enrolled since must enrol again, and an account or worker
+credential revoked since is valid again until you revoke it again.
+
+Restoring this way needs the database user to be able to create databases
+and roles, as the stack's PostgreSQL superuser can. A copy of the library
+comes back with your own tool, as below.
+
+### Restoring at the machine
+
 To restore: stop the stack, restore the `library` volume, start only
 PostgreSQL, restore a copy with `pg_restore --clean --if-exists`, then check
-that the two agree before starting the rest. The `backup` service runs
+that the two agree before starting the rest. This runs the copy as it is,
+so use it only for a copy you trust; the page runs none of a copy's
+definitions. The `backup` service runs
 `pg_restore` too, against this stack's database, for a copy in its volume:
 
 ```bash

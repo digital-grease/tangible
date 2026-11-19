@@ -71,6 +71,8 @@ function backups(extra: Record<string, unknown> = {}) {
       updated_by: null,
       updated_at: null,
     },
+    last_restore: null,
+    can_restore: true,
     ...extra,
   };
 }
@@ -246,6 +248,146 @@ describe('Backups page', () => {
     expect(screen.getByText('Saved.')).toBeTruthy();
     const sent = bodies[asked.indexOf('PUT /api/v1/backups/schedule')];
     expect(JSON.parse(String(sent))).toEqual({ enabled: true, time: '04:30' });
+  });
+
+  it('restores a copy once its name is typed, and follows it until the server is back', async () => {
+    signIn('administrator');
+    let polled = 0;
+    const { asked, bodies } = server({
+      'GET /api/v1/backups': { status: 200, body: backups() },
+      'POST /api/v1/backups/tangible-20261117T210000Z.dump/restore': {
+        status: 202,
+        body: { step: 'stopping', step_number: 1, steps: 7, started_at: '2026-11-18T05:00:00Z' },
+      },
+      'GET /api/v1/backups/restore': () => {
+        polled += 1;
+        return polled === 1
+          ? {
+              status: 200,
+              body: {
+                restoring: true,
+                progress: {
+                  step: 'rows',
+                  step_number: 4,
+                  steps: 7,
+                  started_at: '2026-11-18T05:00:00Z',
+                },
+              },
+            }
+          : { status: 200, body: { restoring: false, progress: null } };
+      },
+    });
+    render(Page);
+    await fireEvent.click(
+      await screen.findByRole('button', { name: 'Restore tangible-20261117T210000Z.dump' }),
+    );
+    const restoreButton = screen.getByRole('button', {
+      name: 'Restore from this copy',
+    }) as HTMLButtonElement;
+    expect(restoreButton.disabled).toBe(true);
+    expect(screen.getByText(/Everything since .* goes from the catalogue/)).toBeTruthy();
+    await fireEvent.input(screen.getByLabelText("Type the copy's name to confirm"), {
+      target: { value: 'tangible-20261117T210000Z.dump' },
+    });
+    expect(restoreButton.disabled).toBe(false);
+    await fireEvent.click(restoreButton);
+    expect(await screen.findByText(/Step 1 of 7: Letting the background work finish/)).toBeTruthy();
+    const sent =
+      bodies[asked.indexOf('POST /api/v1/backups/tangible-20261117T210000Z.dump/restore')];
+    expect(JSON.parse(String(sent))).toEqual({ confirm: 'tangible-20261117T210000Z.dump' });
+    expect(
+      await screen.findByText(/Step 4 of 7: Loading the copy's rows/, undefined, { timeout: 4000 }),
+    ).toBeTruthy();
+    expect(
+      await screen.findByText('The server has started again.', undefined, { timeout: 4000 }),
+    ).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Sign in again' }).getAttribute('href')).toBe('/login');
+  });
+
+  it('shows the last restore, what its check found, and catalogues what the library had', async () => {
+    signIn('administrator');
+    let catalogued = false;
+    const report = (registered: number) => ({
+      missing_objects: { count: 0, listed: [] },
+      wrong_size: { count: 0, listed: [] },
+      missing_manifests: { count: 0, listed: [] },
+      uncatalogued: { count: 2, listed: [] },
+      registered,
+      unfinished: [],
+    });
+    const { asked } = server({
+      'GET /api/v1/backups': () => ({
+        status: 200,
+        body: backups({
+          last_restore: {
+            id: 'r1',
+            requested_by: 'owner',
+            copy_name: 'tangible-20261117T210000Z.dump',
+            safety_copy: 'tangible-20261118T050000Z.dump',
+            outcome: 'restored',
+            error: null,
+            report: report(catalogued ? 2 : 0),
+            started_at: '2026-11-18T05:00:00Z',
+            finished_at: '2026-11-18T05:02:00Z',
+          },
+        }),
+      }),
+      'POST /api/v1/backups/register-missing': () => {
+        catalogued = true;
+        return { status: 200, body: { uncatalogued: 2, registered: 2, report: report(2) } };
+      },
+    });
+    render(Page);
+    expect(await screen.findByText(/Restored from tangible-20261117T210000Z.dump/)).toBeTruthy();
+    expect(screen.getByText('tangible-20261118T050000Z.dump', { selector: 'code' })).toBeTruthy();
+    expect(screen.getByText(/2 artifacts were imported after the copy was taken/)).toBeTruthy();
+    await fireEvent.click(
+      screen.getByRole('button', { name: 'Catalogue them from their manifests' }),
+    );
+    expect(await screen.findByText(/Catalogued 2 of the 2/)).toBeTruthy();
+    expect(asked).toContain('POST /api/v1/backups/register-missing');
+    expect(await screen.findByText('The catalogue and the library agree.')).toBeTruthy();
+  });
+
+  it('says a restore that failed left the database as it was', async () => {
+    signIn('administrator');
+    server({
+      'GET /api/v1/backups': {
+        status: 200,
+        body: backups({
+          last_restore: {
+            id: 'r2',
+            requested_by: 'owner',
+            copy_name: 'tangible-20261117T210000Z.dump',
+            safety_copy: 'tangible-20261118T050000Z.dump',
+            outcome: 'failed',
+            error: "loading the copy's rows failed: disk full",
+            report: null,
+            started_at: '2026-11-18T05:00:00Z',
+            finished_at: '2026-11-18T05:01:00Z',
+          },
+        }),
+      },
+    });
+    render(Page);
+    expect(
+      await screen.findByText(/failed .*: loading the copy's rows failed: disk full/),
+    ).toBeTruthy();
+    expect(
+      screen.getByText('The database is as it was before; nothing was replaced.'),
+    ).toBeTruthy();
+  });
+
+  it('offers no restore where the server cannot restore', async () => {
+    signIn('administrator');
+    server({ 'GET /api/v1/backups': { status: 200, body: backups({ can_restore: false }) } });
+    render(Page);
+    expect(
+      await screen.findByRole('button', { name: 'Remove tangible-20261117T210000Z.dump' }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole('button', { name: 'Restore tangible-20261117T210000Z.dump' }),
+    ).toBeNull();
   });
 
   it('removes a copy only once asked twice', async () => {

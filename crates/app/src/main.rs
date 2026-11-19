@@ -507,16 +507,55 @@ async fn serve_until_shutdown(
         "tangible server listening"
     );
 
-    let served = tangible_api::serve(listener, state, shutdown_signal())
+    // A restore from the Backups page (ADR 0026) comes here to run once the
+    // runners have stopped, the HTTP server still answering its progress;
+    // then the server exits, and Compose starts it on the restored database.
+    let (orders, mut restores) = tokio::sync::mpsc::channel(1);
+    let state = if state.backups().is_some() {
+        state.with_restore_orders(orders)
+    } else {
+        state
+    };
+    let (done, finished) = tokio::sync::oneshot::channel::<()>();
+    let mut serving = tokio::spawn(tangible_api::serve(listener, state.clone(), async {
+        tokio::select! {
+            () = shutdown_signal() => {}
+            _ = finished => {}
+        }
+    }));
+    let order = tokio::select! {
+        served = &mut serving => {
+            stop_runners(runners).await;
+            return served.context("the HTTP server stopped")?.context("serving HTTP");
+        }
+        Some(order) = restores.recv() => order,
+    };
+    stop_runners(runners).await;
+    match tangible_api::restoring::run(order, &state).await {
+        Ok(_) => {
+            tracing::warn!("the database was restored; the server exits, to start again on it");
+        }
+        Err(error) => {
+            tracing::error!(
+                error = %error,
+                "the restore failed and the database is as it was; the server exits, to start \
+                 again on it"
+            );
+        }
+    }
+    let _ = done.send(());
+    serving
         .await
-        .context("serving HTTP");
+        .context("the HTTP server stopped")?
+        .context("serving HTTP")
+}
 
+/// Stop the background runners, letting work already running finish.
+async fn stop_runners(runners: Vec<Stoppable>) {
     for (stop, task) in runners {
         let _ = stop.send(());
         let _ = task.await;
     }
-
-    served
 }
 
 /// Open the library, its manifests and the staging area.

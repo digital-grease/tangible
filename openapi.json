@@ -1391,6 +1391,65 @@
         ]
       }
     },
+    "/api/v1/backups/register-missing": {
+      "post": {
+        "tags": [
+          "backups"
+        ],
+        "summary": "Catalogue again the artifacts the library has and the catalogue lacks.",
+        "description": "After a restore, catalogue again each artifact the library has a manifest for and the catalogue does not name, imported after the copy was taken, once every object it names is there at its size: `tangible restore-check --register-missing`. Their imports' history and burns since are not in the copy, and stay lost. Each is audited as `artifact.recatalogued`. Needs `manage_backups`.",
+        "operationId": "register_missing",
+        "responses": {
+          "200": {
+            "description": "What was catalogued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisteredView"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No library, or it cannot be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/backups/restore": {
+      "get": {
+        "tags": [
+          "backups"
+        ],
+        "summary": "Whether a restore is under way.",
+        "description": "Whether the database is being restored, and how far it has got: the one route that answers while it is. Open to anyone, and names nothing.",
+        "operationId": "restore_status",
+        "responses": {
+          "200": {
+            "description": "Whether one is",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/backups/schedule": {
       "put": {
         "tags": [
@@ -1638,6 +1697,94 @@
           },
           "503": {
             "description": "This server keeps no copies",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/backups/{name}/restore": {
+      "post": {
+        "tags": [
+          "backups"
+        ],
+        "summary": "Restore the database from a copy.",
+        "description": "Replace the database with the copy: everything since it was taken goes from the catalogue, and everyone signs in again. A copy of the database as it is is taken first, the way back. The copy's definitions are never run: the schema is this version's own, and only the copy's rows are loaded, by a role that can do nothing else, then checked. Refused while a burn, rip, erasure, import or derivation is under way, for a copy a later version took or not of a Tangible database, and unless `confirm` is the copy's name. Then every API route but `GET /api/v1/backups/restore` answers 503 `SERVER_RESTORING` until the server starts again on the restored database, or on the one it left as it was if the restore failed; either way the database records it (`last_restore`), audited as `database.restored` or `database.restore_failed`. Needs `manage_backups`.",
+        "operationId": "restore_backup",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The copy's name, as listed",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Restoring",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Progress"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No copy is named that",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Work under way, something else under way, or the database user cannot restore here",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not confirmed, or a copy this version cannot restore",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This server cannot restore copies",
             "content": {
               "application/json": {
                 "schema": {
@@ -10021,9 +10168,14 @@
           "writable",
           "tools",
           "max_upload_bytes",
-          "schedule"
+          "schedule",
+          "can_restore"
         ],
         "properties": {
+          "can_restore": {
+            "type": "boolean",
+            "description": "Whether this server restores copies itself."
+          },
           "copies": {
             "type": "array",
             "items": {
@@ -10042,6 +10194,17 @@
               {
                 "$ref": "#/components/schemas/Outcome",
                 "description": "How the last copy taken or added since the server started went."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_restore": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RestoreView",
+                "description": "The last restore this database records: the one that made it, or\none that failed and left it as it was."
               },
               {
                 "type": "null"
@@ -15221,6 +15384,32 @@
                 "description": "Since when."
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "A copy being restored.",
+            "required": [
+              "started_at",
+              "by",
+              "kind"
+            ],
+            "properties": {
+              "by": {
+                "type": "string",
+                "description": "By whom."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "restoring"
+                ]
+              },
+              "started_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Since when."
+              }
+            }
           }
         ],
         "description": "What is under way."
@@ -15572,6 +15761,39 @@
           }
         }
       },
+      "Progress": {
+        "type": "object",
+        "description": "A restore under way, as anyone may see it while the server answers\nnothing else: no names.",
+        "required": [
+          "step",
+          "step_number",
+          "steps",
+          "started_at"
+        ],
+        "properties": {
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it began."
+          },
+          "step": {
+            "$ref": "#/components/schemas/Step",
+            "description": "Where it is."
+          },
+          "step_number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its place, from 1.",
+            "minimum": 0
+          },
+          "steps": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many steps there are.",
+            "minimum": 0
+          }
+        }
+      },
       "ReadErrors": {
         "type": "object",
         "description": "Sectors that gave trouble.",
@@ -15717,6 +15939,30 @@
           "may_write": {
             "type": "boolean",
             "description": "Always false. Restarting a write is never a recovery action."
+          }
+        }
+      },
+      "RegisteredView": {
+        "type": "object",
+        "description": "What cataloguing the artifacts a restore found did.",
+        "required": [
+          "uncatalogued",
+          "registered",
+          "report"
+        ],
+        "properties": {
+          "registered": {
+            "type": "integer",
+            "description": "How many of those were catalogued now.",
+            "minimum": 0
+          },
+          "report": {
+            "description": "The restore check's report after."
+          },
+          "uncatalogued": {
+            "type": "integer",
+            "description": "How many manifests the library has that the catalogue did not name.",
+            "minimum": 0
           }
         }
       },
@@ -16301,6 +16547,102 @@
           "updated_at": {
             "type": "string",
             "description": "When it last changed."
+          }
+        }
+      },
+      "RestoreRequest": {
+        "type": "object",
+        "description": "Restoring a copy: what confirms it.",
+        "required": [
+          "confirm"
+        ],
+        "properties": {
+          "confirm": {
+            "type": "string",
+            "description": "The copy's name, typed again."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RestoreStatus": {
+        "type": "object",
+        "description": "Whether a restore is under way: what anyone may see while the server\nanswers nothing else.",
+        "required": [
+          "restoring"
+        ],
+        "properties": {
+          "progress": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Progress",
+                "description": "Where it is."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "restoring": {
+            "type": "boolean",
+            "description": "Whether one is."
+          }
+        }
+      },
+      "RestoreView": {
+        "type": "object",
+        "description": "A restore, as the database records it.",
+        "required": [
+          "id",
+          "requested_by",
+          "copy_name",
+          "outcome",
+          "started_at",
+          "finished_at"
+        ],
+        "properties": {
+          "copy_name": {
+            "type": "string",
+            "description": "The copy restored."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it failed."
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it ended."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Its identifier."
+          },
+          "outcome": {
+            "type": "string",
+            "description": "`restored`, or `failed`, which left the database as it was."
+          },
+          "report": {
+            "description": "The restore check's report: what the library lacks, artifacts it has\nthat the copy does not name, and work the copy recorded as under way."
+          },
+          "requested_by": {
+            "type": "string",
+            "description": "Who asked."
+          },
+          "safety_copy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The copy of the database as it was, taken first: the way back."
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it began."
           }
         }
       },
@@ -17455,6 +17797,19 @@
             "description": "`verifying` (the library's copy is being checked first), `removing`\n(at the source, tried again until it answers), or how it ended:\n`removed`, `already_gone`, `kept` (left, saying why) or `refused`\n(the library's copy failed its check, so nothing was removed)."
           }
         }
+      },
+      "Step": {
+        "type": "string",
+        "description": "Where a restore is.",
+        "enum": [
+          "stopping",
+          "safety_copy",
+          "schema",
+          "rows",
+          "checking",
+          "swapping",
+          "restarting"
+        ]
       },
       "StoredGcPlanView": {
         "type": "object",

@@ -2,8 +2,11 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   // Copies of the database (ADR 0026, docs/plans/backups-ui.md): the copies
-  // in the backups volume, taking one now, downloading, adding and removing
-  // one. Removing asks first, under the list, as the DATs page does.
+  // in the backups volume, taking one now, downloading, adding, removing and
+  // restoring one. Removing and restoring ask first, under the list, as the
+  // DATs page does; restoring has the copy's name typed again. While a
+  // restore runs the server answers nothing but its progress, which the page
+  // follows until the server is back.
   import Confirm from '$lib/components/ui/Confirm.svelte';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import Button from '$lib/components/ui/Button.svelte';
@@ -25,13 +28,20 @@
     loadBackups,
     operationLabel,
     readiness,
+    registerMissing,
+    reportFindings,
+    restoreCopy,
+    restoreStatus,
     scheduleLabel,
+    stepLabel,
+    uncataloguedCount,
     setSchedule,
     takeCopy,
     totalSize,
     uploadCopy,
     type Backups,
     type Copy,
+    type Progress,
   } from '$lib/backups';
   import { formatBytes } from '$lib/library';
   import type { Problem } from '$lib/session';
@@ -53,6 +63,15 @@
   let scheduleSaving = $state(false);
   let scheduleProblem = $state<Problem | null>(null);
   let scheduleSaved = $state(false);
+  let confirmingRestore = $state<string | null>(null);
+  let typedName = $state('');
+  let restoreProblem = $state<Problem | null>(null);
+  /** A restore under way: its progress, or null once the server stopped answering. */
+  let restoring = $state<{ progress: Progress | null; back: boolean } | null>(null);
+  let restoreTimer: ReturnType<typeof setTimeout> | null = null;
+  let registering = $state(false);
+  let registered = $state<string | null>(null);
+  let registerProblem = $state<Problem | null>(null);
 
   const deleting = $derived(
     view.kind === 'ready'
@@ -60,6 +79,11 @@
       : null,
   );
   const busy = $derived(view.kind === 'ready' && view.backups.operation != null);
+  const restorable = $derived(
+    view.kind === 'ready'
+      ? (view.backups.copies.find((copy) => copy.name === confirmingRestore) ?? null)
+      : null,
+  );
 
   async function refresh() {
     const result = await loadBackups();
@@ -98,7 +122,62 @@
   onMount(refresh);
   onDestroy(() => {
     if (timer) clearTimeout(timer);
+    if (restoreTimer) clearTimeout(restoreTimer);
   });
+
+  function startRestoring(copy: Copy) {
+    confirmingRestore = copy.name;
+    confirmingDelete = null;
+    typedName = '';
+    restoreProblem = null;
+  }
+
+  async function restore(copy: Copy) {
+    restoreProblem = null;
+    const result = await restoreCopy(copy.name, typedName);
+    if (result.kind === 'error') {
+      restoreProblem = result.problem;
+      return;
+    }
+    confirmingRestore = null;
+    restoring = { progress: result.data, back: false };
+    followRestore();
+  }
+
+  /**
+   * Follow a restore until the server starts again: it answers its progress
+   * while restoring, nothing while it restarts, then that none is under way.
+   */
+  function followRestore() {
+    if (restoreTimer) clearTimeout(restoreTimer);
+    restoreTimer = setTimeout(async () => {
+      const result = await restoreStatus();
+      if (!restoring) return;
+      if (result.kind === 'ok' && result.data.restoring) {
+        restoring = { progress: result.data.progress ?? null, back: false };
+      } else if (result.kind === 'ok') {
+        restoring = { progress: restoring.progress, back: true };
+        return;
+      } else {
+        restoring = { progress: null, back: false };
+      }
+      followRestore();
+    }, FOLLOW_EVERY_MS);
+  }
+
+  async function catalogueMissing() {
+    registering = true;
+    registerProblem = null;
+    registered = null;
+    const result = await registerMissing();
+    registering = false;
+    if (result.kind === 'error') {
+      registerProblem = result.problem;
+      return;
+    }
+    registered = `Catalogued ${result.data.registered} of the ${result.data.uncatalogued} the library had that the catalogue did not.`;
+    await refresh();
+  }
 
   async function take() {
     actionProblem = null;
@@ -164,7 +243,33 @@
 
 <div class="stack">
   <div aria-live="polite" aria-busy={view.kind === 'loading'}>
-    {#if view.kind === 'loading'}
+    {#if restoring}
+      <Panel title="Restoring the database">
+        {#if restoring.back}
+          <p>
+            <StatusMark tone="ok" label="The server has started again." />
+          </p>
+          <p>
+            Everyone was signed out. <a href="/login">Sign in again</a> to see how the restore went: this
+            page then shows it, and what the restored catalogue and the library disagree on.
+          </p>
+        {:else if restoring.progress}
+          <p>
+            <StatusMark
+              tone="busy"
+              label={`Step ${restoring.progress.step_number} of ${restoring.progress.steps}: ${stepLabel(restoring.progress.step)}`}
+            />
+          </p>
+          <p class="quiet small">
+            The server answers nothing else until it starts again on the restored database, or on
+            the one it left as it was if the restore fails. This takes a few minutes for most
+            libraries.
+          </p>
+        {:else}
+          <p><StatusMark tone="busy" label="The server is starting again…" /></p>
+        {/if}
+      </Panel>
+    {:else if view.kind === 'loading'}
       <p class="quiet">Loading the copies…</p>
     {:else if view.kind === 'error'}
       <ErrorPanel
@@ -177,6 +282,60 @@
     {:else}
       {@const backups = view.backups}
       {@const ready = readiness(backups)}
+      {#if backups.last_restore}
+        {@const last = backups.last_restore}
+        <Panel title="The last restore">
+          {#if last.outcome === 'restored'}
+            <p>
+              <StatusMark
+                tone="ok"
+                label={`Restored from ${last.copy_name} ${when(last.finished_at)}, asked for by ${last.requested_by}`}
+              />
+            </p>
+            {#if last.safety_copy}
+              <p class="quiet small">
+                The database as it was before is the copy <code>{last.safety_copy}</code>: restore
+                it to go back.
+              </p>
+            {/if}
+            <ul class="findings">
+              {#each reportFindings(last.report) as finding, index (index)}
+                <li><StatusMark tone={finding.tone} label={finding.text} /></li>
+              {/each}
+            </ul>
+            {#if uncataloguedCount(last.report) > 0}
+              <div class="actions">
+                <Button onclick={catalogueMissing} disabled={registering}>
+                  {registering ? 'Cataloguing…' : 'Catalogue them from their manifests'}
+                </Button>
+              </div>
+            {/if}
+            <div aria-live="polite">
+              {#if registered}<p class="outcome">
+                  <StatusMark tone="ok" label={registered} />
+                </p>{/if}
+            </div>
+            {#if registerProblem}
+              <div class="refusal">
+                <ErrorPanel problem={registerProblem} area="deployment" refusal />
+              </div>
+            {/if}
+            <p class="quiet small">
+              A copy cannot know what happened after it was taken: a worker enrolled since must
+              enrol again, and an account or worker credential revoked since is valid again until it
+              is revoked again.
+            </p>
+          {:else}
+            <p>
+              <StatusMark
+                tone="bad"
+                label={`Restoring from ${last.copy_name} failed ${when(last.finished_at)}: ${last.error ?? 'no reason was kept'}`}
+              />
+            </p>
+            <p class="quiet small">The database is as it was before; nothing was replaced.</p>
+          {/if}
+        </Panel>
+      {/if}
       <Panel title="Taking copies">
         <div class="status">
           <StatusMark tone={ready.tone} label={ready.label} />
@@ -337,12 +496,21 @@
                       <a class="download" href={downloadHref(copy.name)} download={copy.name}
                         >Download<span class="visually-hidden"> {copy.name}</span></a
                       >
+                      {#if backups.can_restore}
+                        <Button
+                          size="sm"
+                          disabled={busy}
+                          onclick={() => startRestoring(copy)}
+                          label={`Restore ${copy.name}`}>Restore</Button
+                        >
+                      {/if}
                       <Button
                         size="sm"
                         variant="danger"
                         disabled={busy}
                         onclick={() => {
                           confirmingDelete = copy.name;
+                          confirmingRestore = null;
                           deleteProblem = null;
                         }}
                         label={`Remove ${copy.name}`}>Remove</Button
@@ -370,6 +538,50 @@
               {#snippet actions()}
                 <Button variant="danger" onclick={() => remove(copy)}>Yes, remove it</Button>
                 <Button onclick={() => (confirmingDelete = null)}>Keep it</Button>
+              {/snippet}
+            </Confirm>
+          {/key}
+        {/if}
+
+        {#if restorable}
+          {@const copy = restorable}
+          {#key copy.name}
+            <Confirm title={`Restore the database from ${copy.name}?`}>
+              <p>
+                Everything since {when(copy.taken_at)} goes from the catalogue: imports, burns, requests,
+                accounts and the audit trail as they are now. The library's files stay. A copy of the
+                database as it is now is taken first, so you can restore that to go back. The server answers
+                nothing else for the few minutes it takes, then starts again, and everyone signs in again.
+              </p>
+              <p>
+                Nothing in the copy is run: the schema is this version's own, and only its rows are
+                loaded, then checked. A copy taken by a later version is refused.
+              </p>
+              <Field label="Type the copy's name to confirm" hint={copy.name}>
+                {#snippet children({ id, describedBy })}
+                  <input
+                    {id}
+                    type="text"
+                    autocomplete="off"
+                    spellcheck="false"
+                    aria-describedby={describedBy}
+                    bind:value={typedName}
+                  />
+                {/snippet}
+              </Field>
+              {#if restoreProblem}
+                <ErrorPanel problem={restoreProblem} area="deployment" refusal />
+              {/if}
+
+              {#snippet actions()}
+                <Button
+                  variant="danger"
+                  disabled={typedName.trim() !== copy.name}
+                  onclick={() => restore(copy)}>Restore from this copy</Button
+                >
+                <Button onclick={() => (confirmingRestore = null)}
+                  >Keep the database as it is</Button
+                >
               {/snippet}
             </Confirm>
           {/key}
@@ -428,6 +640,13 @@
   }
   .download {
     font-size: var(--text-sm);
+  }
+  .findings {
+    display: grid;
+    gap: var(--space-2);
+    margin: var(--space-3) 0;
+    padding: 0;
+    list-style: none;
   }
   .schedule-now {
     display: flex;

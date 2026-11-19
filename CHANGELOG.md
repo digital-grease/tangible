@@ -27,6 +27,26 @@ may change between minor versions, and the release notes say how.
   has a copy a day. Those count towards `TANGIBLE_BACKUPS_KEPT` with the
   rest. A migration adds the schedule's table, which the version before
   neither reads nor writes.
+- **Restore** on the Backups page replaces the database with a copy, the
+  copy's name typed to confirm (`database.restored`, or
+  `database.restore_failed`, recorded in the database the restore made or
+  left). A copy of the database as it is is taken first. The copy's
+  definitions are never run, so an uploaded copy is safe to restore: the
+  server makes a new database beside the one in use with this version's own
+  schema, loads only the copy's rows into it as a role made for that alone,
+  which can insert rows and set sequences and nothing else, adds the
+  foreign keys back over every row, applies any migrations the copy is
+  behind, ends every session, checks the result against the library, and
+  only then swaps the names. Every API route but the restore's progress
+  answers `503 SERVER_RESTORING` meanwhile, and the server exits after, so
+  Compose starts it on the restored database. It is refused while work is
+  under way (`BACKUP_WORK_UNDER_WAY`), for a copy a later version took or
+  not of a Tangible database (`BACKUP_NOT_RESTORABLE`), and where the
+  database user cannot create databases and roles
+  (`BACKUP_RESTORE_NOT_PERMITTED`). The page shows the restore check's
+  report and catalogues, from their manifests, the artifacts imported after
+  the copy was taken. A migration adds the restores' table, which the
+  version before neither reads nor writes.
 
 ### Fixed
 

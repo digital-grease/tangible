@@ -16,6 +16,11 @@ export type Copy = components['schemas']['CopyEntry'];
 export type CopyKind = components['schemas']['CopyKind'];
 export type Operation = components['schemas']['Operation'];
 export type Schedule = components['schemas']['ScheduleView'];
+export type Restore = components['schemas']['RestoreView'];
+export type RestoreStatus = components['schemas']['RestoreStatus'];
+export type Progress = components['schemas']['Progress'];
+export type Step = components['schemas']['Step'];
+export type Registered = components['schemas']['RegisteredView'];
 
 /** How often the page looks again while something is under way, in milliseconds. */
 export const FOLLOW_EVERY_MS = 2000;
@@ -44,6 +49,114 @@ export function scheduleLabel(schedule: Schedule, kept: number): string {
   if (!schedule.enabled) return 'Copies are taken only at a start and when asked for';
   if (kept === 0) return `Every day at ${schedule.time} UTC, but copies are turned off`;
   return `Every day at ${schedule.time} UTC`;
+}
+
+/**
+ * Restore the database from a copy, `confirm` being its name typed again.
+ * The server answers nothing else until it starts again on the result.
+ */
+export function restoreCopy(
+  name: string,
+  confirm: string,
+  fetcher: typeof fetch = apiFetch,
+): Promise<Result<Progress>> {
+  return apiCall(fetcher, `/api/v1/backups/${encodeURIComponent(name)}/restore`, 'POST', {
+    confirm,
+  });
+}
+
+/** Whether a restore is under way; anyone may ask, and it names nothing. */
+export function restoreStatus(fetcher: typeof fetch = apiFetch): Promise<Result<RestoreStatus>> {
+  return apiCall(fetcher, '/api/v1/backups/restore');
+}
+
+/** Catalogue again what the library has and the restored catalogue lacks. */
+export function registerMissing(fetcher: typeof fetch = apiFetch): Promise<Result<Registered>> {
+  return apiCall(fetcher, '/api/v1/backups/register-missing', 'POST');
+}
+
+/** Where a restore is, in words. */
+export function stepLabel(step: Step): string {
+  switch (step) {
+    case 'stopping':
+      return 'Letting the background work finish';
+    case 'safety_copy':
+      return 'Taking a copy of the database as it is';
+    case 'schema':
+      return "Making the new database's schema";
+    case 'rows':
+      return "Loading the copy's rows";
+    case 'checking':
+      return 'Checking the rows, migrating, and checking against the library';
+    case 'swapping':
+      return 'Putting the restored database in place';
+    case 'restarting':
+      return 'Starting again on it';
+  }
+}
+
+/** One finding of a restore's check against the library. */
+export interface Finding {
+  tone: Tone;
+  text: string;
+}
+
+/** What a restore's check against the library found, in words. */
+export function reportFindings(report: unknown): Finding[] {
+  if (!report || typeof report !== 'object') return [];
+  const r = report as Record<string, unknown>;
+  const count = (key: string): number => {
+    const value = r[key] as { count?: unknown } | undefined;
+    return typeof value?.count === 'number' ? value.count : 0;
+  };
+  const findings: Finding[] = [];
+  const missing = count('missing_objects');
+  const wrong = count('wrong_size');
+  const manifests = count('missing_manifests');
+  const uncatalogued = count('uncatalogued');
+  const registered = typeof r.registered === 'number' ? r.registered : 0;
+  if (missing > 0)
+    findings.push({
+      tone: 'bad',
+      text: `${missing} ${missing === 1 ? 'file the catalogue names is' : 'files the catalogue names are'} not in the library: restore a later copy of the library`,
+    });
+  if (wrong > 0)
+    findings.push({
+      tone: 'bad',
+      text: `${wrong} ${wrong === 1 ? 'file is' : 'files are'} in the library at another size than the catalogue says`,
+    });
+  if (manifests > 0)
+    findings.push({
+      tone: 'bad',
+      text: `${manifests} ${manifests === 1 ? 'artifact has' : 'artifacts have'} no manifest in the library`,
+    });
+  if (uncatalogued > registered)
+    findings.push({
+      tone: 'warn',
+      text: `${uncatalogued - registered} ${uncatalogued - registered === 1 ? 'artifact was' : 'artifacts were'} imported after the copy was taken: the library has ${uncatalogued - registered === 1 ? 'it' : 'them'}, the catalogue does not`,
+    });
+  const unfinished = Array.isArray(r.unfinished) ? (r.unfinished as unknown[]) : [];
+  for (const item of unfinished) {
+    if (Array.isArray(item) && item.length === 3) {
+      const [kind, state, n] = item as [string, string, number];
+      findings.push({
+        tone: 'idle',
+        text: `${n} ${String(kind).replaceAll('_', ' ')} ${state}, as the copy recorded it: taken up again, or said why not`,
+      });
+    }
+  }
+  if (findings.length === 0)
+    findings.push({ tone: 'ok', text: 'The catalogue and the library agree.' });
+  return findings;
+}
+
+/** How many artifacts the library has that the restored catalogue lacks. */
+export function uncataloguedCount(report: unknown): number {
+  if (!report || typeof report !== 'object') return 0;
+  const r = report as { uncatalogued?: { count?: unknown }; registered?: unknown };
+  const found = typeof r.uncatalogued?.count === 'number' ? r.uncatalogued.count : 0;
+  const registered = typeof r.registered === 'number' ? r.registered : 0;
+  return Math.max(0, found - registered);
 }
 
 /** Remove a copy. */

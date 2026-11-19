@@ -25,7 +25,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Serialize;
-use tangible_domain::SecretString;
 use time::OffsetDateTime;
 use time::macros::format_description;
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWriteExt as _};
@@ -56,64 +55,7 @@ pub const DEFAULT_MAX_UPLOAD_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 /// Where the dump tools are in the image: Debian's PostgreSQL 17 client.
 pub const DEFAULT_TOOLS_DIR: &str = "/usr/lib/postgresql/17/bin";
 
-/// How PostgreSQL's own tools reach the database: libpq's settings, given
-/// to each run in its environment. The password never reaches an argument.
-#[derive(Clone)]
-pub struct ToolConnection {
-    /// The host, or a directory holding PostgreSQL's socket.
-    pub host: String,
-    /// The port.
-    pub port: u16,
-    /// The database user.
-    pub user: String,
-    /// Its password, if it has one.
-    pub password: Option<SecretString>,
-    /// The database.
-    pub database: String,
-    /// libpq's `sslmode`, when the server's URL names one.
-    pub sslmode: Option<String>,
-}
-
-impl std::fmt::Debug for ToolConnection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ToolConnection")
-            .field("host", &self.host)
-            .field("port", &self.port)
-            .field("user", &self.user)
-            .field("database", &self.database)
-            .field("sslmode", &self.sslmode)
-            .finish_non_exhaustive()
-    }
-}
-
-impl ToolConnection {
-    /// libpq's environment for a run connecting as `user` to `database`.
-    pub(crate) fn environment(
-        &self,
-        user: &str,
-        password: Option<&SecretString>,
-        database: &str,
-    ) -> Vec<(&'static str, String)> {
-        let mut env = vec![
-            ("PGHOST", self.host.clone()),
-            ("PGPORT", self.port.to_string()),
-            ("PGUSER", user.to_owned()),
-            ("PGDATABASE", database.to_owned()),
-            ("PGAPPNAME", "tangible-backup".to_owned()),
-            ("PGCONNECT_TIMEOUT", "10".to_owned()),
-            // Times and messages the same wherever the server runs.
-            ("PGTZ", "UTC".to_owned()),
-            ("LC_ALL", "C".to_owned()),
-        ];
-        if let Some(password) = password {
-            env.push(("PGPASSWORD", password.expose().to_owned()));
-        }
-        if let Some(mode) = &self.sslmode {
-            env.push(("PGSSLMODE", mode.clone()));
-        }
-        env
-    }
-}
+pub use tangible_db::restores::ToolConnection;
 
 /// What the server needs to keep copies.
 #[derive(Debug, Clone)]
@@ -226,6 +168,14 @@ pub enum Operation {
     },
     /// A copy being uploaded.
     Uploading {
+        /// Since when.
+        #[serde(with = "time::serde::rfc3339")]
+        started_at: OffsetDateTime,
+        /// By whom.
+        by: String,
+    },
+    /// A copy being restored.
+    Restoring {
         /// Since when.
         #[serde(with = "time::serde::rfc3339")]
         started_at: OffsetDateTime,
@@ -381,6 +331,7 @@ impl Backups {
     fn busy_with(&self) -> &'static str {
         match self.operation() {
             Some(Operation::Uploading { .. }) => "an upload",
+            Some(Operation::Restoring { .. }) => "a restore",
             Some(Operation::Taking { .. }) | None => "a copy",
         }
     }
@@ -562,11 +513,28 @@ impl Backups {
         outcome
     }
 
+    /// Take a copy of the database as it is before a restore replaces it,
+    /// holding `turn`: whatever the number kept, and pruning nothing, so the
+    /// copy being restored is not the one that goes to make room.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::take`].
+    pub async fn take_before_restore(&self, _turn: &Turn) -> Result<CopyEntry, BackupError> {
+        self.dump().await
+    }
+
     async fn take_now(&self) -> Result<CopyEntry, BackupError> {
-        let settings = &self.inner.settings;
-        if settings.kept == 0 {
+        if self.inner.settings.kept == 0 {
             return Err(BackupError::Off);
         }
+        let copy = self.dump().await?;
+        self.prune().await;
+        Ok(copy)
+    }
+
+    async fn dump(&self) -> Result<CopyEntry, BackupError> {
+        let settings = &self.inner.settings;
         let (name, stamp) = free_name(&settings.dir, "tangible").await;
         let part = settings.dir.join(format!(".server-{stamp}.part"));
         create_private(&part).await?;
@@ -602,7 +570,6 @@ impl Backups {
         }
         let path = settings.dir.join(&name);
         finish(&part, &path).await?;
-        self.prune().await;
         let metadata = tokio::fs::symlink_metadata(&path)
             .await
             .map_err(io("reading the copy taken"))?;
@@ -1042,6 +1009,8 @@ pub(crate) struct RunOutput {
     pub(crate) success: bool,
     pub(crate) stdout: String,
     pub(crate) stderr: String,
+    /// Whether stdout was longer than kept.
+    pub(crate) truncated: bool,
 }
 
 /// The last lines a run printed, for an error.
@@ -1073,6 +1042,18 @@ pub(crate) async fn run(
     env: &[(&'static str, String)],
     timeout: Duration,
 ) -> std::io::Result<RunOutput> {
+    run_limited(program, args, env, timeout, OUTPUT_LIMIT).await
+}
+
+/// [`run`], keeping up to `stdout_limit` bytes of stdout: the first, with
+/// [`RunOutput::truncated`] saying when there were more.
+pub(crate) async fn run_limited(
+    program: &Path,
+    args: &[&str],
+    env: &[(&'static str, String)],
+    timeout: Duration,
+    stdout_limit: usize,
+) -> std::io::Result<RunOutput> {
     let mut command = tokio::process::Command::new(program);
     command
         .args(args)
@@ -1087,7 +1068,7 @@ pub(crate) async fn run(
     let mut child = command.spawn()?;
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    let reading = async { tokio::join!(read_bounded(stdout), read_bounded(stderr)) };
+    let reading = async { tokio::join!(read_head(stdout, stdout_limit), read_bounded(stderr)) };
     let finished = tokio::time::timeout(timeout, async {
         let (out, err) = reading.await;
         let status = child.wait().await?;
@@ -1095,11 +1076,12 @@ pub(crate) async fn run(
     })
     .await;
     if let Ok(result) = finished {
-        let (status, stdout, stderr) = result?;
+        let (status, (stdout, truncated), stderr) = result?;
         Ok(RunOutput {
             success: status.success(),
             stdout,
             stderr,
+            truncated,
         })
     } else {
         let _ = child.kill().await;
@@ -1114,8 +1096,31 @@ pub(crate) async fn run(
     }
 }
 
-/// Read a pipe to the end, keeping at most the last [`OUTPUT_LIMIT`] bytes,
-/// or, for stdout, the first: a table of contents is read from its start.
+/// Read a pipe to the end, keeping at most its first `limit` bytes, and
+/// whether there were more: a table of contents is read from its start.
+async fn read_head<R: AsyncRead + Unpin>(pipe: Option<R>, limit: usize) -> (String, bool) {
+    let Some(mut pipe) = pipe else {
+        return (String::new(), false);
+    };
+    let mut kept: Vec<u8> = Vec::new();
+    let mut truncated = false;
+    let mut buf = vec![0_u8; 8192];
+    loop {
+        match pipe.read(&mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                let room = limit.saturating_sub(kept.len());
+                if n > room {
+                    truncated = true;
+                }
+                kept.extend_from_slice(&buf[..n.min(room)]);
+            }
+        }
+    }
+    (String::from_utf8_lossy(&kept).into_owned(), truncated)
+}
+
+/// Read a pipe to the end, keeping at most the last [`OUTPUT_LIMIT`] bytes.
 async fn read_bounded<R: AsyncRead + Unpin>(pipe: Option<R>) -> String {
     let Some(mut pipe) = pipe else {
         return String::new();
@@ -1143,6 +1148,7 @@ async fn read_bounded<R: AsyncRead + Unpin>(pipe: Option<R>) -> String {
 #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use tangible_domain::SecretString;
 
     #[test]
     fn a_copy_is_a_plain_name_ending_dump() {

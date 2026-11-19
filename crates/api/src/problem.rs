@@ -156,6 +156,17 @@ pub enum ErrorCode {
     /// An uploaded file is not a copy of a database: not a PostgreSQL
     /// custom-format archive (ADR 0026).
     BackupNotACopy,
+    /// Work is under way that restoring a copy would cut off (ADR 0026).
+    BackupWorkUnderWay,
+    /// The copy is not one this version restores: taken by a later version,
+    /// or not of a Tangible database (ADR 0026).
+    BackupNotRestorable,
+    /// The database user may not create databases and roles, which
+    /// restoring here takes (ADR 0026).
+    BackupRestoreNotPermitted,
+    /// The database is being restored from a copy: the server answers
+    /// nothing else until it starts again (ADR 0026).
+    ServerRestoring,
     /// Anything unanticipated.
     Internal,
 }
@@ -210,6 +221,10 @@ impl ErrorCode {
             Self::BackupsOff => "BACKUPS_OFF",
             Self::BackupBusy => "BACKUP_BUSY",
             Self::BackupNotACopy => "BACKUP_NOT_A_COPY",
+            Self::BackupWorkUnderWay => "BACKUP_WORK_UNDER_WAY",
+            Self::BackupNotRestorable => "BACKUP_NOT_RESTORABLE",
+            Self::BackupRestoreNotPermitted => "BACKUP_RESTORE_NOT_PERMITTED",
+            Self::ServerRestoring => "SERVER_RESTORING",
             Self::Internal => "INTERNAL",
         }
     }
@@ -225,7 +240,9 @@ impl ErrorCode {
             // 503 rather than 500: the library being unreadable is usually a
             // mount or permissions problem an operator can fix, and it is
             // worth retrying.
-            Self::StorageUnavailable | Self::BackupsUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            Self::StorageUnavailable | Self::BackupsUnavailable | Self::ServerRestoring => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
             // Three readings of the same status. The request was fine and the
             // stored data is not; or the request was well formed and the
             // server will not act on it; or it named something that does not
@@ -238,7 +255,8 @@ impl ErrorCode {
             | Self::IntegrationAddressRefused
             | Self::DatInvalid
             | Self::AttestationRequired
-            | Self::BackupNotACopy => StatusCode::UNPROCESSABLE_ENTITY,
+            | Self::BackupNotACopy
+            | Self::BackupNotRestorable => StatusCode::UNPROCESSABLE_ENTITY,
             // Worker routes only ever answer 401: they have no notion of an
             // authenticated-but-unauthorised caller. Operator routes answer
             // 403 when the account is known and its role is not enough.
@@ -268,7 +286,9 @@ impl ErrorCode {
             | Self::GcPlanExpired
             | Self::GcPlanCollected
             | Self::BackupsOff
-            | Self::BackupBusy => StatusCode::CONFLICT,
+            | Self::BackupBusy
+            | Self::BackupWorkUnderWay
+            | Self::BackupRestoreNotPermitted => StatusCode::CONFLICT,
             // The server is a gateway to the client here: the request was
             // fine, and what stands behind it failed.
             Self::IntegrationUnreachable
@@ -328,6 +348,10 @@ impl ErrorCode {
             Self::BackupsOff => "Copies of the database are turned off",
             Self::BackupBusy => "Something is already being done with the copies",
             Self::BackupNotACopy => "Not a copy of a database",
+            Self::BackupWorkUnderWay => "Work is under way that a restore would cut off",
+            Self::BackupNotRestorable => "This version cannot restore that copy",
+            Self::BackupRestoreNotPermitted => "The database user cannot restore here",
+            Self::ServerRestoring => "The database is being restored",
             Self::Internal => "Internal error",
         }
     }
@@ -498,6 +522,10 @@ mod tests {
             ErrorCode::BackupsOff,
             ErrorCode::BackupBusy,
             ErrorCode::BackupNotACopy,
+            ErrorCode::BackupWorkUnderWay,
+            ErrorCode::BackupNotRestorable,
+            ErrorCode::BackupRestoreNotPermitted,
+            ErrorCode::ServerRestoring,
             ErrorCode::IntegrationAddressRefused,
             ErrorCode::InsufficientSpace,
             ErrorCode::DatInvalid,

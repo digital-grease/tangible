@@ -22,6 +22,7 @@ use utoipa::ToSchema;
 use crate::auth::SignedIn;
 use crate::backups::{BackupError, Backups, CopyEntry, Operation, Outcome, ToolsStatus};
 use crate::problem::{ErrorCode, Problem};
+use crate::restoring::{self, Progress, Refusal, Step};
 use crate::state::ApiState;
 
 /// The copies, and what the server can do with them.
@@ -44,6 +45,82 @@ pub struct BackupsView {
     pub max_upload_bytes: u64,
     /// When copies are taken by themselves.
     pub schedule: ScheduleView,
+    /// The last restore this database records: the one that made it, or
+    /// one that failed and left it as it was.
+    pub last_restore: Option<RestoreView>,
+    /// Whether this server restores copies itself.
+    pub can_restore: bool,
+}
+
+/// A restore, as the database records it.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RestoreView {
+    /// Its identifier.
+    pub id: uuid::Uuid,
+    /// Who asked.
+    pub requested_by: String,
+    /// The copy restored.
+    pub copy_name: String,
+    /// The copy of the database as it was, taken first: the way back.
+    pub safety_copy: Option<String>,
+    /// `restored`, or `failed`, which left the database as it was.
+    pub outcome: String,
+    /// Why it failed.
+    pub error: Option<String>,
+    /// The restore check's report: what the library lacks, artifacts it has
+    /// that the copy does not name, and work the copy recorded as under way.
+    pub report: Option<serde_json::Value>,
+    /// When it began.
+    #[serde(with = "time::serde::rfc3339")]
+    pub started_at: OffsetDateTime,
+    /// When it ended.
+    #[serde(with = "time::serde::rfc3339")]
+    pub finished_at: OffsetDateTime,
+}
+
+impl From<tangible_db::restores::RestoreRecord> for RestoreView {
+    fn from(record: tangible_db::restores::RestoreRecord) -> Self {
+        Self {
+            id: record.id,
+            requested_by: record.requested_by,
+            copy_name: record.copy_name,
+            safety_copy: record.safety_copy,
+            outcome: record.outcome,
+            error: record.error,
+            report: record.report,
+            started_at: record.started_at,
+            finished_at: record.finished_at,
+        }
+    }
+}
+
+/// Restoring a copy: what confirms it.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RestoreRequest {
+    /// The copy's name, typed again.
+    pub confirm: String,
+}
+
+/// Whether a restore is under way: what anyone may see while the server
+/// answers nothing else.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RestoreStatus {
+    /// Whether one is.
+    pub restoring: bool,
+    /// Where it is.
+    pub progress: Option<Progress>,
+}
+
+/// What cataloguing the artifacts a restore found did.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RegisteredView {
+    /// How many manifests the library has that the catalogue did not name.
+    pub uncatalogued: usize,
+    /// How many of those were catalogued now.
+    pub registered: usize,
+    /// The restore check's report after.
+    pub report: serde_json::Value,
 }
 
 /// When the server takes a copy by itself: every day at a time in UTC.
@@ -147,6 +224,9 @@ async fn view(state: &ApiState, backups: &Backups) -> Result<BackupsView, Proble
     let schedule = tangible_db::backups::schedule(state.database().pool())
         .await
         .map_err(|error| problem_for(error.into()))?;
+    let last_restore = tangible_db::restores::last_restore(state.database().pool())
+        .await
+        .map_err(|error| problem_for(error.into()))?;
     Ok(BackupsView {
         copies: listing.copies,
         kept: backups.settings().kept,
@@ -156,7 +236,21 @@ async fn view(state: &ApiState, backups: &Backups) -> Result<BackupsView, Proble
         last_outcome: backups.last_outcome(),
         max_upload_bytes: backups.settings().max_upload_bytes,
         schedule: schedule_view(&schedule, backups.settings().kept),
+        last_restore: last_restore.map(RestoreView::from),
+        can_restore: state.restore_orders().is_some(),
     })
+}
+
+fn refusal_problem(refusal: Refusal) -> Problem {
+    match refusal {
+        Refusal::Backup(error) => problem_for(error),
+        Refusal::NotConfirmed(_) => Problem::new(ErrorCode::ValidationFailed, refusal.to_string()),
+        Refusal::NotPermitted | Refusal::NameTooLong { .. } => {
+            Problem::new(ErrorCode::BackupRestoreNotPermitted, refusal.to_string())
+        }
+        Refusal::WorkUnderWay(detail) => Problem::new(ErrorCode::BackupWorkUnderWay, detail),
+        Refusal::NotRestorable(detail) => Problem::new(ErrorCode::BackupNotRestorable, detail),
+    }
 }
 
 /// The copies of the database, and what the server can do with them.
@@ -489,12 +583,149 @@ pub async fn set_backup_schedule(
     Ok(Json(schedule_view(&schedule, backups.settings().kept)))
 }
 
+/// Restore the database from a copy.
+///
+/// # Errors
+///
+/// `NOT_FOUND`; `VALIDATION_FAILED` when `confirm` is not the copy's name;
+/// `BACKUP_WORK_UNDER_WAY`; `BACKUP_NOT_RESTORABLE`; `BACKUP_BUSY`;
+/// `BACKUP_RESTORE_NOT_PERMITTED`; `BACKUPS_UNAVAILABLE`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/backups/{name}/restore",
+    tag = "backups",
+    description = "Replace the database with the copy: everything since it was taken goes \
+                   from the catalogue, and everyone signs in again. A copy of the database \
+                   as it is is taken first, the way back. The copy's definitions are never \
+                   run: the schema is this version's own, and only the copy's rows are \
+                   loaded, by a role that can do nothing else, then checked. Refused while a \
+                   burn, rip, erasure, import or derivation is under way, for a copy a later \
+                   version took or not of a Tangible database, and unless `confirm` is the \
+                   copy's name. Then every API route but `GET /api/v1/backups/restore` \
+                   answers 503 `SERVER_RESTORING` until the server starts again on the \
+                   restored database, or on the one it left as it was if the restore failed; \
+                   either way the database records it (`last_restore`), audited as \
+                   `database.restored` or `database.restore_failed`. Needs `manage_backups`.",
+    params(("name" = String, Path, description = "The copy's name, as listed")),
+    request_body = RestoreRequest,
+    responses(
+        (status = 202, description = "Restoring", body = Progress),
+        (status = 404, description = "No copy is named that", body = Problem),
+        (status = 409, description = "Work under way, something else under way, or the database user cannot restore here", body = Problem),
+        (status = 422, description = "Not confirmed, or a copy this version cannot restore", body = Problem),
+        (status = 503, description = "This server cannot restore copies", body = Problem),
+    ),
+)]
+pub async fn restore_backup(
+    State(state): State<ApiState>,
+    SignedIn(user): SignedIn,
+    Path(name): Path<String>,
+    Json(request): Json<RestoreRequest>,
+) -> Result<(StatusCode, Json<Progress>), Problem> {
+    let backups = backups_of(&state)?;
+    let Some(orders) = state.restore_orders() else {
+        return Err(unavailable(
+            "this server does not restore copies itself; restore at the machine \
+             (deploy/README.md, \"Backups\")",
+        ));
+    };
+    let order = restoring::prepare(&state, backups, &name, &request.confirm, &user.username)
+        .await
+        .map_err(refusal_problem)?;
+    tracing::warn!(copy = %order.copy.name, by = %user.username, "restoring the database from a copy");
+    state.maintenance().step(Step::Stopping);
+    // Every open event stream ends; new ones are refused with the rest.
+    state.events().close();
+    if orders.send(order).await.is_err() {
+        state.maintenance().end();
+        return Err(unavailable("the server could not begin the restore"));
+    }
+    let progress = state
+        .maintenance()
+        .current()
+        .ok_or_else(|| unavailable("the restore ended at once"))?;
+    Ok((StatusCode::ACCEPTED, Json(progress)))
+}
+
+/// Whether a restore is under way.
+#[utoipa::path(
+    get,
+    path = "/api/v1/backups/restore",
+    tag = "backups",
+    description = "Whether the database is being restored, and how far it has got: the one \
+                   route that answers while it is. Open to anyone, and names nothing.",
+    responses((status = 200, description = "Whether one is", body = RestoreStatus)),
+)]
+pub async fn restore_status(State(state): State<ApiState>) -> Json<RestoreStatus> {
+    let progress = state.maintenance().current();
+    Json(RestoreStatus {
+        restoring: progress.is_some(),
+        progress,
+    })
+}
+
+/// Catalogue again the artifacts the library has and the catalogue lacks.
+///
+/// # Errors
+///
+/// `STORAGE_UNAVAILABLE` when there is no library, or it cannot be read.
+#[utoipa::path(
+    post,
+    path = "/api/v1/backups/register-missing",
+    tag = "backups",
+    description = "After a restore, catalogue again each artifact the library has a manifest \
+                   for and the catalogue does not name, imported after the copy was taken, \
+                   once every object it names is there at its size: `tangible restore-check \
+                   --register-missing`. Their imports' history and burns since are not in the \
+                   copy, and stay lost. Each is audited as `artifact.recatalogued`. Needs \
+                   `manage_backups`.",
+    responses(
+        (status = 200, description = "What was catalogued", body = RegisteredView),
+        (status = 503, description = "No library, or it cannot be read", body = Problem),
+    ),
+)]
+pub async fn register_missing(
+    State(state): State<ApiState>,
+) -> Result<Json<RegisteredView>, Problem> {
+    let manifests = state.manifests().ok_or_else(|| {
+        Problem::new(
+            ErrorCode::StorageUnavailable,
+            "this server has no library configured",
+        )
+    })?;
+    let report = crate::restore_check::restore_check(
+        state.database(),
+        manifests.objects(),
+        manifests,
+        crate::restore_check::RestoreCheckSettings {
+            register: true,
+            list: 50,
+        },
+    )
+    .await
+    .map_err(|error| {
+        tracing::error!(error = ?error, "the restore check could not run");
+        Problem::new(
+            ErrorCode::StorageUnavailable,
+            "the library or catalogue could not be read",
+        )
+    })?;
+    Ok(Json(RegisteredView {
+        uncatalogued: report.uncatalogued.count,
+        registered: report.registered,
+        report: serde_json::to_value(&report).unwrap_or_default(),
+    }))
+}
+
 /// The routes.
 pub fn router() -> Router<ApiState> {
     Router::new()
         .route("/backups", get(list_backups).merge(post(take_backup)))
         .route("/backups/uploads", put(upload_backup))
         .route("/backups/schedule", put(set_backup_schedule))
+        .route("/backups/restore", get(restore_status))
+        .route("/backups/register-missing", post(register_missing))
+        .route("/backups/{name}/restore", post(restore_backup))
         .route("/backups/{name}/download", get(download_backup))
         .route("/backups/{name}", delete(delete_backup))
 }

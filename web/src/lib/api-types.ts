@@ -392,6 +392,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/backups/register-missing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Catalogue again the artifacts the library has and the catalogue lacks.
+         * @description After a restore, catalogue again each artifact the library has a manifest for and the catalogue does not name, imported after the copy was taken, once every object it names is there at its size: `tangible restore-check --register-missing`. Their imports' history and burns since are not in the copy, and stay lost. Each is audited as `artifact.recatalogued`. Needs `manage_backups`.
+         */
+        post: operations["register_missing"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether a restore is under way.
+         * @description Whether the database is being restored, and how far it has got: the one route that answers while it is. Open to anyone, and names nothing.
+         */
+        get: operations["restore_status"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/backups/schedule": {
         parameters: {
             query?: never;
@@ -466,6 +506,26 @@ export interface paths {
         get: operations["download_backup"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/{name}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore the database from a copy.
+         * @description Replace the database with the copy: everything since it was taken goes from the catalogue, and everyone signs in again. A copy of the database as it is is taken first, the way back. The copy's definitions are never run: the schema is this version's own, and only the copy's rows are loaded, by a role that can do nothing else, then checked. Refused while a burn, rip, erasure, import or derivation is under way, for a copy a later version took or not of a Tangible database, and unless `confirm` is the copy's name. Then every API route but `GET /api/v1/backups/restore` answers 503 `SERVER_RESTORING` until the server starts again on the restored database, or on the one it left as it was if the restore failed; either way the database records it (`last_restore`), audited as `database.restored` or `database.restore_failed`. Needs `manage_backups`.
+         */
+        post: operations["restore_backup"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2954,6 +3014,8 @@ export interface components {
         };
         /** @description The copies, and what the server can do with them. */
         BackupsView: {
+            /** @description Whether this server restores copies itself. */
+            can_restore: boolean;
             /** @description Every copy in the backups volume, newest first. */
             copies: components["schemas"]["CopyEntry"][];
             /**
@@ -2963,6 +3025,7 @@ export interface components {
              */
             kept: number;
             last_outcome?: components["schemas"]["Outcome"] | null;
+            last_restore?: components["schemas"]["RestoreView"] | null;
             /**
              * Format: int64
              * @description The largest copy an upload may be, in bytes.
@@ -5314,6 +5377,16 @@ export interface components {
              * @description Since when.
              */
             started_at: string;
+        } | {
+            /** @description By whom. */
+            by: string;
+            /** @enum {string} */
+            kind: "restoring";
+            /**
+             * Format: date-time
+             * @description Since when.
+             */
+            started_at: string;
         };
         /** @description How the last copy the server took or added since it started went. */
         Outcome: {
@@ -5457,6 +5530,29 @@ export interface components {
             /** @description A URI identifying the problem type. */
             type: string;
         };
+        /**
+         * @description A restore under way, as anyone may see it while the server answers
+         *     nothing else: no names.
+         */
+        Progress: {
+            /**
+             * Format: date-time
+             * @description When it began.
+             */
+            started_at: string;
+            /** @description Where it is. */
+            step: components["schemas"]["Step"];
+            /**
+             * Format: int32
+             * @description Its place, from 1.
+             */
+            step_number: number;
+            /**
+             * Format: int32
+             * @description How many steps there are.
+             */
+            steps: number;
+        };
         /** @description Sectors that gave trouble. */
         ReadErrors: {
             /**
@@ -5519,6 +5615,15 @@ export interface components {
             may_accept_new_work: boolean;
             /** @description Always false. Restarting a write is never a recovery action. */
             may_write: boolean;
+        };
+        /** @description What cataloguing the artifacts a restore found did. */
+        RegisteredView: {
+            /** @description How many of those were catalogued now. */
+            registered: number;
+            /** @description The restore check's report after. */
+            report: unknown;
+            /** @description How many manifests the library has that the catalogue did not name. */
+            uncatalogued: number;
         };
         /** @description A search for a request's releases, held for a person to pick from. */
         ReleaseSearchView: {
@@ -5804,6 +5909,53 @@ export interface components {
             title: string;
             /** @description When it last changed. */
             updated_at: string;
+        };
+        /** @description Restoring a copy: what confirms it. */
+        RestoreRequest: {
+            /** @description The copy's name, typed again. */
+            confirm: string;
+        };
+        /**
+         * @description Whether a restore is under way: what anyone may see while the server
+         *     answers nothing else.
+         */
+        RestoreStatus: {
+            progress?: components["schemas"]["Progress"] | null;
+            /** @description Whether one is. */
+            restoring: boolean;
+        };
+        /** @description A restore, as the database records it. */
+        RestoreView: {
+            /** @description The copy restored. */
+            copy_name: string;
+            /** @description Why it failed. */
+            error?: string | null;
+            /**
+             * Format: date-time
+             * @description When it ended.
+             */
+            finished_at: string;
+            /**
+             * Format: uuid
+             * @description Its identifier.
+             */
+            id: string;
+            /** @description `restored`, or `failed`, which left the database as it was. */
+            outcome: string;
+            /**
+             * @description The restore check's report: what the library lacks, artifacts it has
+             *     that the copy does not name, and work the copy recorded as under way.
+             */
+            report?: unknown;
+            /** @description Who asked. */
+            requested_by: string;
+            /** @description The copy of the database as it was, taken first: the way back. */
+            safety_copy?: string | null;
+            /**
+             * Format: date-time
+             * @description When it began.
+             */
+            started_at: string;
         };
         /** @description What a worker can rip with. */
         RipCapability: {
@@ -6282,6 +6434,11 @@ export interface components {
              */
             state: string;
         };
+        /**
+         * @description Where a restore is.
+         * @enum {string}
+         */
+        Step: "stopping" | "safety_copy" | "schema" | "rows" | "checking" | "swapping" | "restarting";
         /** @description A plan kept for collecting. */
         StoredGcPlanView: {
             /**
@@ -7650,6 +7807,55 @@ export interface operations {
             };
         };
     };
+    register_missing: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What was catalogued */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegisteredView"];
+                };
+            };
+            /** @description No library, or it cannot be read */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    restore_status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Whether one is */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreStatus"];
+                };
+            };
+        };
+    };
     set_backup_schedule: {
         parameters: {
             query?: never;
@@ -7831,6 +8037,69 @@ export interface operations {
                 };
             };
             /** @description This server keeps no copies */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    restore_backup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The copy's name, as listed */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestoreRequest"];
+            };
+        };
+        responses: {
+            /** @description Restoring */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Progress"];
+                };
+            };
+            /** @description No copy is named that */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Work under way, something else under way, or the database user cannot restore here */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not confirmed, or a copy this version cannot restore */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description This server cannot restore copies */
             503: {
                 headers: {
                     [name: string]: unknown;

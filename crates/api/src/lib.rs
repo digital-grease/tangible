@@ -37,6 +37,7 @@ pub mod releases;
 pub mod report;
 pub mod request_id;
 pub mod restore_check;
+pub mod restoring;
 pub mod romm_export;
 pub mod romm_link;
 pub mod romm_sync;
@@ -187,6 +188,9 @@ pub const API_BASE: &str = "/api/v1";
         routes::backups::download_backup,
         routes::backups::delete_backup,
         routes::backups::set_backup_schedule,
+        routes::backups::restore_backup,
+        routes::backups::restore_status,
+        routes::backups::register_missing,
         routes::integrations::list_all,
         routes::integrations::create_one,
         routes::integrations::get_one,
@@ -367,6 +371,12 @@ pub const API_BASE: &str = "/api/v1";
         routes::backups::BackupsView,
         routes::backups::ScheduleView,
         routes::backups::NewSchedule,
+        routes::backups::RestoreView,
+        routes::backups::RestoreRequest,
+        routes::backups::RestoreStatus,
+        routes::backups::RegisteredView,
+        restoring::Progress,
+        restoring::Step,
         backups::CopyEntry,
         backups::CopyKind,
         backups::Operation,
@@ -674,6 +684,12 @@ pub fn router(state: ApiState) -> Router {
             state.clone(),
             auth::authorize,
         ))
+        // Outside that, so a restore under way answers before anything
+        // reads the database being replaced.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            restoring_guard,
+        ))
         // Everything else is the web UI, or a JSON 404 under /api.
         .fallback(web::fallback)
         .layer(axum::middleware::from_fn_with_state(
@@ -681,6 +697,36 @@ pub fn router(state: ApiState) -> Router {
             auth::security_headers,
         ));
     traced(router).with_state(state)
+}
+
+/// While a restore is under way (ADR 0026), every API route but the
+/// restore's own progress answers 503: nothing reads or writes the database
+/// being replaced, and workers try again later.
+async fn restoring_guard(
+    axum::extract::State(state): axum::extract::State<ApiState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
+    if state.maintenance().current().is_some() {
+        let path = request.uri().path();
+        let progress =
+            path == "/api/v1/backups/restore" && request.method() == axum::http::Method::GET;
+        if path.starts_with("/api/") && !progress {
+            let mut response = problem::Problem::new(
+                problem::ErrorCode::ServerRestoring,
+                "the database is being restored from a copy; the server starts again on it in \
+                 a few minutes",
+            )
+            .into_response();
+            response.headers_mut().insert(
+                axum::http::header::RETRY_AFTER,
+                axum::http::HeaderValue::from_static("15"),
+            );
+            return response;
+        }
+    }
+    next.run(request).await
 }
 
 /// Request and response headers that carry a secret: the session cookie, a

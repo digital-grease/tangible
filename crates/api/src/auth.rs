@@ -270,6 +270,19 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
     ),
     ("DELETE", "/api/v1/backups/{name}", Signed(ManageBackups)),
     ("PUT", "/api/v1/backups/schedule", Signed(ManageBackups)),
+    (
+        "POST",
+        "/api/v1/backups/{name}/restore",
+        Signed(ManageBackups),
+    ),
+    (
+        "POST",
+        "/api/v1/backups/register-missing",
+        Signed(ManageBackups),
+    ),
+    // Whether a restore is under way: the one route that answers while it
+    // is, and it names nothing.
+    ("GET", "/api/v1/backups/restore", Public),
     // The catalog.
     ("GET", "/api/v1/titles", Signed(Read)),
     ("POST", "/api/v1/titles", Signed(Catalog)),

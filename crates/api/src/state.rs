@@ -97,6 +97,13 @@ struct Inner {
     artwork_nudge: Arc<tokio::sync::Notify>,
     /// Copies of the database, when this server keeps them (ADR 0026).
     backups: Option<crate::backups::Backups>,
+    /// Whether a restore is under way, when every API route but its
+    /// progress answers 503 (ADR 0026). Every clone shares it.
+    maintenance: crate::restoring::Maintenance,
+    /// Where a restore checked and ready goes to run: the composition root,
+    /// which stops the background runners first. None in a server that
+    /// cannot restore.
+    restore_orders: Option<tokio::sync::mpsc::Sender<crate::restoring::RestoreOrder>>,
 }
 
 /// How long a worker credential is used before rotation, unless configured.
@@ -159,6 +166,8 @@ impl ApiState {
                 deletion_nudge: Arc::new(tokio::sync::Notify::new()),
                 artwork_nudge: Arc::new(tokio::sync::Notify::new()),
                 backups: None,
+                maintenance: crate::restoring::Maintenance::default(),
+                restore_orders: None,
             }),
         }
     }
@@ -198,6 +207,8 @@ impl ApiState {
                 deletion_nudge: Arc::new(tokio::sync::Notify::new()),
                 artwork_nudge: Arc::new(tokio::sync::Notify::new()),
                 backups: None,
+                maintenance: crate::restoring::Maintenance::default(),
+                restore_orders: None,
             }),
         }
     }
@@ -314,6 +325,33 @@ impl ApiState {
     #[must_use]
     pub fn backups(&self) -> Option<&crate::backups::Backups> {
         self.inner.backups.as_ref()
+    }
+
+    /// Send restores to `orders`, where the composition root runs them.
+    #[must_use]
+    pub fn with_restore_orders(
+        self,
+        orders: tokio::sync::mpsc::Sender<crate::restoring::RestoreOrder>,
+    ) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.restore_orders = Some(orders);
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Where restores go to run, when this server runs them.
+    #[must_use]
+    pub fn restore_orders(
+        &self,
+    ) -> Option<&tokio::sync::mpsc::Sender<crate::restoring::RestoreOrder>> {
+        self.inner.restore_orders.as_ref()
+    }
+
+    /// Whether a restore is under way.
+    #[must_use]
+    pub fn maintenance(&self) -> &crate::restoring::Maintenance {
+        &self.inner.maintenance
     }
 
     /// What wakes the artwork runner, when something wants a cover.
