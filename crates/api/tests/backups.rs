@@ -128,6 +128,11 @@ async fn take(h: &Harness) -> Value {
     for _ in 0..600 {
         let view = listed(h).await;
         if view["operation"].is_null() {
+            assert!(
+                view["last_outcome"]["error"].is_null(),
+                "the copy was not taken: {}",
+                view["last_outcome"]
+            );
             return view;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
