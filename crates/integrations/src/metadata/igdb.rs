@@ -39,6 +39,11 @@ const MAX_ANSWER_BYTES: usize = 1024 * 1024;
 /// How long before it expires a token is no longer used.
 const EXPIRY_MARGIN: Duration = Duration::from_mins(10);
 
+/// The longest a token from Twitch is kept, whatever its answer says: an
+/// app token lasts about 60 days, and a larger lifetime would overflow the
+/// clock it is added to.
+const MAX_TOKEN_LIFETIME: Duration = Duration::from_hours(60 * 24);
+
 /// Most platforms named in a candidate's details.
 const MAX_PLATFORMS: usize = 6;
 
@@ -128,8 +133,10 @@ impl IgdbClient {
             .append_pair("client_secret", self.client_secret.expose())
             .append_pair("grant_type", "client_credentials")
             .finish();
-        let request = self
-            .http
+        // The secret is in the body, which an HTTP client sends again after
+        // a 307 or 308 to any host: no redirect is followed with it.
+        let http = self.http.without_redirects().map_err(outbound)?;
+        let request = http
             .request(reqwest::Method::POST, &self.endpoints.token)
             .map_err(outbound)?
             .header(
@@ -138,7 +145,7 @@ impl IgdbClient {
             )
             .body(body)
             .timeout(super::ANSWER_TIMEOUT);
-        let response = self.http.send(request).await.map_err(outbound)?;
+        let response = http.send(request).await.map_err(outbound)?;
         let status = response.status().as_u16();
         let text = read_text_within(CLIENT, response, 64 * 1024).await?;
         match status {
@@ -178,8 +185,10 @@ impl IgdbClient {
             .join(endpoint)
             .map_err(|_| ClientError::bad(CLIENT, "the address cannot be joined"))?;
         self.pace.wait().await;
-        let request = self
-            .http
+        // The client ID rides in a header an HTTP client keeps across a
+        // redirect to another host: none is followed.
+        let http = self.http.without_redirects().map_err(outbound)?;
+        let request = http
             .request(reqwest::Method::POST, &url)
             .map_err(outbound)?
             .header("Client-ID", self.client_id.expose())
@@ -188,7 +197,7 @@ impl IgdbClient {
             .header(reqwest::header::ACCEPT, "application/json")
             .body(body.to_owned())
             .timeout(super::ANSWER_TIMEOUT);
-        let response = self.http.send(request).await.map_err(outbound)?;
+        let response = http.send(request).await.map_err(outbound)?;
         let status = response.status().as_u16();
         Ok((
             status,
@@ -303,7 +312,7 @@ pub fn parse_token(text: &str) -> Result<(SecretString, Duration), ClientError> 
     }
     Ok((
         SecretString::new(token.access_token),
-        Duration::from_secs(token.expires_in),
+        Duration::from_secs(token.expires_in).min(MAX_TOKEN_LIFETIME),
     ))
 }
 
@@ -433,6 +442,15 @@ mod tests {
         assert_eq!(lifetime, Duration::from_secs(5_011_271));
         assert!(parse_token(&fixture("twitch-token-refused.json")).is_err());
         assert!(parse_token(r#"{"access_token": "", "expires_in": 5}"#).is_err());
+        // A lifetime past what a clock can add is held to 60 days, so
+        // keeping the token cannot overflow and panic.
+        let (_, lifetime) = parse_token(&format!(
+            r#"{{"access_token": "t", "expires_in": {}}}"#,
+            u64::MAX
+        ))
+        .unwrap();
+        assert_eq!(lifetime, MAX_TOKEN_LIFETIME);
+        assert!(std::time::Instant::now().checked_add(lifetime).is_some());
     }
 
     #[test]

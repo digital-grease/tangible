@@ -886,7 +886,9 @@ used if set.
 To find a release for an approved request, add your Prowlarr on the
 Integrations page: its address as the server reaches it (a LAN address is
 fine; a loopback one needs `TANGIBLE_OUTBOUND_ALLOW`) and its API key, from
-Prowlarr's Settings, General. Tangible searches the indexers you added in
+Prowlarr's Settings, General. Give the address Prowlarr answers at itself,
+not one behind a sign-in proxy: the key travels in a header, so Tangible
+follows no redirect with it and reports one instead. Tangible searches the indexers you added in
 Prowlarr, and adds or changes nothing there. On the request's page, Find a
 release searches by the request's title (a film by its IMDb ID first), or by
 other words; the releases found are listed best first, each saying why. Grab

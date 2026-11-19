@@ -342,13 +342,17 @@ impl ProwlarrClient {
     }
 
     async fn get_now(&self, url: &Url, max: usize) -> Result<String, ClientError> {
-        let request = self
-            .http
+        // The key rides in a header, which an HTTP client keeps when a
+        // redirect leads to another host (only Authorization and cookies are
+        // dropped), so a redirect is never followed with it: Prowlarr's own
+        // address is the one to give.
+        let http = self.http.without_redirects().map_err(outbound)?;
+        let request = http
             .request(reqwest::Method::GET, url)
             .map_err(outbound)?
             .header("x-api-key", self.api_key.expose())
             .header("accept", "application/json");
-        let response = self.http.send(request).await.map_err(outbound)?;
+        let response = http.send(request).await.map_err(outbound)?;
         let status = response.status();
         let text = read_text_within(CLIENT, response, max).await?;
         match status {
@@ -360,6 +364,14 @@ impl ProwlarrClient {
             StatusCode::BAD_REQUEST => Err(ClientError::bad(
                 CLIENT,
                 refused_message(&text).unwrap_or_else(|| "it refused the request".to_owned()),
+            )),
+            other if other.is_redirection() => Err(ClientError::bad(
+                CLIENT,
+                format!(
+                    "it answered HTTP {}, a redirect, which is not followed with its key; \
+                     give the address Prowlarr answers at itself",
+                    other.as_u16()
+                ),
             )),
             other => Err(ClientError::bad(
                 CLIENT,
@@ -1005,6 +1017,26 @@ mod tests {
         // A redirect to an address the policy refuses is not followed.
         let error = prowlarr.fetch(&at("/elsewhere")).await.unwrap_err();
         assert_eq!(error.code(), "INTEGRATION_ADDRESS_REFUSED");
+    }
+
+    #[tokio::test]
+    async fn the_key_is_never_sent_on_through_a_redirect() {
+        // Prowlarr's address answering with a redirect (a proxy asking for a
+        // sign-in, an address that moved) to a host that is not Prowlarr:
+        // nothing is sent there, and the administrator is told why.
+        let (elsewhere, seen_elsewhere) = server(vec![]).await;
+        let (address, _) = server(vec![(
+            "/prowlarr/api/v1/system/status",
+            redirect(&format!("http://127.0.0.1:{}/sign-in", elsewhere.port())),
+        )])
+        .await;
+        let error = prowlarr_at(address).status().await.unwrap_err();
+        assert_eq!(error.code(), "INTEGRATION_BAD_RESPONSE", "{error}");
+        assert!(error.to_string().contains("redirect"), "{error}");
+        assert!(
+            seen_elsewhere.lock().unwrap().is_empty(),
+            "the redirect was not followed"
+        );
     }
 
     #[tokio::test]

@@ -22,6 +22,13 @@ may change between minor versions, and the release notes say how.
   of them. Collection now holds to the planner's rule and lists, inspects
   and removes nothing it reaches through a link. It took someone replacing
   a directory in the library with a link.
+- Prowlarr's API key was sent on to another host when Prowlarr's address
+  answered with a redirect there, a sign-in proxy's for instance: the key
+  rides in a header that redirects keep. Tangible now follows no redirect
+  with the key, and says to give the address Prowlarr answers at itself.
+  The requests to Twitch and IGDB, which carry the IGDB client's secret and
+  ID, follow none either, and a token lifetime from Twitch too large for
+  the clock no longer panics.
 
 ## 0.4.1 (2026-11-18)
 
