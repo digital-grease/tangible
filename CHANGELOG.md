@@ -4,7 +4,57 @@ Notable changes to Tangible, newest first. Versions follow semantic
 versioning; during 0.x the API, the manifest schema and the database schema
 may change between minor versions, and the release notes say how.
 
-## Unreleased
+## 0.5.0 (2026-11-19)
+
+Backup and restore in the web UI. A Backups page lists the copies of the
+database, takes one now, downloads, uploads and removes them; the server
+takes one every day; and Restore puts one back without running anything the
+copy holds, so a copy from another install is as safe to restore as one
+taken here. The release also brings the fixes from a review of 0.4.1, among
+them the integration secret key moved out of the database container's
+reach. The highlights, each detailed below:
+
+- A **Backups** page, for administrators: the copies in the `backups`
+  volume, taken, downloaded, uploaded and removed, each audited.
+- A copy every day at 03:00 UTC, the time set or the schedule turned off on
+  the page.
+- **Restore** from the page: the copy's rows loaded into this version's own
+  schema as a role that can only insert them, every foreign key checked,
+  the restore check run, and only then the databases swapped; a copy of the
+  database as it was is taken first.
+- The integration secret key out of the PostgreSQL container's reach, in a
+  volume of its own from the database's password.
+- Prowlarr's key no longer follows a redirect, and a grab's link reaches
+  only public addresses past Prowlarr's own.
+
+### Upgrading from 0.4.1
+
+Two migrations, each adding a table the version before neither reads nor
+writes, so 0.4.1 runs on the migrated database. No API route or field is
+gone. The Compose files name `v0.5` now, so take this release's
+`compose.yaml` once, and each worker's file: `docker compose pull` under
+0.4.1's stays on 0.4.
+
+- Keep your `.env`.
+- Back up the library, then, with the new `compose.yaml`, `docker compose
+  pull` and `docker compose up -d`: `init` copies the database's password
+  into the new `database-password` volume and leaves it where it was;
+  `backup` gives the `backups` volume to the image's group and takes a
+  copy; `migrate` applies 0041 and 0042; then the server starts, with the
+  Backups page.
+- A 0.4.1 burn worker keeps working with a 0.5.0 server.
+- With a PostgreSQL of your own: the server's tools are PostgreSQL 17's,
+  which copy no newer server, and a restore from the page needs a database
+  user that may create databases and roles. The Backups page says when
+  either is missing and attempts nothing.
+- Going back to 0.4.1 needs no restore: set `TANGIBLE_IMAGE` to 0.4.1's
+  digest under this `compose.yaml`, or run 0.4.1's own with your `.env`.
+  Its `migrate` finds the database ahead of it and starts the server.
+  Under this `compose.yaml`, 0.4.1 warns that `TANGIBLE_DATABASE_PASSWORD_DIR`,
+  `TANGIBLE_BACKUPS_KEPT` and `TANGIBLE_MAX_BACKUP_UPLOAD_BYTES` are set but
+  nothing reads them: they are this release's, and harmless. Copies the
+  server took stay in the volume, and 0.4.1's `backup` counts them towards
+  `TANGIBLE_BACKUPS_KEPT` as its own; uploaded ones it leaves alone.
 
 ### Added
 
