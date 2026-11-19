@@ -65,9 +65,12 @@ may change between minor versions, and the release notes say how.
   integration passwords the database stores, which keeping the key outside
   the database was meant to prevent. The password now has a volume of its
   own, `database-password`, which those three mount; only `init` and the
-  server mount `secrets`. On the first `up`, `init` copies an existing
-  password from `secrets` and leaves it there, so 0.4.1 still runs on the
-  same volumes. `init` also runs with no network now.
+  server mount `secrets`. On the first `up` with this release's
+  `compose.yaml`, `init` copies an existing password from `secrets` and
+  leaves it there, so 0.4.1 still runs on the same volumes. `init` also
+  runs with no network now. The move takes this release's `compose.yaml`:
+  run under 0.4.1's, `init` keeps the password beside the key, as before,
+  and everything runs as it did.
 - Grabbing a release fetched its link through Prowlarr and followed the
   redirects there to wherever they led, under the rules for addresses an
   administrator configured: private networks and any port. An indexer,

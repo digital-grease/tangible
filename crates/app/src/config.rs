@@ -9,7 +9,7 @@
 //! consequence (the burn engine in particular) defaults to the safe value.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand, ValueEnum};
 use tangible_domain::SecretString;
@@ -556,19 +556,28 @@ pub struct InitConfig {
 
     /// The directory the database's password is kept in: compose.yaml's
     /// database-password volume, which PostgreSQL, the backup, migrations
-    /// and the server mount, without the key.
-    #[arg(
-        long,
-        env = "TANGIBLE_DATABASE_PASSWORD_DIR",
-        default_value = "/var/lib/tangible/database-password"
-    )]
-    pub database_password_dir: PathBuf,
+    /// and the server mount, without the key. Unset, the secrets directory,
+    /// as in 0.4.1: its compose.yaml, which `docker compose pull` runs this
+    /// image with, mounts no other volume for it, and reads it there.
+    #[arg(long, env = "TANGIBLE_DATABASE_PASSWORD_DIR")]
+    pub database_password_dir: Option<PathBuf>,
 
     /// The PostgreSQL password to keep, in place of making one: that of an
     /// install from before `tangible init`, whose database was created with
     /// it. Empty is the same as unset.
     #[arg(long, env = "POSTGRES_PASSWORD", hide_env_values = true)]
     pub postgres_password: Option<SecretString>,
+}
+
+impl InitConfig {
+    /// Where the database's password is kept: the directory given, or the
+    /// secrets directory beside the key, where 0.4.1's compose.yaml has it.
+    #[must_use]
+    pub fn password_dir(&self) -> &Path {
+        self.database_password_dir
+            .as_deref()
+            .unwrap_or(&self.secrets_dir)
+    }
 }
 
 /// Settings for `tangible secrets rotate`.

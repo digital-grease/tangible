@@ -1535,7 +1535,10 @@ docker compose -f deploy/compose.yaml up -d
 takes the newest patch: the database is copied, anything to migrate is, and
 the server starts on the new image. Check it becomes healthy, and
 `docker compose logs migrate` for what was applied. Note the digest you run
-first (`docker compose images`) if you might want it back.
+first (`docker compose images`) if you might want it back. A patch release
+runs under the `compose.yaml` you have, but may bring a new one too, a fix in
+how the services are confined, for instance; its notes say so, and you take
+it as for a new minor version (step 4 below).
 
 A new minor version (0.5.0) is a step of its own, since it may migrate in
 ways the one before cannot run on, and its `compose.yaml` names it:

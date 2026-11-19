@@ -303,6 +303,9 @@ services:
     network_mode: none
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      # Where the password goes. Unset, init keeps it beside the key, as the
+      # compose.yaml of 0.4.1 has it.
+      TANGIBLE_DATABASE_PASSWORD_DIR: /var/lib/tangible/database-password
       TANGIBLE_LOG: ${TANGIBLE_LOG:-tangible=info,tower_http=info}
       # As for migrate: two threads, whatever the machine.
       TOKIO_WORKER_THREADS: "2"

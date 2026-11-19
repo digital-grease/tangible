@@ -22,6 +22,12 @@
 //! created with; given that, the file holds it instead. 0.4.1 kept the
 //! password in the secrets volume beside the key; found there, it is copied
 //! (and left, so 0.4.1 still runs).
+//!
+//! Without `TANGIBLE_DATABASE_PASSWORD_DIR` the password stays in the
+//! secrets directory, as 0.4.1 kept it. That is 0.4.1's compose.yaml, which
+//! `docker compose pull` runs this image with: it mounts only the secrets
+//! volume into `init`, on a read-only root, and points PostgreSQL and the
+//! server at the password there.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write as _;
@@ -68,9 +74,10 @@ pub struct Report {
 ///
 /// When the directory cannot be written, or a key there is not one.
 pub fn init_command(config: &InitConfig) -> Result<()> {
+    let database = config.password_dir();
     let report = init(
         &config.secrets_dir,
-        &config.database_password_dir,
+        database,
         config.postgres_password.as_ref(),
     )?;
     let said = |outcome: Outcome| match outcome {
@@ -81,7 +88,7 @@ pub fn init_command(config: &InitConfig) -> Result<()> {
     };
     tracing::info!(
         dir = %config.secrets_dir.display(),
-        database_password_dir = %config.database_password_dir.display(),
+        database_password_dir = %database.display(),
         postgres_password = said(report.postgres_password),
         secret_key = said(report.secret_key),
         "secrets ready"
@@ -304,6 +311,45 @@ mod tests {
             "from .env\n"
         );
         for dir in [secrets, database, secrets2, database2] {
+            fs::remove_dir_all(&dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn under_041s_compose_file_the_password_stays_beside_the_key() {
+        // 0.4.1's compose.yaml gives init the secrets volume alone, on a
+        // read-only root: the password is found where it is and nothing is
+        // written anywhere else.
+        let secrets = scratch();
+        fs::write(secrets.join(POSTGRES_PASSWORD), "from 0.4.1\n").unwrap();
+        let first = init(&secrets, &secrets, None).unwrap();
+        assert_eq!(first.postgres_password, Outcome::Kept);
+        assert_eq!(first.secret_key, Outcome::Made);
+        let mut names: Vec<_> = fs::read_dir(&secrets)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        assert_eq!(names, [POSTGRES_PASSWORD, SECRET_KEY]);
+        assert_eq!(
+            fs::read_to_string(secrets.join(POSTGRES_PASSWORD)).unwrap(),
+            "from 0.4.1\n"
+        );
+        // And an install from before 0.4.1, its password in .env, has it
+        // written there, as 0.4.1 did.
+        let older = scratch();
+        let given = SecretString::from("the one in .env".to_owned());
+        assert_eq!(
+            init(&older, &older, Some(&given))
+                .unwrap()
+                .postgres_password,
+            Outcome::Given
+        );
+        assert_eq!(
+            fs::read_to_string(older.join(POSTGRES_PASSWORD)).unwrap(),
+            "the one in .env\n"
+        );
+        for dir in [secrets, older] {
             fs::remove_dir_all(&dir).unwrap();
         }
     }

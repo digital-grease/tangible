@@ -1920,6 +1920,33 @@ mod tests {
     }
 
     #[test]
+    fn init_keeps_the_password_beside_the_key_unless_told_where() {
+        // 0.4.1's compose.yaml, which `docker compose pull` runs a 0.4 patch
+        // release's image with, sets no directory for the password: it has
+        // no volume for one, and reads the password in the secrets volume.
+        use std::path::Path;
+        let init =
+            |args: &[&str]| match Cli::try_parse_from(["tangible", "init"].iter().chain(args))
+                .expect("parse")
+                .command
+            {
+                Command::Init(init) => *init,
+                other => panic!("parsed {other:?}"),
+            };
+        let unset = init(&[]);
+        assert_eq!(unset.password_dir(), Path::new("/var/lib/tangible/secrets"));
+        let given = init(&[
+            "--database-password-dir",
+            "/var/lib/tangible/database-password",
+        ]);
+        assert_eq!(
+            given.password_dir(),
+            Path::new("/var/lib/tangible/database-password")
+        );
+        assert_eq!(given.secrets_dir, Path::new("/var/lib/tangible/secrets"));
+    }
+
+    #[test]
     fn decryption_is_off_unless_an_administrator_turns_it_on() {
         assert!(!serve_config(&[]).allow_decryption);
         assert!(serve_config(&["--allow-decryption", "true"]).allow_decryption);
