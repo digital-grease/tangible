@@ -7,6 +7,7 @@ import {
   kindLabel,
   operationLabel,
   readiness,
+  scheduleLabel,
   uploadCopy,
   type Backups,
 } from './backups';
@@ -20,6 +21,7 @@ function backups(extra: Partial<Backups> = {}): Backups {
     operation: null,
     last_outcome: null,
     max_upload_bytes: 1024,
+    schedule: { enabled: true, time: '03:00', next_at: null, updated_by: null, updated_at: null },
     ...extra,
   };
 }
@@ -38,6 +40,15 @@ describe('copies of the database', () => {
     expect(isPruned('taken')).toBe(true);
     expect(isPruned('uploaded')).toBe(false);
     expect(isPruned('added')).toBe(false);
+  });
+
+  it('says when copies are taken by themselves', () => {
+    const schedule = backups().schedule;
+    expect(scheduleLabel(schedule, 10)).toBe('Every day at 03:00 UTC');
+    expect(scheduleLabel(schedule, 0)).toBe('Every day at 03:00 UTC, but copies are turned off');
+    expect(scheduleLabel({ ...schedule, enabled: false }, 10)).toBe(
+      'Copies are taken only at a start and when asked for',
+    );
   });
 
   it('says what is under way', () => {

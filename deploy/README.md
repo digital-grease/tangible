@@ -1242,7 +1242,10 @@ The **Backups** page, for administrators, lists the copies, takes one now,
 downloads one, uploads one from another install (kept as
 `uploaded-<time>.dump` and never removed to make room; up to
 `TANGIBLE_MAX_BACKUP_UPLOAD_BYTES`, 4 GiB unless set) and removes one. Each
-is in the audit log. The server shares the volume with the `backup` service
+is in the audit log. The server also takes a copy every day, at 03:00 UTC
+unless the page sets another time or turns it off; those count towards
+`TANGIBLE_BACKUPS_KEPT` with the rest, and a time missed while the server is
+down is not made up, since the next start takes one anyway. The server shares the volume with the `backup` service
 through its image's group: `backup` makes the volume that group's on every
 run, so the page can write there once this release's `compose.yaml` has run.
 

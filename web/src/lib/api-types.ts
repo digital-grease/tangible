@@ -392,6 +392,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/backups/schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set when copies are taken by themselves.
+         * @description Take a copy every day at `time` (`HH:MM`, UTC), or none when `enabled` is false. Copies are taken at 03:00 unless set; they count towards `kept` with the rest. A time missed while the server is down is not made up: the next start takes one. Audited as `backup.schedule_changed`. Needs `manage_backups`.
+         */
+        put: operations["set_backup_schedule"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/backups/uploads": {
         parameters: {
             query?: never;
@@ -2949,6 +2969,8 @@ export interface components {
              */
             max_upload_bytes: number;
             operation?: components["schemas"]["Operation"] | null;
+            /** @description When copies are taken by themselves. */
+            schedule: components["schemas"]["ScheduleView"];
             /** @description Whether the dump tools can copy the database. */
             tools: components["schemas"]["ToolsStatus"];
             /** @description Whether the server can write copies into the volume. */
@@ -5252,6 +5274,13 @@ export interface components {
              */
             grace_days?: number | null;
         };
+        /** @description A new schedule. */
+        NewSchedule: {
+            /** @description Whether copies are taken by themselves. */
+            enabled: boolean;
+            /** @description The time each day, `HH:MM` in UTC, `00:00` to `23:59`. */
+            time: string;
+        };
         /** @description Whether sign-in through a provider is offered. */
         OidcStatusView: {
             /** @description What the sign-in page calls it. */
@@ -6157,6 +6186,25 @@ export interface components {
             id: string;
             /** @description Its name. */
             name: string;
+        };
+        /** @description When the server takes a copy by itself: every day at a time in UTC. */
+        ScheduleView: {
+            /** @description Whether it does. */
+            enabled: boolean;
+            /**
+             * Format: date-time
+             * @description When the next is due, while it is enabled and copies are kept.
+             */
+            next_at?: string | null;
+            /** @description The time each day, `HH:MM` in UTC. */
+            time: string;
+            /**
+             * Format: date-time
+             * @description When.
+             */
+            updated_at?: string | null;
+            /** @description Who last changed it; `null` while it is the default, 03:00. */
+            updated_by?: string | null;
         };
         /** @description What to search for: the request's own title, unless words are given. */
         SearchReleasesRequest: {
@@ -7592,6 +7640,48 @@ export interface operations {
                 };
             };
             /** @description The tools or the volume are not ready */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    set_backup_schedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewSchedule"];
+            };
+        };
+        responses: {
+            /** @description The schedule */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleView"];
+                };
+            };
+            /** @description A time that is not HH:MM */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description This server keeps no copies */
             503: {
                 headers: {
                     [name: string]: unknown;

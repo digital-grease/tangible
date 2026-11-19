@@ -392,3 +392,74 @@ async fn without_the_tools_nothing_is_attempted_and_the_page_says_why() {
     let problem: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(problem["code"], "BACKUPS_UNAVAILABLE");
 }
+
+/// One test at a time changes the schedule, which every test shares.
+static SCHEDULE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+fn put_schedule(body: &Value) -> Request<Body> {
+    Request::put("/api/v1/backups/schedule")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn the_schedule_is_set_audited_and_shown() {
+    let _one = SCHEDULE.lock().await;
+    let h = harness(10, 1 << 20).await;
+    let (status, body, _) = send(
+        &h,
+        &h.admin,
+        put_schedule(&serde_json::json!({ "enabled": false, "time": "04:30" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let view = listed(&h).await;
+    assert_eq!(view["schedule"]["enabled"], false);
+    assert_eq!(view["schedule"]["time"], "04:30");
+    assert!(view["schedule"]["next_at"].is_null());
+    assert_eq!(
+        view["schedule"]["updated_by"],
+        h.admin.user.username.as_str()
+    );
+    assert_eq!(
+        audited(&h, "backup.schedule_changed").await,
+        [("schedule".to_owned(), "success".to_owned())]
+    );
+
+    let (status, body, _) = send(
+        &h,
+        &h.admin,
+        put_schedule(&serde_json::json!({ "enabled": true, "time": "03:00" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let schedule: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(schedule["enabled"], true);
+    let next = time::OffsetDateTime::parse(
+        schedule["next_at"].as_str().unwrap(),
+        &time::format_description::well_known::Rfc3339,
+    )
+    .unwrap();
+    assert_eq!((next.hour(), next.minute(), next.second()), (3, 0, 0));
+    assert!(next > time::OffsetDateTime::now_utc());
+
+    for refused in ["24:00", "3:00", "noon"] {
+        let (status, _, _) = send(
+            &h,
+            &h.admin,
+            put_schedule(&serde_json::json!({ "enabled": true, "time": refused })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    }
+    let operator = support::sign_in(&h.pool, Role::Operator).await;
+    let (status, _, _) = send(
+        &h,
+        &operator,
+        put_schedule(&serde_json::json!({ "enabled": false, "time": "03:00" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}

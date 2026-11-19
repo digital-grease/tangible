@@ -14,7 +14,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse as _, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tangible_db::backups::{Actor, audit};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
@@ -42,6 +42,61 @@ pub struct BackupsView {
     pub last_outcome: Option<Outcome>,
     /// The largest copy an upload may be, in bytes.
     pub max_upload_bytes: u64,
+    /// When copies are taken by themselves.
+    pub schedule: ScheduleView,
+}
+
+/// When the server takes a copy by itself: every day at a time in UTC.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ScheduleView {
+    /// Whether it does.
+    pub enabled: bool,
+    /// The time each day, `HH:MM` in UTC.
+    pub time: String,
+    /// When the next is due, while it is enabled and copies are kept.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub next_at: Option<OffsetDateTime>,
+    /// Who last changed it; `null` while it is the default, 03:00.
+    pub updated_by: Option<String>,
+    /// When.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub updated_at: Option<OffsetDateTime>,
+}
+
+/// A new schedule.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NewSchedule {
+    /// Whether copies are taken by themselves.
+    pub enabled: bool,
+    /// The time each day, `HH:MM` in UTC, `00:00` to `23:59`.
+    pub time: String,
+}
+
+fn schedule_view(schedule: &tangible_db::backups::Schedule, kept: u32) -> ScheduleView {
+    ScheduleView {
+        enabled: schedule.enabled,
+        time: format!(
+            "{:02}:{:02}",
+            schedule.minute_of_day / 60,
+            schedule.minute_of_day % 60
+        ),
+        next_at: (schedule.enabled && kept > 0)
+            .then(|| crate::backups::next_due(OffsetDateTime::now_utc(), schedule.minute_of_day)),
+        updated_by: schedule.updated_by.clone(),
+        updated_at: schedule.updated_at,
+    }
+}
+
+/// The minutes past midnight of `HH:MM`.
+fn minute_of_day(time: &str) -> Option<u16> {
+    let (hours, minutes) = time.split_once(':')?;
+    if hours.len() != 2 || minutes.len() != 2 {
+        return None;
+    }
+    let hours: u16 = hours.parse().ok()?;
+    let minutes: u16 = minutes.parse().ok()?;
+    (hours < 24 && minutes < 60).then_some(hours * 60 + minutes)
 }
 
 fn unavailable(detail: impl Into<String>) -> Problem {
@@ -89,6 +144,9 @@ fn audit_failed(error: &tangible_db::DbError) {
 
 async fn view(state: &ApiState, backups: &Backups) -> Result<BackupsView, Problem> {
     let listing = backups.list().await.map_err(problem_for)?;
+    let schedule = tangible_db::backups::schedule(state.database().pool())
+        .await
+        .map_err(|error| problem_for(error.into()))?;
     Ok(BackupsView {
         copies: listing.copies,
         kept: backups.settings().kept,
@@ -97,6 +155,7 @@ async fn view(state: &ApiState, backups: &Backups) -> Result<BackupsView, Proble
         operation: backups.operation(),
         last_outcome: backups.last_outcome(),
         max_upload_bytes: backups.settings().max_upload_bytes,
+        schedule: schedule_view(&schedule, backups.settings().kept),
     })
 }
 
@@ -388,11 +447,71 @@ pub async fn delete_backup(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
+/// Set when copies are taken by themselves.
+///
+/// # Errors
+///
+/// `INVALID_PARAMETER` for a time that is not `HH:MM`; `BACKUPS_UNAVAILABLE`.
+#[utoipa::path(
+    put,
+    path = "/api/v1/backups/schedule",
+    tag = "backups",
+    description = "Take a copy every day at `time` (`HH:MM`, UTC), or none when `enabled` \
+                   is false. Copies are taken at 03:00 unless set; they count towards \
+                   `kept` with the rest. A time missed while the server is down is not made \
+                   up: the next start takes one. Audited as `backup.schedule_changed`. Needs \
+                   `manage_backups`.",
+    request_body = NewSchedule,
+    responses(
+        (status = 200, description = "The schedule", body = ScheduleView),
+        (status = 400, description = "A time that is not HH:MM", body = Problem),
+        (status = 503, description = "This server keeps no copies", body = Problem),
+    ),
+)]
+pub async fn set_backup_schedule(
+    State(state): State<ApiState>,
+    SignedIn(user): SignedIn,
+    Json(request): Json<NewSchedule>,
+) -> Result<Json<ScheduleView>, Problem> {
+    let backups = backups_of(&state)?;
+    let minute = minute_of_day(&request.time).ok_or_else(|| {
+        Problem::invalid_parameter("time", "must be HH:MM in UTC, from 00:00 to 23:59")
+    })?;
+    let schedule = tangible_db::backups::set_schedule(
+        state.database().pool(),
+        request.enabled,
+        minute,
+        &user.username,
+    )
+    .await
+    .map_err(|error| problem_for(error.into()))?;
+    backups.schedule_changed();
+    Ok(Json(schedule_view(&schedule, backups.settings().kept)))
+}
+
 /// The routes.
 pub fn router() -> Router<ApiState> {
     Router::new()
         .route("/backups", get(list_backups).merge(post(take_backup)))
         .route("/backups/uploads", put(upload_backup))
+        .route("/backups/schedule", put(set_backup_schedule))
         .route("/backups/{name}/download", get(download_backup))
         .route("/backups/{name}", delete(delete_backup))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_time_is_hours_and_minutes_in_the_day() {
+        assert_eq!(minute_of_day("03:00"), Some(180));
+        assert_eq!(minute_of_day("00:00"), Some(0));
+        assert_eq!(minute_of_day("23:59"), Some(1439));
+        for refused in [
+            "24:00", "3:00", "03:60", "03:00:00", "0300", "", "aa:bb", "-1:00",
+        ] {
+            assert_eq!(minute_of_day(refused), None, "{refused}");
+        }
+    }
 }

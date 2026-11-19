@@ -284,6 +284,8 @@ struct Inner {
     last: Mutex<Option<Outcome>>,
     /// The tools' major version, asked once.
     tools_version: tokio::sync::OnceCell<Result<u32, String>>,
+    /// Wakes the schedule when it changes.
+    schedule_nudge: tokio::sync::Notify,
 }
 
 /// A copy, or an upload, in hand: holding it keeps anything else from
@@ -318,6 +320,7 @@ impl Backups {
                 operation: Mutex::new(None),
                 last: Mutex::new(None),
                 tools_version: tokio::sync::OnceCell::new(),
+                schedule_nudge: tokio::sync::Notify::new(),
             }),
         }
     }
@@ -326,6 +329,11 @@ impl Backups {
     #[must_use]
     pub fn settings(&self) -> &BackupSettings {
         &self.inner.settings
+    }
+
+    /// Tell the schedule it changed.
+    pub fn schedule_changed(&self) {
+        self.inner.schedule_nudge.notify_one();
     }
 
     /// What is under way, if anything.
@@ -729,6 +737,145 @@ impl Backups {
     }
 }
 
+// --- the schedule (docs/plans/backups-ui.md, D5) -------------------------------------
+
+/// The longest the schedule sleeps before it looks again, so a clock set
+/// forward or a missed wake costs at most this.
+const SCHEDULE_RECHECK: Duration = Duration::from_mins(15);
+
+/// The next time at `minute_of_day` past midnight UTC after `now`: today's,
+/// unless it has passed, then tomorrow's.
+#[must_use]
+pub fn next_due(now: OffsetDateTime, minute_of_day: u16) -> OffsetDateTime {
+    let minute = minute_of_day.min(24 * 60 - 1);
+    let at = time::Time::from_hms(
+        u8::try_from(minute / 60).unwrap_or(0),
+        u8::try_from(minute % 60).unwrap_or(0),
+        0,
+    )
+    .unwrap_or(time::Time::MIDNIGHT);
+    let today = now.to_offset(time::UtcOffset::UTC).replace_time(at);
+    if today > now {
+        today
+    } else {
+        today + time::Duration::days(1)
+    }
+}
+
+/// Takes a copy each day at the time the schedule says.
+#[derive(Debug, Clone)]
+pub struct BackupScheduler {
+    backups: Backups,
+    database: tangible_db::Database,
+}
+
+impl BackupScheduler {
+    /// The schedule for `backups`, read from `database`.
+    #[must_use]
+    pub fn new(backups: Backups, database: tangible_db::Database) -> Self {
+        Self { backups, database }
+    }
+
+    /// Run until `shutdown` resolves.
+    pub async fn run<S>(self, shutdown: S)
+    where
+        S: Future<Output = ()> + Send,
+    {
+        let mut shutdown = std::pin::pin!(shutdown);
+        loop {
+            let schedule = match tangible_db::backups::schedule(self.database.pool()).await {
+                Ok(schedule) => schedule,
+                Err(error) => {
+                    tracing::warn!(error = ?error, "the copy schedule could not be read");
+                    tangible_db::backups::Schedule {
+                        enabled: false,
+                        ..tangible_db::backups::Schedule::default()
+                    }
+                }
+            };
+            let now = OffsetDateTime::now_utc();
+            let due = schedule
+                .enabled
+                .then(|| next_due(now, schedule.minute_of_day));
+            let wait = due.map_or(SCHEDULE_RECHECK, |due| {
+                Duration::try_from(due - now)
+                    .unwrap_or(Duration::ZERO)
+                    .min(SCHEDULE_RECHECK)
+            });
+            tokio::select! {
+                () = &mut shutdown => return,
+                () = self.backups.inner.schedule_nudge.notified() => continue,
+                () = tokio::time::sleep(wait) => {}
+            }
+            if due.is_some_and(|due| OffsetDateTime::now_utc() >= due) {
+                self.take_one().await;
+            }
+        }
+    }
+
+    /// The day's copy, unless copies are off or something else is under
+    /// way, which is said and not made up later: the next start takes one.
+    async fn take_one(&self) {
+        if self.backups.settings().kept == 0 {
+            tracing::info!("no copy taken on the schedule: TANGIBLE_BACKUPS_KEPT is 0");
+            return;
+        }
+        let tools = self.backups.tools(&self.database).await;
+        let taken = if tools.ready {
+            match self.backups.begin(Operation::Taking {
+                started_at: OffsetDateTime::now_utc(),
+                by: "schedule".to_owned(),
+            }) {
+                Ok(turn) => self.backups.take(&turn).await,
+                Err(error) => {
+                    tracing::info!(error = %error, "no copy taken on the schedule");
+                    return;
+                }
+            }
+        } else {
+            let problem = tools
+                .problem
+                .unwrap_or_else(|| "the dump tools cannot copy this database".to_owned());
+            self.backups.record(Outcome {
+                finished_at: OffsetDateTime::now_utc(),
+                name: None,
+                error: Some(problem.clone()),
+            });
+            Err(BackupError::ToolsUnavailable(problem))
+        };
+        let (name, succeeded, metadata) = match &taken {
+            Ok(copy) => {
+                tracing::info!(copy = %copy.name, bytes = copy.size_bytes, "a copy was taken on the schedule");
+                (
+                    copy.name.as_str(),
+                    true,
+                    serde_json::json!({ "size_bytes": copy.size_bytes }),
+                )
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "the copy the schedule takes failed");
+                (
+                    "-",
+                    false,
+                    serde_json::json!({ "error": error.to_string() }),
+                )
+            }
+        };
+        if let Err(error) = tangible_db::backups::audit(
+            self.database.pool(),
+            tangible_db::backups::Actor::Schedule,
+            "backup.taken",
+            name,
+            succeeded,
+            metadata,
+        )
+        .await
+        {
+            tracing::error!(error = ?error, "a copy's audit record could not be written");
+        }
+    }
+}
+
 fn not_an_archive() -> BackupError {
     BackupError::NotACopy(
         "it is not a PostgreSQL custom-format archive (pg_dump --format=custom), which every \
@@ -1044,6 +1191,34 @@ mod tests {
         assert_eq!(
             stamp_of(time::macros::datetime!(2026-11-17 21:05:03 UTC)),
             "20261117T210503Z"
+        );
+    }
+
+    #[test]
+    fn the_schedule_is_due_today_until_its_time_has_passed() {
+        use time::macros::datetime;
+        let three = 3 * 60;
+        assert_eq!(
+            next_due(datetime!(2026-11-18 02:59:59 UTC), three),
+            datetime!(2026-11-18 03:00:00 UTC)
+        );
+        // At the minute, or just after, it is tomorrow's: a copy taken at
+        // 03:00 is not taken twice.
+        assert_eq!(
+            next_due(datetime!(2026-11-18 03:00:00 UTC), three),
+            datetime!(2026-11-19 03:00:00 UTC)
+        );
+        assert_eq!(
+            next_due(datetime!(2026-11-18 03:00:00.5 UTC), three),
+            datetime!(2026-11-19 03:00:00 UTC)
+        );
+        assert_eq!(
+            next_due(datetime!(2026-12-31 23:59:30 UTC), 0),
+            datetime!(2027-01-01 00:00:00 UTC)
+        );
+        assert_eq!(
+            next_due(datetime!(2026-11-18 12:00:00 UTC), 23 * 60 + 59),
+            datetime!(2026-11-18 23:59:00 UTC)
         );
     }
 

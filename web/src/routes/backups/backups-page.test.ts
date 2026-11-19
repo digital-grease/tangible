@@ -64,6 +64,13 @@ function backups(extra: Record<string, unknown> = {}) {
     operation: null,
     last_outcome: null,
     max_upload_bytes: 4 * 1024 * 1024 * 1024,
+    schedule: {
+      enabled: true,
+      time: '03:00',
+      next_at: '2026-11-19T03:00:00Z',
+      updated_by: null,
+      updated_at: null,
+    },
     ...extra,
   };
 }
@@ -213,6 +220,32 @@ describe('Backups page', () => {
     accepted = true;
     await fireEvent.click(screen.getByRole('button', { name: 'Upload' }));
     expect(await screen.findByText(/Kept uploaded-20261118T040000Z.dump/)).toBeTruthy();
+  });
+
+  it('saves the schedule an administrator sets', async () => {
+    signIn('administrator');
+    const { asked, bodies } = server({
+      'GET /api/v1/backups': { status: 200, body: backups() },
+      'PUT /api/v1/backups/schedule': {
+        status: 200,
+        body: {
+          enabled: true,
+          time: '04:30',
+          next_at: '2026-11-19T04:30:00Z',
+          updated_by: 'owner',
+        },
+      },
+    });
+    render(Page);
+    expect(await screen.findByText('Every day at 03:00 UTC')).toBeTruthy();
+    const time = screen.getByLabelText('At, in UTC') as HTMLInputElement;
+    expect(time.value).toBe('03:00');
+    await fireEvent.input(time, { target: { value: '04:30' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Save the schedule' }));
+    expect(await screen.findByText('Every day at 04:30 UTC')).toBeTruthy();
+    expect(screen.getByText('Saved.')).toBeTruthy();
+    const sent = bodies[asked.indexOf('PUT /api/v1/backups/schedule')];
+    expect(JSON.parse(String(sent))).toEqual({ enabled: true, time: '04:30' });
   });
 
   it('removes a copy only once asked twice', async () => {

@@ -716,11 +716,25 @@ fn with_policies(
 }
 
 /// Start the runners that keep the library tidy and dressed: deletions
-/// (ADR 0020) and cover art (ADR 0023).
+/// (ADR 0020) and cover art (ADR 0023); and the copies of the database
+/// taken each day (ADR 0026).
 fn start_upkeep(state: &ApiState, serve: &ServeConfig) -> impl Iterator<Item = Stoppable> {
     start_deletions(state, serve.orphan_collection_interval_days)
         .into_iter()
         .chain(start_artwork(state, serve.artwork))
+        .chain(start_backup_schedule(state))
+}
+
+/// Start the runner that takes a copy of the database each day at the time
+/// the Backups page sets, when the server keeps copies.
+fn start_backup_schedule(state: &ApiState) -> Option<Stoppable> {
+    let backups = state.backups()?.clone();
+    let runner = tangible_api::backups::BackupScheduler::new(backups, state.database().clone());
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(runner.run(async {
+        let _ = stopped.await;
+    }));
+    Some((stop, task))
 }
 
 /// Start the runner that fetches covers (ADR 0023), unless

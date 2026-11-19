@@ -269,6 +269,7 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
         Signed(ManageBackups),
     ),
     ("DELETE", "/api/v1/backups/{name}", Signed(ManageBackups)),
+    ("PUT", "/api/v1/backups/schedule", Signed(ManageBackups)),
     // The catalog.
     ("GET", "/api/v1/titles", Signed(Read)),
     ("POST", "/api/v1/titles", Signed(Catalog)),

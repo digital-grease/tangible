@@ -1391,6 +1391,63 @@
         ]
       }
     },
+    "/api/v1/backups/schedule": {
+      "put": {
+        "tags": [
+          "backups"
+        ],
+        "summary": "Set when copies are taken by themselves.",
+        "description": "Take a copy every day at `time` (`HH:MM`, UTC), or none when `enabled` is false. Copies are taken at 03:00 unless set; they count towards `kept` with the rest. A time missed while the server is down is not made up: the next start takes one. Audited as `backup.schedule_changed`. Needs `manage_backups`.",
+        "operationId": "set_backup_schedule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewSchedule"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The schedule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A time that is not HH:MM",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This server keeps no copies",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/backups/uploads": {
       "put": {
         "tags": [
@@ -9963,7 +10020,8 @@
           "kept",
           "writable",
           "tools",
-          "max_upload_bytes"
+          "max_upload_bytes",
+          "schedule"
         ],
         "properties": {
           "copies": {
@@ -10006,6 +10064,10 @@
                 "type": "null"
               }
             ]
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/ScheduleView",
+            "description": "When copies are taken by themselves."
           },
           "tools": {
             "$ref": "#/components/schemas/ToolsStatus",
@@ -15062,6 +15124,25 @@
           }
         }
       },
+      "NewSchedule": {
+        "type": "object",
+        "description": "A new schedule.",
+        "required": [
+          "enabled",
+          "time"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether copies are taken by themselves."
+          },
+          "time": {
+            "type": "string",
+            "description": "The time each day, `HH:MM` in UTC, `00:00` to `23:59`."
+          }
+        },
+        "additionalProperties": false
+      },
       "OidcStatusView": {
         "type": "object",
         "description": "Whether sign-in through a provider is offered.",
@@ -17174,6 +17255,47 @@
           "name": {
             "type": "string",
             "description": "Its name."
+          }
+        }
+      },
+      "ScheduleView": {
+        "type": "object",
+        "description": "When the server takes a copy by itself: every day at a time in UTC.",
+        "required": [
+          "enabled",
+          "time"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether it does."
+          },
+          "next_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the next is due, while it is enabled and copies are kept."
+          },
+          "time": {
+            "type": "string",
+            "description": "The time each day, `HH:MM` in UTC."
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When."
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who last changed it; `null` while it is the default, 03:00."
           }
         }
       },

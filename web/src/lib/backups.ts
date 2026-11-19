@@ -15,6 +15,7 @@ export type Backups = components['schemas']['BackupsView'];
 export type Copy = components['schemas']['CopyEntry'];
 export type CopyKind = components['schemas']['CopyKind'];
 export type Operation = components['schemas']['Operation'];
+export type Schedule = components['schemas']['ScheduleView'];
 
 /** How often the page looks again while something is under way, in milliseconds. */
 export const FOLLOW_EVERY_MS = 2000;
@@ -27,6 +28,22 @@ export function loadBackups(fetcher: typeof fetch = apiFetch): Promise<Result<Ba
 /** Take a copy now; it is taken in the background. */
 export function takeCopy(fetcher: typeof fetch = apiFetch): Promise<Result<Backups>> {
   return apiCall(fetcher, '/api/v1/backups', 'POST');
+}
+
+/** Take a copy every day at `time` (HH:MM, UTC), or none. */
+export function setSchedule(
+  enabled: boolean,
+  time: string,
+  fetcher: typeof fetch = apiFetch,
+): Promise<Result<Schedule>> {
+  return apiCall(fetcher, '/api/v1/backups/schedule', 'PUT', { enabled, time });
+}
+
+/** The schedule, in words. */
+export function scheduleLabel(schedule: Schedule, kept: number): string {
+  if (!schedule.enabled) return 'Copies are taken only at a start and when asked for';
+  if (kept === 0) return `Every day at ${schedule.time} UTC, but copies are turned off`;
+  return `Every day at ${schedule.time} UTC`;
 }
 
 /** Remove a copy. */

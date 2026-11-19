@@ -21,6 +21,12 @@ may change between minor versions, and the release notes say how.
   `uploaded-<time>.dump`, never pruned, up to
   `TANGIBLE_MAX_BACKUP_UPLOAD_BYTES` (4 GiB), and only once `pg_restore`
   reads it as an archive.
+- The server takes a copy of the database every day, at 03:00 UTC unless an
+  administrator sets another time or turns it off on the Backups page
+  (`backup.schedule_changed`), so an install that is never restarted still
+  has a copy a day. Those count towards `TANGIBLE_BACKUPS_KEPT` with the
+  rest. A migration adds the schedule's table, which the version before
+  neither reads nor writes.
 
 ### Fixed
 

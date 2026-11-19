@@ -8,6 +8,7 @@
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import Callout from '$lib/components/ui/Callout.svelte';
+  import Checkbox from '$lib/components/ui/Checkbox.svelte';
   import EmptyState from '$lib/components/ui/EmptyState.svelte';
   import Field from '$lib/components/ui/Field.svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
@@ -24,6 +25,8 @@
     loadBackups,
     operationLabel,
     readiness,
+    scheduleLabel,
+    setSchedule,
     takeCopy,
     totalSize,
     uploadCopy,
@@ -45,6 +48,11 @@
   let confirmingDelete = $state<string | null>(null);
   let deleteProblem = $state<Problem | null>(null);
   let timer: ReturnType<typeof setTimeout> | null = null;
+  /** The schedule being edited, once the page has it. */
+  let scheduleForm = $state<{ enabled: boolean; time: string } | null>(null);
+  let scheduleSaving = $state(false);
+  let scheduleProblem = $state<Problem | null>(null);
+  let scheduleSaved = $state(false);
 
   const deleting = $derived(
     view.kind === 'ready'
@@ -56,7 +64,26 @@
   async function refresh() {
     const result = await loadBackups();
     view = result.kind === 'ok' ? { kind: 'ready', backups: result.data } : result;
+    if (result.kind === 'ok' && scheduleForm === null) {
+      scheduleForm = { enabled: result.data.schedule.enabled, time: result.data.schedule.time };
+    }
     follow();
+  }
+
+  async function saveSchedule(event: SubmitEvent) {
+    event.preventDefault();
+    if (!scheduleForm || scheduleSaving || view.kind !== 'ready') return;
+    scheduleSaving = true;
+    scheduleProblem = null;
+    scheduleSaved = false;
+    const result = await setSchedule(scheduleForm.enabled, scheduleForm.time);
+    scheduleSaving = false;
+    if (result.kind === 'error') {
+      scheduleProblem = result.problem;
+      return;
+    }
+    view = { kind: 'ready', backups: { ...view.backups, schedule: result.data } };
+    scheduleSaved = true;
   }
 
   /** Look again while something is under way, and stop once nothing is. */
@@ -186,6 +213,58 @@
           <div class="refusal">
             <ErrorPanel problem={actionProblem} area="deployment" refusal />
           </div>
+        {/if}
+      </Panel>
+
+      <Panel title="Every day">
+        <p class="schedule-now">
+          <StatusMark
+            tone={backups.schedule.enabled && backups.kept > 0 ? 'ok' : 'idle'}
+            label={scheduleLabel(backups.schedule, backups.kept)}
+          />
+          {#if backups.schedule.next_at}
+            <span class="quiet small"
+              >The next is due <time
+                datetime={backups.schedule.next_at}
+                title={full(backups.schedule.next_at)}>{when(backups.schedule.next_at)}</time
+              >.</span
+            >
+          {/if}
+        </p>
+        {#if scheduleForm}
+          <form class="schedule" onsubmit={saveSchedule}>
+            <Checkbox
+              label="Take a copy every day"
+              hint="One is taken at every start as well. A time missed while the server is down is not made up."
+              bind:checked={scheduleForm.enabled}
+            />
+            <Field label="At, in UTC" hint="Copies taken this way count towards those kept.">
+              {#snippet children({ id, describedBy })}
+                <input
+                  {id}
+                  type="time"
+                  step="60"
+                  required
+                  aria-describedby={describedBy}
+                  disabled={!scheduleForm?.enabled}
+                  bind:value={scheduleForm!.time}
+                />
+              {/snippet}
+            </Field>
+            <div>
+              <Button type="submit" disabled={scheduleSaving}>
+                {scheduleSaving ? 'Saving…' : 'Save the schedule'}
+              </Button>
+            </div>
+          </form>
+          <div aria-live="polite">
+            {#if scheduleSaved}<p class="outcome"><StatusMark tone="ok" label="Saved." /></p>{/if}
+          </div>
+          {#if scheduleProblem}
+            <div class="refusal">
+              <ErrorPanel problem={scheduleProblem} area="deployment" refusal />
+            </div>
+          {/if}
         {/if}
       </Panel>
 
@@ -350,6 +429,14 @@
   .download {
     font-size: var(--text-sm);
   }
+  .schedule-now {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-3);
+    align-items: baseline;
+    margin: 0 0 var(--space-4);
+  }
+  .schedule,
   .upload {
     display: grid;
     gap: var(--space-3);
