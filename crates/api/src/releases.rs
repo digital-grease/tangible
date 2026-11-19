@@ -482,10 +482,29 @@ impl HeldSearch {
     }
 }
 
-/// The searches held, by request. Shared by every clone of the state.
+/// The searches held, by request, and the requests a grab is under way
+/// for. Shared by every clone of the state.
 #[derive(Debug, Clone, Default)]
 pub struct Held {
     searches: Arc<Mutex<HashMap<uuid::Uuid, HeldSearch>>>,
+    grabbing: Arc<Mutex<std::collections::HashSet<uuid::Uuid>>>,
+}
+
+/// A grab under way for one request; the request is free again when this
+/// is dropped, however the grab ends.
+#[derive(Debug)]
+pub struct Grabbing {
+    grabbing: Arc<Mutex<std::collections::HashSet<uuid::Uuid>>>,
+    request: uuid::Uuid,
+}
+
+impl Drop for Grabbing {
+    fn drop(&mut self) {
+        self.grabbing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.request);
+    }
 }
 
 impl Held {
@@ -510,6 +529,18 @@ impl Held {
             }
         }
         searches.insert(request, search);
+    }
+
+    /// Begin a grab for `request`, or `None` while another is under way:
+    /// a grab takes seconds between checking the request and handing the
+    /// release over, and two at once would hand over two.
+    #[must_use]
+    pub fn begin_grab(&self, request: uuid::Uuid) -> Option<Grabbing> {
+        let mut grabbing = self.grabbing.lock().unwrap_or_else(PoisonError::into_inner);
+        grabbing.insert(request).then(|| Grabbing {
+            grabbing: Arc::clone(&self.grabbing),
+            request,
+        })
     }
 
     /// The search held for `request`, while it is held.
@@ -835,6 +866,28 @@ mod tests {
         assert_eq!(held.link(&key).unwrap(), Some(link));
         let other = SecretKey::from_bytes(&[8; 32]).unwrap();
         assert!(held.link(&other).is_err());
+    }
+
+    #[test]
+    fn one_grab_at_a_time_for_a_request_and_free_again_after() {
+        let held = Held::default();
+        let (request, other) = (uuid::Uuid::now_v7(), uuid::Uuid::now_v7());
+        let grab = held.begin_grab(request).expect("the first grab begins");
+        assert!(
+            held.begin_grab(request).is_none(),
+            "a second waits its turn"
+        );
+        let beside = held.begin_grab(other).expect("another request's is free");
+        drop(grab);
+        assert!(
+            held.begin_grab(request).is_some(),
+            "free once the first ends"
+        );
+        // Every clone of the state shares it.
+        let clone = held.clone();
+        assert!(clone.begin_grab(other).is_none());
+        drop(beside);
+        assert!(clone.begin_grab(other).is_some());
     }
 
     #[test]

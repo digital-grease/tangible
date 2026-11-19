@@ -223,6 +223,47 @@ async fn grabbable(state: &ApiState, id: RequestId, doing: &str) -> Result<Reque
     }
 }
 
+fn grab_under_way() -> Problem {
+    Problem::new(
+        ErrorCode::Conflict,
+        "a grab of this request is under way; wait for it to end, then look again",
+    )
+}
+
+/// The request changed while its release was handed over (withdrawn or
+/// declined meanwhile), so it does not take the download: say that the
+/// download is in the client all the same, and what it is now.
+fn handed_over_anyway(
+    refusal: RequestRefusal,
+    id: RequestId,
+    client: &str,
+    import_id: uuid::Uuid,
+) -> Problem {
+    tracing::warn!(
+        request_id = %id,
+        import_id = %import_id,
+        "a release was handed over for a request that changed meanwhile; \
+         its import goes on untied to the request"
+    );
+    match refusal {
+        RequestRefusal::NotFound => Problem::new(
+            ErrorCode::Conflict,
+            format!(
+                "this request was removed while the release was handed to {client}; the \
+                 download goes on there as import {import_id}, tied to no request"
+            ),
+        ),
+        RequestRefusal::Conflict(state) => Problem::new(
+            ErrorCode::Conflict,
+            format!(
+                "this request became {} while the release was handed to {client}; the \
+                 download goes on there as import {import_id}, not tied to the request",
+                state.as_str()
+            ),
+        ),
+    }
+}
+
 fn no_key() -> Problem {
     Problem::new(
         ErrorCode::SecretKeyMissing,
@@ -706,6 +747,12 @@ pub async fn grab_release(
         .map(|raw| raw.trim().parse::<uuid::Uuid>())
         .transpose()
         .map_err(|_| invalid("integration_id is not an integration's id"))?;
+    // One grab of a request at a time: the request is checked here and only
+    // takes the download once the release is handed over, seconds later.
+    let _grabbing = state
+        .releases()
+        .begin_grab(*id.as_uuid())
+        .ok_or_else(grab_under_way)?;
     grabbable(&state, id, "grabbed").await?;
     let held = state.releases().get(*id.as_uuid()).ok_or_else(expired)?;
     let release = held
@@ -756,7 +803,7 @@ pub async fn grab_release(
     )
     .await
     .map_err(|error| unavailable(&error))?
-    .map_err(|refusal| refused(refusal, id, "grabbed"))?;
+    .map_err(|refusal| handed_over_anyway(refusal, id, &client_record.name, import_id))?;
     tracing::info!(
         request_id = %id,
         integration_id = %client_record.id,

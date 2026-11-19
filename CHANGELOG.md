@@ -8,6 +8,14 @@ may change between minor versions, and the release notes say how.
 
 ### Fixed
 
+- Grabbing a release for a request checks the request, hands the release
+  to the download client, and only then ties the download to the request.
+  Two operators grabbing for one request at once both handed a release
+  over; a request withdrawn or declined meanwhile made the grab answer only
+  that it was refused, with the download already in the client and tied to
+  nothing. Now one grab of a request runs at a time, a second is refused
+  before anything is handed over, and a grab whose request changed says the
+  download goes on as an ordinary import and gives its id.
 - A file in the `backups` volume with a quote in its name made the copy
   taken at every start fail, and with it the migration and the server,
   which wait for it; a name with a space was split into the wrong files to
