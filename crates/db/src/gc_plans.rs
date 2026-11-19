@@ -140,7 +140,12 @@ pub enum Refusal {
     AlreadyRequested,
 }
 
-/// Store a plan and its candidates, in one transaction.
+/// Store a plan and its candidates, in one transaction, and let go of the
+/// candidates of every plan a day old that nobody asked to collect: such a
+/// plan expired within its hour and can never be collected, and keeps its
+/// counts on its own row. Without this every plan, the schedule's daily one
+/// while a manifest cannot be read among them, would keep every candidate
+/// for good.
 ///
 /// # Errors
 ///
@@ -191,6 +196,15 @@ pub async fn insert_plan(
         .await
         .map_err(DbError::Query)?;
     }
+    sqlx::query(
+        "DELETE FROM gc_plan_objects o USING gc_plans p
+         WHERE o.plan_id = p.id
+           AND p.collect_requested_at IS NULL
+           AND p.created_at < now() - interval '1 day'",
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
     tx.commit().await.map_err(DbError::Query)
 }
 

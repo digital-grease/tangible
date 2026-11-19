@@ -444,6 +444,105 @@ async fn a_candidate_that_changed_since_the_plan_is_kept() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
+async fn a_recorded_orphan_already_gone_has_its_row_marked_removed() {
+    // A collection that removed a recorded orphan's file and failed before
+    // marking its row (or a file gone by other hands): the next collection
+    // finds the file gone and marks the row, which a scrub would otherwise
+    // report missing for good.
+    let _serial = SERIAL.lock().await;
+    let h = harness().await;
+    let gone = h.old_orphan().await;
+    sqlx::query("INSERT INTO cas_objects (sha256, size_bytes) VALUES ($1, 1000)")
+        .bind(gone.to_hex())
+        .execute(&h.pool)
+        .await
+        .unwrap();
+    let planned = h.plan().await;
+    let plan_id = planned["plan"]["id"].as_str().unwrap().to_owned();
+    std::fs::remove_file(h.objects.object_path(&gone)).unwrap();
+
+    let collected = h.collect(&plan_id).await;
+    assert_eq!(Harness::outcomes(&collected)[&gone.to_hex()], "kept_gone");
+    let marked: bool =
+        sqlx::query_scalar("SELECT removed_at IS NOT NULL FROM cas_objects WHERE sha256 = $1")
+            .bind(gone.to_hex())
+            .fetch_one(&h.pool)
+            .await
+            .unwrap();
+    assert!(marked, "the row says its bytes are gone");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_plan_nobody_asked_for_lets_its_candidates_go_after_a_day() {
+    // Two plans made two days ago: one nobody asked to collect, which
+    // expired within its hour, and one collected. Making a new plan lets go
+    // of the first's candidates and keeps its counts; the collected one
+    // keeps its candidates, the record of what went.
+    let _serial = SERIAL.lock().await;
+    let h = harness().await;
+    let (idle, collected) = (uuid::Uuid::now_v7(), uuid::Uuid::now_v7());
+    for (plan, asked) in [(idle, false), (collected, true)] {
+        sqlx::query(
+            "INSERT INTO gc_plans (id, created_at, grace_seconds, certain, candidate_count,
+                 candidate_bytes, stale_partial_files, collect_requested_at, collected_at,
+                 removed_count, removed_bytes, kept_count, kept_bytes, partial_files_removed)
+             VALUES ($1, now() - interval '2 days', 604800, true, 1, 10, 0,
+                     CASE WHEN $2 THEN now() - interval '2 days' END,
+                     CASE WHEN $2 THEN now() - interval '2 days' END,
+                     CASE WHEN $2 THEN 1 END, CASE WHEN $2 THEN 10 END,
+                     CASE WHEN $2 THEN 0 END, CASE WHEN $2 THEN 0 END,
+                     CASE WHEN $2 THEN 0 END)",
+        )
+        .bind(plan)
+        .bind(asked)
+        .execute(&h.pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO gc_plan_objects (plan_id, sha256, size_bytes, modified_at, recorded)
+             VALUES ($1, $2, 10, now() - interval '30 days', false)",
+        )
+        .bind(plan)
+        .bind(format!("{:0>64}", plan.simple().to_string()))
+        .execute(&h.pool)
+        .await
+        .unwrap();
+    }
+
+    h.plan().await;
+    let left = |plan: uuid::Uuid| {
+        let pool = h.pool.clone();
+        async move {
+            let objects: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM gc_plan_objects WHERE plan_id = $1")
+                    .bind(plan)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            let count: i64 =
+                sqlx::query_scalar("SELECT candidate_count FROM gc_plans WHERE id = $1")
+                    .bind(plan)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            (objects, count)
+        }
+    };
+    assert_eq!(
+        left(idle).await,
+        (0, 1),
+        "its candidates gone, its count kept"
+    );
+    assert_eq!(
+        left(collected).await,
+        (1, 1),
+        "the record of what went stays"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn an_uncertain_expired_or_unknown_plan_is_refused_and_only_administrators_plan() {
     let _serial = SERIAL.lock().await;
     let h = harness().await;

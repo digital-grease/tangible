@@ -23,6 +23,16 @@ may change between minor versions, and the release notes say how.
   copies being removed at all. The copy now counts and removes only the
   copies named as it takes them, by name, and reads the number as a
   decimal; a file you put there under another name is never touched.
+- A collection that removed a recorded orphan's file and failed before
+  marking its row left the row saying the file was there, and every scrub
+  after reported it missing; the next collection found the file gone and
+  left the row as it was. It now marks such a row removed.
+- Every storage plan kept a row for each of its candidates for good, even
+  a plan nobody asked to collect, which expires within the hour; the
+  schedule makes one a day while a manifest cannot be read. Making a plan
+  now lets go of the candidates of plans a day old that nobody asked to
+  collect; their counts stay, and a collected plan keeps the record of
+  what went.
 - A file in the library whose time no date can hold, past the year 9999
   (which a damaged or restored filesystem can leave), made the storage
   plan fail and, with scheduled orphan collection on, stopped the server's

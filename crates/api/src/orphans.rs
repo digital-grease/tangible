@@ -284,6 +284,15 @@ impl Check<'_> {
             }
         };
         let Some((length, modified)) = file else {
+            // Gone already: by a collection that failed after removing it
+            // (its row never marked), or by other hands. A row that would
+            // let it go is marked removed, as its bytes are, so a scrub does
+            // not report it missing for good; one that holds it is left.
+            if let RowHold::Removable(removal) =
+                gc_plans::hold_row(self.database.pool(), sha256).await?
+            {
+                removal.finish().await?;
+            }
             return Ok(Outcome::KeptGone);
         };
         if whole(length) != size
