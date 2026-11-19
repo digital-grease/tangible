@@ -31,9 +31,9 @@ services:
       migrate:
         condition: service_completed_successfully
     environment:
-      # The password is the one `init` keeps in the secrets volume.
+      # The password is the one `init` keeps in the database-password volume.
       TANGIBLE_DATABASE_URL: postgres://tangible@postgres:5432/tangible
-      TANGIBLE_DATABASE_PASSWORD_FILE: /var/lib/tangible/secrets/postgres-password
+      TANGIBLE_DATABASE_PASSWORD_FILE: /var/lib/tangible/database-password/postgres-password
       TANGIBLE_BIND: 0.0.0.0:8080
       TANGIBLE_PUBLIC_URL: ${TANGIBLE_PUBLIC_URL:-http://localhost:8080}
       TANGIBLE_STORAGE_KIND: filesystem
@@ -131,6 +131,8 @@ services:
     volumes:
       - library:/var/lib/tangible/library
       - staging:/var/lib/tangible/staging
+      - database-password:/var/lib/tangible/database-password:ro
+      # The integration secret key: mounted here alone.
       - secrets:/var/lib/tangible/secrets:ro
       # - /path/to/romm/library/roms:/var/lib/tangible/romm
     ports:
@@ -167,13 +169,15 @@ services:
       POSTGRES_USER: tangible
       POSTGRES_DB: tangible
       # Read when the database is first created, and only then.
-      POSTGRES_PASSWORD_FILE: /var/lib/tangible/secrets/postgres-password
+      POSTGRES_PASSWORD_FILE: /var/lib/tangible/database-password/postgres-password
     depends_on:
       init:
         condition: service_completed_successfully
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - secrets:/var/lib/tangible/secrets:ro
+      # The password alone: the key that opens the integration secrets this
+      # database holds is never in its container (ADR 0016).
+      - database-password:/var/lib/tangible/database-password:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U tangible"]
       interval: 10s
@@ -220,7 +224,7 @@ services:
       PGDATABASE: tangible
       # How many copies to keep, newest first. 0 takes none.
       TANGIBLE_BACKUPS_KEPT: ${TANGIBLE_BACKUPS_KEPT:-10}
-    # With the database's password from the secrets volume. A command given
+    # With the database's password from its volume. A command given
     # to it (`docker compose run --rm backup ls -l /backups`, or pg_restore)
     # runs in place of taking a copy.
     entrypoint:
@@ -228,7 +232,7 @@ services:
       - -eu
       - -c
       - |
-        PGPASSWORD=$$(cat /var/lib/tangible/secrets/postgres-password)
+        PGPASSWORD=$$(cat /var/lib/tangible/database-password/postgres-password)
         export PGPASSWORD
         if [ "$$#" -gt 0 ]; then exec "$$@"; fi
         kept=$$TANGIBLE_BACKUPS_KEPT
@@ -251,7 +255,7 @@ services:
       - backup
     volumes:
       - backups:/backups
-      - secrets:/var/lib/tangible/secrets:ro
+      - database-password:/var/lib/tangible/database-password:ro
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -270,13 +274,13 @@ services:
         condition: service_completed_successfully
     environment:
       TANGIBLE_DATABASE_URL: postgres://tangible@postgres:5432/tangible
-      TANGIBLE_DATABASE_PASSWORD_FILE: /var/lib/tangible/secrets/postgres-password
+      TANGIBLE_DATABASE_PASSWORD_FILE: /var/lib/tangible/database-password/postgres-password
       TANGIBLE_LOG: ${TANGIBLE_LOG:-tangible=info,tower_http=info}
       # A thread per CPU by default, which on a large machine is more than
       # the process limit below; a short step needs two.
       TOKIO_WORKER_THREADS: "2"
     volumes:
-      - secrets:/var/lib/tangible/secrets:ro
+      - database-password:/var/lib/tangible/database-password:ro
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -284,15 +288,19 @@ services:
     read_only: true
     pids_limit: 64
 
-  # First of all, the secrets a new deployment needs, each made once and
-  # kept in the secrets volume: the database's password and the key
-  # integrations' secrets are sealed with, so there is nothing to invent
-  # before the first `up`. An install from before keeps POSTGRES_PASSWORD in
-  # .env, which its database was created with, and init keeps that one.
+  # First of all, the secrets a new deployment needs, each made once: the
+  # database's password, in the database-password volume, and the key
+  # integrations' secrets are sealed with, in the secrets volume, so there is
+  # nothing to invent before the first `up`. An install from before 0.4.1
+  # keeps POSTGRES_PASSWORD in .env, which its database was created with, and
+  # init keeps that one; one from 0.4.1 has it in the secrets volume, and
+  # init copies it.
   init:
     image: ${TANGIBLE_IMAGE:-ghcr.io/digital-grease/tangible:v0.4}
     command: ["init"]
     restart: "no"
+    # It writes two files and talks to nothing.
+    network_mode: none
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
       TANGIBLE_LOG: ${TANGIBLE_LOG:-tangible=info,tower_http=info}
@@ -300,6 +308,7 @@ services:
       TOKIO_WORKER_THREADS: "2"
     volumes:
       - secrets:/var/lib/tangible/secrets
+      - database-password:/var/lib/tangible/database-password
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -312,8 +321,11 @@ volumes:
   staging:
   postgres-data:
   backups:
-  # The database's password and the integration secret key. Back it up apart
-  # from the database (deploy/README.md, "Backups").
+  # The database's password, for PostgreSQL and what connects to it.
+  database-password:
+  # The integration secret key, for the server alone. Back it up apart from
+  # the database (deploy/README.md, "Backups"). From 0.4.1 it may also hold
+  # the database's password, which init copied into database-password.
   secrets:
 
 # Secrets of your own for the server: the metrics token, the identity

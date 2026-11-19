@@ -87,11 +87,11 @@ RUN useradd --system --create-home --uid 10001 tangible
 # does not have is created owned by root: the first end-to-end run found the
 # server refused its own library ("Permission denied") on a fresh deployment,
 # and the worker's state volume would have failed the same way.
-# The secrets directory stays readable by others: PostgreSQL reads its
-# password there as its own user, and `tangible init` makes the key in it
-# readable by this user alone.
+# The database-password directory stays readable by others: PostgreSQL reads
+# its password there as its own user. `tangible init` makes the key in the
+# secrets directory readable by this user alone.
 RUN mkdir -p /var/lib/tangible/library /var/lib/tangible/staging /var/lib/tangible/secrets \
-      /var/lib/tangible-worker \
+      /var/lib/tangible/database-password /var/lib/tangible-worker \
  && chown -R tangible:tangible /var/lib/tangible /var/lib/tangible-worker
 USER tangible
 

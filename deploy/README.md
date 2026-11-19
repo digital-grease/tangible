@@ -57,8 +57,10 @@ mappings, ports, and the env file. To run exactly the image you verified, set
 `TANGIBLE_IMAGE` in `.env` to its digest ("Verifying a release").
 
 `up` first runs `init`, which makes the database's password and the
-integration secret key the first time and keeps them in the `secrets` volume
-("Integration secrets"), so there is nothing to choose before starting. Then
+integration secret key the first time and keeps them, the password in the
+`database-password` volume and the key in the `secrets` volume, which only
+the server mounts ("Integration secrets"), so there is nothing to choose
+before starting. Then
 PostgreSQL, then two short steps before the server: `backup` copies the
 database into the `backups` volume ("Backups"), and `migrate` applies the
 migrations this version needs, usually none. Only once these have finished
@@ -928,7 +930,9 @@ read it back, through the web UI or the API.
 
 The first `docker compose up` makes that key: `init` writes it to the
 `secrets` volume, readable only by the server's user (10001 in the image),
-beside the database's password, and keeps it from then on. Diagnostics says
+and keeps it from then on. Only the server mounts that volume: PostgreSQL's
+container never holds the key that opens what the database stores, and the
+database's password is in a volume of its own. Diagnostics says
 whether a key is loaded and whether it opens every stored password.
 
 Back the key up apart from the database: a database backup holds the
@@ -1215,7 +1219,7 @@ Three volumes hold everything that cannot be rebuilt:
 |---|---|
 | `postgres-data` | the catalogue, jobs, burn history, physical copies, accounts, audit trail |
 | `library` | every stored file and every artifact's manifest |
-| `secrets` | the database's password, and the key integration passwords are sealed with ("Integration secrets") |
+| `secrets` | the key integration passwords are sealed with ("Integration secrets") |
 | each worker's `burner-*-cache` | its credential, and its recovery record while a burn is in progress |
 
 `staging` holds only work in progress and needs no backup. `backups` holds

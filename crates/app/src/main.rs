@@ -1630,6 +1630,7 @@ mod tests {
         "TANGIBLE_SECRET_KEY_FILE",
         // Where `tangible init` keeps the secrets, not the secrets.
         "TANGIBLE_SECRETS_DIR",
+        "TANGIBLE_DATABASE_PASSWORD_DIR",
         "TANGIBLE_SERVER_URL",
         "TANGIBLE_STAGING_ROOT",
         "TANGIBLE_STORAGE_KIND",

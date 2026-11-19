@@ -36,6 +36,16 @@ may change between minor versions, and the release notes say how.
   The requests to Twitch and IGDB, which carry the IGDB client's secret and
   ID, follow none either, and a token lifetime from Twitch too large for
   the clock no longer panics.
+- In 0.4.1 the integration secret key sat in the PostgreSQL container: the
+  `secrets` volume held it beside the database's password, and PostgreSQL,
+  the backup and migrations mounted the whole volume. Code running as root
+  in the database's container could read the key that opens the
+  integration passwords the database stores, which keeping the key outside
+  the database was meant to prevent. The password now has a volume of its
+  own, `database-password`, which those three mount; only `init` and the
+  server mount `secrets`. On the first `up`, `init` copies an existing
+  password from `secrets` and leaves it there, so 0.4.1 still runs on the
+  same volumes. `init` also runs with no network now.
 
 ## 0.4.1 (2026-11-18)
 

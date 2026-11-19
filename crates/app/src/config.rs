@@ -80,7 +80,7 @@ pub struct CommonConfig {
 
     /// A file holding the database password, which then takes the place of
     /// any password in the connection URL: compose.yaml points it at the one
-    /// `tangible init` keeps in the secrets volume.
+    /// `tangible init` keeps in the database-password volume.
     #[arg(long, env = "TANGIBLE_DATABASE_PASSWORD_FILE")]
     pub database_password_file: Option<PathBuf>,
 
@@ -545,13 +545,24 @@ pub enum SecretsCommand {
 /// Settings for `tangible init`.
 #[derive(Debug, Clone, Args)]
 pub struct InitConfig {
-    /// The directory the secrets are kept in: compose.yaml's secrets volume.
+    /// The directory the integration secret key is kept in: compose.yaml's
+    /// secrets volume, which only the server mounts.
     #[arg(
         long,
         env = "TANGIBLE_SECRETS_DIR",
         default_value = "/var/lib/tangible/secrets"
     )]
     pub secrets_dir: PathBuf,
+
+    /// The directory the database's password is kept in: compose.yaml's
+    /// database-password volume, which PostgreSQL, the backup, migrations
+    /// and the server mount, without the key.
+    #[arg(
+        long,
+        env = "TANGIBLE_DATABASE_PASSWORD_DIR",
+        default_value = "/var/lib/tangible/database-password"
+    )]
+    pub database_password_dir: PathBuf,
 
     /// The PostgreSQL password to keep, in place of making one: that of an
     /// install from before `tangible init`, whose database was created with
