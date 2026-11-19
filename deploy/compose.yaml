@@ -233,12 +233,19 @@ services:
         if [ "$$#" -gt 0 ]; then exec "$$@"; fi
         kept=$$TANGIBLE_BACKUPS_KEPT
         case $$kept in ''|*[!0-9]*) echo "TANGIBLE_BACKUPS_KEPT is not a number: $$kept" >&2; exit 2;; esac
+        # Read as a decimal: the shell takes a leading 0 as octal, or fails.
+        kept=$$(echo "$$kept" | sed 's/^0*//')
+        kept=$${kept:-0}
+        case $$kept in ??????*) echo "TANGIBLE_BACKUPS_KEPT is too large: $$kept" >&2; exit 2;; esac
         if [ "$$kept" -eq 0 ]; then echo "TANGIBLE_BACKUPS_KEPT is 0: no copy taken"; exit 0; fi
         rm -f /backups/.tangible-*.part
         stamp=$$(date -u +%Y%m%dT%H%M%SZ)
         pg_dump --format=custom --no-password --file="/backups/.tangible-$$stamp.part"
         mv "/backups/.tangible-$$stamp.part" "/backups/tangible-$$stamp.dump"
-        ls -1 /backups/tangible-*.dump | sort -r | tail -n "+$$((kept + 1))" | xargs -r rm -f --
+        # Only the copies named as this takes them count and go: one you
+        # named yourself, or anything else in the volume, is never touched.
+        ls -1 /backups | grep -E '^tangible-[0-9]{8}T[0-9]{6}Z[.]dump$$' | sort -r |
+          tail -n "+$$((kept + 1))" | while read -r old; do rm -f -- "/backups/$$old"; done
         echo "copied the database to tangible-$$stamp.dump in the backups volume"
       # The script's name, before any command given to it.
       - backup

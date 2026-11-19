@@ -8,6 +8,13 @@ may change between minor versions, and the release notes say how.
 
 ### Fixed
 
+- A file in the `backups` volume with a quote in its name made the copy
+  taken at every start fail, and with it the migration and the server,
+  which wait for it; a name with a space was split into the wrong files to
+  remove. `TANGIBLE_BACKUPS_KEPT` with a leading zero (`08`) stopped old
+  copies being removed at all. The copy now counts and removes only the
+  copies named as it takes them, by name, and reads the number as a
+  decimal; a file you put there under another name is never touched.
 - A file in the library whose time no date can hold, past the year 9999
   (which a damaged or restored filesystem can leave), made the storage
   plan fail and, with scheduled orphan collection on, stopped the server's
