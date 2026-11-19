@@ -280,7 +280,13 @@ pub async fn delete_now(
         tx.rollback().await.map_err(DbError::Query)?;
         return Ok(DeletionChange::NotFound);
     };
-    let now = OffsetDateTime::now_utc();
+    // The database's clock, which `due_for_deletion` reads it against: by
+    // this server's, a clock ahead of the database's would leave it not yet
+    // due when the runner is nudged, waiting for the next pass.
+    let now: OffsetDateTime = sqlx::query_scalar("SELECT now()")
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(DbError::Query)?;
     let next = match current.delete_now(now) {
         Ok(next) => next,
         Err(error) => {

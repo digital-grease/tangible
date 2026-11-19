@@ -8,6 +8,10 @@ may change between minor versions, and the release notes say how.
 
 ### Fixed
 
+- "Delete now" set an artifact's deletion due by the server's clock, and
+  the deletion runner finds it due by the database's: with the server's
+  clock ahead, the runner was nudged, found nothing due, and the files
+  waited up to the next pass, 15 minutes. It now uses the database's.
 - Grabbing a release for a request checks the request, hands the release
   to the download client, and only then ties the download to the request.
   Two operators grabbing for one request at once both handed a release
