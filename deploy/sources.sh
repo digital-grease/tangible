@@ -9,7 +9,10 @@
 # xorriso, cdrdao and glibc among them, not only Tangible's own. The runtime
 # stage installs nothing but Debian packages, so each one's source is a
 # Debian source package at an exact version, archived permanently by
-# snapshot.debian.org. This lists them, with each upstream project's own
+# snapshot.debian.org. The one exception, pg_dump and pg_restore, is copied
+# from Debian's postgresql-client-17 beside the libpq5 built from the same
+# source at the same version, which the Dockerfile pins, so libpq5's row
+# names their source too. This lists them, with each upstream project's own
 # address, from the image itself rather than from the Dockerfile, so it names
 # what actually shipped.
 #

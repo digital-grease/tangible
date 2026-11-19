@@ -37,19 +37,38 @@ RUN cargo build --release --locked -p tangible-app
 COPY deploy/third-party-notices.py ./deploy/
 RUN python3 deploy/third-party-notices.py > THIRD_PARTY_NOTICES-rust.txt
 
+# pg_dump and pg_restore, which take and restore copies of the database
+# (ADR 0026), from Debian's postgresql-client-17: 17, the major version of
+# the PostgreSQL the Compose files run, since pg_dump copies no newer
+# server. Only those two programs go on to the runtime image. The package
+# brings psql and the rest of PostgreSQL's client programs, and Perl, about
+# 50 MB, for wrapper scripts Tangible never runs. The version is kept, so
+# the runtime installs the library the two use from the same build.
+FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS pg-tools
+RUN apt-get update \
+ && apt-get install --no-install-recommends -y postgresql-client-17 \
+ && dpkg-query -W -f '${Version}' postgresql-client-17 > /postgresql-client-version \
+ && rm -rf /var/lib/apt/lists/*
+
 FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS runtime
 
 # xorriso for ISO-oriented workflows, cdrdao for DAO/audio/mixed-mode CD,
 # mame-tools for chdman, which makes CHD derivatives (it brings SDL2 and its
 # libraries, about 75 MB; Debian builds chdman only in that package).
 # ca-certificates for TLS to the database and integration endpoints.
-# postgresql-client-17 for pg_dump and pg_restore, which take and restore
-# copies of the database (ADR 0026): 17, the major version of the
-# PostgreSQL the Compose files run, since pg_dump copies no newer server.
+# libpq5, and the compression and TLS libraries, for pg_dump and pg_restore
+# (the pg-tools stage above). libpq5 is built from the same Debian source,
+# postgresql-17, so it is pinned to the version the two programs came from:
+# SOURCES.md and the vulnerability scan, which read the installed packages,
+# then name the source and version of all three. A local build whose
+# pg-tools stage was cached before a newer PostgreSQL release reached the
+# archive fails here, for want of that version: rebuild with
+# --no-cache-filter pg-tools. The release builds without a cache.
 #
 # Installed from distro packages on purpose: publishing this image conveys
 # object code for every GPL binary in it, and distro packaging means the
-# corresponding source is already archived upstream.
+# corresponding source is already archived upstream. pg_dump and pg_restore
+# are Debian's own builds too, from the package named above.
 #
 # NEVER ADD, in any form:
 #   cdrtools / cdrkit / wodim / genisoimage  CDDL+GPL mix, not distributable
@@ -71,6 +90,7 @@ FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1de
 # daily, and the release workflow refuses an image with a fixable high or
 # critical vulnerability. SOURCES.md is read from the built image, so it
 # names the upgraded versions.
+COPY --from=pg-tools /postgresql-client-version /tmp/postgresql-client-version
 RUN apt-get update \
  && apt-get upgrade -y \
  && apt-get install --no-install-recommends -y \
@@ -78,8 +98,21 @@ RUN apt-get update \
       cdrdao \
       mame-tools \
       ca-certificates \
-      postgresql-client-17 \
- && rm -rf /var/lib/apt/lists/*
+      "libpq5=$(cat /tmp/postgresql-client-version)" \
+      liblz4-1 \
+      libssl3t64 \
+      libzstd1 \
+      zlib1g \
+ && rm -rf /var/lib/apt/lists/* /tmp/postgresql-client-version
+
+# Where Debian's package puts them, which is where the server looks
+# (TANGIBLE_POSTGRES_TOOLS_DIR). Each must start, every library found.
+COPY --from=pg-tools /usr/lib/postgresql/17/bin/pg_dump /usr/lib/postgresql/17/bin/pg_restore \
+     /usr/lib/postgresql/17/bin/
+RUN set -e; for tool in pg_dump pg_restore; do \
+      "/usr/lib/postgresql/17/bin/$tool" --version; \
+      if ldd "/usr/lib/postgresql/17/bin/$tool" | grep 'not found'; then exit 1; fi; \
+    done
 
 # Unprivileged by default. The worker gains device access through the device
 # mapping in compose.hardware.yaml, not through user privilege. The group's

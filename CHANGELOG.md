@@ -13,8 +13,10 @@ may change between minor versions, and the release notes say how.
   downloads one, uploads one from another install, and removes one, each
   audited (`backup.taken`, `backup.downloaded`, `backup.uploaded`,
   `backup.deleted`) and needing the new `manage_backups` permission. The
-  server image carries PostgreSQL 17's client tools for it, and the server
-  mounts the `backups` volume, which the `backup` service now makes the
+  server image carries PostgreSQL 17's `pg_dump` and `pg_restore` for it,
+  Debian's own builds, with the `libpq5` they use and none of the rest of
+  the client package (about 7 MB in all), and the server mounts the
+  `backups` volume, which the `backup` service now makes the
   image group's (999), setgid, with every copy readable by that group
   alone. Copies the server takes are named and pruned as the `backup`
   service's are (`TANGIBLE_BACKUPS_KEPT`); one uploaded is kept as
