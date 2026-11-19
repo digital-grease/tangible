@@ -312,10 +312,25 @@ pub async fn plan_in_full(
 }
 
 /// Whether an object is younger than the grace period as of `now`. One
-/// written in the future, by a clock that disagrees, is young.
+/// written in the future, by a clock that disagrees, is young, and so is one
+/// whose time no date can hold.
 fn young(modified: std::time::SystemTime, now: OffsetDateTime, grace: Duration) -> bool {
     let grace = time::Duration::try_from(grace).unwrap_or(time::Duration::MAX);
-    now - OffsetDateTime::from(modified) < grace
+    file_time(modified).is_none_or(|modified| now - modified < grace)
+}
+
+/// A file's time as a date, or `None` when no date can hold it: a time past
+/// the year 9999 or before -9999, which a corrupt or restored filesystem can
+/// carry and `OffsetDateTime::from` would panic on.
+pub(crate) fn file_time(at: std::time::SystemTime) -> Option<OffsetDateTime> {
+    match at.duration_since(std::time::UNIX_EPOCH) {
+        Ok(after) => time::Duration::try_from(after)
+            .ok()
+            .and_then(|after| OffsetDateTime::UNIX_EPOCH.checked_add(after)),
+        Err(before) => time::Duration::try_from(before.duration())
+            .ok()
+            .and_then(|before| OffsetDateTime::UNIX_EPOCH.checked_sub(before)),
+    }
 }
 
 /// Whether collection would remove an object: nothing marks it, and it is
@@ -443,7 +458,8 @@ fn assess(
         .map(|object| GcCandidate {
             sha256: object.digest.to_hex(),
             size_bytes: object.size_bytes,
-            modified_at: rfc3339(OffsetDateTime::from(object.modified)),
+            // A candidate is not young, so its time is a date.
+            modified_at: rfc3339(file_time(object.modified).unwrap_or(OffsetDateTime::UNIX_EPOCH)),
             recorded: recorded.contains(&object.digest),
         })
         .collect();
@@ -505,6 +521,21 @@ mod tests {
 
     fn days_ago(days: u32) -> SystemTime {
         SystemTime::from(now()) - DAY * days
+    }
+
+    #[test]
+    fn a_file_time_no_date_can_hold_is_young_not_a_panic() {
+        // Past the year 9999 and before -9999: kept, never collected, and
+        // the planner and the deletion runner do not die on it.
+        let far = SystemTime::UNIX_EPOCH + Duration::from_secs(400_000_000_000);
+        let long_ago = SystemTime::UNIX_EPOCH - Duration::from_secs(400_000_000_000);
+        assert_eq!(file_time(far), None);
+        assert_eq!(file_time(long_ago), None);
+        assert!(young(far, now(), DAY * 7));
+        assert!(young(long_ago, now(), DAY * 7));
+        // An ordinary time still converts exactly.
+        assert_eq!(file_time(SystemTime::from(now())), Some(now()));
+        assert!(!young(days_ago(8), now(), DAY * 7));
     }
 
     fn object(n: u8, size: u64, modified: SystemTime) -> StoredObject {

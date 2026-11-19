@@ -4,6 +4,25 @@ Notable changes to Tangible, newest first. Versions follow semantic
 versioning; during 0.x the API, the manifest schema and the database schema
 may change between minor versions, and the release notes say how.
 
+## Unreleased
+
+### Fixed
+
+- A file in the library whose time no date can hold, past the year 9999
+  (which a damaged or restored filesystem can leave), made the storage
+  plan fail and, with scheduled orphan collection on, stopped the server's
+  deletion runner until the next restart, so deletions and collections
+  waited. Such a file now counts as recent and is kept.
+
+### Security
+
+- Collecting orphaned files followed a link put in place of the library's
+  `objects/incoming` directory, or of one of the directories an object sits
+  in, and removed old files where it led, though the plan had counted none
+  of them. Collection now holds to the planner's rule and lists, inspects
+  and removes nothing it reaches through a link. It took someone replacing
+  a directory in the library with a link.
+
 ## 0.4.1 (2026-11-18)
 
 Tangible installs and upgrades with one command. Download a release's

@@ -125,7 +125,9 @@ pub async fn make_plan(
         .map(|candidate| NewPlanObject {
             sha256: candidate.object.digest.to_hex(),
             size_bytes: whole(candidate.object.size_bytes),
-            modified_at: to_micros(candidate.object.modified),
+            // A candidate is not young, so its time is a date
+            // (crate::gc::young).
+            modified_at: to_micros(candidate.object.modified).unwrap_or(OffsetDateTime::UNIX_EPOCH),
             recorded: candidate.recorded,
             import_job_id: origins.get(&candidate.object.digest).copied(),
         })
@@ -284,7 +286,10 @@ impl Check<'_> {
         let Some((length, modified)) = file else {
             return Ok(Outcome::KeptGone);
         };
-        if whole(length) != size || to_micros(modified) != modified_at || modified >= self.cutoff {
+        if whole(length) != size
+            || to_micros(modified) != Some(modified_at)
+            || modified >= self.cutoff
+        {
             return Ok(Outcome::KeptChanged);
         }
         match gc_plans::hold_row(self.database.pool(), sha256).await? {
@@ -343,11 +348,14 @@ fn whole(value: u64) -> i64 {
 }
 
 /// A file time to the microsecond, as PostgreSQL keeps a timestamp, so a
-/// file's time can be compared with the one its plan recorded.
-fn to_micros(at: SystemTime) -> OffsetDateTime {
-    let at = OffsetDateTime::from(at);
-    at.replace_nanosecond(at.nanosecond() / 1_000 * 1_000)
-        .unwrap_or(at)
+/// file's time can be compared with the one its plan recorded; `None` when
+/// no date can hold it ([`crate::gc::file_time`]).
+fn to_micros(at: SystemTime) -> Option<OffsetDateTime> {
+    let at = crate::gc::file_time(at)?;
+    Some(
+        at.replace_nanosecond(at.nanosecond() / 1_000 * 1_000)
+            .unwrap_or(at),
+    )
 }
 
 #[cfg(test)]
@@ -418,12 +426,22 @@ mod tests {
     #[test]
     fn a_file_time_keeps_its_microseconds_and_drops_the_rest() {
         let at = SystemTime::UNIX_EPOCH + Duration::new(1_800_000_000, 123_456_789);
-        let micros = to_micros(at);
+        let micros = to_micros(at).unwrap();
         assert_eq!(micros.nanosecond(), 123_456_000);
         assert_eq!(micros.unix_timestamp(), 1_800_000_000);
         // Before 1970 as well: the whole second is not moved.
         let early = SystemTime::UNIX_EPOCH - Duration::new(10, 500_000_001);
-        assert_eq!(to_micros(early).nanosecond(), 499_999_000);
+        assert_eq!(to_micros(early).unwrap().nanosecond(), 499_999_000);
+    }
+
+    #[test]
+    fn a_file_time_no_date_can_hold_is_none_not_a_panic() {
+        // About the year 14645, which btrfs, ZFS or a restore tool can leave
+        // on a file; `OffsetDateTime::from` panics on it.
+        let far = SystemTime::UNIX_EPOCH + Duration::from_secs(400_000_000_000);
+        assert_eq!(to_micros(far), None);
+        let long_ago = SystemTime::UNIX_EPOCH - Duration::from_secs(400_000_000_000);
+        assert_eq!(to_micros(long_ago), None);
     }
 
     #[test]

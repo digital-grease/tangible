@@ -16,7 +16,7 @@ use std::time::SystemTime;
 
 use tangible_domain::Sha256Digest;
 
-use crate::filesystem::{FilesystemStore, StorageError};
+use crate::filesystem::{FilesystemStore, StorageError, is_real_dir, through_a_link};
 use crate::object_key::{ALGORITHM_DIR, INCOMING_DIR, OBJECTS_DIR};
 
 /// One object found in the tree.
@@ -154,6 +154,11 @@ impl FilesystemStore {
     /// [`StorageError::Io`] if `incoming` cannot be read.
     pub async fn partial_files(&self) -> Result<Vec<PartialFile>, StorageError> {
         let incoming = self.root().join(OBJECTS_DIR).join(INCOMING_DIR);
+        // As the walk: an `incoming` that is a link is not one (ADR 0024,
+        // what was planned is the most that goes).
+        if !is_real_dir(&incoming).await {
+            return Ok(Vec::new());
+        }
         tokio::task::spawn_blocking(move || {
             Ok(entries(&incoming)?
                 .into_iter()
@@ -185,6 +190,9 @@ impl FilesystemStore {
         digest: &Sha256Digest,
     ) -> Result<Option<(u64, SystemTime)>, StorageError> {
         let path = self.object_path(digest);
+        if !self.object_dirs_are_real(digest).await {
+            return Err(through_a_link("reading an object's metadata", path));
+        }
         match tokio::fs::symlink_metadata(&path).await {
             Ok(metadata) if metadata.is_file() => Ok(Some((metadata.len(), modified(&metadata)))),
             Ok(_) => Ok(None),
@@ -216,7 +224,11 @@ impl FilesystemStore {
         if !plain {
             return Ok(false);
         }
-        let path = self.root().join(OBJECTS_DIR).join(INCOMING_DIR).join(name);
+        let incoming = self.root().join(OBJECTS_DIR).join(INCOMING_DIR);
+        if !is_real_dir(&incoming).await {
+            return Ok(false);
+        }
+        let path = incoming.join(name);
         let failed = |operation, source| StorageError::Io {
             operation,
             path: path.clone(),

@@ -312,6 +312,75 @@ fn file_identity(metadata: &std::fs::Metadata) -> u64 {
     metadata.len()
 }
 
+/// A file last written thirty days ago, well past any grace period.
+fn write_old(path: &Path, bytes: &[u8]) {
+    std::fs::write(path, bytes).expect("write");
+    let month = std::time::Duration::from_hours(30 * 24);
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .expect("open")
+        .set_modified(std::time::SystemTime::now() - month)
+        .expect("set its time");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn collection_follows_no_link_in_place_of_incoming() {
+    // An `incoming` that is a link to somewhere else: the planner's walk
+    // counts it as unrecognized, with no partial file, so collection must
+    // not list or remove anything through it (docs/STORAGE.md 9).
+    let (dir, store) = store().await;
+    let elsewhere = TempDir::new().expect("temp dir");
+    let precious = elsewhere.path().join("precious.txt");
+    write_old(&precious, b"not the library's");
+    let incoming = dir.path().join("objects").join("incoming");
+    std::fs::remove_dir(&incoming).expect("remove incoming");
+    std::os::unix::fs::symlink(elsewhere.path(), &incoming).expect("link");
+
+    let inventory = store.inventory().await.expect("inventory");
+    assert!(inventory.partial_files.is_empty());
+    assert_eq!(inventory.unrecognized_count, 1);
+
+    assert!(store.partial_files().await.expect("partials").is_empty());
+    let now = std::time::SystemTime::now();
+    assert!(
+        !store
+            .remove_stale_partial("precious.txt", now)
+            .await
+            .expect("remove a partial")
+    );
+    assert_eq!(store.clean_incoming().await.expect("clean"), 0);
+    assert!(precious.exists(), "nothing through the link was removed");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_object_reached_through_a_linked_directory_is_left_alone() {
+    // One of an object's directories replaced by a link to a copy of it
+    // elsewhere: the walk does not count the object, and collection neither
+    // inspects nor removes it.
+    let (dir, store) = store().await;
+    let stored = store
+        .put_stream(&b"behind a link"[..], fast())
+        .await
+        .expect("store");
+    let path = store.object_path(&stored.digest);
+    let second = path.parent().expect("its directory").to_path_buf();
+    let elsewhere = TempDir::new().expect("temp dir");
+    let moved = elsewhere.path().join("moved");
+    std::fs::rename(&second, &moved).expect("move the directory");
+    std::os::unix::fs::symlink(&moved, &second).expect("link it back");
+    assert!(path.exists(), "the object is reachable through the link");
+
+    let inventory = store.inventory().await.expect("inventory");
+    assert!(inventory.objects.is_empty());
+    assert!(store.object_file(&stored.digest).await.is_err());
+    assert!(store.remove(&stored.digest).await.is_err());
+    assert!(path.exists(), "nothing through the link was removed");
+    drop(dir);
+}
+
 #[tokio::test]
 async fn interrupted_ingests_can_be_swept_up() {
     let (dir, store) = store().await;

@@ -638,6 +638,9 @@ impl FilesystemStore {
     /// [`StorageError::Io`] if removal fails for a reason other than absence.
     pub async fn remove(&self, digest: &Sha256Digest) -> Result<bool, StorageError> {
         let path = self.object_path(digest);
+        if !self.object_dirs_are_real(digest).await {
+            return Err(through_a_link("removing an object", path));
+        }
         match fs::remove_file(&path).await {
             Ok(()) => {
                 tracing::debug!(digest = %digest, "removed object");
@@ -663,6 +666,9 @@ impl FilesystemStore {
     /// [`StorageError::Io`] if the incoming directory cannot be read.
     pub async fn clean_incoming(&self) -> Result<usize, StorageError> {
         let incoming = self.root.join(OBJECTS_DIR).join(INCOMING_DIR);
+        if !is_real_dir(&incoming).await {
+            return Ok(0);
+        }
         let mut entries = fs::read_dir(&incoming)
             .await
             .map_err(|source| StorageError::Io {
@@ -686,5 +692,57 @@ impl FilesystemStore {
             }
         }
         Ok(removed)
+    }
+
+    /// Whether no directory between `objects` and an object's file is a link
+    /// (or anything else that is not a directory), as the planner's walk
+    /// requires before it counts an object (crate::inventory). What removes
+    /// or inspects an object for collection holds to the same, so a link
+    /// put in the tree never leads it outside (docs/STORAGE.md 9: GC
+    /// follows no links). A directory that is absent is no link: the object
+    /// is then absent too. `objects` itself may be a link: the walk starts
+    /// through it.
+    pub(crate) async fn object_dirs_are_real(&self, digest: &Sha256Digest) -> bool {
+        let objects = self.root.join(OBJECTS_DIR);
+        let path = self.object_path(digest);
+        let mut dirs = Vec::new();
+        let mut dir = path.parent();
+        while let Some(current) = dir {
+            if current == objects {
+                break;
+            }
+            dirs.push(current.to_path_buf());
+            dir = current.parent();
+        }
+        if dir.is_none() {
+            return false;
+        }
+        // From `objects` down, so an absent directory ends the walk.
+        for current in dirs.iter().rev() {
+            match fs::symlink_metadata(current).await {
+                Ok(metadata) if metadata.is_dir() => {}
+                Err(error) if error.kind() == ErrorKind::NotFound => return true,
+                _ => return false,
+            }
+        }
+        true
+    }
+}
+
+/// Whether `path` is a directory itself, not a link to one.
+pub(crate) async fn is_real_dir(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .await
+        .is_ok_and(|metadata| metadata.is_dir())
+}
+
+/// The error for a file reached through a link in the object tree.
+pub(crate) fn through_a_link(operation: &'static str, path: PathBuf) -> StorageError {
+    StorageError::Io {
+        operation,
+        path,
+        source: std::io::Error::other(
+            "a directory on the way to it is a link, which GC never follows",
+        ),
     }
 }
