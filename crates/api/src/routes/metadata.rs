@@ -22,6 +22,8 @@ use tangible_domain::RequestKind;
 use tangible_integrations::metadata::{Candidate, MAX_QUERY_CHARS};
 use utoipa::{IntoParams, ToSchema};
 
+use tangible_domain::auth::Permission;
+
 use crate::auth::SignedIn;
 use crate::metadata::{Found, SourceOutcome};
 use crate::problem::{ErrorCode, Problem};
@@ -195,7 +197,26 @@ pub async fn search_metadata(
         // A server that reaches no providers still searches its DATs.
         None => crate::metadata::search_dats_only(state.database(), q, kind).await,
     };
-    Ok(Json(MetadataSearchView::from(found)).into_response())
+    let mut view = MetadataSearchView::from(found);
+    if !user.role.allows(Permission::ManageIntegrations) {
+        hide_resolved_addresses(&mut view.sources);
+    }
+    Ok(Json(view).into_response())
+}
+
+/// A provider's address refused names what its name resolved to, such as
+/// an address on the server's own network: for administrators, who set the
+/// providers up and see it on Test. Anyone else is told it was refused.
+fn hide_resolved_addresses(sources: &mut [MetadataSourceView]) {
+    for source in sources {
+        if source.error_code.as_deref() == Some("INTEGRATION_ADDRESS_REFUSED") {
+            source.detail = Some(
+                "the provider's address was refused; an administrator can see why with Test \
+                 on the Integrations page"
+                    .to_owned(),
+            );
+        }
+    }
 }
 
 /// The metadata routes.
@@ -212,6 +233,29 @@ mod tests {
         MAX_JSON_BYTES, MAX_TITLE_CHARS, check,
     };
     use tangible_integrations::metadata::{igdb, musicbrainz, tmdb};
+
+    #[test]
+    fn an_address_refused_is_told_without_what_it_resolved_to() {
+        let source = |code: Option<&str>, detail: &str| MetadataSourceView {
+            provider: "tmdb".into(),
+            state: "failed".into(),
+            count: 0,
+            error_code: code.map(str::to_owned),
+            detail: Some(detail.to_owned()),
+        };
+        let mut sources = [
+            source(
+                Some("INTEGRATION_ADDRESS_REFUSED"),
+                "api.themoviedb.org has no address (10.0.0.5 is private network)",
+            ),
+            source(Some("INTEGRATION_RATE_LIMITED"), "TMDB asked to wait"),
+        ];
+        hide_resolved_addresses(&mut sources);
+        let hidden = sources[0].detail.as_deref().unwrap();
+        assert!(!hidden.contains("10.0.0.5"), "{hidden}");
+        assert!(hidden.contains("refused"), "{hidden}");
+        assert_eq!(sources[1].detail.as_deref(), Some("TMDB asked to wait"));
+    }
 
     fn fixture(name: &str) -> String {
         std::fs::read_to_string(format!(

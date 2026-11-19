@@ -376,6 +376,7 @@ pub(crate) fn check(request: &CreateItemRequest) -> Result<Checked, Problem> {
             )));
         }
         let external_id = line("external_id", &reference.external_id, MAX_EXTERNAL_ID_CHARS)?;
+        let external_id = reference_id(&reference.provider, &external_id)?;
         let entry = serde_json::json!({
             "provider": reference.provider,
             "external_id": external_id,
@@ -426,6 +427,35 @@ pub(crate) fn rate_limited(wait: std::time::Duration) -> Response {
 
 /// Whose requests `user` may see or withdraw: their own, or everybody's for
 /// somebody who decides them.
+/// A reference's ID in its provider's own form, so that what is built from
+/// it (an IMDb link, a provider's lookup) leads where it says: an IMDb
+/// title's ID (an IMDb address is taken as its ID), TMDB's `movie/<n>` or
+/// `tv/<n>`, a MusicBrainz release's UUID, IGDB's number. A DAT's game is
+/// named as the DAT names it.
+fn reference_id(provider: &str, id: &str) -> Result<String, Problem> {
+    let refused = || invalid(format!("a {provider} reference's ID will not do"));
+    let number = |text: &str| {
+        !text.is_empty() && text.len() <= 20 && text.bytes().all(|b| b.is_ascii_digit())
+    };
+    match provider {
+        "imdb" => tangible_integrations::metadata::tmdb::imdb_id(id).ok_or_else(|| {
+            invalid("an IMDb reference is a title's ID, such as tt0083658, or its address")
+        }),
+        "tmdb" => id
+            .split_once('/')
+            .filter(|(kind, n)| matches!(*kind, "movie" | "tv") && number(n))
+            .map(|_| id.to_owned())
+            .ok_or_else(refused),
+        "musicbrainz" => uuid::Uuid::parse_str(id)
+            .ok()
+            .filter(|_| id.len() == 36)
+            .map(|release| release.hyphenated().to_string())
+            .ok_or_else(refused),
+        "igdb" => number(id).then(|| id.to_owned()).ok_or_else(refused),
+        _ => Ok(id.to_owned()),
+    }
+}
+
 pub(crate) fn scope_of(user: &CurrentUser) -> Option<uuid::Uuid> {
     (!user.role.allows(Permission::DecideRequests)).then_some(user.user_id)
 }
@@ -838,6 +868,49 @@ mod tests {
     }
 
     #[test]
+    fn a_reference_is_in_its_providers_own_form() {
+        let with = |provider: &str, id: &str| {
+            let mut request = asked();
+            request.refs = vec![RequestRefView {
+                provider: provider.into(),
+                external_id: id.into(),
+            }];
+            check(&request).map(|checked| checked.refs[0]["external_id"].clone())
+        };
+        assert_eq!(with("imdb", "tt0083658").unwrap(), "tt0083658");
+        // An IMDb address is taken as its title's ID.
+        assert_eq!(
+            with("imdb", "https://www.imdb.com/title/tt0083658/").unwrap(),
+            "tt0083658"
+        );
+        assert_eq!(with("tmdb", "movie/78").unwrap(), "movie/78");
+        assert_eq!(with("tmdb", "tv/1399").unwrap(), "tv/1399");
+        assert_eq!(
+            with("musicbrainz", "B84EE12A-09EF-421B-82DE-0441A926375B").unwrap(),
+            "b84ee12a-09ef-421b-82de-0441a926375b"
+        );
+        assert_eq!(with("igdb", "1942").unwrap(), "1942");
+        // What would lead elsewhere, or is not one, is refused.
+        for (provider, id) in [
+            ("imdb", "tt1/../../find?q=x"),
+            ("imdb", "https://evil.example/title/tt0083658/"),
+            ("tmdb", "person/1"),
+            ("tmdb", "movie/"),
+            ("musicbrainz", "not-a-uuid"),
+            ("musicbrainz", "b84ee12a09ef421b82de0441a926375b"),
+            ("igdb", "12a"),
+        ] {
+            assert_eq!(
+                with(provider, id).expect_err("refused").code,
+                "VALIDATION_FAILED",
+                "{provider} {id}"
+            );
+        }
+        // A DAT's game is named as the DAT names it.
+        assert_eq!(with("dat", "Some Game (USA)").unwrap(), "Some Game (USA)");
+    }
+
+    #[test]
     fn characters_that_take_four_bytes_cannot_overflow_the_database() {
         // Sixteen references at the character bound, each character four
         // bytes, would be over 6000 bytes: refused here, not by the
@@ -845,7 +918,8 @@ mod tests {
         let mut request = asked();
         request.refs = (0..MAX_REFS)
             .map(|n| RequestRefView {
-                provider: "musicbrainz".into(),
+                // A DAT's game names take any text, so the bound is bytes.
+                provider: "dat".into(),
                 external_id: format!("{n:02}{}", "\u{1f4bf}".repeat(MAX_EXTERNAL_ID_CHARS - 2)),
             })
             .collect();

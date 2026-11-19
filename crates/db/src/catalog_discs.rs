@@ -58,13 +58,14 @@ pub struct DiscSearch<'a> {
     pub limit: i64,
 }
 
-/// The words of a search, at most [`MAX_WORDS`].
+/// The words of a search, at most [`MAX_WORDS`], each as a pattern
+/// matching it anywhere and literally: `%` and `_` are not wildcards.
 fn words(search: Option<&str>) -> Vec<String> {
     search
         .unwrap_or_default()
         .split_whitespace()
         .take(MAX_WORDS)
-        .map(ToOwned::to_owned)
+        .map(crate::library::contains_pattern)
         .collect()
 }
 
@@ -97,7 +98,7 @@ pub async fn find_discs(pool: &PgPool, search: DiscSearch<'_>) -> Result<Vec<Dis
                SELECT 1 FROM unnest($1::text[]) AS word
                WHERE concat_ws(' ', t.display_title, t.release_year::text, e.display_name,
                                s.name, d.display_name, d.volume_label)
-                     NOT ILIKE '%' || word || '%'
+                     NOT ILIKE word ESCAPE '\\'
            )
          ORDER BY linked DESC, t.sort_title, t.id, e.display_name, e.id, s.name, s.id,
                   d.sequence_number
@@ -294,7 +295,16 @@ mod tests {
     fn a_search_is_its_words_and_no_more_than_eight() {
         assert!(words(None).is_empty());
         assert!(words(Some("  ")).is_empty());
-        assert_eq!(words(Some(" Hackers  DVD ")), ["Hackers", "DVD"]);
+        assert_eq!(words(Some(" Hackers  DVD ")), ["%Hackers%", "%DVD%"]);
         assert_eq!(words(Some("a b c d e f g h i j")).len(), MAX_WORDS);
+    }
+
+    #[test]
+    fn a_word_matches_itself_and_not_as_a_wildcard() {
+        // `%` alone would match every disc, `_` any one character.
+        assert_eq!(
+            words(Some("100% a_b c\\d")),
+            ["%100\\%%", "%a\\_b%", "%c\\\\d%"]
+        );
     }
 }

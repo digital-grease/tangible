@@ -77,6 +77,14 @@ may change between minor versions, and the release notes say how.
   viewer, and a library search found the artifact by the request's title.
   A viewer is now told only of their own requests there too; the import,
   the artifact and its cover are the library's and stay visible.
+- Smaller hardening: a request's references are checked for their
+  provider's form (an IMDb title's ID or address, TMDB's `movie/` or `tv/`
+  number, a MusicBrainz release's UUID, IGDB's number), so an IMDb link
+  built from one leads to that title; a metadata provider's address
+  refused is told to anyone but administrators without the addresses its
+  name resolved to; a release's guid, which for some indexers is their
+  download link, is left out of debug output; and `%` and `_` in a disc
+  search match themselves.
 
 ## 0.4.1 (2026-11-18)
 

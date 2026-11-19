@@ -263,7 +263,8 @@ pub struct Release {
 impl fmt::Debug for Release {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Release")
-            .field("guid", &self.guid)
+            // Some indexers' guid is their download link, passkey and all.
+            .field("guid", &"<redacted>")
             .field("indexer", &self.indexer)
             .field("title", &self.title)
             .field("protocol", &self.protocol)

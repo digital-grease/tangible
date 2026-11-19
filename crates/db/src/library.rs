@@ -80,7 +80,7 @@ pub struct ArtifactFilter<'a> {
 
 /// A name filter as a `LIKE` pattern matching it anywhere, with the
 /// pattern's own special characters escaped so they match themselves.
-fn contains_pattern(name: &str) -> String {
+pub(crate) fn contains_pattern(name: &str) -> String {
     let mut pattern = String::with_capacity(name.len() + 2);
     pattern.push('%');
     for character in name.chars() {

@@ -249,7 +249,7 @@ export function refLabel(ref: RequestRef): { label: string; href: string | null 
     case 'imdb':
       return {
         label: `IMDb ${ref.external_id}`,
-        href: `https://www.imdb.com/title/${ref.external_id}/`,
+        href: `https://www.imdb.com/title/${encodeURIComponent(ref.external_id)}/`,
       };
     case 'tmdb':
       return { label: `TMDB ${ref.external_id}`, href: null };
