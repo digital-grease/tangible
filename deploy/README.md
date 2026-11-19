@@ -944,6 +944,7 @@ passwords sealed, and the key is what opens them. A lost key loses only those
 passwords; enter them again. To copy it out:
 
 ```bash
+umask 077
 docker compose -f deploy/compose.yaml run --rm --no-deps --entrypoint cat \
   server /var/lib/tangible/secrets/secret-key > tangible-secret-key
 chmod 0400 tangible-secret-key
@@ -963,6 +964,7 @@ above:
 
 ```bash
 mkdir -p deploy/secrets
+umask 077
 docker compose -f deploy/compose.yaml run --rm --no-deps server \
   secrets generate > deploy/secrets/tangible-secret-key
 chmod 0400 deploy/secrets/tangible-secret-key
@@ -1013,10 +1015,11 @@ long-lived key to steal, and a signature proves which workflow, at which tag,
 in which repository, built the bytes. The release page gives the image's
 digest. To run exactly what you verified, set `TANGIBLE_IMAGE` in `.env` to
 that digest: a tag can be moved, and the minor tag the Compose files name is
-moved by every patch release, while a digest cannot. The minor tag, like the
-release's own, only ever names a published release's image, so verifying it
-(`cosign verify ghcr.io/digital-grease/tangible:v0.4 ...`) checks the image it
-names now.
+moved by every patch release, while a digest cannot. The minor tag only ever
+names a published release's image, so verifying it (`cosign verify
+ghcr.io/digital-grease/tangible:v0.4 ...`) checks the image it names now. A
+release's own tag is pushed while the release is built, before its scan and
+signature, so verify an image by its digest before you run it.
 
 With [cosign](https://docs.sigstore.dev/cosign/system_config/installation/)
 3.0 or later, from your distribution or its release page. Releases are signed
@@ -1240,6 +1243,9 @@ the volume:
 ```bash
 docker compose -f deploy/compose.yaml run --rm backup
 docker compose -f deploy/compose.yaml run --rm backup ls -l /backups
+# A copy holds every account's password hash and the audit trail: keep it
+# readable by you alone.
+umask 077
 docker compose -f deploy/compose.yaml run --rm backup \
   cat /backups/tangible-20261117T210000Z.dump > tangible-20261117T210000Z.dump
 ```
@@ -1496,6 +1502,7 @@ uncomment `TANGIBLE_METRICS_TOKEN_FILE` and the `tangible-metrics-token`
 secret lines:
 
 ```bash
+umask 077
 docker compose -f deploy/compose.yaml run --rm --no-deps server \
   secrets generate > deploy/secrets/tangible-metrics-token
 chmod 0400 deploy/secrets/tangible-metrics-token

@@ -85,6 +85,10 @@ may change between minor versions, and the release notes say how.
   name resolved to; a release's guid, which for some indexers is their
   download link, is left out of debug output; and `%` and `_` in a disc
   search match themselves.
+- The guide's commands that copy the integration key or a database backup
+  out of their volumes, or make a key or the metrics token, now set
+  `umask 077` first: with the usual umask the files were readable by
+  everyone on the machine, a backup for good.
 
 ## 0.4.1 (2026-11-18)
 
