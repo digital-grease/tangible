@@ -1,0 +1,19 @@
+<!-- SPDX-FileCopyrightText: 2026 digitalgrease -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!--
+  The browser's icon for Tangible: the mark Wordmark.svelte draws, in the
+  dark theme's colours, which show on light and dark tab bars alike. The
+  centre is a real hole, since an icon has no page colour behind it. Colours
+  are attributes, not a stylesheet, so the UI's Content Security Policy,
+  which the server sends with this file too, has nothing here to refuse.
+
+  favicon.ico is this drawing at 16, 32 and 48 pixels, for browsers that
+  cannot use an SVG and for tabs showing a file rather than a page. After a
+  change to it, from web/:
+    for s in 16 32 48; do rsvg-convert -w $s -h $s static/favicon.svg -o /tmp/icon-$s.png; done
+    magick /tmp/icon-16.png /tmp/icon-32.png /tmp/icon-48.png static/favicon.ico
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path fill="#8b9ea6" fill-rule="evenodd" d="M12 1.5a10.5 10.5 0 1 0 0 21a10.5 10.5 0 1 0 0-21zM12 10a2 2 0 1 0 0 4a2 2 0 1 0 0-4z"/>
+  <circle cx="12" cy="12" r="6.5" fill="none" stroke="#5c686f" stroke-width="3.5"/>
+</svg>

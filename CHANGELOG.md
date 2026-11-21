@@ -4,6 +4,17 @@ Notable changes to Tangible, newest first. Versions follow semantic
 versioning; during 0.x the API, the manifest schema and the database schema
 may change between minor versions, and the release notes say how.
 
+## Unreleased
+
+### Fixed
+
+- The web UI had no icon. Its pages linked a `favicon.png` that no build
+  carried, and the server answers a path it has no file for with the UI's
+  page, so a browser was handed HTML and showed a blank or generic icon. The
+  build now carries Tangible's mark as `favicon.svg`, with `favicon.ico` for
+  browsers that cannot use an SVG and for tabs showing a file rather than a
+  page.
+
 ## 0.5.0 (2026-11-19)
 
 Backup and restore in the web UI. A Backups page lists the copies of the
