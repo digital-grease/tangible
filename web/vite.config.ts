@@ -22,7 +22,9 @@ export default defineConfig({
       // through the public API, so there is nothing for a server-side
       // renderer to do, and no Node process to run, patch or expose in
       // production. Paths the build has no file for get the fallback page,
-      // which routes in the browser.
+      // which routes in the browser, unless their last segment has a dot:
+      // those name a file, and the server answers a missing one with a 404
+      // (crates/api/src/web.rs). So no route's last segment may hold one.
       adapter: adapter({ fallback: 'index.html', strict: true }),
       csp: {
         // The web UI is always served under a Content Security Policy. Kit

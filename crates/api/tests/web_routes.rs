@@ -17,6 +17,8 @@ use tower::ServiceExt as _;
 
 const PAGE: &str = r#"<!doctype html><html><head><meta http-equiv="content-security-policy" content="default-src 'self'; script-src 'self' 'sha256-abc='"></head><body>tangible ui</body></html>"#;
 
+const ICON: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"/>"#;
+
 fn database() -> Database {
     Database::connect_lazy(&DbConfig::new(
         "postgres://tangible:tangible@127.0.0.1:1/tangible",
@@ -24,13 +26,14 @@ fn database() -> Database {
     .expect("lazy pool")
 }
 
-/// A build with a page and one hashed asset, and a secret beside it that
-/// must never be reachable.
+/// A build with a page, an icon and one hashed asset, and a secret beside it
+/// that must never be reachable.
 async fn server() -> (TempDir, axum::Router) {
     let dir = TempDir::new().unwrap();
     let build = dir.path().join("build");
     std::fs::create_dir_all(build.join("_app/immutable/entry")).unwrap();
     std::fs::write(build.join("index.html"), PAGE).unwrap();
+    std::fs::write(build.join("favicon.svg"), ICON).unwrap();
     std::fs::write(
         build.join("_app/immutable/entry/start.abc.js"),
         "export {};",
@@ -82,7 +85,13 @@ fn header_of(reply: &Reply, name: header::HeaderName) -> &str {
 #[tokio::test]
 async fn the_ui_is_served_at_the_root_and_at_every_page_it_routes() {
     let (_dir, router) = server().await;
-    for uri in ["/", "/library", "/burns/0198-abc", "/login?next=%2Fburns"] {
+    for uri in [
+        "/",
+        "/library",
+        "/burns/0198-abc",
+        "/login?next=%2Fburns",
+        "/login?next=%2Fdiscs%2Fa.b",
+    ] {
         let reply = send(&router, "GET", uri).await;
         assert_eq!(reply.status, StatusCode::OK, "{uri}");
         assert!(reply.body.contains("tangible ui"), "{uri}");
@@ -117,6 +126,35 @@ async fn hashed_assets_are_cached_for_good_and_missing_ones_are_not_the_page() {
     let missing = send(&router, "GET", "/_app/immutable/entry/start.old.js").await;
     assert_eq!(missing.status, StatusCode::NOT_FOUND);
     assert!(!missing.body.contains("tangible ui"));
+}
+
+#[tokio::test]
+async fn a_file_is_served_as_itself_and_a_missing_one_is_not_the_page() {
+    let (_dir, router) = server().await;
+    let icon = send(&router, "GET", "/favicon.svg").await;
+    assert_eq!(icon.status, StatusCode::OK);
+    assert_eq!(icon.body, ICON);
+    assert_eq!(header_of(&icon, header::CONTENT_TYPE), "image/svg+xml");
+    assert_eq!(header_of(&icon, header::CACHE_CONTROL), "no-cache");
+
+    // Each of these got the page, with a 200, before: a browser asking for
+    // an icon the build lacked was handed HTML and showed none.
+    for uri in [
+        "/favicon.png",
+        "/favicon.ico",
+        "/robots.txt",
+        "/apple-touch-icon.png",
+        "/.well-known/security.txt",
+        "/library/report.pdf",
+    ] {
+        let missing = send(&router, "GET", uri).await;
+        assert_eq!(missing.status, StatusCode::NOT_FOUND, "{uri}");
+        assert!(!missing.body.contains("tangible ui"), "{uri}");
+        assert!(
+            !header_of(&missing, header::CONTENT_TYPE).starts_with("text/html"),
+            "{uri}"
+        );
+    }
 }
 
 #[tokio::test]

@@ -11,7 +11,9 @@
 //!
 //! Anything the router does not match falls through to here. API paths that
 //! match nothing still get a JSON 404, never the UI's page, so a client that
-//! mistypes a route is told so rather than handed HTML.
+//! mistypes a route is told so rather than handed HTML. A path naming a file
+//! the build does not have is a 404 too: the page goes only to paths that
+//! name a page, which the UI then routes.
 
 use std::path::{Path, PathBuf};
 
@@ -148,6 +150,17 @@ pub fn is_immutable_asset(path: &str) -> bool {
     path.starts_with(IMMUTABLE_PREFIX)
 }
 
+/// Whether a path names a file rather than a page: its last segment has a
+/// dot, as every file the build writes has (`favicon.svg`, `index.html`) and
+/// no page of the UI has, since its routes are words and its identifiers
+/// UUIDs. A route that took a file name as its last segment would need this
+/// changed. A dot in the query string does not count.
+fn names_a_file(path: &str) -> bool {
+    path.rsplit('/')
+        .next()
+        .is_some_and(|last| last.contains('.'))
+}
+
 /// Answer anything the router did not match.
 pub async fn fallback(State(state): State<ApiState>, request: Request) -> Response {
     let path = request.uri().path().to_owned();
@@ -162,10 +175,13 @@ pub async fn fallback(State(state): State<ApiState>, request: Request) -> Respon
         .into_response();
     };
 
-    // A missing asset is a 404, not the UI's page: a stale tab asking for a
+    // A missing file is a 404, not the UI's page: a stale tab asking for a
     // script from an older build should fail as itself, not as HTML that the
-    // browser then refuses to run as a script.
-    let served = if is_immutable_asset(&path) {
+    // browser then refuses to run as a script. So should anything else: a
+    // browser handed the page for an icon the build lacks shows no icon and
+    // nothing says why, as every release up to 0.5.0 did for the
+    // favicon.png its page linked.
+    let served = if is_immutable_asset(&path) || names_a_file(&path) {
         ServeDir::new(web.root()).oneshot(request).await
     } else {
         ServeDir::new(web.root())
@@ -212,6 +228,30 @@ mod tests {
             "/_app/immutable/x.js",
         ] {
             assert!(!is_api_path(path), "{path}");
+        }
+    }
+
+    #[test]
+    fn a_path_names_a_file_by_a_dot_in_its_last_segment() {
+        for path in [
+            "/favicon.ico",
+            "/robots.txt",
+            "/index.html",
+            "/.well-known/security.txt",
+            "/_app/version.json",
+            "/library/report.pdf",
+        ] {
+            assert!(names_a_file(path), "{path}");
+        }
+        for path in [
+            "/",
+            "/library",
+            "/library/",
+            "/burns/0198a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+            "/v1.2/library",
+            "",
+        ] {
+            assert!(!names_a_file(path), "{path}");
         }
     }
 
