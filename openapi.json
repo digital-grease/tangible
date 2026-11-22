@@ -8880,6 +8880,112 @@
         ]
       }
     },
+    "/api/v1/users/{user_id}/disable": {
+      "post": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Disable an account.",
+        "description": "Disable an account: its sessions end, and it cannot sign in, by password or through the identity provider, until it is enabled again. What it did stays in the audit log and on the requests and burns that name it. Not your own account, and not the only enabled administrator. Audited.",
+        "operationId": "disable_account",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "Account identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Your own account, or the only enabled administrator",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/users/{user_id}/enable": {
+      "post": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Enable an account again.",
+        "description": "Enable a disabled account: it may sign in again as it did before. Audited.",
+        "operationId": "enable_account",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "Account identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/worker-enrollments": {
       "post": {
         "tags": [

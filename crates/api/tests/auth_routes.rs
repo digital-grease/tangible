@@ -720,6 +720,145 @@ async fn no_password_account_is_made_where_only_setup_may_use_one() {
     }
 }
 
+/// The audit actions recorded against the account `id`, oldest first.
+async fn audited(pool: &PgPool, id: &str) -> Vec<String> {
+    sqlx::query_scalar("SELECT action FROM audit_events WHERE target_id = $1 ORDER BY id")
+        .bind(id)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn an_administrator_disables_and_enables_an_account() {
+    let harness = harness().await;
+    let admin = support::administrator(&harness.pool).await;
+    let username = account(&harness.pool, Role::Operator).await;
+    let signed_in = sign_in(&harness.router, &username, PASSWORD).await;
+    let id = listed(&harness.router, &admin.cookie(), &username)
+        .await
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let post = |uri: String, cookie: String, csrf: String| {
+        let router = harness.router.clone();
+        async move { send(&router, "POST", &uri, Some(&cookie), Some(&csrf), None).await }
+    };
+    let as_admin = |uri: String| post(uri, admin.cookie(), admin.csrf_token.clone());
+
+    // Disabled: its session ends at once, and it cannot sign in again.
+    let disabled = as_admin(format!("/api/v1/users/{id}/disable")).await;
+    assert_eq!(disabled.status, StatusCode::OK, "{}", disabled.body);
+    assert_eq!(disabled.body["disabled"], true);
+    assert_eq!(disabled.body["signs_in_with"], "password");
+    let me = send(
+        &harness.router,
+        "GET",
+        "/api/v1/session",
+        Some(&signed_in.cookie()),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(me.status, StatusCode::UNAUTHORIZED);
+    let (live,): (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM user_sessions WHERE user_id = $1::uuid AND revoked_at IS NULL",
+    )
+    .bind(&id)
+    .fetch_one(&harness.pool)
+    .await
+    .unwrap();
+    assert_eq!(live, 0, "its sessions are revoked, not merely refused");
+    assert_eq!(
+        sign_in(&harness.router, &username, PASSWORD).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    // Asking again changes nothing, and is not audited again.
+    let again = as_admin(format!("/api/v1/users/{id}/disable")).await;
+    assert_eq!(again.status, StatusCode::OK);
+
+    // Enabled: it signs in as before.
+    let enabled = as_admin(format!("/api/v1/users/{id}/enable")).await;
+    assert_eq!(enabled.status, StatusCode::OK, "{}", enabled.body);
+    assert_eq!(enabled.body["disabled"], false);
+    assert_eq!(
+        sign_in(&harness.router, &username, PASSWORD).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        audited(&harness.pool, &id).await,
+        ["user.created", "user.disabled", "user.enabled"]
+    );
+
+    // Not your own account; not an account that does not exist; and not by
+    // anybody but an administrator.
+    let own = as_admin(format!("/api/v1/users/{}/disable", admin.user.id)).await;
+    assert_eq!(own.status, StatusCode::CONFLICT, "{}", own.body);
+    let missing = as_admin(format!("/api/v1/users/{}/disable", uuid::Uuid::now_v7())).await;
+    assert_eq!(missing.status, StatusCode::NOT_FOUND);
+    let malformed = as_admin("/api/v1/users/not-an-id/disable".to_owned()).await;
+    assert_eq!(malformed.status, StatusCode::BAD_REQUEST);
+    let operator = support::sign_in(&harness.pool, Role::Operator).await;
+    let refused = post(
+        format!("/api/v1/users/{}/disable", admin.user.id),
+        operator.cookie(),
+        operator.csrf_token.clone(),
+    )
+    .await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn two_administrators_disabling_each_other_at_once_leave_one() {
+    use tangible_db::accounts::{AccountChange, set_user_disabled};
+    let fresh = FreshDatabase::create().await;
+    let pool = fresh.database.pool().clone();
+    let hash = hash_password(PASSWORD.to_owned()).await.unwrap();
+    let mut ids = Vec::new();
+    for name in ["ada", "bob"] {
+        let user =
+            tangible_db::accounts::create_user(&pool, name, &hash, Role::Administrator, "test")
+                .await
+                .unwrap()
+                .unwrap();
+        ids.push(user.id);
+    }
+    let (ada, bob) = (ids[0], ids[1]);
+
+    // Bob disables Ada, and has not committed yet, when Ada disables Bob.
+    let mut first = pool.begin().await.unwrap();
+    sqlx::query("UPDATE users SET disabled_at = now() WHERE id = $1")
+        .bind(ada)
+        .execute(&mut *first)
+        .await
+        .unwrap();
+    let second = tokio::spawn({
+        let pool = pool.clone();
+        async move { set_user_disabled(&pool, bob, true, "ada").await }
+    });
+    // Long enough for the second to finish, were it not made to wait.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!second.is_finished(), "it waits for the first to finish");
+    first.commit().await.unwrap();
+
+    // Once Ada is disabled, Bob is the only administrator left.
+    assert_eq!(
+        second.await.unwrap().unwrap(),
+        AccountChange::LastAdministrator
+    );
+    let (enabled,): (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM users WHERE role = 'administrator' AND disabled_at IS NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(enabled, 1);
+    fresh.drop().await;
+}
+
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
 async fn a_worker_credential_opens_no_operator_route() {

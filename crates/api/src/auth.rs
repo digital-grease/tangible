@@ -209,6 +209,16 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
     ("GET", "/api/v1/session/oidc/callback", Public),
     ("GET", "/api/v1/users", Signed(ManageUsers)),
     ("POST", "/api/v1/users", Signed(ManageUsers)),
+    (
+        "POST",
+        "/api/v1/users/{user_id}/disable",
+        Signed(ManageUsers),
+    ),
+    (
+        "POST",
+        "/api/v1/users/{user_id}/enable",
+        Signed(ManageUsers),
+    ),
     // The library.
     ("GET", "/api/v1/artifacts", Signed(Read)),
     ("GET", "/api/v1/artifacts/{artifact_id}", Signed(Read)),

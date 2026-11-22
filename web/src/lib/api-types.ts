@@ -2526,6 +2526,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users/{user_id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disable an account.
+         * @description Disable an account: its sessions end, and it cannot sign in, by password or through the identity provider, until it is enabled again. What it did stays in the audit log and on the requests and burns that name it. Not your own account, and not the only enabled administrator. Audited.
+         */
+        post: operations["disable_account"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{user_id}/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enable an account again.
+         * @description Enable a disabled account: it may sign in again as it did before. Audited.
+         */
+        post: operations["enable_account"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/worker-enrollments": {
         parameters: {
             query?: never;
@@ -12881,6 +12921,79 @@ export interface operations {
             };
             /** @description The username, password or role will not do */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    disable_account: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Account identifier */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Disabled */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserView"];
+                };
+            };
+            /** @description No such account */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Your own account, or the only enabled administrator */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    enable_account: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Account identifier */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Enabled */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserView"];
+                };
+            };
+            /** @description No such account */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

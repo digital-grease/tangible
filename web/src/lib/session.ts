@@ -31,10 +31,22 @@ let onSignedOut: (() => void) | null = null;
 /** The signed-in account's role, for showing links; the server decides. */
 let currentRole: string | null = null;
 
+/** The signed-in account's username, for the same; the server decides. */
+let currentUsername: string | null = null;
+
 /** Remember the session the server returned, or forget it. */
 export function rememberSession(session: SessionView | null): void {
   csrfToken = session?.csrf_token ?? null;
   currentRole = session?.role ?? null;
+  currentUsername = session?.username ?? null;
+}
+
+/**
+ * The signed-in account's username, or `null`: only for leaving out what
+ * the server would refuse to do to one's own account.
+ */
+export function sessionUsername(): string | null {
+  return currentUsername;
 }
 
 /**
@@ -275,4 +287,14 @@ export function createUser(
   fetcher: typeof fetch = apiFetch,
 ): Promise<Result<UserView>> {
   return apiCall(fetcher, '/api/v1/users', 'POST', request);
+}
+
+/** Disable an account, ending its sessions, or enable it again. */
+export function setUserDisabled(
+  id: string,
+  disabled: boolean,
+  fetcher: typeof fetch = apiFetch,
+): Promise<Result<UserView>> {
+  const action = disabled ? 'disable' : 'enable';
+  return apiCall(fetcher, `/api/v1/users/${encodeURIComponent(id)}/${action}`, 'POST');
 }

@@ -125,6 +125,9 @@ pub enum ErrorCode {
     /// another account, which signs in through the identity provider, or a
     /// password account was asked to be made.
     PasswordSignInOff,
+    /// The change would leave no enabled administrator, and nobody could
+    /// manage accounts or workers again.
+    LastAdministrator,
     /// The artifact is deleted, or pending deletion, so its bytes are not
     /// to be used (ADR 0020).
     ArtifactDeleted,
@@ -211,6 +214,7 @@ impl ErrorCode {
             Self::InsufficientSpace => "INSUFFICIENT_SPACE",
             Self::DatInvalid => "DAT_INVALID",
             Self::PasswordSignInOff => "PASSWORD_SIGN_IN_OFF",
+            Self::LastAdministrator => "LAST_ADMINISTRATOR",
             Self::ArtifactDeleted => "ARTIFACT_DELETED",
             Self::ArtifactInUse => "ARTIFACT_IN_USE",
             Self::ArtifactRetained => "ARTIFACT_RETAINED",
@@ -280,6 +284,7 @@ impl ErrorCode {
             | Self::IntegrationOff
             | Self::IntegrationMisconfigured
             | Self::IntegrationSecretUnreadable
+            | Self::LastAdministrator
             | Self::ArtifactDeleted
             | Self::ArtifactInUse
             | Self::ArtifactRetained
@@ -338,6 +343,7 @@ impl ErrorCode {
             Self::InsufficientSpace => "Not enough free space",
             Self::DatInvalid => "Not a DAT this server reads",
             Self::PasswordSignInOff => "Passwords are for the account setup made",
+            Self::LastAdministrator => "The last administrator",
             Self::ArtifactDeleted => "The artifact is deleted, or is being deleted",
             Self::ArtifactInUse => "The artifact is in use",
             Self::ArtifactRetained => "The artifact is retained",
@@ -512,6 +518,7 @@ mod tests {
             ErrorCode::IntegrationUnreachable,
             ErrorCode::IntegrationAuthFailed,
             ErrorCode::IntegrationBadResponse,
+            ErrorCode::LastAdministrator,
             ErrorCode::ArtifactDeleted,
             ErrorCode::ArtifactInUse,
             ErrorCode::ArtifactRetained,

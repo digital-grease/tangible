@@ -4,11 +4,13 @@
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { axeViolations } from '$lib/testing/axe';
+import { rememberSession } from '$lib/session';
 
 const { default: UsersPage } = await import('./+page.svelte');
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  rememberSession(null);
 });
 
 type Reply = { status: number; body: unknown };
@@ -113,6 +115,61 @@ describe('Accounts page', () => {
     expect(await screen.findByRole('region', { name: 'Create an account' })).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'New accounts' })).toBeNull();
     expect(screen.queryByText(/cannot sign in/i)).toBeNull();
+  });
+
+  it('disables an account after asking, and enables one in a click', async () => {
+    rememberSession({ username: 'admin', role: 'administrator' } as Parameters<
+      typeof rememberSession
+    >[0]);
+    const asked = server({
+      '/api/v1/users': {
+        status: 200,
+        body: { items: [user(1), { ...user(4), disabled: true }], next_cursor: null },
+      },
+      '/api/v1/users/u1/disable': { status: 200, body: { ...user(1), disabled: true } },
+      '/api/v1/users/u4/enable': { status: 200, body: user(4) },
+    });
+    const { container } = render(UsersPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Disable user1…' }));
+    // Asked first, saying what it does.
+    expect(screen.getByRole('heading', { name: 'Disable user1?' })).toBeTruthy();
+    expect(screen.getByText(/They are signed out now/)).toBeTruthy();
+    expect(asked).not.toContain('/api/v1/users/u1/disable');
+    expect(await axeViolations(container)).toEqual([]);
+    await fireEvent.click(screen.getByRole('button', { name: 'Disable user1' }));
+    expect(await screen.findByText('Disabled user1.')).toBeTruthy();
+    expect(asked).toContain('/api/v1/users/u1/disable');
+    expect(screen.queryByRole('heading', { name: 'Disable user1?' })).toBeNull();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Enable user4' }));
+    expect(await screen.findByText('Enabled user4.')).toBeTruthy();
+    expect(asked).toContain('/api/v1/users/u4/enable');
+  });
+
+  it("offers nothing against one's own account, and says why a change was refused", async () => {
+    rememberSession({ username: 'user1', role: 'administrator' } as Parameters<
+      typeof rememberSession
+    >[0]);
+    server({
+      '/api/v1/users': { status: 200, body: { items: [user(1), user(3)], next_cursor: null } },
+      '/api/v1/users/u3/disable': {
+        status: 409,
+        body: {
+          type: 'about:blank',
+          title: 'The last administrator',
+          status: 409,
+          code: 'LAST_ADMINISTRATOR',
+          detail: 'it is the only enabled administrator',
+        },
+      },
+    });
+    render(UsersPage);
+    await screen.findByRole('rowheader', { name: 'user1' });
+    expect(screen.queryByRole('button', { name: /user1/ })).toBeNull();
+    expect(screen.getByText('You')).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: 'Disable user3…' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Disable user3' }));
+    expect(await screen.findByText('it is the only enabled administrator')).toBeTruthy();
   });
 
   it('tells anybody but an administrator that the page is not theirs', async () => {

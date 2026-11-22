@@ -18,6 +18,12 @@ may change between minor versions, and the release notes say how.
   for an hour and never stored. `TANGIBLE_ARTWORK=false` turns them off with
   covers. libretro now learns the names of the DAT games a search finds, not
   only those of games in the library.
+- Accounts can be disabled and enabled again on the Accounts page.
+  Disabling asks first, signs the account out at once and keeps it from
+  signing in, with a password or through the identity provider, until it
+  is enabled; what it did stays in the audit log. Your own account and the
+  only enabled administrator cannot be disabled. There was no way to do
+  either before but in the database.
 
 ### Changed
 

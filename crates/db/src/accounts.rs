@@ -223,6 +223,105 @@ pub async fn list_users(
     rows.iter().map(user_from_row).collect()
 }
 
+/// What changing an account came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccountChange {
+    /// Done; the account as it now is.
+    Done(UserRecord),
+    /// No account has that identifier.
+    NoSuchAccount,
+    /// It is the only enabled administrator, and this would leave none.
+    LastAdministrator,
+}
+
+/// Lock every enabled administrator, in one order, inside `tx`: two
+/// administrators changing each other at once then take turns, and the
+/// second sees what the first did. Their identifiers.
+async fn lock_administrators(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<Vec<uuid::Uuid>, DbError> {
+    sqlx::query_scalar(
+        "SELECT id FROM users WHERE role = 'administrator' AND disabled_at IS NULL
+         ORDER BY id FOR UPDATE",
+    )
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(DbError::Query)
+}
+
+/// Disable the account `id`, ending its sessions, or enable it again, as
+/// `actor`. Asking for what it already is changes nothing and audits
+/// nothing. The only enabled administrator is not disabled. Audited as
+/// `user.disabled` or `user.enabled`.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn set_user_disabled(
+    pool: &PgPool,
+    id: uuid::Uuid,
+    disabled: bool,
+    actor: &str,
+) -> Result<AccountChange, DbError> {
+    let mut tx = pool.begin().await.map_err(DbError::Query)?;
+    let administrators = lock_administrators(&mut tx).await?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {USER_COLUMNS} FROM users WHERE id = $1 FOR UPDATE"
+    )))
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
+    let Some(row) = row else {
+        tx.rollback().await.map_err(DbError::Query)?;
+        return Ok(AccountChange::NoSuchAccount);
+    };
+    let user = user_from_row(&row)?;
+    if user.disabled == disabled {
+        tx.rollback().await.map_err(DbError::Query)?;
+        return Ok(AccountChange::Done(user));
+    }
+    if disabled && administrators == [id] {
+        tx.rollback().await.map_err(DbError::Query)?;
+        return Ok(AccountChange::LastAdministrator);
+    }
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "UPDATE users SET disabled_at = CASE WHEN $2 THEN now() END
+         WHERE id = $1
+         RETURNING {USER_COLUMNS}"
+    )))
+    .bind(id)
+    .bind(disabled)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
+    let user = user_from_row(&row)?;
+    if disabled {
+        sqlx::query(
+            "UPDATE user_sessions SET revoked_at = now()
+             WHERE user_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(DbError::Query)?;
+    }
+    audit(
+        &mut tx,
+        actor,
+        if disabled {
+            "user.disabled"
+        } else {
+            "user.enabled"
+        },
+        &id.to_string(),
+        serde_json::json!({ "username": user.username }),
+    )
+    .await?;
+    tx.commit().await.map_err(DbError::Query)?;
+    Ok(AccountChange::Done(user))
+}
+
 /// Which of `users` setup made: the accounts that may still sign in with a
 /// password when password sign-in is for setup's account alone
 /// (`TANGIBLE_PASSWORD_SIGN_IN=setup-only`).

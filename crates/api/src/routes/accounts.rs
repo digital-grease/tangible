@@ -12,17 +12,17 @@
 //! exists, it refuses, so a server left on the setup page cannot be claimed
 //! by a second visitor after the owner has finished.
 
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use tangible_db::accounts::{
-    CreateUserOutcome, UserRecord, count_users, create_first_administrator, create_session,
-    create_user, list_users, made_by_setup, record_failed_sign_in, revoke_session,
-    user_for_sign_in,
+    AccountChange, CreateUserOutcome, UserRecord, count_users, create_first_administrator,
+    create_session, create_user, list_users, made_by_setup, record_failed_sign_in, revoke_session,
+    set_user_disabled, user_for_sign_in,
 };
 use tangible_domain::auth::{MAX_PASSWORD_BYTES, check_new_password, normalize_username};
 use tangible_domain::{Role, SecretString};
@@ -481,6 +481,12 @@ pub async fn list_accounts(
         tracing::error!(error = ?error, "could not list accounts");
         unavailable("accounts could not be read")
     })?;
+    let items = account_views(&state, users).await?;
+    Ok(Json(Page::new(items, limit, |user| user.id.clone()).into()))
+}
+
+/// `users` as the list shows them, each saying how it signs in.
+async fn account_views(state: &ApiState, users: Vec<UserRecord>) -> Result<Vec<UserView>, Problem> {
     let ids: Vec<uuid::Uuid> = users.iter().map(|user| user.id).collect();
     let read_failed = |error: tangible_db::DbError| {
         tracing::error!(error = ?error, "could not read how accounts sign in");
@@ -499,7 +505,7 @@ pub async fn list_accounts(
                 .map_err(read_failed)?,
         ),
     };
-    let items = users
+    Ok(users
         .into_iter()
         .map(|user| {
             let signs_in_with = if through_provider.contains(&user.id) {
@@ -516,8 +522,108 @@ pub async fn list_accounts(
             signs_in_with.clone_into(&mut view.signs_in_with);
             view
         })
-        .collect();
-    Ok(Json(Page::new(items, limit, |user| user.id.clone()).into()))
+        .collect())
+}
+
+fn account_id(raw: &str) -> Result<uuid::Uuid, Problem> {
+    uuid::Uuid::parse_str(raw)
+        .map_err(|_| Problem::invalid_parameter("user_id", "not a valid identifier"))
+}
+
+/// Disable or enable `raw` as `actor`, answering the account as it now is.
+async fn set_disabled(
+    state: &ApiState,
+    actor: &CurrentUser,
+    raw: &str,
+    disabled: bool,
+) -> Result<Json<UserView>, Problem> {
+    let id = account_id(raw)?;
+    if disabled && id == actor.user_id {
+        return Err(Problem::new(
+            ErrorCode::Conflict,
+            "your own account cannot be disabled; another administrator can disable it",
+        ));
+    }
+    let change = set_user_disabled(state.database().pool(), id, disabled, &actor.username)
+        .await
+        .map_err(|error| {
+            tracing::error!(error = ?error, "could not change an account");
+            unavailable("the account could not be changed")
+        })?;
+    match change {
+        AccountChange::Done(user) => {
+            tracing::info!(
+                user = %user.username,
+                disabled,
+                by = %actor.username,
+                "account changed"
+            );
+            let mut views = account_views(state, vec![user]).await?;
+            views
+                .pop()
+                .map(Json)
+                .ok_or_else(|| unavailable("the account could not be read"))
+        }
+        AccountChange::NoSuchAccount => Err(Problem::not_found("account", raw)),
+        AccountChange::LastAdministrator => Err(Problem::new(
+            ErrorCode::LastAdministrator,
+            "it is the only enabled administrator, and nobody could manage accounts or workers \
+             without one: make or enable another administrator first",
+        )),
+    }
+}
+
+/// Disable an account.
+///
+/// # Errors
+///
+/// `NOT_FOUND`; `CONFLICT` for your own account; `LAST_ADMINISTRATOR`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/users/{user_id}/disable",
+    tag = "accounts",
+    description = "Disable an account: its sessions end, and it cannot sign in, by password or \
+                   through the identity provider, until it is enabled again. What it did stays \
+                   in the audit log and on the requests and burns that name it. Not your own \
+                   account, and not the only enabled administrator. Audited.",
+    params(("user_id" = String, Path, description = "Account identifier")),
+    responses(
+        (status = 200, description = "Disabled", body = UserView),
+        (status = 404, description = "No such account", body = Problem),
+        (status = 409, description = "Your own account, or the only enabled administrator",
+         body = Problem),
+    ),
+)]
+pub async fn disable_account(
+    State(state): State<ApiState>,
+    SignedIn(actor): SignedIn,
+    Path(raw): Path<String>,
+) -> Result<Json<UserView>, Problem> {
+    set_disabled(&state, &actor, &raw, true).await
+}
+
+/// Enable an account again.
+///
+/// # Errors
+///
+/// `NOT_FOUND`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/users/{user_id}/enable",
+    tag = "accounts",
+    description = "Enable a disabled account: it may sign in again as it did before. Audited.",
+    params(("user_id" = String, Path, description = "Account identifier")),
+    responses(
+        (status = 200, description = "Enabled", body = UserView),
+        (status = 404, description = "No such account", body = Problem),
+    ),
+)]
+pub async fn enable_account(
+    State(state): State<ApiState>,
+    SignedIn(actor): SignedIn,
+    Path(raw): Path<String>,
+) -> Result<Json<UserView>, Problem> {
+    set_disabled(&state, &actor, &raw, false).await
 }
 
 /// Create an account.
@@ -599,4 +705,6 @@ pub fn router() -> Router<ApiState> {
             get(current_session).post(sign_in).delete(sign_out),
         )
         .route("/users", get(list_accounts).post(create_account))
+        .route("/users/{user_id}/disable", post(disable_account))
+        .route("/users/{user_id}/enable", post(enable_account))
 }

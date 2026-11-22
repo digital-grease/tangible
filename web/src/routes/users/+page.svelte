@@ -9,9 +9,14 @@
   // (TANGIBLE_PASSWORD_SIGN_IN=setup-only), the form is not offered, since
   // an account made with it could never sign in: the server refuses it, and
   // the page says how accounts are made there instead.
+  //
+  // An account is disabled, which signs it out and keeps it from signing in,
+  // after a question under the list; enabled again in one click. Not one's
+  // own: the server refuses that, so it is not offered.
   import Badge from '$lib/components/ui/Badge.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import Callout from '$lib/components/ui/Callout.svelte';
+  import Confirm from '$lib/components/ui/Confirm.svelte';
   import EmptyState from '$lib/components/ui/EmptyState.svelte';
   import Field from '$lib/components/ui/Field.svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
@@ -27,6 +32,8 @@
     loadUsers,
     MIN_PASSWORD_CHARS,
     roleLabel,
+    sessionUsername,
+    setUserDisabled,
     type OidcStatus,
     type Problem,
     type UserView,
@@ -51,6 +58,13 @@
   let moreProblem = $state<Problem | null>(null);
   /** How people sign in here; unknown until it loads, or if it cannot. */
   let signIn = $state<OidcStatus | null>(null);
+
+  /** The account a question is being asked about, before it is disabled. */
+  let confirming = $state<UserView | null>(null);
+  let changing = $state(false);
+  let changed = $state<string | null>(null);
+  let changeProblem = $state<Problem | null>(null);
+  const me = sessionUsername();
 
   /** Whether only the account setup made may use a password. */
   const passwordsOff = $derived(signIn?.password_sign_in === 'setup-only');
@@ -87,6 +101,22 @@
       if (result.kind === 'ok') signIn = result.data;
     });
   });
+
+  async function setDisabled(user: UserView, disabled: boolean) {
+    if (changing) return;
+    changing = true;
+    changed = null;
+    changeProblem = null;
+    const result = await setUserDisabled(user.id, disabled);
+    changing = false;
+    if (result.kind === 'error') {
+      changeProblem = result.problem;
+      return;
+    }
+    confirming = null;
+    changed = `${disabled ? 'Disabled' : 'Enabled'} ${user.username}.`;
+    await refresh();
+  }
 
   /** How an account signs in, in words. */
   function signsInWith(user: UserView): string {
@@ -172,6 +202,7 @@
               <th scope="col">Status</th>
               <th scope="col">Last signed in</th>
               <th scope="col">Created</th>
+              <th scope="col"><span class="visually-hidden">Actions</span></th>
             </tr>
           </thead>
           <tbody>
@@ -208,10 +239,57 @@
                     >{when(user.created_at)}</time
                   >
                 </td>
+                <td class="actions">
+                  {#if user.username === me}
+                    <span class="quiet">You</span>
+                  {:else if user.disabled}
+                    <Button
+                      size="sm"
+                      onclick={() => setDisabled(user, false)}
+                      disabled={changing}
+                      label={`Enable ${user.username}`}>Enable</Button
+                    >
+                  {:else}
+                    <Button
+                      size="sm"
+                      onclick={() => {
+                        confirming = user;
+                        changed = null;
+                        changeProblem = null;
+                      }}
+                      disabled={changing}
+                      label={`Disable ${user.username}…`}>Disable…</Button
+                    >
+                  {/if}
+                </td>
               </tr>
             {/each}
           </tbody>
         </Table>
+        {#if confirming}
+          {@const user = confirming}
+          <div class="question">
+            <Confirm title={`Disable ${user.username}?`}>
+              <p>
+                They are signed out now, and cannot sign in, with a password or through the identity
+                provider, until the account is enabled again. What they did stays in the audit log
+                and on what they asked for and burned.
+              </p>
+              {#snippet actions()}
+                <Button variant="danger" onclick={() => setDisabled(user, true)} disabled={changing}
+                  >{changing ? 'Disabling…' : `Disable ${user.username}`}</Button
+                >
+                <Button onclick={() => (confirming = null)}>Keep it</Button>
+              {/snippet}
+            </Confirm>
+          </div>
+        {/if}
+        <div aria-live="polite">
+          {#if changed}<p class="changed"><StatusMark tone="ok" label={changed} /></p>{/if}
+        </div>
+        {#if changeProblem}
+          <p role="alert" class="problem changed">{changeProblem.detail}</p>
+        {/if}
       </Panel>
       {#if view.users.some((user) => user.signs_in_with === 'none')}
         <p class="quiet note">
@@ -326,6 +404,14 @@
     .columns:not(.single) {
       grid-template-columns: minmax(0, 2fr) minmax(20rem, 1fr);
     }
+  }
+  .actions {
+    text-align: right;
+    white-space: nowrap;
+  }
+  .question,
+  .changed {
+    margin: var(--space-3) var(--space-4);
   }
   .note {
     margin: var(--space-3) 0 0;
