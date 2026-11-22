@@ -412,7 +412,7 @@ export function attemptAdvice(
   switch (code) {
     case 'ENGINE_DRIVE_DISCONNECTED':
       return state === 'write_failed'
-        ? 'The drive dropped off during the write, so this disc is probably unusable. A USB drive that resets while writing is often short of power: connect it to the machine directly, or by its second USB plug if it has one. Restart the worker so it finds the drive again, then retry with a new disc.'
+        ? 'The drive dropped off during the write, so this disc is probably unusable. A USB drive that resets while writing is often short of power: a hub with its own power supply, or a second USB plug if the drive has one, can help. Restart the worker so it finds the drive again, then retry with a new disc.'
         : 'The drive was disconnected, or reconnected as another device, after the worker started. Restart the worker so it finds the drive again, then retry.';
     case 'WRITE_FAILED':
       return 'The write did not finish, so this disc is probably unusable. What the worker said tells why; retry with a new disc.';

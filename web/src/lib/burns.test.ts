@@ -320,6 +320,7 @@ describe('labels', () => {
     expect(during).toContain('during the write');
     expect(during).toContain('short of power');
     expect(during).toContain('new disc');
+    expect(during).not.toContain('directly');
     const before = attemptAdvice('ENGINE_DRIVE_DISCONNECTED', 'failed_before_write') ?? '';
     expect(before).not.toContain('unusable');
     expect(attemptAdvice('WRITE_FAILED', 'write_failed')).toContain('What the worker said');
