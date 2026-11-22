@@ -14,7 +14,7 @@ body:
     id: version
     attributes:
       label: Tangible version
-      placeholder: v0.5.0
+      placeholder: v0.6.0
     validations:
       required: true
 

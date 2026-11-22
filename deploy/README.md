@@ -1026,7 +1026,7 @@ digest. To run exactly what you verified, set `TANGIBLE_IMAGE` in `.env` to
 that digest: a tag can be moved, and the minor tag the Compose files name is
 moved by every patch release, while a digest cannot. The minor tag only ever
 names a published release's image, so verifying it (`cosign verify
-ghcr.io/digital-grease/tangible:v0.5 ...`) checks the image it names now. A
+ghcr.io/digital-grease/tangible:v0.6 ...`) checks the image it names now. A
 release's own tag is pushed while the release is built, before its scan and
 signature, so verify an image by its digest before you run it.
 
@@ -1038,7 +1038,7 @@ correctly signed image. `cosign version` says which you have.
 
 ```bash
 IMAGE=ghcr.io/digital-grease/tangible@sha256:<digest from the release page>
-TAG=v0.5.0
+TAG=v0.6.0
 
 # The image was signed by this repository's release workflow at this tag.
 cosign verify "$IMAGE" \
@@ -1134,16 +1134,16 @@ check it carries what you expect:
 
 ```bash
 docker build -f deploy/decryption/Dockerfile \
-  --build-arg TANGIBLE_IMAGE=ghcr.io/digital-grease/tangible:v0.5.0 \
-  -t tangible-decryption:v0.5.0 deploy/decryption
-docker run --rm --entrypoint cat tangible-decryption:v0.5.0 /usr/share/tangible/decryption.json
+  --build-arg TANGIBLE_IMAGE=ghcr.io/digital-grease/tangible:v0.6.0 \
+  -t tangible-decryption:v0.6.0 deploy/decryption
+docker run --rm --entrypoint cat tangible-decryption:v0.6.0 /usr/share/tangible/decryption.json
 ```
 
 Run the drive's worker from it with one more override, which changes only
 the image:
 
 ```bash
-TANGIBLE_DECRYPTION_IMAGE=tangible-decryption:v0.5.0 docker compose \
+TANGIBLE_DECRYPTION_IMAGE=tangible-decryption:v0.6.0 docker compose \
   -f deploy/compose.yaml -f deploy/compose.hardware.yaml \
   -f deploy/compose.decryption.yaml up -d
 ```
@@ -1575,8 +1575,8 @@ metrics: import it and choose your Prometheus data source.
 
 ## Upgrading
 
-The Compose files name the release's minor version, `ghcr.io/digital-grease/tangible:v0.5`,
-which each published patch release of it (0.5.1, 0.5.2) moves to its own
+The Compose files name the release's minor version, `ghcr.io/digital-grease/tangible:v0.6`,
+which each published patch release of it (0.6.1, 0.6.2) moves to its own
 image. A patch release fixes, changes nothing you set, and migrates only in
 ways its predecessor still runs on. So within a minor version:
 
@@ -1593,7 +1593,7 @@ runs under the `compose.yaml` you have, but may bring a new one too, a fix in
 how the services are confined, for instance; its notes say so, and you take
 it as for a new minor version (step 4 below).
 
-A new minor version (0.6.0) is a step of its own, since it may migrate in
+A new minor version (0.7.0) is a step of its own, since it may migrate in
 ways the one before cannot run on, and its `compose.yaml` names it:
 
 1. Read the release notes, especially "Upgrading from".

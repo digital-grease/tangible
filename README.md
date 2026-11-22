@@ -10,7 +10,7 @@
 
 > A self-hosted disc-image preservation, management, and burning platform.
 
-**Status:** early release, 0.5.0. Everything listed under "What it does" works
+**Status:** early release, 0.6.0. Everything listed under "What it does" works
 and is tested, including on a real optical drive. Expect the API and the
 manifest schema to change during 0.x, with release notes.
 

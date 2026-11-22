@@ -35,7 +35,7 @@ serde_json = "1.0.151"
 # the tree through sqlx.
 sha1 = "0.11.0"
 sha2 = "0.11.0"
-tangible-domain = { version = "0.5.0", path = "../domain" }
+tangible-domain = { version = "0.6.0", path = "../domain" }
 thiserror = "2.0.19"
 # When Prowlarr says a release was posted, and until when it paused an
 # indexer: RFC 3339. The same version the domain crate uses.
@@ -55,6 +55,6 @@ aws-lc-rs = "1.18.0"
 # The CUE rewriter the server passes to the planner, so the tests plan with
 # the real one. A test dependency only: the planner itself does not depend
 # on the image crate.
-tangible-image = { version = "0.5.0", path = "../image" }
+tangible-image = { version = "0.6.0", path = "../image" }
 tempfile = "3.27.0"
 tokio = { version = "1.53.1", features = ["net", "macros", "rt-multi-thread", "io-util", "time", "test-util"] }

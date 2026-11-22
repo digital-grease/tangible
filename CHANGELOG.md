@@ -4,7 +4,47 @@ Notable changes to Tangible, newest first. Versions follow semantic
 versioning; during 0.x the API, the manifest schema and the database schema
 may change between minor versions, and the release notes say how.
 
-## Unreleased
+## 0.6.0 (2026-11-22)
+
+Clearer burns, accounts an administrator can manage, and pictures to find
+an item by. A burn on a drive that dropped off the machine, or came back as
+another device, now says so and what to do, and a failed write carries the
+burning tool's own words. The highlights, each detailed below:
+
+- **Thumbnails** beside the results of a search for an item to ask for, and
+  in the cover picker, fetched and served by the server.
+- **Accounts** disabled and enabled on the Accounts page, and deleted when
+  never used; no password account made where only setup's may sign in with
+  one (`TANGIBLE_PASSWORD_SIGN_IN=setup-only`).
+- **Drive trouble said plainly**: `ENGINE_DRIVE_DISCONNECTED` when the drive
+  is gone since the worker started, the burning tool's messages for a
+  failed write, and advice on the burn's page.
+- The Backups page warns that its copies hold no disc images.
+- The web UI has an icon, and a missing file is a 404, not the UI's page.
+
+### Upgrading from 0.5.0
+
+No migrations, so 0.5.0 runs on the database as this release leaves it.
+No API route or field is gone; the new ones are listed below.
+The Compose files name `v0.6` now, so take this release's `compose.yaml`
+once, and each worker's file: `docker compose pull` under 0.5.0's stays on
+0.5. They differ from 0.5.0's only in that tag, so setting
+`TANGIBLE_IMAGE` to this release's digest under the files you have does
+the same.
+
+- Keep your `.env`, then `docker compose pull` and `docker compose up -d`.
+- Upgrade each worker too: a 0.5.0 worker keeps working with a 0.6.0
+  server, but only a 0.6.0 worker says why a drive cannot be reached or a
+  write failed.
+- What changes for you: with `TANGIBLE_PASSWORD_SIGN_IN=setup-only`, the
+  Accounts page makes no password accounts, since none could sign in, and
+  lists any made before as unable to; a path with a dot in its last
+  segment that the web UI's build lacks is a 404; and showing a search's
+  results makes the server fetch their thumbnails from the providers'
+  image services (`TANGIBLE_ARTWORK=false` turns that off).
+- Going back to 0.5.0 needs no restore: set `TANGIBLE_IMAGE` to 0.5.0's
+  digest, or run 0.5.0's own `compose.yaml` with your `.env`. Accounts
+  disabled in 0.6.0 stay disabled, and 0.5.0 still refuses them.
 
 ### Added
 
@@ -28,6 +68,12 @@ may change between minor versions, and the release notes say how.
   after a question: one made by mistake, say. It goes entirely and its name
   can be given again. An account that has signed in names the person behind
   what it did in the audit log, so it can only be disabled.
+- In the API: `GET /api/v1/metadata/thumbnails/{thumbnail_id}`, and a
+  `thumbnail` on each search candidate; `POST /api/v1/users/{user_id}/disable`
+  and `/enable`, `DELETE /api/v1/users/{user_id}`, and `can_delete` on
+  accounts, whose `signs_in_with` may now be `none`; the error codes
+  `LAST_ADMINISTRATOR` and `ACCOUNT_IN_USE`; and, from workers,
+  `ENGINE_DRIVE_DISCONNECTED` and `DRIVE_DISCONNECTED`.
 
 ### Changed
 

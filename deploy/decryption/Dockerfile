@@ -12,8 +12,8 @@
 # first:
 #
 #   docker build -f deploy/decryption/Dockerfile \
-#     --build-arg TANGIBLE_IMAGE=ghcr.io/digital-grease/tangible:v0.5.0 \
-#     -t tangible-decryption:v0.5.0 deploy/decryption
+#     --build-arg TANGIBLE_IMAGE=ghcr.io/digital-grease/tangible:v0.6.0 \
+#     -t tangible-decryption:v0.6.0 deploy/decryption
 #
 # The result is yours: it is outside the release's signature, SBOM,
 # provenance and vulnerability scan. Rebuild it whenever you move to a new
