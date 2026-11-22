@@ -47,7 +47,11 @@
 </div>
 
 <style>
+  /* Positioned, so what is placed absolutely inside it, such as a heading
+     hidden but for screen readers, is clipped with the table and does not
+     widen the page. */
   .table-region {
+    position: relative;
     overflow-x: auto;
     max-width: 100%;
   }
