@@ -4,6 +4,16 @@ Notable changes to Tangible, newest first. Versions follow semantic
 versioning; during 0.x the API, the manifest schema and the database schema
 may change between minor versions, and the release notes say how.
 
+## Unreleased
+
+### Security
+
+- `url` 2.5.9, for RUSTSEC-2026-0592: `Url::origin()` called itself once
+  for each `blob:` prefix of a URL, and enough of them overflowed the
+  stack, which ends the process. Neither Tangible nor any library it uses
+  calls `Url::origin()`, so it could not be reached here; updated so a
+  dependency audit passes.
+
 ## 0.6.0 (2026-11-22)
 
 Clearer burns, accounts an administrator can manage, and pictures to find
