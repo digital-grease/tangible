@@ -173,7 +173,7 @@ describe('Burn page', () => {
       error_code: 'ENGINE_DRIVE_DISCONNECTED',
       error_detail: 'the drive at /dev/sr0 is gone from this machine; nothing was written',
     };
-    server({
+    const asked = server({
       '/api/v1/burn-jobs/j1': {
         status: 200,
         body: { ...job({ state: 'failed', progress: null }), attempts: [failed] },
@@ -181,6 +181,10 @@ describe('Burn page', () => {
       '/api/v1/burn-attempts/t1/events?order=newest': { status: 200, body: { items: [] } },
       '/api/v1/burn-attempts/t1': { status: 200, body: { ...failed, medium: null } },
       '/api/v1/artifacts/a1': { status: 200, body: { id: 'a1', disc_shape: null } },
+      'POST /api/v1/burn-jobs/j1/retry': {
+        status: 200,
+        body: { ...job({ state: 'queued', progress: null }), attempts: [failed] },
+      },
       '/api/v1/report-settings': SETTINGS,
     });
     const { container } = render(BurnPage);
@@ -191,6 +195,9 @@ describe('Burn page', () => {
     expect(screen.getByText('ENGINE_DRIVE_DISCONNECTED')).toBeTruthy();
     expect(screen.getByText(/gone from this machine/)).toBeTruthy();
     expect(await axeViolations(container)).toEqual([]);
+    // Retried with a button that says so in one word.
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await vi.waitFor(() => expect(asked).toContain('POST /api/v1/burn-jobs/j1/retry'));
   });
 
   it('shows the newest events first, and earlier ones on request', async () => {

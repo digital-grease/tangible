@@ -395,9 +395,7 @@
           {/if}
 
           {#if canRetry(job)}
-            <Button onclick={retry} disabled={working}>
-              Retry: queues another attempt and spends another disc
-            </Button>
+            <Button onclick={retry} disabled={working}>Retry</Button>
           {:else if job.state === 'complete'}
             <p>This burn is finished. Producing another copy is a new burn job.</p>
           {:else if job.state === 'needs_attention'}
