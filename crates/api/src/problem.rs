@@ -120,8 +120,10 @@ pub enum ErrorCode {
     InsufficientSpace,
     /// A file sent as a DAT is not a Logiqx XML DAT this server reads.
     DatInvalid,
-    /// The password was right, and this account signs in through the
-    /// identity provider instead (`TANGIBLE_PASSWORD_SIGN_IN=setup-only`).
+    /// Only the account setup made may use a password here
+    /// (`TANGIBLE_PASSWORD_SIGN_IN=setup-only`): the password was right for
+    /// another account, which signs in through the identity provider, or a
+    /// password account was asked to be made.
     PasswordSignInOff,
     /// The artifact is deleted, or pending deletion, so its bytes are not
     /// to be used (ADR 0020).
@@ -335,7 +337,7 @@ impl ErrorCode {
             Self::IntegrationAddressRefused => "The server will not reach that address",
             Self::InsufficientSpace => "Not enough free space",
             Self::DatInvalid => "Not a DAT this server reads",
-            Self::PasswordSignInOff => "This account signs in through the identity provider",
+            Self::PasswordSignInOff => "Passwords are for the account setup made",
             Self::ArtifactDeleted => "The artifact is deleted, or is being deleted",
             Self::ArtifactInUse => "The artifact is in use",
             Self::ArtifactRetained => "The artifact is retained",

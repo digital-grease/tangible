@@ -21,7 +21,8 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use tangible_db::accounts::{
     CreateUserOutcome, UserRecord, count_users, create_first_administrator, create_session,
-    create_user, list_users, record_failed_sign_in, revoke_session, user_for_sign_in,
+    create_user, list_users, made_by_setup, record_failed_sign_in, revoke_session,
+    user_for_sign_in,
 };
 use tangible_domain::auth::{MAX_PASSWORD_BYTES, check_new_password, normalize_username};
 use tangible_domain::{Role, SecretString};
@@ -76,8 +77,10 @@ pub struct UserView {
     pub last_signed_in_at: Option<String>,
     /// When it was created.
     pub created_at: String,
-    /// How it signs in: `password`, or `provider` for an account an identity
-    /// provider vouches for (ADR 0018).
+    /// How it signs in: `password`; `provider` for an account an identity
+    /// provider vouches for (ADR 0018); or `none` for a password account
+    /// that cannot sign in at all, because this server lets only the account
+    /// setup made use a password (`TANGIBLE_PASSWORD_SIGN_IN=setup-only`).
     pub signs_in_with: String,
 }
 
@@ -479,20 +482,38 @@ pub async fn list_accounts(
         unavailable("accounts could not be read")
     })?;
     let ids: Vec<uuid::Uuid> = users.iter().map(|user| user.id).collect();
+    let read_failed = |error: tangible_db::DbError| {
+        tracing::error!(error = ?error, "could not read how accounts sign in");
+        unavailable("accounts could not be read")
+    };
     let through_provider = tangible_db::oidc::identity_users(state.database().pool(), &ids)
         .await
-        .map_err(|error| {
-            tracing::error!(error = ?error, "could not read how accounts sign in");
-            unavailable("accounts could not be read")
-        })?;
+        .map_err(read_failed)?;
+    // Where passwords are for setup's account alone, any other password
+    // account cannot sign in at all, and the list says so.
+    let password_allowed = match state.auth().password_sign_in {
+        PasswordSignIn::All => None,
+        PasswordSignIn::SetupOnly => Some(
+            made_by_setup(state.database().pool(), &ids)
+                .await
+                .map_err(read_failed)?,
+        ),
+    };
     let items = users
         .into_iter()
         .map(|user| {
-            let provider = through_provider.contains(&user.id);
+            let signs_in_with = if through_provider.contains(&user.id) {
+                "provider"
+            } else if password_allowed
+                .as_ref()
+                .is_some_and(|allowed| !allowed.contains(&user.id))
+            {
+                "none"
+            } else {
+                "password"
+            };
             let mut view = UserView::from(user);
-            if provider {
-                "provider".clone_into(&mut view.signs_in_with);
-            }
+            signs_in_with.clone_into(&mut view.signs_in_with);
             view
         })
         .collect();
@@ -503,16 +524,22 @@ pub async fn list_accounts(
 ///
 /// # Errors
 ///
+/// `PASSWORD_SIGN_IN_OFF` where only setup's account may use a password;
 /// `VALIDATION_FAILED` for a username, password or role that will not do;
 /// `CONFLICT` for a username already in use.
 #[utoipa::path(
     post,
     path = "/api/v1/users",
     tag = "accounts",
+    description = "Create an account that signs in with a password. Refused where only the \
+                   account setup made may use a password (`TANGIBLE_PASSWORD_SIGN_IN=setup-only`): \
+                   there, an account is made the first time its person signs in through the \
+                   identity provider.",
     request_body = CreateUserRequest,
     responses(
         (status = 201, description = "Created", body = UserView),
-        (status = 403, description = "Not an administrator", body = Problem),
+        (status = 403, description = "Not an administrator, or password accounts are off here \
+                                      (`TANGIBLE_PASSWORD_SIGN_IN=setup-only`)", body = Problem),
         (status = 409, description = "The username is taken", body = Problem),
         (status = 422, description = "The username, password or role will not do", body = Problem),
     ),
@@ -522,6 +549,18 @@ pub async fn create_account(
     SignedIn(actor): SignedIn,
     Json(request): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<UserView>), Problem> {
+    // An account made here signs in with a password, which this server
+    // would refuse it: it would be an account nobody can use.
+    if state.auth().password_sign_in == PasswordSignIn::SetupOnly {
+        return Err(Problem::new(
+            ErrorCode::PasswordSignInOff,
+            "only the account setup made may sign in with a password here \
+             (TANGIBLE_PASSWORD_SIGN_IN=setup-only), so an account made with one could never \
+             sign in. Each person's account is made the first time they sign in through the \
+             identity provider, with the role their group gives; set \
+             TANGIBLE_PASSWORD_SIGN_IN=all and restart the server to make password accounts",
+        ));
+    }
     let username = normalize_username(&request.username).map_err(|error| invalid(&error))?;
     check_new_password(request.password.expose()).map_err(|error| invalid(&error))?;
     let role = Role::from_str(&request.role).map_err(|_| {

@@ -4,8 +4,14 @@
   // Accounts (UX.md 11; docs/plans/ui-overhaul.md, "Pages"): everyone who
   // can sign in, with their role and how they sign in, and a form that
   // creates an account. Administrators only; anybody else is told so.
+  //
+  // Where only the account setup made may use a password
+  // (TANGIBLE_PASSWORD_SIGN_IN=setup-only), the form is not offered, since
+  // an account made with it could never sign in: the server refuses it, and
+  // the page says how accounts are made there instead.
   import Badge from '$lib/components/ui/Badge.svelte';
   import Button from '$lib/components/ui/Button.svelte';
+  import Callout from '$lib/components/ui/Callout.svelte';
   import EmptyState from '$lib/components/ui/EmptyState.svelte';
   import Field from '$lib/components/ui/Field.svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
@@ -17,9 +23,11 @@
   import {
     apiFetch,
     createUser,
+    loadOidcStatus,
     loadUsers,
     MIN_PASSWORD_CHARS,
     roleLabel,
+    type OidcStatus,
     type Problem,
     type UserView,
   } from '$lib/session';
@@ -41,6 +49,12 @@
   let submitting = $state(false);
   let loadingMore = $state(false);
   let moreProblem = $state<Problem | null>(null);
+  /** How people sign in here; unknown until it loads, or if it cannot. */
+  let signIn = $state<OidcStatus | null>(null);
+
+  /** Whether only the account setup made may use a password. */
+  const passwordsOff = $derived(signIn?.password_sign_in === 'setup-only');
+  const provider = $derived(signIn?.display_name || 'the identity provider');
 
   const ROLES = [
     {
@@ -67,7 +81,24 @@
     }
   }
 
-  onMount(refresh);
+  onMount(() => {
+    void refresh();
+    void loadOidcStatus().then((result) => {
+      if (result.kind === 'ok') signIn = result.data;
+    });
+  });
+
+  /** How an account signs in, in words. */
+  function signsInWith(user: UserView): string {
+    switch (user.signs_in_with) {
+      case 'provider':
+        return 'Identity provider';
+      case 'none':
+        return 'Cannot sign in';
+      default:
+        return 'Password';
+    }
+  }
 
   async function loadMore() {
     if (view.kind !== 'ready' || !view.nextCursor || loadingMore) return;
@@ -150,7 +181,13 @@
                 <td>
                   <Badge strong={user.role === 'administrator'}>{roleLabel(user.role)}</Badge>
                 </td>
-                <td>{user.signs_in_with === 'provider' ? 'Identity provider' : 'Password'}</td>
+                <td>
+                  {#if user.signs_in_with === 'none'}
+                    <StatusMark tone="warn" label={signsInWith(user)} />
+                  {:else}
+                    {signsInWith(user)}
+                  {/if}
+                </td>
                 <td>
                   <StatusMark
                     tone={user.disabled ? 'idle' : 'ok'}
@@ -176,6 +213,12 @@
           </tbody>
         </Table>
       </Panel>
+      {#if view.users.some((user) => user.signs_in_with === 'none')}
+        <p class="quiet note">
+          An account that cannot sign in was made with a password, but only the account setup made
+          may use one here (<code>TANGIBLE_PASSWORD_SIGN_IN=setup-only</code>).
+        </p>
+      {/if}
       {#if view.nextCursor || moreProblem}
         <div class="more">
           {#if view.nextCursor}
@@ -193,7 +236,24 @@
     {/if}
   </div>
 
-  {#if view.kind === 'ready'}
+  {#if view.kind === 'ready' && passwordsOff}
+    <Panel title="New accounts">
+      <Callout tone="info">
+        <p>
+          Only the account setup made signs in with a password here (<code
+            >TANGIBLE_PASSWORD_SIGN_IN=setup-only</code
+          >), so an account made with one could never sign in.
+        </p>
+        <p>
+          Everyone else signs in through {provider}. Their account is made here the first time they
+          do, with the role their group gives them.
+        </p>
+        <p>
+          To make password accounts, set <code>TANGIBLE_PASSWORD_SIGN_IN=all</code> and restart the server.
+        </p>
+      </Callout>
+    </Panel>
+  {:else if view.kind === 'ready'}
     <Panel title="Create an account">
       <form class="create" onsubmit={submit}>
         <Field label="Username" required>
@@ -266,6 +326,10 @@
     .columns:not(.single) {
       grid-template-columns: minmax(0, 2fr) minmax(20rem, 1fr);
     }
+  }
+  .note {
+    margin: var(--space-3) 0 0;
+    font-size: var(--text-sm);
   }
   .more {
     display: flex;

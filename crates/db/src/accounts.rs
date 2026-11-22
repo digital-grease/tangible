@@ -223,6 +223,26 @@ pub async fn list_users(
     rows.iter().map(user_from_row).collect()
 }
 
+/// Which of `users` setup made: the accounts that may still sign in with a
+/// password when password sign-in is for setup's account alone
+/// (`TANGIBLE_PASSWORD_SIGN_IN=setup-only`).
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn made_by_setup(
+    pool: &PgPool,
+    users: &[uuid::Uuid],
+) -> Result<std::collections::HashSet<uuid::Uuid>, DbError> {
+    let found: Vec<uuid::Uuid> =
+        sqlx::query_scalar("SELECT id FROM users WHERE id = ANY($1) AND created_by = 'setup'")
+            .bind(users)
+            .fetch_all(pool)
+            .await
+            .map_err(DbError::Query)?;
+    Ok(found.into_iter().collect())
+}
+
 /// An account as a password sign-in sees it.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SignInRecord {

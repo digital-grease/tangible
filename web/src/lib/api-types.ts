@@ -2517,10 +2517,7 @@ export interface paths {
         put?: never;
         /**
          * Create an account.
-         * @description # Errors
-         *
-         *     `VALIDATION_FAILED` for a username, password or role that will not do;
-         *     `CONFLICT` for a username already in use.
+         * @description Create an account that signs in with a password. Refused where only the account setup made may use a password (`TANGIBLE_PASSWORD_SIGN_IN=setup-only`): there, an account is made the first time its person signs in through the identity provider.
          */
         post: operations["create_account"];
         delete?: never;
@@ -6853,8 +6850,10 @@ export interface components {
             /** @description `viewer`, `operator` or `administrator`. */
             role: string;
             /**
-             * @description How it signs in: `password`, or `provider` for an account an identity
-             *     provider vouches for (ADR 0018).
+             * @description How it signs in: `password`; `provider` for an account an identity
+             *     provider vouches for (ADR 0018); or `none` for a password account
+             *     that cannot sign in at all, because this server lets only the account
+             *     setup made use a password (`TANGIBLE_PASSWORD_SIGN_IN=setup-only`).
              */
             signs_in_with: string;
             /** @description The username, lowercase. */
@@ -12862,7 +12861,7 @@ export interface operations {
                     "application/json": components["schemas"]["UserView"];
                 };
             };
-            /** @description Not an administrator */
+            /** @description Not an administrator, or password accounts are off here (`TANGIBLE_PASSWORD_SIGN_IN=setup-only`) */
             403: {
                 headers: {
                     [name: string]: unknown;

@@ -28,6 +28,13 @@ may change between minor versions, and the release notes say how.
 
 ### Fixed
 
+- An administrator could make a password account where only the account
+  setup made may sign in with a password
+  (`TANGIBLE_PASSWORD_SIGN_IN=setup-only`). The account was made, and every
+  sign-in with it was refused. Making one is now refused, saying which
+  setting causes it, and the Accounts page shows how accounts are made there
+  instead of the form: the first time each person signs in through the
+  identity provider. An account made before is listed as unable to sign in.
 - The web UI had no icon. Its pages linked a `favicon.png` that no build
   carried, and the server answered a path it had no file for with the UI's
   page, so a browser was handed HTML and showed a blank or generic icon. The

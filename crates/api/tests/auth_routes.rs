@@ -644,6 +644,82 @@ async fn an_administrator_creates_accounts_that_can_sign_in() {
     );
 }
 
+/// The account `username` as the list shows it, following the cursors to
+/// the end: the database is shared with every earlier run.
+async fn listed(router: &axum::Router, cookie: &str, username: &str) -> Option<serde_json::Value> {
+    let mut uri = "/api/v1/users?limit=500".to_owned();
+    loop {
+        let page = send(router, "GET", &uri, Some(cookie), None, None).await;
+        assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+        if let Some(user) = page.body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|user| user["username"] == username)
+        {
+            return Some(user.clone());
+        }
+        match page.body["next_cursor"].as_str() {
+            Some(cursor) => uri = format!("/api/v1/users?limit=500&cursor={cursor}"),
+            None => return None,
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn no_password_account_is_made_where_only_setup_may_use_one() {
+    use tangible_api::auth::{AuthSettings, PasswordSignIn};
+    let database = support::database().await;
+    let pool = database.pool().clone();
+    let setup_only = router(
+        ApiState::new(database.clone())
+            .with_auth(AuthSettings::default().with_password_sign_in(PasswordSignIn::SetupOnly)),
+    );
+    let all = router(ApiState::new(database));
+    let admin = support::administrator(&pool).await;
+    let username = format!("never-{}", uuid::Uuid::now_v7().simple());
+
+    // Refused, saying which setting makes it so, and nothing is made.
+    let refused = send(
+        &setup_only,
+        "POST",
+        "/api/v1/users",
+        Some(&admin.cookie()),
+        Some(&admin.csrf_token),
+        Some(json!({ "username": username, "password": PASSWORD, "role": "operator" })),
+    )
+    .await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.body);
+    assert_eq!(refused.body["code"], "PASSWORD_SIGN_IN_OFF");
+    let detail = refused.body["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("TANGIBLE_PASSWORD_SIGN_IN=setup-only"),
+        "{detail}"
+    );
+    assert!(listed(&all, &admin.cookie(), &username).await.is_none());
+
+    // One made before, or while passwords were for everyone, is listed as
+    // unable to sign in; setup's is not, and with passwords for everyone
+    // both sign in with one.
+    let local = account(&pool, Role::Operator).await;
+    let setup = format!("setup-{}", uuid::Uuid::now_v7().simple());
+    let hash = hash_password(PASSWORD.to_owned()).await.unwrap();
+    tangible_db::accounts::create_user(&pool, &setup, &hash, Role::Administrator, "setup")
+        .await
+        .unwrap()
+        .unwrap();
+    for (router, name, expected) in [
+        (&setup_only, &local, "none"),
+        (&setup_only, &setup, "password"),
+        (&all, &local, "password"),
+        (&all, &setup, "password"),
+    ] {
+        let user = listed(router, &admin.cookie(), name).await.unwrap();
+        assert_eq!(user["signs_in_with"], expected, "{name}");
+    }
+}
+
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
 async fn a_worker_credential_opens_no_operator_route() {

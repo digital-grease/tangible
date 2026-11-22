@@ -75,6 +75,46 @@ describe('Accounts page', () => {
     expect(await axeViolations(container)).toEqual([]);
   });
 
+  it('offers no form where only setup may use a password, and says why', async () => {
+    server({
+      '/api/v1/users': {
+        status: 200,
+        body: { items: [user(1), { ...user(3), signs_in_with: 'none' }], next_cursor: null },
+      },
+      '/api/v1/session/oidc': {
+        status: 200,
+        body: { enabled: true, display_name: 'VoidAuth', password_sign_in: 'setup-only' },
+      },
+    });
+    const { container } = render(UsersPage);
+    const panel = await screen.findByRole('region', { name: 'New accounts' });
+    expect(screen.queryByRole('region', { name: 'Create an account' })).toBeNull();
+    expect(screen.queryByLabelText(/^Password/)).toBeNull();
+    expect(panel.textContent).toContain('TANGIBLE_PASSWORD_SIGN_IN=setup-only');
+    expect(panel.textContent).toContain('signs in through VoidAuth');
+    expect(panel.textContent).toContain('TANGIBLE_PASSWORD_SIGN_IN=all');
+    // The account that cannot sign in is marked, and the page says why.
+    expect(screen.getByText('Cannot sign in')).toBeTruthy();
+    expect(
+      screen.getByText(/An account that cannot sign in was made with a password/),
+    ).toBeTruthy();
+    expect(await axeViolations(container)).toEqual([]);
+  });
+
+  it('offers the form where passwords are for everyone', async () => {
+    server({
+      '/api/v1/users': { status: 200, body: { items: [user(1)], next_cursor: null } },
+      '/api/v1/session/oidc': {
+        status: 200,
+        body: { enabled: false, display_name: null, password_sign_in: 'all' },
+      },
+    });
+    render(UsersPage);
+    expect(await screen.findByRole('region', { name: 'Create an account' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'New accounts' })).toBeNull();
+    expect(screen.queryByText(/cannot sign in/i)).toBeNull();
+  });
+
   it('tells anybody but an administrator that the page is not theirs', async () => {
     server({
       '/api/v1/users': {

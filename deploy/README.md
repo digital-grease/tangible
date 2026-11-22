@@ -180,7 +180,9 @@ VoidAuth".
   the provider's identifier for the person. It has no password.
 - **Passwords stay.** With `TANGIBLE_PASSWORD_SIGN_IN=setup-only`, only the
   administrator setup made can sign in with a password, for when the
-  provider is down; everyone else signs in through it.
+  provider is down; everyone else signs in through it. The Accounts page
+  then makes no password accounts, since none could sign in, and lists any
+  made before as unable to sign in.
 - **Tangible reaches the provider from the server**, for its discovery
   document, keys and token exchange, held to the same policy as an
   integration's address: private networks allowed, this machine not. The

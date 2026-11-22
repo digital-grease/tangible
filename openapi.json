@@ -8819,7 +8819,7 @@
           "accounts"
         ],
         "summary": "Create an account.",
-        "description": "# Errors\n\n`VALIDATION_FAILED` for a username, password or role that will not do;\n`CONFLICT` for a username already in use.",
+        "description": "Create an account that signs in with a password. Refused where only the account setup made may use a password (`TANGIBLE_PASSWORD_SIGN_IN=setup-only`): there, an account is made the first time its person signs in through the identity provider.",
         "operationId": "create_account",
         "requestBody": {
           "content": {
@@ -8843,7 +8843,7 @@
             }
           },
           "403": {
-            "description": "Not an administrator",
+            "description": "Not an administrator, or password accounts are off here (`TANGIBLE_PASSWORD_SIGN_IN=setup-only`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -18631,7 +18631,7 @@
           },
           "signs_in_with": {
             "type": "string",
-            "description": "How it signs in: `password`, or `provider` for an account an identity\nprovider vouches for (ADR 0018)."
+            "description": "How it signs in: `password`; `provider` for an account an identity\nprovider vouches for (ADR 0018); or `none` for a password account\nthat cannot sign in at all, because this server lets only the account\nsetup made use a password (`TANGIBLE_PASSWORD_SIGN_IN=setup-only`)."
           },
           "username": {
             "type": "string",
