@@ -1272,7 +1272,9 @@ integration passwords do not open. The database's password needs no copy: a
 copy of the database restores into one made with any password.
 
 Back up the library with whatever you use for large files; it only ever grows,
-and nothing in it is rewritten. Copy the database before the library, so every
+and nothing in it is rewritten. Tangible's copies are the database alone, as
+the Backups page warns: it does not copy the library, and will not, since the
+library grows as large as your collection. Copy the database before the library, so every
 artifact the database names is in the copy. A backup is not a backup until a
 restore from it has been tried.
 

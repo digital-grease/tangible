@@ -7,6 +7,11 @@
   // DATs page does; restoring has the copy's name typed again. While a
   // restore runs the server answers nothing but its progress, which the page
   // follows until the server is back.
+  //
+  // A copy is the database alone. Tangible never copies the library's disc
+  // images (the owner, 2026-11-21: they could make copies huge), and the
+  // page says so first, as a warning, so nobody takes these copies for a
+  // backup of their collection.
   import Confirm from '$lib/components/ui/Confirm.svelte';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import Button from '$lib/components/ui/Button.svelte';
@@ -238,10 +243,23 @@
 
 <PageHeader
   title="Backups"
-  description="Copies of the database: the catalogue, accounts, jobs, burn history and audit trail. One is taken before every start; take one now, download one to keep elsewhere, or add one from another install. The library's files are not in a copy: back them up with your own tool."
+  description="Copies of the database: the catalogue, accounts, jobs, burn history and audit trail. One is taken before every start; take one now, download one to keep elsewhere, or add one from another install."
 />
 
 <div class="stack">
+  <Callout tone="warn" title="Warning: your disc images are not in these copies" marked>
+    <p>
+      A copy holds Tangible's configuration and metadata only: the catalogue, accounts, settings,
+      jobs, burn history and audit trail. The disc images themselves are in the library (the
+      <code>library</code> volume), and Tangible never copies them, as the library grows as large as your
+      collection.
+    </p>
+    <p>
+      Back up the library another way: your own backup tool, a snapshot of the disk it is on, or a
+      copy on another drive. Without it, a restored copy is a catalogue of images that are not
+      there.
+    </p>
+  </Callout>
   <div aria-live="polite" aria-busy={view.kind === 'loading'}>
     {#if restoring}
       <Panel title="Restoring the database">
@@ -593,8 +611,7 @@
           Every account's password hash, the integration passwords sealed with this server's key,
           and the audit trail: keep a downloaded copy where only you can read it. The key itself is
           not in it, so a copy's integration passwords open only on a server holding the same key;
-          copy the key out at the machine (deploy/README.md, "Integration secrets"). The library's
-          files are not in it either.
+          copy the key out at the machine (deploy/README.md, "Integration secrets").
         </p>
       </Callout>
     {/if}

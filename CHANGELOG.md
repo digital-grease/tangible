@@ -19,6 +19,13 @@ may change between minor versions, and the release notes say how.
   covers. libretro now learns the names of the DAT games a search finds, not
   only those of games in the library.
 
+### Changed
+
+- The Backups page now opens with a warning that its copies hold the
+  database alone, Tangible's configuration and metadata, and not the disc
+  images in the library, which must be backed up another way. Tangible does
+  not copy the library, and will not: it grows as large as the collection.
+
 ### Fixed
 
 - The web UI had no icon. Its pages linked a `favicon.png` that no build

@@ -114,8 +114,24 @@ describe('Backups page', () => {
       '/api/v1/backups/tangible-20261117T210000Z.dump/download',
     );
     expect(screen.getByText('The newest 10 copies Tangible takes are kept')).toBeTruthy();
-    expect(screen.getByText(/not in it either/)).toBeTruthy();
+    expect(screen.getByText(/the same key/)).toBeTruthy();
     expect(await axeViolations(container)).toEqual([]);
+  });
+
+  it('warns first that the disc images are not in a copy, whatever the copies are', async () => {
+    signIn('administrator');
+    server({ 'GET /api/v1/backups': { status: 503, body: { code: 'BACKUPS_UNAVAILABLE' } } });
+    const { container } = render(Page);
+    const warning = screen.getByRole('region', {
+      name: /Warning: your disc images are not in these copies/,
+    });
+    expect(within(warning).getByText(/configuration and metadata only/)).toBeTruthy();
+    expect(within(warning).getByText(/Back up the library another way/)).toBeTruthy();
+    // Above everything else on the page, before the copies have loaded or
+    // when they cannot.
+    expect(container.querySelector('.stack')?.firstElementChild).toBe(warning);
+    await screen.findByText(/The copies could not be loaded/);
+    expect(screen.getByRole('region', { name: /Warning: your disc images/ })).toBe(warning);
   });
 
   it('takes a copy, and follows it until it is kept', async () => {
