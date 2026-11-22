@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: 2026 digitalgrease
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Every file the page links from the build is in the build. Every release
-// up to 0.5.0 linked a favicon.png that no build had, and the server
-// answered it with the page itself, so browsers showed no icon and nothing
-// said why. The server now answers a missing file with a 404, which only a
-// browser's console shows; this reads the page and the static directory
-// instead of trusting either.
+// Every file the page links from the build is in the build. The server
+// answers a path the build has no file for with the page itself, so a
+// missing icon is not an error anywhere: the browser is handed HTML for it
+// and shows none. Every release up to 0.5.0 linked a favicon.png that no
+// build had; this reads the page and the static directory instead of
+// trusting either.
 import { readFileSync, existsSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 

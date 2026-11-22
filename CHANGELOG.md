@@ -9,16 +9,11 @@ may change between minor versions, and the release notes say how.
 ### Fixed
 
 - The web UI had no icon. Its pages linked a `favicon.png` that no build
-  carried, and the server answered a path it had no file for with the UI's
+  carried, and the server answers a path it has no file for with the UI's
   page, so a browser was handed HTML and showed a blank or generic icon. The
   build now carries Tangible's mark as `favicon.svg`, with `favicon.ico` for
   browsers that cannot use an SVG and for tabs showing a file rather than a
   page.
-- A path naming a file the web UI's build does not have, such as
-  `/robots.txt` or `/apple-touch-icon.png`, is now a 404. It got the UI's
-  page with a 200, so a missing file looked present, as the icon did. A
-  path names a file when its last segment has a dot; the UI's pages never
-  do, and still get the page.
 
 ## 0.5.0 (2026-11-19)
 
