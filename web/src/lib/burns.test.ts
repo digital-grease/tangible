@@ -6,6 +6,7 @@ import {
   attemptOutcomeTone,
   burnDrawing,
   jobStateTone,
+  attemptAdvice,
   attemptOutcomeLabel,
   canCancel,
   canRetry,
@@ -306,6 +307,14 @@ describe('offering a retry', () => {
 });
 
 describe('labels', () => {
+  it('says what to do about a drive that cannot be reached, and nothing about the rest', () => {
+    expect(attemptAdvice('ENGINE_DRIVE_DISCONNECTED')).toContain('Restart the worker');
+    expect(attemptAdvice('ENGINE_DRIVE_UNAVAILABLE')).toContain('connected');
+    for (const code of ['ENGINE_FAILED', 'PREFLIGHT_FAILED', null, undefined]) {
+      expect(attemptAdvice(code)).toBeNull();
+    }
+  });
+
   it('never claims a written disc was verified', () => {
     // The distinction the whole design rests on: a successful tool exit is
     // not verified media.

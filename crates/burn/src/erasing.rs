@@ -101,12 +101,7 @@ pub async fn erase_disc<E: BurnEngine + ?Sized>(
             return ended("refused", None, Some(("UNSUITABLE_MEDIUM", reason)), None);
         }
         Err(error) => {
-            return ended(
-                "failed",
-                None,
-                Some(("DRIVE_UNAVAILABLE", error.to_string())),
-                None,
-            );
+            return ended("failed", None, Some(drive_failure(drive, &error)), None);
         }
     };
     let body = Some(medium_body(&medium));
@@ -148,21 +143,41 @@ pub async fn erase_disc<E: BurnEngine + ?Sized>(
                     )),
                     Some(report.duration_seconds),
                 ),
-                Err(error) => ended(
-                    "failed",
-                    body,
-                    Some((
-                        match error {
-                            EngineError::Unsupported { .. } => "ENGINE_CANNOT_ERASE",
-                            EngineError::DriveUnavailable { .. } => "DRIVE_UNAVAILABLE",
-                            _ => "ERASE_FAILED",
-                        },
-                        error.to_string(),
-                    )),
-                    Some(started.elapsed().as_secs()),
-                ),
+                Err(error) => {
+                    let (code, detail) = match &error {
+                        EngineError::Unsupported { .. } => {
+                            ("ENGINE_CANNOT_ERASE", error.to_string())
+                        }
+                        EngineError::DriveUnavailable { .. } => drive_failure(drive, &error),
+                        _ => ("ERASE_FAILED", error.to_string()),
+                    };
+                    ended(
+                        "failed",
+                        body,
+                        Some((code, detail)),
+                        Some(started.elapsed().as_secs()),
+                    )
+                }
             }
         }
+    }
+}
+
+/// The code and words for a drive that could not be reached:
+/// `DRIVE_DISCONNECTED`, saying to restart the worker, when it is gone from
+/// the machine since the worker started; `DRIVE_UNAVAILABLE` otherwise.
+fn drive_failure(drive: &DriveRef, error: &EngineError) -> (&'static str, String) {
+    if crate::connection::is_gone(std::path::Path::new(&drive.device_alias)) {
+        tracing::error!(
+            alias = %drive.device_alias,
+            "the drive is gone from this machine: restart the worker to find it again"
+        );
+        (
+            "DRIVE_DISCONNECTED",
+            crate::connection::gone_detail(&drive.device_alias),
+        )
+    } else {
+        ("DRIVE_UNAVAILABLE", error.to_string())
     }
 }
 

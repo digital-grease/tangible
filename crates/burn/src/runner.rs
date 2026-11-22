@@ -187,6 +187,16 @@ pub enum RunnerError {
     #[error("the drive could not be checked before writing: {0}")]
     Preflight(#[source] EngineError),
 
+    /// The drive could not be reached because it is gone from the machine:
+    /// disconnected, or reconnected as another device, since the worker
+    /// started ([`crate::connection::is_gone`]). Nothing was written.
+    /// Reported as `ENGINE_DRIVE_DISCONNECTED`, saying to restart the worker.
+    #[error("{}; nothing was written", crate::connection::gone_detail(alias))]
+    DriveGone {
+        /// The device alias.
+        alias: String,
+    },
+
     /// An attempt was in flight and its outcome cannot be established here.
     ///
     /// Terminal on purpose. The worker stops taking work and waits for a
@@ -307,6 +317,31 @@ impl<E: BurnEngine> WorkerRuntime<E> {
 
     fn recovery_store(&self) -> RecoveryStore {
         RecoveryStore::new(self.settings.state_dir.join("recovery.json"))
+    }
+
+    /// Whether `error` is the drive being unreachable because it is gone
+    /// from the machine since this worker started, which a restart fixes.
+    fn drive_is_gone(&self, error: &EngineError) -> bool {
+        matches!(error, EngineError::DriveUnavailable { .. })
+            && crate::connection::is_gone(std::path::Path::new(&self.settings.device_alias))
+    }
+
+    /// The runner's error for an engine that could not check the drive:
+    /// [`RunnerError::DriveGone`] when the drive is gone from the machine,
+    /// said plainly in the log as well.
+    fn drive_error(&self, error: EngineError) -> RunnerError {
+        if self.drive_is_gone(&error) {
+            tracing::error!(
+                alias = %self.settings.device_alias,
+                "the drive is gone from this machine: it was disconnected, or reconnected as \
+                 another device, since this worker started; restart the worker to find it again"
+            );
+            RunnerError::DriveGone {
+                alias: self.settings.device_alias.clone(),
+            }
+        } else {
+            RunnerError::Preflight(error)
+        }
     }
 
     fn staging_root(&self) -> PathBuf {
@@ -1222,6 +1257,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
                     failure: Some(FailureBody {
                         code: match &error {
                             RunnerError::Preflight(engine) => engine_failure_code(engine),
+                            RunnerError::DriveGone { .. } => DRIVE_DISCONNECTED,
                             _ => "WORKER_ERROR",
                         }
                         .to_owned(),
@@ -1461,9 +1497,19 @@ impl<E: BurnEngine> WorkerRuntime<E> {
                     },
                     verification: None,
                     medium: medium_body,
-                    failure: Some(FailureBody {
-                        code: engine_failure_code(&error).to_owned(),
-                        detail: Some(error.to_string()),
+                    failure: Some(if self.drive_is_gone(&error) {
+                        FailureBody {
+                            code: DRIVE_DISCONNECTED.to_owned(),
+                            detail: Some(format!(
+                                "{}; the disc may be partly written",
+                                crate::connection::gone_detail(&self.settings.device_alias)
+                            )),
+                        }
+                    } else {
+                        FailureBody {
+                            code: engine_failure_code(&error).to_owned(),
+                            detail: Some(error.to_string()),
+                        }
                     }),
                 });
             }
@@ -1641,7 +1687,7 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             note(buffer, WorkerStage::Preflighting, "PREFLIGHT_STARTED");
             let report = self.engine.preflight(&*plan).await.map_err(|error| {
                 tracing::error!(error = ?error, "preflight could not run");
-                RunnerError::Preflight(error)
+                self.drive_error(error)
             })?;
             // What was in the tray, each time it is a different disc: a burn
             // report describes the media from this, and an event is durable
@@ -2001,6 +2047,9 @@ fn failure_of(failures: &[PreflightFailure]) -> FailureBody {
     }
 }
 
+/// The code for a drive gone from the machine since the worker started.
+pub const DRIVE_DISCONNECTED: &str = "ENGINE_DRIVE_DISCONNECTED";
+
 /// A stable code for an engine failure.
 fn engine_failure_code(error: &EngineError) -> &'static str {
     match error {
@@ -2054,6 +2103,18 @@ mod tests {
             CdReader::Corrected(_) => "redumper",
             CdReader::Unavailable => "unavailable",
         }
+    }
+
+    #[test]
+    fn a_drive_gone_since_the_worker_started_says_to_restart_it() {
+        let words = RunnerError::DriveGone {
+            alias: "/dev/sr0".to_owned(),
+        }
+        .to_string();
+        assert!(words.contains("the drive at /dev/sr0 is gone"), "{words}");
+        assert!(words.contains("Restart the worker"), "{words}");
+        assert!(words.ends_with("nothing was written"), "{words}");
+        assert_eq!(DRIVE_DISCONNECTED, "ENGINE_DRIVE_DISCONNECTED");
     }
 
     #[test]

@@ -38,6 +38,13 @@ may change between minor versions, and the release notes say how.
 
 ### Fixed
 
+- A burn on a drive that had been unplugged, or plugged back in as another
+  device, since its worker started failed as `ENGINE_DRIVE_UNAVAILABLE`,
+  "drive /dev/sr0 is unavailable", which said nothing of why. The worker
+  now sees that the kernel no longer has the device it was given, and the
+  burn fails as `ENGINE_DRIVE_DISCONNECTED` (an erasure as
+  `DRIVE_DISCONNECTED`), saying to restart the worker; the burn's page says
+  so in words, and what to check when a drive cannot be reached at all.
 - An administrator could make a password account where only the account
   setup made may sign in with a password
   (`TANGIBLE_PASSWORD_SIGN_IN=setup-only`). The account was made, and every

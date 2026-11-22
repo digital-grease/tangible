@@ -14,6 +14,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { page } from '$app/state';
   import {
+    attemptAdvice,
     attemptOutcomeLabel,
     attemptOutcomeTone,
     burnDrawing,
@@ -300,6 +301,9 @@
                           label={attemptOutcomeLabel(attempt.state)}
                           pill
                         />
+                        {#if attemptAdvice(attempt.error_code)}
+                          <p class="advice">{attemptAdvice(attempt.error_code)}</p>
+                        {/if}
                         {#if attempt.error_code}
                           <small><code>{attempt.error_code}</code></small>
                         {/if}
@@ -540,6 +544,11 @@
     display: grid;
     gap: var(--space-1);
     justify-items: start;
+  }
+  .advice {
+    margin: 0;
+    max-width: 40ch;
+    font-size: var(--text-sm);
   }
   .facts {
     display: grid;

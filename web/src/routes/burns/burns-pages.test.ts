@@ -165,6 +165,34 @@ describe('Burn page', () => {
     expect(await axeViolations(container)).toEqual([]);
   });
 
+  it('says what to do when the drive was disconnected since the worker started', async () => {
+    const failed = {
+      ...attempt,
+      state: 'failed_before_write',
+      consumed_media: false,
+      error_code: 'ENGINE_DRIVE_DISCONNECTED',
+      error_detail: 'the drive at /dev/sr0 is gone from this machine; nothing was written',
+    };
+    server({
+      '/api/v1/burn-jobs/j1': {
+        status: 200,
+        body: { ...job({ state: 'failed', progress: null }), attempts: [failed] },
+      },
+      '/api/v1/burn-attempts/t1/events?order=newest': { status: 200, body: { items: [] } },
+      '/api/v1/burn-attempts/t1': { status: 200, body: { ...failed, medium: null } },
+      '/api/v1/artifacts/a1': { status: 200, body: { id: 'a1', disc_shape: null } },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    const { container } = render(BurnPage);
+    // Said in words, not folded away; the code and the worker's words stay.
+    expect(
+      await screen.findByText(/Restart the worker so it finds the drive again, then retry/),
+    ).toBeTruthy();
+    expect(screen.getByText('ENGINE_DRIVE_DISCONNECTED')).toBeTruthy();
+    expect(screen.getByText(/gone from this machine/)).toBeTruthy();
+    expect(await axeViolations(container)).toEqual([]);
+  });
+
   it('shows the newest events first, and earlier ones on request', async () => {
     const event = (sequence: number, code: string, fraction: number | null = null) => ({
       sequence,

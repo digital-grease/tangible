@@ -234,7 +234,10 @@ number can change when a USB drive is plugged in again or the machine
 restarts, and a worker mapped to the old number cannot reach its drive; the
 by-id name stays with the drive, and Docker follows it each time the worker
 starts, so after a re-plug restarting the worker is enough
-(`docker compose ... restart burner-sr0`). The names contain colons, which
+(`docker compose ... restart burner-sr0`). Until it is restarted, a burn
+fails before writing with `ENGINE_DRIVE_DISCONNECTED` (an erasure with
+`DRIVE_DISCONNECTED`), and the burn's page says to restart the worker: the
+worker sees that the kernel no longer has the device it was given. The names contain colons, which
 is why the worker files map the drive in Compose's long form; that needs
 Docker Compose 2.29.3 or later. `stat` needs `-L` to read the drive and not
 the link to it, which root owns.

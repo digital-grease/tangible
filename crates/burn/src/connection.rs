@@ -55,6 +55,53 @@ pub fn from_device_number(rdev: u64, sys_root: &Path) -> DriveConnection {
     }
 }
 
+/// Whether the block device at `device` is gone from the machine: its node
+/// is still here, but the kernel lists no device with its numbers. That is
+/// a drive disconnected, or reconnected as another device (the next `srN`,
+/// say), since the container started: Docker gives a container its devices,
+/// by number, when it starts, so the container's node stays the old one.
+/// False whenever it cannot be told, as without a device tree to read.
+#[must_use]
+pub fn is_gone(device: &Path) -> bool {
+    is_gone_in(device, Path::new(SYS_ROOT))
+}
+
+/// [`is_gone`], against a device tree mounted at `sys_root`.
+#[must_use]
+pub fn is_gone_in(device: &Path, sys_root: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(device) else {
+        return false;
+    };
+    metadata.file_type().is_block_device() && number_is_gone(metadata.rdev(), sys_root)
+}
+
+/// Whether the kernel lists no block device numbered `rdev`: the device
+/// tree is there and lists devices, and none with these numbers.
+#[must_use]
+pub fn number_is_gone(rdev: u64, sys_root: &Path) -> bool {
+    let listed = sys_root.join("dev/block");
+    let Ok(mut entries) = std::fs::read_dir(&listed) else {
+        return false;
+    };
+    if entries.next().is_none() {
+        return false;
+    }
+    let (major, minor) = split_device_number(rdev);
+    std::fs::symlink_metadata(listed.join(format!("{major}:{minor}"))).is_err()
+}
+
+/// What a person is told when the drive at `device` is gone: what happened,
+/// and what brings it back.
+#[must_use]
+pub fn gone_detail(device: &str) -> String {
+    format!(
+        "the drive at {device} is gone from this machine: it was disconnected, or reconnected \
+         as another device, since this worker started, and a container is given its drive when \
+         it starts. Restart the worker (docker compose restart, naming its service) so it finds \
+         the drive again"
+    )
+}
+
 /// A Linux `dev_t` as its major and minor numbers, as glibc's `major()` and
 /// `minor()` split it.
 #[must_use]
@@ -149,6 +196,27 @@ mod tests {
             DriveConnection::Unknown,
             "a number with no entry"
         );
+    }
+
+    #[test]
+    fn a_drive_is_gone_when_the_tree_lists_others_and_not_it() {
+        let sys = tempfile::tempdir().expect("tempdir");
+        let listed = sys.path().join("dev/block");
+        // No tree at all, or an empty one: nothing can be told.
+        assert!(!number_is_gone(0x0b00, sys.path()));
+        std::fs::create_dir_all(&listed).expect("dev/block");
+        assert!(!number_is_gone(0x0b00, sys.path()));
+        // The drive came back as sr1 (11:1); the container still has 11:0.
+        let device = sys.path().join("devices/usb7/7-1.3/host1/block/sr1");
+        std::fs::create_dir_all(&device).expect("device dir");
+        std::os::unix::fs::symlink(&device, listed.join("11:1")).expect("link");
+        assert!(number_is_gone(0x0b00, sys.path()), "11:0 is gone");
+        assert!(!number_is_gone(0x0b01, sys.path()), "11:1 is here");
+        // A file, or nothing at all, is never said to be a gone drive.
+        let file = tempfile::NamedTempFile::new().expect("file");
+        assert!(!is_gone_in(file.path(), sys.path()));
+        assert!(!is_gone_in(Path::new("/nonexistent/sr0"), sys.path()));
+        assert!(gone_detail("/dev/sr0").contains("Restart the worker"));
     }
 
     #[test]
