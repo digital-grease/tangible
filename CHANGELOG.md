@@ -6,6 +6,31 @@ may change between minor versions, and the release notes say how.
 
 ## Unreleased
 
+### Changed
+
+- A worker whose drive drops off and is plugged back in as another device
+  (`/dev/sr1` for a drive that was `/dev/sr0`) takes it up again by
+  itself. Docker gives a container its drive by number when it starts it,
+  so until now the worker had to be restarted by hand. Between jobs, never
+  during one, the worker now watches the kernel's device tree, knows its
+  drive again by what the tree says it is (its vendor and model, and the
+  USB serial number, which its `/dev/disk/by-id` name is made of), waits
+  for it to stay, and stops with exit status 75 for Compose's
+  `restart: unless-stopped` to start it again with the drive. The wait is
+  10 seconds, doubled for each such restart in the last hour, up to 15
+  minutes, so a drive that keeps dropping off, as one short of power does,
+  does not have the worker restart over and over. It stops only when the
+  restart will find the drive, since Docker leaves a container stopped when
+  its device is missing and does not try again: the worker files pass it
+  the drive's name on the host as `TANGIBLE_HOST_BLOCK_DEVICE`, and a
+  `/dev/disk/by-id` name finds the drive however it comes back, where a
+  `/dev/srN` name does not, as the drive comes back under another number
+  while the worker holds the old one. Take this release's worker file,
+  or add that line to yours; without it the worker's log says to restart it
+  by hand, as before. While the drive is gone, a burn still fails before
+  writing as `ENGINE_DRIVE_DISCONNECTED`, and the burn's page and the
+  worker's words say which of the two to expect.
+
 ### Security
 
 - `url` 2.5.9, for RUSTSEC-2026-0592: `Url::origin()` called itself once

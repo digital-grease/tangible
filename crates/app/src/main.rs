@@ -89,7 +89,7 @@ enum Command {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> Result<std::process::ExitCode> {
     let mut cli = Cli::parse();
     telemetry::init(&cli.common)?;
     warn_of_unknown_variables();
@@ -112,12 +112,14 @@ async fn main() -> Result<()> {
             rotate_secrets(&cli.common, &rotate).await
         }
         Command::Doctor(doctor) => doctor_command(&cli.common, &doctor).await,
-        Command::BurnWorker(worker) => burn_worker_command(&worker).await,
+        // The one command with an exit status of its own.
+        Command::BurnWorker(worker) => return burn_worker_command(&worker).await,
         Command::Manifest(ManifestCommand::Show(show)) => manifest::show_command(&show).await,
         Command::Manifest(ManifestCommand::Validate(validate)) => {
             manifest::validate_command(&validate)
         }
     }
+    .map(|()| std::process::ExitCode::SUCCESS)
 }
 
 /// The connection URL with the password in `file` in place of its own.
@@ -1556,7 +1558,7 @@ fn checked_server_url(worker: &WorkerConfig) -> Result<tangible_burn::PlainHttp>
 /// finishes the step it is on. A burn already writing is never interrupted by
 /// a redeploy, because stopping mid-write ruins the disc and the local
 /// recovery record is what lets the next process reconcile rather than guess.
-async fn burn_worker_command(worker: &WorkerConfig) -> Result<()> {
+async fn burn_worker_command(worker: &WorkerConfig) -> Result<std::process::ExitCode> {
     use tangible_burn::runner::WorkerSettings;
     use tangible_burn::{CdrdaoEngine, CombinedEngine, FakeEngine, XorrisoEngine};
 
@@ -1613,6 +1615,7 @@ async fn burn_worker_command(worker: &WorkerConfig) -> Result<()> {
         redumper,
         device_alias: worker.device_alias.to_string_lossy().into_owned(),
         configured_name: worker.worker_name.clone(),
+        host_block_device: worker.host_block_device.clone(),
         ..WorkerSettings::new(
             worker.server_url.clone(),
             worker.worker_name.clone(),
@@ -1676,17 +1679,24 @@ async fn burn_worker_command(worker: &WorkerConfig) -> Result<()> {
     }
 }
 
-/// Run a worker with the engine it was given until it is asked to stop.
+/// Run a worker with the engine it was given until it is asked to stop, or
+/// stops so that its container is restarted with its drive, which exits
+/// with [`tangible_burn::replug::RESTART_FOR_DRIVE`].
 async fn run_worker<E: tangible_burn::BurnEngine + 'static>(
     settings: tangible_burn::runner::WorkerSettings,
     engine: E,
-) -> Result<()> {
+) -> Result<std::process::ExitCode> {
     let mut runtime = tangible_burn::runner::WorkerRuntime::new(settings, engine)
         .context("assembling the burn worker")?;
-    runtime
-        .run(shutdown_signal())
-        .await
-        .context("running the burn worker")
+    match runtime.run(shutdown_signal()).await {
+        Ok(()) => Ok(std::process::ExitCode::SUCCESS),
+        // Not a failure: the container's restart policy starts the worker
+        // again, and Docker gives it the drive under its new number.
+        Err(tangible_burn::RunnerError::DriveBack { .. }) => Ok(std::process::ExitCode::from(
+            tangible_burn::replug::RESTART_FOR_DRIVE,
+        )),
+        Err(error) => Err(anyhow::Error::new(error).context("running the burn worker")),
+    }
 }
 
 /// Resolve when the process is asked to stop, so in-flight requests finish.
@@ -1750,6 +1760,8 @@ mod tests {
         "TANGIBLE_MAX_BACKUP_UPLOAD_BYTES",
         "TANGIBLE_BIND",
         "TANGIBLE_BLOCK_DEVICE",
+        // The drive's name on the host: a device path, never a secret.
+        "TANGIBLE_HOST_BLOCK_DEVICE",
         "TANGIBLE_BUILD_REVISION",
         "TANGIBLE_BUILD_VERSION",
         "TANGIBLE_BURN_ENGINE",

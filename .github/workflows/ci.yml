@@ -228,11 +228,19 @@ jobs:
               set -- -f deploy/compose.worker.yaml \
                 --env-file deploy/worker.env.example
             fi
-            source=$(TANGIBLE_WORKER_NAME=validate TANGIBLE_OPTICAL_GID=990 \
-              TANGIBLE_BLOCK_DEVICE="$byid" docker compose "$@" config \
-              --format json | jq -r '.services["burner-sr0"].devices[0].source')
+            rendered=$(TANGIBLE_WORKER_NAME=validate TANGIBLE_OPTICAL_GID=990 \
+              TANGIBLE_BLOCK_DEVICE="$byid" docker compose "$@" config --format json)
+            source=$(jq -r '.services["burner-sr0"].devices[0].source' <<<"$rendered")
             if [ "$source" != "$byid" ]; then
               echo "::error::$file did not map $byid (got: $source)"
+              exit 1
+            fi
+            # The worker is told the same name, which is how it knows a
+            # restart finds its drive once it is plugged back in.
+            host=$(jq -r '.services["burner-sr0"].environment.TANGIBLE_HOST_BLOCK_DEVICE' \
+              <<<"$rendered")
+            if [ "$host" != "$source" ]; then
+              echo "::error::$file maps $source but tells the worker $host"
               exit 1
             fi
           done

@@ -400,6 +400,14 @@ export function attemptOutcomeLabel(state: string): string {
 }
 
 /**
+ * What brings a drive that is gone back to its worker. The worker restarts
+ * itself to take it up when Docker was given the drive's /dev/disk/by-id
+ * name, and says so in its own words; any other has to be restarted.
+ */
+const TAKEN_UP =
+  'Once the drive is plugged back in, a worker given it by its /dev/disk/by-id name restarts itself to take it up; restart any other worker yourself.';
+
+/**
  * What a person can do about a failed attempt, in words, for the failures
  * they can act on; null for the rest, which the code and the worker's own
  * words describe. `state` tells a failure during the write, which has
@@ -412,8 +420,8 @@ export function attemptAdvice(
   switch (code) {
     case 'ENGINE_DRIVE_DISCONNECTED':
       return state === 'write_failed'
-        ? 'The drive dropped off during the write, so this disc is probably unusable. A USB drive that resets while writing is often short of power: a hub with its own power supply, or a second USB plug if the drive has one, can help. Restart the worker so it finds the drive again, then retry with a new disc.'
-        : 'The drive was disconnected, or reconnected as another device, after the worker started. Restart the worker so it finds the drive again, then retry.';
+        ? `The drive dropped off during the write, so this disc is probably unusable. A USB drive that resets while writing is often short of power: a hub with its own power supply, or a second USB plug if the drive has one, can help. ${TAKEN_UP} Then retry with a new disc.`
+        : `The drive was disconnected, or reconnected as another device, after the worker started. ${TAKEN_UP} Then retry.`;
     case 'WRITE_FAILED':
       return 'The write did not finish, so this disc is probably unusable. What the worker said tells why; retry with a new disc.';
     case 'ENGINE_DRIVE_UNAVAILABLE':

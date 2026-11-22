@@ -715,6 +715,17 @@ pub struct WorkerConfig {
     #[arg(long, env = "TANGIBLE_BLOCK_DEVICE", default_value = "/dev/sr0")]
     pub device_alias: PathBuf,
 
+    /// The drive's name on the host, as Docker was given it: the source of
+    /// the worker's device mapping, which the Compose files pass here too.
+    ///
+    /// It says whether restarting finds the drive once it is plugged back in
+    /// as another device. A `/dev/disk/by-id` name does, so the worker then
+    /// restarts itself to take its drive up; a kernel name such as `/dev/sr0`
+    /// does only if the drive comes back as that. Unset, or any other name,
+    /// and restarting is left to a person.
+    #[arg(long, env = "TANGIBLE_HOST_BLOCK_DEVICE")]
+    pub host_block_device: Option<String>,
+
     /// Burn engine. Defaults to `fake`, so a misconfigured worker cannot
     /// reach a drive by accident.
     #[arg(long, env = "TANGIBLE_BURN_ENGINE", value_enum, default_value_t = BurnEngineKind::Fake)]

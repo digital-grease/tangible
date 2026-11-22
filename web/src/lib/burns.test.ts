@@ -308,7 +308,9 @@ describe('offering a retry', () => {
 
 describe('labels', () => {
   it('says what to do about a drive that cannot be reached, and nothing about the rest', () => {
-    expect(attemptAdvice('ENGINE_DRIVE_DISCONNECTED')).toContain('Restart the worker');
+    const gone = attemptAdvice('ENGINE_DRIVE_DISCONNECTED') ?? '';
+    expect(gone).toContain('restarts itself');
+    expect(gone).toContain('restart any other worker yourself');
     expect(attemptAdvice('ENGINE_DRIVE_UNAVAILABLE')).toContain('connected');
     for (const code of ['ENGINE_FAILED', 'PREFLIGHT_FAILED', null, undefined]) {
       expect(attemptAdvice(code)).toBeNull();
@@ -321,6 +323,7 @@ describe('labels', () => {
     expect(during).toContain('short of power');
     expect(during).toContain('new disc');
     expect(during).not.toContain('directly');
+    expect(during).toContain('restarts itself');
     const before = attemptAdvice('ENGINE_DRIVE_DISCONNECTED', 'failed_before_write') ?? '';
     expect(before).not.toContain('unusable');
     expect(attemptAdvice('WRITE_FAILED', 'write_failed')).toContain('What the worker said');

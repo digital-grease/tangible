@@ -190,7 +190,9 @@ describe('Burn page', () => {
     const { container } = render(BurnPage);
     // Said in words, not folded away; the code and the worker's words stay.
     expect(
-      await screen.findByText(/Restart the worker so it finds the drive again, then retry/),
+      await screen.findByText(
+        /restarts itself to take it up; restart any other worker yourself\. Then retry\./,
+      ),
     ).toBeTruthy();
     expect(screen.getByText('ENGINE_DRIVE_DISCONNECTED')).toBeTruthy();
     expect(screen.getByText(/gone from this machine/)).toBeTruthy();

@@ -164,13 +164,14 @@ pub async fn erase_disc<E: BurnEngine + ?Sized>(
 }
 
 /// The code and words for a drive that could not be reached:
-/// `DRIVE_DISCONNECTED`, saying to restart the worker, when it is gone from
+/// `DRIVE_DISCONNECTED`, saying what brings it back, when it is gone from
 /// the machine since the worker started; `DRIVE_UNAVAILABLE` otherwise.
 fn drive_failure(drive: &DriveRef, error: &EngineError) -> (&'static str, String) {
     if crate::connection::is_gone(std::path::Path::new(&drive.device_alias)) {
         tracing::error!(
             alias = %drive.device_alias,
-            "the drive is gone from this machine: restart the worker to find it again"
+            "the drive is gone from this machine: {}",
+            crate::connection::gone_remedy()
         );
         (
             "DRIVE_DISCONNECTED",

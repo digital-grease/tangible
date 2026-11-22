@@ -33,8 +33,10 @@ services:
       # (target). Name the host's drive by its /dev/disk/by-id name, which
       # stays with the drive when it is plugged in again or the machine
       # restarts, where /dev/sr0 can come back as /dev/sr1. Docker follows
-      # the name each time the worker starts, so restarting the worker is
-      # then enough. The long form is needed because those names contain
+      # the name each time it starts the worker, so a drive plugged back in
+      # is taken up by a restart, which the worker makes itself once the
+      # drive is back (it stops, and `restart` above starts it again). The
+      # long form is needed because those names contain
       # colons, which the short "host:container" form cannot carry; it needs
       # Docker Compose 2.29.3 or later.
       #
@@ -65,6 +67,11 @@ services:
       TANGIBLE_SERVER_URL: http://server:8080
       # The drive's path inside this container, not on the host.
       TANGIBLE_BLOCK_DEVICE: /dev/sr0
+      # The drive's name on the host, the same as the mapping's source above,
+      # so the worker knows whether restarting finds the drive once it is
+      # plugged back in: a /dev/disk/by-id name does, whatever the drive comes
+      # back as, and then the worker restarts itself to take it up.
+      TANGIBLE_HOST_BLOCK_DEVICE: "${TANGIBLE_BLOCK_DEVICE:-/dev/sr0}"
       TANGIBLE_WORKER_NAME: ${TANGIBLE_WORKER_NAME:?name this drive, e.g. pioneer-bdr-212}
       # Where the credential and the local recovery record live. It is on the
       # volume below because a worker that loses this cannot tell, after a

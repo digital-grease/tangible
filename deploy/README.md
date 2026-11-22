@@ -232,12 +232,22 @@ Once the worker's log says `enrolled`, take the token line out of `.env`.
 Name the drive by its `/dev/disk/by-id` name rather than `/dev/srN`. The
 number can change when a USB drive is plugged in again or the machine
 restarts, and a worker mapped to the old number cannot reach its drive; the
-by-id name stays with the drive, and Docker follows it each time the worker
-starts, so after a re-plug restarting the worker is enough
-(`docker compose ... restart burner-sr0`). Until it is restarted, a burn
+by-id name stays with the drive, and Docker follows it each time it starts
+the worker. So a drive plugged back in is taken up by a restart, and the
+worker makes that itself: it sees the kernel no longer has the device it
+was given, waits for the drive to come back and stay (10 seconds, doubled
+for each such restart in the last hour, up to 15 minutes, since a drive
+that keeps dropping off is often short of power), and stops between jobs,
+never during one, for Compose's `restart: unless-stopped` to start it again
+with the drive. The worker files pass it the drive's name as
+`TANGIBLE_HOST_BLOCK_DEVICE`, which is how it knows a restart will find the
+drive. Named `/dev/srN`, it comes back under another number while the
+worker holds the old one, which the old name does not find, and the
+worker's log says so; then, or with a worker file that does not pass that
+name, restart the worker yourself
+(`docker compose ... restart burner-sr0`). While the drive is gone, a burn
 fails before writing with `ENGINE_DRIVE_DISCONNECTED` (an erasure with
-`DRIVE_DISCONNECTED`), and the burn's page says to restart the worker: the
-worker sees that the kernel no longer has the device it was given. The names contain colons, which
+`DRIVE_DISCONNECTED`), and the burn's page says what to do. The names contain colons, which
 is why the worker files map the drive in Compose's long form; that needs
 Docker Compose 2.29.3 or later. `stat` needs `-L` to read the drive and not
 the link to it, which root owns.

@@ -47,6 +47,7 @@ use crate::plan::{
     VerifyReport, WriteMode, WriteReport,
 };
 use crate::redumper::{CdDumper, Redumper};
+use crate::replug::{Follower, Given, RestartLog, Sighting};
 use crate::ripping::{CdReader, Decrypting, RipOptions, RipOutcome, rip_disc};
 use crate::transport::{PlainHttp, ServerUrl, ServerUrlError, Transport};
 use crate::worker::{EventBuffer, RecoveryRecord, RecoveryStore, WorkerStage, plan_for};
@@ -67,6 +68,21 @@ enum Step {
     Idle,
     /// The server asked for the credential to be rotated, before any work.
     RotateCredential,
+}
+
+/// What the drive's watcher says to do before the next step.
+enum DriveWatch {
+    /// Carry on: the drive is here, or gone and not back where a restart
+    /// would find it.
+    Carry,
+    /// Take no work for now: the drive is back, and is being waited on
+    /// before the restart that takes it up.
+    Hold,
+    /// Stop, so the container is restarted with the drive, back as `name`.
+    Restart {
+        /// Its kernel name: `sr1`.
+        name: String,
+    },
 }
 
 /// How a worker is configured.
@@ -91,6 +107,10 @@ pub struct WorkerSettings {
     pub device_alias: String,
     /// Human-meaningful drive name.
     pub configured_name: String,
+    /// The drive's name on the host, as Docker was given it, which says
+    /// whether a restart finds the drive once it is plugged back in as
+    /// another device ([`crate::replug::Given`]). None when not told.
+    pub host_block_device: Option<String>,
     /// This worker's software version.
     pub software_version: String,
     /// How long to wait between polls when there is nothing to do.
@@ -127,6 +147,7 @@ impl WorkerSettings {
             state_dir,
             device_alias: "/dev/disc-block".to_owned(),
             configured_name: "drive".to_owned(),
+            host_block_device: None,
             software_version: env!("CARGO_PKG_VERSION").to_owned(),
             poll_interval: Duration::from_secs(5),
             // Long enough that somebody can walk to the machine, short enough
@@ -190,11 +211,26 @@ pub enum RunnerError {
     /// The drive could not be reached because it is gone from the machine:
     /// disconnected, or reconnected as another device, since the worker
     /// started ([`crate::connection::is_gone`]). Nothing was written.
-    /// Reported as `ENGINE_DRIVE_DISCONNECTED`, saying to restart the worker.
+    /// Reported as `ENGINE_DRIVE_DISCONNECTED`, saying what brings it back
+    /// ([`crate::connection::gone_remedy`]).
     #[error("{}; nothing was written", crate::connection::gone_detail(alias))]
     DriveGone {
         /// The device alias.
         alias: String,
+    },
+
+    /// The drive is back on the machine as another device, and the worker
+    /// stops so that its container is restarted with it
+    /// ([`crate::replug`]). Not a fault: the process exits with
+    /// [`crate::replug::RESTART_FOR_DRIVE`], and Docker, starting it again,
+    /// gives it the drive under its new number.
+    #[error(
+        "the drive is back on this machine as /dev/{name}; stopping so that the container is \
+         restarted with it"
+    )]
+    DriveBack {
+        /// Its kernel name: `sr1`.
+        name: String,
     },
 
     /// An attempt was in flight and its outcome cannot be established here.
@@ -251,6 +287,11 @@ pub struct WorkerRuntime<E: BurnEngine> {
     engine: E,
     /// Held for as long as this worker runs, for engines that drive hardware.
     drive: Option<DeviceLock>,
+    /// Watches for the drive to come back as another device, for engines
+    /// that drive hardware, when it can be known again.
+    follower: Option<Follower>,
+    /// What the watcher last saw, so each change is said once.
+    drive_seen: &'static str,
     /// What decrypts a DVD, when this worker's image can.
     css: Option<Arc<dyn CssCopier>>,
     /// What reads a CD with its read offset corrected, when this worker's
@@ -293,6 +334,8 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             client,
             engine,
             drive: None,
+            follower: None,
+            drive_seen: "here",
             css,
             cd_dumper,
             changing_disc: AtomicBool::new(false),
@@ -319,6 +362,141 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         RecoveryStore::new(self.settings.state_dir.join("recovery.json"))
     }
 
+    /// The restarts this worker made for its drive, kept with its other
+    /// state so the next process knows of them.
+    fn restart_log(&self) -> RestartLog {
+        RestartLog::new(self.settings.state_dir.join("drive-restarts.json"))
+    }
+
+    /// Start watching for the drive to come back as another device, for an
+    /// engine that drives one ([`crate::replug`]), and say what this worker
+    /// does then.
+    fn follow_drive(&mut self) {
+        self.follower = None;
+        self.drive_seen = "here";
+        crate::replug::set_restarts_itself(false);
+        if !self.engine.uses_hardware() {
+            return;
+        }
+        let given = Given::parse(self.settings.host_block_device.as_deref());
+        let recent = self.restart_log().recent(OffsetDateTime::now_utc()).len();
+        let follower = match Follower::start(
+            std::path::Path::new(&self.settings.device_alias),
+            given,
+            std::path::Path::new(crate::connection::SYS_ROOT),
+            recent,
+        ) {
+            Ok(follower) => follower,
+            Err(reason) => {
+                tracing::warn!(
+                    %reason,
+                    "this worker cannot know its drive again if it is plugged back in as another \
+                     device; restart the worker then"
+                );
+                return;
+            }
+        };
+        match follower.given() {
+            // Not the by-id name itself, nor any other: they carry the
+            // drive's serial number, which the server is only ever sent
+            // hashed.
+            Given::ById(_) => {
+                crate::replug::set_restarts_itself(true);
+                tracing::info!(
+                    "the drive is given to this worker by its /dev/disk/by-id name: if it is \
+                     plugged back in as another device, this worker restarts itself to take it up"
+                );
+            }
+            Given::Kernel(name) => tracing::info!(
+                host_device = %format!("/dev/{name}"),
+                "the drive is given to this worker by its number, which changes when the drive \
+                 is plugged back in, so restart the worker then; name it by its /dev/disk/by-id \
+                 name and this worker takes it up again by itself"
+            ),
+            Given::Other(_) => tracing::info!(
+                "if the drive is plugged back in as another device, restart the worker: the name \
+                 it is given by may lead to another drive or none by then, so this worker does \
+                 not restart itself; name it by its /dev/disk/by-id name and it does"
+            ),
+            Given::Unknown => tracing::info!(
+                "if the drive is plugged back in as another device, restart the worker: \
+                 TANGIBLE_HOST_BLOCK_DEVICE does not say what Docker calls the drive, which the \
+                 worker needs to know before it restarts itself"
+            ),
+        }
+        if recent > 0 {
+            tracing::warn!(
+                restarts = recent,
+                wait = ?follower.wait(),
+                "this worker has restarted for its drive in the last hour, so it waits longer \
+                 before the next: a drive that keeps dropping off is often short of power"
+            );
+        }
+        self.follower = Some(follower);
+    }
+
+    /// Look for the drive, and say what to do before the next step.
+    fn watch_drive(&mut self) -> DriveWatch {
+        let Some(follower) = self.follower.as_mut() else {
+            return DriveWatch::Carry;
+        };
+        let sighting = follower.look(std::time::Instant::now());
+        let news = self.drive_seen != sighting.kind();
+        self.drive_seen = sighting.kind();
+        match sighting {
+            Sighting::Here => DriveWatch::Carry,
+            Sighting::Gone => {
+                if news {
+                    tracing::warn!(
+                        alias = %self.settings.device_alias,
+                        "the drive is gone from this machine: it was disconnected, or \
+                         reconnected as another device; {}",
+                        crate::connection::gone_remedy()
+                    );
+                }
+                DriveWatch::Carry
+            }
+            Sighting::Settling { name, left } => {
+                if news {
+                    tracing::info!(
+                        device = %format!("/dev/{name}"),
+                        restart_in = ?left,
+                        "the drive is back on this machine as another device; taking no work \
+                         until this worker restarts to take it up"
+                    );
+                }
+                DriveWatch::Hold
+            }
+            Sighting::Back { name } => DriveWatch::Restart { name },
+            Sighting::OutOfReach { name } => {
+                if news {
+                    tracing::warn!(
+                        device = %format!("/dev/{name}"),
+                        "the drive is back on this machine as another device, which the name \
+                         Docker was given for it does not lead to; name it by its \
+                         /dev/disk/by-id name, then restart the worker"
+                    );
+                }
+                DriveWatch::Carry
+            }
+        }
+    }
+
+    /// Stop so that the container is restarted with the drive, back as
+    /// `name`, recording the restart so a drive that keeps dropping is
+    /// waited on longer each time.
+    fn restart_for_drive(&self, name: String) -> Result<(), RunnerError> {
+        if let Err(error) = self.restart_log().record(OffsetDateTime::now_utc()) {
+            tracing::warn!(error = ?error, "could not record this restart for the drive");
+        }
+        tracing::info!(
+            device = %format!("/dev/{name}"),
+            "the drive is back on this machine as another device; stopping so that the \
+             container is restarted with it"
+        );
+        Err(RunnerError::DriveBack { name })
+    }
+
     /// Whether `error` is the drive being unreachable because it is gone
     /// from the machine since this worker started, which a restart fixes.
     fn drive_is_gone(&self, error: &EngineError) -> bool {
@@ -334,7 +512,8 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             tracing::error!(
                 alias = %self.settings.device_alias,
                 "the drive is gone from this machine: it was disconnected, or reconnected as \
-                 another device, since this worker started; restart the worker to find it again"
+                 another device, since this worker started; {}",
+                crate::connection::gone_remedy()
             );
             RunnerError::DriveGone {
                 alias: self.settings.device_alias.clone(),
@@ -626,30 +805,13 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         // First of all: a worker whose server URL would be refused at every
         // connection says why now, before it holds a drive or enrolls.
         self.server.check_resolution().await?;
-        match self.server.transport() {
-            Transport::Tls => {
-                tracing::info!(
-                    transport = Transport::Tls.as_str(),
-                    "talking to the server over TLS"
-                );
-            }
-            Transport::PlainLocal => tracing::info!(
-                transport = Transport::PlainLocal.as_str(),
-                "talking to the server over plain HTTP, which stays on this machine or a network \
-                 this container is attached to"
-            ),
-            Transport::PlainAccepted => tracing::warn!(
-                transport = Transport::PlainAccepted.as_str(),
-                "talking to the server over plain HTTP, wherever it is, as \
-                 TANGIBLE_WORKER_PLAIN_HTTP allows: the credential and every image cross the \
-                 network unencrypted"
-            ),
-        }
+        self.say_transport();
 
         // Before enrolling, and before announcing a drive. A worker that
         // cannot have this drive should not appear in the server's list of
         // workers that have one.
         self.claim_drive()?;
+        self.follow_drive();
 
         let mut identity = self.identify().await?;
         let drive_id = self.announce(&mut identity).await?;
@@ -665,6 +827,26 @@ impl<E: BurnEngine> WorkerRuntime<E> {
         // not keep this worker from its work: it tries again later.
         let mut rotation_failed_at: Option<std::time::Instant> = None;
         loop {
+            // Between steps, never during one: a drive back as another
+            // device is taken up by a restart, and a restart during a write
+            // would ruin the disc.
+            match self.watch_drive() {
+                DriveWatch::Carry => {}
+                DriveWatch::Hold => {
+                    // Work taken now would fail on a node that is no longer
+                    // the drive's. Reporting in all the same, so the server
+                    // sees this worker is alive while it waits.
+                    if let Err(error) = self.client.heartbeat(&identity.worker_id).await {
+                        tracing::warn!(error = ?error, "heartbeat failed");
+                    }
+                    tokio::select! {
+                        () = &mut shutdown => return Ok(()),
+                        () = tokio::time::sleep(self.settings.poll_interval) => {}
+                    }
+                    continue;
+                }
+                DriveWatch::Restart { name } => return self.restart_for_drive(name),
+            }
             let may_rotate =
                 rotation_failed_at.is_none_or(|at| at.elapsed() >= ROTATION_RETRY_INTERVAL);
             let mut rotate = false;
@@ -739,6 +921,29 @@ impl<E: BurnEngine> WorkerRuntime<E> {
                     }
                 }
             }
+        }
+    }
+
+    /// Say how this worker talks to the server.
+    fn say_transport(&self) {
+        match self.server.transport() {
+            Transport::Tls => {
+                tracing::info!(
+                    transport = Transport::Tls.as_str(),
+                    "talking to the server over TLS"
+                );
+            }
+            Transport::PlainLocal => tracing::info!(
+                transport = Transport::PlainLocal.as_str(),
+                "talking to the server over plain HTTP, which stays on this machine or a network \
+                 this container is attached to"
+            ),
+            Transport::PlainAccepted => tracing::warn!(
+                transport = Transport::PlainAccepted.as_str(),
+                "talking to the server over plain HTTP, wherever it is, as \
+                 TANGIBLE_WORKER_PLAIN_HTTP allows: the credential and every image cross the \
+                 network unencrypted"
+            ),
         }
     }
 
@@ -1579,7 +1784,8 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             tracing::error!(
                 alias = %self.settings.device_alias,
                 "the drive went from this machine during the write: it was disconnected, or \
-                 reconnected as another device; restart the worker to find it again"
+                 reconnected as another device; {}",
+                crate::connection::gone_remedy()
             );
             return Some(FailureBody {
                 code: DRIVE_DISCONNECTED.to_owned(),
@@ -2169,7 +2375,81 @@ mod tests {
     }
 
     #[test]
-    fn a_drive_gone_since_the_worker_started_says_to_restart_it() {
+    fn a_drive_back_as_another_device_holds_work_then_restarts_the_worker() {
+        use crate::replug::test_tree::Tree;
+        let tree = Tree::new();
+        tree.plug("7-1.4.1.1", 0, Some("413539303333313541444431"));
+        let state = tempfile::tempdir().expect("tempdir");
+        let settings = WorkerSettings::new("http://127.0.0.1:9", "w", state.path().to_path_buf());
+        let mut runtime = WorkerRuntime::new(settings, FakeEngine::new(state.path().join("media")))
+            .expect("a runtime");
+        let by_id = Given::parse(Some(
+            "/dev/disk/by-id/usb-Slimtype_DVD_A_DS8A8SH_413539303333313541444431-0:0",
+        ));
+        runtime.follower =
+            Some(Follower::numbered(0x0b00, "/dev/sr0", by_id, tree.root(), 0).expect("followed"));
+        assert!(matches!(runtime.watch_drive(), DriveWatch::Carry));
+
+        // Gone and not back: work is still taken, and fails saying so.
+        tree.unplug(0);
+        assert!(matches!(runtime.watch_drive(), DriveWatch::Carry));
+
+        // Back as sr1: no work until the restart that takes it up.
+        tree.plug("7-1.3.1", 1, Some("413539303333313541444431"));
+        assert!(matches!(runtime.watch_drive(), DriveWatch::Hold));
+        runtime.follower = runtime
+            .follower
+            .take()
+            .map(|follower| follower.waiting(Duration::ZERO));
+        let DriveWatch::Restart { name } = runtime.watch_drive() else {
+            panic!("back for long enough is a restart");
+        };
+        assert_eq!(name, "sr1");
+
+        // The restart is recorded, for the next process to wait longer.
+        let stopped = runtime.restart_for_drive(name);
+        assert!(
+            matches!(&stopped, Err(RunnerError::DriveBack { name }) if name == "sr1"),
+            "{stopped:?}"
+        );
+        assert_eq!(
+            runtime
+                .restart_log()
+                .recent(OffsetDateTime::now_utc())
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_drive_back_where_docker_would_not_find_it_is_left_to_a_person() {
+        use crate::replug::test_tree::Tree;
+        let tree = Tree::new();
+        tree.plug("7-1.3.1", 0, Some("413539303333313541444431"));
+        let mut runtime = runtime_with(None);
+        runtime.follower = Some(
+            Follower::numbered(
+                0x0b00,
+                "/dev/sr0",
+                Given::parse(Some("/dev/sr0")),
+                tree.root(),
+                0,
+            )
+            .expect("followed")
+            .waiting(Duration::ZERO),
+        );
+        tree.unplug(0);
+        tree.plug("7-1.3.1", 1, Some("413539303333313541444431"));
+        assert!(
+            matches!(runtime.watch_drive(), DriveWatch::Carry),
+            "given as /dev/sr0, a drive back as sr1 is not restarted for"
+        );
+    }
+
+    #[test]
+    fn a_drive_gone_since_the_worker_started_says_what_brings_it_back() {
+        // No runtime in this process follows a drive, so the words are a
+        // person's to act on.
         let words = RunnerError::DriveGone {
             alias: "/dev/sr0".to_owned(),
         }
@@ -2178,6 +2458,11 @@ mod tests {
         assert!(words.contains("Restart the worker"), "{words}");
         assert!(words.ends_with("nothing was written"), "{words}");
         assert_eq!(DRIVE_DISCONNECTED, "ENGINE_DRIVE_DISCONNECTED");
+        let back = RunnerError::DriveBack {
+            name: "sr1".to_owned(),
+        }
+        .to_string();
+        assert!(back.contains("back on this machine as /dev/sr1"), "{back}");
     }
 
     #[test]

@@ -91,15 +91,38 @@ pub fn number_is_gone(rdev: u64, sys_root: &Path) -> bool {
 }
 
 /// What a person is told when the drive at `device` is gone: what happened,
-/// and what brings it back.
+/// and what brings it back, which depends on whether this worker restarts
+/// itself to take its drive up ([`crate::replug::restarts_itself`]).
 #[must_use]
 pub fn gone_detail(device: &str) -> String {
+    gone_detail_saying(device, crate::replug::restarts_itself())
+}
+
+/// [`gone_detail`], for a worker that does, or does not, restart itself to
+/// take its drive up once it is back.
+#[must_use]
+pub fn gone_detail_saying(device: &str, restarts_itself: bool) -> String {
+    let remedy = if restarts_itself {
+        "Once the drive is plugged back in, this worker restarts itself to take it up"
+    } else {
+        "Restart the worker (docker compose restart, naming its service) so it finds the drive \
+         again"
+    };
     format!(
         "the drive at {device} is gone from this machine: it was disconnected, or reconnected \
          as another device, since this worker started, and a container is given its drive when \
-         it starts. Restart the worker (docker compose restart, naming its service) so it finds \
-         the drive again"
+         it starts. {remedy}"
     )
+}
+
+/// What brings a gone drive back, for the worker's log.
+#[must_use]
+pub fn gone_remedy() -> &'static str {
+    if crate::replug::restarts_itself() {
+        "this worker restarts itself to take it up once it is back"
+    } else {
+        "restart the worker to find it again"
+    }
 }
 
 /// A Linux `dev_t` as its major and minor numbers, as glibc's `major()` and
@@ -216,7 +239,10 @@ mod tests {
         let file = tempfile::NamedTempFile::new().expect("file");
         assert!(!is_gone_in(file.path(), sys.path()));
         assert!(!is_gone_in(Path::new("/nonexistent/sr0"), sys.path()));
-        assert!(gone_detail("/dev/sr0").contains("Restart the worker"));
+        assert!(gone_detail_saying("/dev/sr0", false).contains("Restart the worker"));
+        let following = gone_detail_saying("/dev/sr0", true);
+        assert!(following.contains("restarts itself"), "{following}");
+        assert!(!following.contains("Restart the worker"), "{following}");
     }
 
     #[test]
