@@ -12,7 +12,7 @@
 use serde::Deserialize;
 use tangible_domain::{RequestKind, SecretString};
 
-use super::{Candidate, MAX_CANDIDATES, Pace, query_of, year_of};
+use super::{Candidate, MAX_CANDIDATES, Pace, Picture, query_of, year_of};
 use crate::download::{ClientError, read_text_within};
 use crate::outbound::{OutboundClient, OutboundError, Url};
 
@@ -320,7 +320,14 @@ fn movie(found: &Movie) -> Option<Candidate> {
     }
     candidate.reference(PROVIDER, &format!("movie/{}", found.id));
     candidate.link = Some(format!("https://www.themoviedb.org/movie/{}", found.id));
+    candidate.picture = poster(found.poster_path.as_deref());
     Some(candidate)
+}
+
+/// A poster path, as a candidate's picture.
+fn poster(path: Option<&str>) -> Option<Picture> {
+    path.filter(|path| is_image_path(path))
+        .map(|path| Picture::TmdbPoster(path.to_owned()))
 }
 
 fn show(found: &Show) -> Option<Candidate> {
@@ -340,6 +347,7 @@ fn show(found: &Show) -> Option<Candidate> {
     candidate.detail("region", &found.origin_country.join(", "));
     candidate.reference(PROVIDER, &format!("tv/{}", found.id));
     candidate.link = Some(format!("https://www.themoviedb.org/tv/{}", found.id));
+    candidate.picture = poster(found.poster_path.as_deref());
     Some(candidate)
 }
 
@@ -431,6 +439,45 @@ mod tests {
         // Markup is kept as text, and an empty date is no year.
         assert_eq!(films[2].title, "Dangerous Days: Making <b>Blade Runner</b>");
         assert!(!films[2].details.contains_key("year"));
+    }
+
+    #[test]
+    fn a_title_s_picture_is_its_poster_where_it_has_one() {
+        let films = parse_movies(&fixture("tmdb-search-movie.json")).unwrap();
+        let pictures: Vec<_> = films.iter().map(|film| film.picture.clone()).collect();
+        assert_eq!(
+            pictures,
+            [
+                Some(Picture::TmdbPoster(
+                    "/63N9uy8nd9j7Eog2axPQ8lbr3Wj.jpg".into()
+                )),
+                Some(Picture::TmdbPoster(
+                    "/gajva2L0rPYkEWjzgFlBXCAVBE5.jpg".into()
+                )),
+                None,
+            ]
+        );
+        let shows = parse_tv(&fixture("tmdb-search-tv.json")).unwrap();
+        assert_eq!(
+            shows[0].picture,
+            Some(Picture::TmdbPoster(
+                "/1XS1oqL89opfnbLl8WnZY1O1uJx.jpg".into()
+            ))
+        );
+        assert_eq!(shows[1].picture, None, "its poster is null");
+        let found = parse_find(&fixture("tmdb-find-imdb.json"), "tt0083658").unwrap();
+        assert!(found[0].picture.is_some());
+        // A path is a file name under the image service, never an address.
+        for path in [
+            "https://example.com/a.jpg",
+            "/../a.jpg",
+            "a.jpg",
+            "/a b.jpg",
+            "/",
+        ] {
+            let text = format!(r#"{{"results":[{{"id":1,"title":"X","poster_path":"{path}"}}]}}"#);
+            assert_eq!(parse_movies(&text).unwrap()[0].picture, None, "{path}");
+        }
     }
 
     #[test]

@@ -13,7 +13,8 @@
 
 use std::collections::BTreeMap;
 
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
@@ -56,6 +57,12 @@ pub struct MetadataCandidateView {
     pub refs: Vec<RequestRefView>,
     /// Its page at the provider, `https` and on the provider's own site.
     pub link: Option<String>,
+    /// Where Tangible serves its thumbnail (ADR 0027): fetched from the
+    /// provider when it is first asked for, for an hour after the search.
+    /// Null when it has no picture, or this server fetches none
+    /// (`TANGIBLE_ARTWORK=false`). The provider may still have none, and
+    /// the address then answers 404.
+    pub thumbnail: Option<String>,
 }
 
 impl From<Candidate> for MetadataCandidateView {
@@ -74,6 +81,7 @@ impl From<Candidate> for MetadataCandidateView {
                 })
                 .collect(),
             link: candidate.link,
+            thumbnail: None,
         }
     }
 }
@@ -197,7 +205,19 @@ pub async fn search_metadata(
         // A server that reaches no providers still searches its DATs.
         None => crate::metadata::search_dats_only(state.database(), q, kind).await,
     };
+    let thumbnails: Vec<Option<String>> = match state.thumbnails() {
+        Some(thumbnails) => thumbnails.hold(
+            found
+                .candidates
+                .iter()
+                .map(|candidate| candidate.picture.as_ref()),
+        ),
+        None => Vec::new(),
+    };
     let mut view = MetadataSearchView::from(found);
+    for (candidate, id) in view.candidates.iter_mut().zip(thumbnails) {
+        candidate.thumbnail = id.map(|id| format!("/api/v1/metadata/thumbnails/{id}"));
+    }
     if !user.role.allows(Permission::ManageIntegrations) {
         hide_resolved_addresses(&mut view.sources);
     }
@@ -219,9 +239,69 @@ fn hide_resolved_addresses(sources: &mut [MetadataSourceView]) {
     }
 }
 
+/// A search result's thumbnail.
+///
+/// # Errors
+///
+/// `INVALID_PARAMETER` for an identifier that is not one; `NOT_FOUND`.
+#[utoipa::path(
+    get,
+    path = "/api/v1/metadata/thumbnails/{thumbnail_id}",
+    tag = "requests",
+    description = "The thumbnail of a metadata search's result, at the address the search \
+                   answered (ADR 0027). Tangible fetches it from the provider's image service \
+                   the first time it is asked for, keeps it only if it is a JPEG, PNG or WebP, \
+                   and holds it in memory for an hour after the last search that named it. \
+                   Served as its checked type and never sniffed. Only a picture a search named \
+                   can be fetched. Anybody who may search.",
+    params(("thumbnail_id" = String, Path,
+            description = "The thumbnail's identifier, from a search's answer")),
+    responses(
+        (status = 200, description = "The image", content_type = "image/jpeg"),
+        (status = 400, description = "Not a thumbnail's identifier", body = Problem),
+        (status = 404, description = "None now: not named by a search in the last hour, \
+                                      none at the provider, or not fetched", body = Problem),
+    ),
+)]
+pub async fn get_thumbnail(
+    State(state): State<ApiState>,
+    Path(thumbnail_id): Path<String>,
+) -> Result<Response, Problem> {
+    if thumbnail_id.len() != 32 || !thumbnail_id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(Problem::invalid_parameter(
+            "thumbnail_id",
+            "not a thumbnail's identifier",
+        ));
+    }
+    let not_found = || Problem::not_found("thumbnail", &thumbnail_id);
+    let thumbnails = state.thumbnails().ok_or_else(not_found)?;
+    let image = thumbnails
+        .image(&thumbnail_id)
+        .await
+        .ok_or_else(not_found)?;
+    let mut response = (StatusCode::OK, image.bytes.clone()).into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(image.image_type.media_type()),
+    );
+    // For as long as it is held, and only by this browser.
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=3600"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    Ok(response)
+}
+
 /// The metadata routes.
 pub fn router() -> Router<ApiState> {
-    Router::new().route("/metadata/search", get(search_metadata))
+    Router::new()
+        .route("/metadata/search", get(search_metadata))
+        .route("/metadata/thumbnails/{thumbnail_id}", get(get_thumbnail))
 }
 
 #[cfg(test)]

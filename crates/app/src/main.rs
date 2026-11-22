@@ -376,8 +376,8 @@ async fn serve_command(common: &CommonConfig, serve: &ServeConfig) -> Result<()>
         Some(key) => state.with_secret_key(Arc::clone(key)),
         None => state,
     }
-    .with_integration_client(integrations.clone())
-    .with_metadata(metadata_providers(serve)?);
+    .with_integration_client(integrations.clone());
+    let state = with_metadata_providers(state, serve)?;
     let state = attach_web_ui(state, serve.web_root.as_deref()).await?;
     let (state, romm, romm_sync) = start_romm_export(
         state,
@@ -671,6 +671,19 @@ fn integration_client(
         concat!("tangible/", env!("CARGO_PKG_VERSION")),
     )
     .context("building the client integrations are reached with")
+}
+
+/// Reach the metadata providers, and show thumbnails beside a search's
+/// results (ADR 0027) unless `TANGIBLE_ARTWORK=false`: they are fetched
+/// pictures, as covers are.
+fn with_metadata_providers(state: ApiState, serve: &ServeConfig) -> Result<ApiState> {
+    let state = state.with_metadata(metadata_providers(serve)?);
+    if !serve.artwork {
+        return Ok(state);
+    }
+    state
+        .with_thumbnails()
+        .context("making the thumbnails' identifiers unguessable")
 }
 
 /// The client metadata providers are reached with (ADR 0021): their own

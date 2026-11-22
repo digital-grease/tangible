@@ -5933,6 +5933,60 @@
         ]
       }
     },
+    "/api/v1/metadata/thumbnails/{thumbnail_id}": {
+      "get": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "A search result's thumbnail.",
+        "description": "The thumbnail of a metadata search's result, at the address the search answered (ADR 0027). Tangible fetches it from the provider's image service the first time it is asked for, keeps it only if it is a JPEG, PNG or WebP, and holds it in memory for an hour after the last search that named it. Served as its checked type and never sniffed. Only a picture a search named can be fetched. Anybody who may search.",
+        "operationId": "get_thumbnail",
+        "parameters": [
+          {
+            "name": "thumbnail_id",
+            "in": "path",
+            "description": "The thumbnail's identifier, from a search's answer",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The image",
+            "content": {
+              "image/jpeg": {}
+            }
+          },
+          "400": {
+            "description": "Not a thumbnail's identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "None now: not named by a search in the last hour, none at the provider, or not fetched",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/physical-copies": {
       "get": {
         "tags": [
@@ -15203,6 +15257,13 @@
               "$ref": "#/components/schemas/RequestRefView"
             },
             "description": "Where it was found, as a request stores it."
+          },
+          "thumbnail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where Tangible serves its thumbnail (ADR 0027): fetched from the\nprovider when it is first asked for, for an hour after the search.\nNull when it has no picture, or this server fetches none\n(`TANGIBLE_ARTWORK=false`). The provider may still have none, and\nthe address then answers 404."
           },
           "title": {
             "type": "string",

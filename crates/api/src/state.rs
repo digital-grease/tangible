@@ -95,6 +95,9 @@ struct Inner {
     deletion_nudge: Arc<tokio::sync::Notify>,
     /// Wakes the artwork runner, as a new request does (ADR 0023).
     artwork_nudge: Arc<tokio::sync::Notify>,
+    /// The thumbnails beside a metadata search's results (ADR 0027), when
+    /// this server fetches pictures.
+    thumbnails: Option<crate::thumbnails::Thumbnails>,
     /// Copies of the database, when this server keeps them (ADR 0026).
     backups: Option<crate::backups::Backups>,
     /// Whether a restore is under way, when every API route but its
@@ -165,6 +168,7 @@ impl ApiState {
                 deletion_grace_days: crate::deletion::DEFAULT_GRACE_DAYS,
                 deletion_nudge: Arc::new(tokio::sync::Notify::new()),
                 artwork_nudge: Arc::new(tokio::sync::Notify::new()),
+                thumbnails: None,
                 backups: None,
                 maintenance: crate::restoring::Maintenance::default(),
                 restore_orders: None,
@@ -206,6 +210,7 @@ impl ApiState {
                 deletion_grace_days: crate::deletion::DEFAULT_GRACE_DAYS,
                 deletion_nudge: Arc::new(tokio::sync::Notify::new()),
                 artwork_nudge: Arc::new(tokio::sync::Notify::new()),
+                thumbnails: None,
                 backups: None,
                 maintenance: crate::restoring::Maintenance::default(),
                 restore_orders: None,
@@ -590,6 +595,31 @@ impl ApiState {
     #[must_use]
     pub fn metadata(&self) -> Option<&crate::metadata::Metadata> {
         self.inner.metadata.as_ref()
+    }
+
+    /// Show thumbnails beside a metadata search's results (ADR 0027),
+    /// fetched through the metadata providers attached; with none, nothing
+    /// changes.
+    ///
+    /// # Errors
+    ///
+    /// The system's randomness failing.
+    pub fn with_thumbnails(self) -> Result<Self, getrandom::Error> {
+        let Some(metadata) = self.inner.metadata.clone() else {
+            return Ok(self);
+        };
+        let mut inner = (*self.inner).clone();
+        inner.thumbnails = Some(crate::thumbnails::Thumbnails::new(metadata)?);
+        Ok(Self {
+            inner: Arc::new(inner),
+        })
+    }
+
+    /// The thumbnails beside a metadata search's results, when this server
+    /// shows them.
+    #[must_use]
+    pub fn thumbnails(&self) -> Option<&crate::thumbnails::Thumbnails> {
+        self.inner.thumbnails.as_ref()
     }
 
     /// The manifest store, when a library root is configured.

@@ -13,6 +13,7 @@
 use std::time::Duration;
 
 use crate::download::read_bytes_within;
+use crate::metadata::Picture;
 use crate::outbound::{OutboundClient, OutboundError, Url};
 
 /// The largest cover kept.
@@ -57,17 +58,40 @@ impl Endpoints {
     /// TMDB's poster at `path` (`/abc.jpg`), 342 pixels wide.
     #[must_use]
     pub fn tmdb_poster(&self, path: &str) -> Option<Url> {
+        self.tmdb_sized(path, "w342")
+    }
+
+    fn tmdb_sized(&self, path: &str, size: &str) -> Option<Url> {
         let name = path.strip_prefix('/')?;
-        self.tmdb_images.join(&format!("w342/{name}")).ok()
+        self.tmdb_images.join(&format!("{size}/{name}")).ok()
     }
 
     /// The front cover of the MusicBrainz release `release`, 500 pixels.
     #[must_use]
     pub fn release_front(&self, release: &str) -> Option<Url> {
+        self.release_sized(release, 500)
+    }
+
+    fn release_sized(&self, release: &str, size: u16) -> Option<Url> {
         let id = mbid(release)?;
         self.cover_art_archive
-            .join(&format!("release/{id}/front-500"))
+            .join(&format!("release/{id}/front-{size}"))
             .ok()
+    }
+
+    /// A search result's picture as a thumbnail (ADR 0027), the smallest
+    /// each provider keeps that is sharp at twice the size it is shown:
+    /// TMDB's poster 154 pixels wide, the Cover Art Archive's front at 250,
+    /// IGDB's small cover at twice its size, and libretro's box art as it is,
+    /// since libretro keeps one size.
+    #[must_use]
+    pub fn thumbnail(&self, picture: &Picture) -> Option<Url> {
+        match picture {
+            Picture::TmdbPoster(path) => self.tmdb_sized(path, "w154"),
+            Picture::Release(release) => self.release_sized(release, 250),
+            Picture::IgdbImage(image_id) => self.igdb_sized(image_id, "t_cover_small_2x"),
+            Picture::Libretro(key) => self.libretro_box_art(key),
+        }
     }
 
     /// libretro's box art for the key [`libretro_key`] made:
@@ -91,11 +115,15 @@ impl Endpoints {
     /// IGDB's cover image `image_id`, at its cover size.
     #[must_use]
     pub fn igdb_cover(&self, image_id: &str) -> Option<Url> {
+        self.igdb_sized(image_id, "t_cover_big")
+    }
+
+    fn igdb_sized(&self, image_id: &str, size: &str) -> Option<Url> {
         if image_id.is_empty() || !image_id.bytes().all(|b| b.is_ascii_alphanumeric()) {
             return None;
         }
         self.igdb_images
-            .join(&format!("t_cover_big/{image_id}.jpg"))
+            .join(&format!("{size}/{image_id}.jpg"))
             .ok()
     }
 }
@@ -293,6 +321,50 @@ mod tests {
         );
         assert!(at.igdb_cover("../x").is_none());
         assert!(at.igdb_cover("").is_none());
+    }
+
+    #[test]
+    fn a_thumbnail_is_each_provider_s_small_size() {
+        let at = Endpoints::public();
+        let thumbnail = |picture: Picture| at.thumbnail(&picture).map(|url| url.to_string());
+        assert_eq!(
+            thumbnail(Picture::TmdbPoster(
+                "/f89U3ADr1oiB1s9GkdPOEpXUk5H.jpg".into()
+            ))
+            .as_deref(),
+            Some("https://image.tmdb.org/t/p/w154/f89U3ADr1oiB1s9GkdPOEpXUk5H.jpg")
+        );
+        assert_eq!(
+            thumbnail(Picture::Release(
+                "76df3287-6cda-33eb-8e9a-044b5e15ffdd".into()
+            ))
+            .as_deref(),
+            Some(
+                "https://coverartarchive.org/release/76df3287-6cda-33eb-8e9a-044b5e15ffdd/front-250"
+            )
+        );
+        assert_eq!(
+            thumbnail(Picture::IgdbImage("co1wyy".into())).as_deref(),
+            Some("https://images.igdb.com/igdb/image/upload/t_cover_small_2x/co1wyy.jpg")
+        );
+        assert_eq!(
+            thumbnail(Picture::Libretro(
+                "Sony - PlayStation/Crash Bandicoot (USA)".into()
+            ))
+            .as_deref(),
+            Some(
+                "https://thumbnails.libretro.com/Sony%20-%20PlayStation/Named_Boxarts/Crash%20Bandicoot%20(USA).png"
+            )
+        );
+        // Each is checked as a cover's is.
+        for picture in [
+            Picture::TmdbPoster("no-slash.jpg".into()),
+            Picture::Release("not-an-mbid".into()),
+            Picture::IgdbImage("../x".into()),
+            Picture::Libretro("no system".into()),
+        ] {
+            assert_eq!(at.thumbnail(&picture), None, "{picture:?}");
+        }
     }
 
     #[test]

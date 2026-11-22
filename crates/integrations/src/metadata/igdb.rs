@@ -18,7 +18,7 @@ use tangible_domain::{RequestKind, SecretString};
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
-use super::{Candidate, MAX_CANDIDATES, Pace, query_of};
+use super::{Candidate, MAX_CANDIDATES, Pace, Picture, query_of};
 use crate::download::{ClientError, read_text_within};
 use crate::outbound::{OutboundClient, OutboundError, Url};
 
@@ -241,7 +241,7 @@ impl IgdbClient {
             return Ok(Vec::new());
         };
         let body = format!(
-            "search \"{}\"; fields name,first_release_date,platforms.name,slug; limit {MAX_CANDIDATES};",
+            "search \"{}\"; fields name,first_release_date,platforms.name,slug,cover.image_id; limit {MAX_CANDIDATES};",
             quoted(&query)
         );
         parse_games(&self.query("games", &body).await?)
@@ -265,11 +265,9 @@ impl IgdbClient {
             .await?;
         let covers: Vec<Cover> = serde_json::from_str(&text)
             .map_err(|_| ClientError::bad(CLIENT, "the answer was not covers"))?;
-        Ok(covers.into_iter().find_map(|cover| {
-            cover.image_id.filter(|id| {
-                !id.is_empty() && id.len() <= 40 && id.bytes().all(|b| b.is_ascii_alphanumeric())
-            })
-        }))
+        Ok(covers
+            .into_iter()
+            .find_map(|cover| cover.image_id.filter(|id| image_id(id))))
     }
 
     /// Whether Twitch issues a token and IGDB takes it, for an
@@ -291,6 +289,11 @@ impl IgdbClient {
 struct Cover {
     #[serde(default)]
     image_id: Option<String>,
+}
+
+/// Whether `id` is an IGDB image id: letters and digits, at most 40.
+fn image_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 40 && id.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
 #[derive(Deserialize)]
@@ -327,6 +330,12 @@ struct Game {
     platforms: Vec<Platform>,
     #[serde(default)]
     slug: Option<String>,
+    /// Its cover, expanded to its image id: `{"id": 1, "image_id": "co1wyy"}`.
+    /// Kept as it came, so that a cover in another shape (its id alone, as
+    /// IGDB answers when it is not expanded) is no picture rather than an
+    /// answer refused.
+    #[serde(default)]
+    cover: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -392,6 +401,13 @@ pub fn parse_games(text: &str) -> Result<Vec<Candidate>, ClientError> {
             .as_deref()
             .and_then(slug)
             .map(|slug| format!("https://www.igdb.com/games/{slug}"));
+        candidate.picture = game
+            .cover
+            .as_ref()
+            .and_then(|cover| cover.get("image_id"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| image_id(id))
+            .map(|id| Picture::IgdbImage(id.to_owned()));
         candidates.push(candidate);
     }
     Ok(candidates)
@@ -433,6 +449,33 @@ mod tests {
             games[2].link.as_deref(),
             Some("https://www.igdb.com/games/the-legend-of-zelda-collectors-edition")
         );
+    }
+
+    #[test]
+    fn a_game_s_picture_is_its_cover_where_it_has_one() {
+        let games = parse_games(&fixture("igdb-games.json")).unwrap();
+        let pictures: Vec<_> = games.iter().map(|game| game.picture.clone()).collect();
+        assert_eq!(
+            pictures,
+            [
+                Some(Picture::IgdbImage("co1u6s".into())),
+                Some(Picture::IgdbImage("co3nnx".into())),
+                None,
+            ]
+        );
+        // A cover not expanded, or an image id that is not one, is no
+        // picture, and the game is still found.
+        for cover in [
+            "85130",
+            r#"{"id":1}"#,
+            r#"{"image_id":"../x"}"#,
+            r#"{"image_id":7}"#,
+        ] {
+            let text = format!(r#"[{{"id":1,"name":"A Game","cover":{cover}}}]"#);
+            let games = parse_games(&text).unwrap();
+            assert_eq!(games.len(), 1, "{cover}");
+            assert_eq!(games[0].picture, None, "{cover}");
+        }
     }
 
     #[test]

@@ -19,5 +19,6 @@ What the metadata providers answer, for the clients in
 - `twitch-token.json`, `twitch-token-refused.json`, `igdb-games.json`,
   `igdb-unauthorized.json`: WRITTEN from Twitch's client-credentials flow
   and IGDB's API reference (v4 `POST /games`), not recorded, for the same
-  reason. The third game has no release date and a `url` that is not
-  IGDB's, on purpose. The token is not a real one.
+  reason. The third game has no release date, no cover, and a `url` that
+  is not IGDB's, on purpose; the others' covers are expanded to their image
+  ids, as `fields ... cover.image_id` asks. The token is not a real one.

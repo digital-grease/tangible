@@ -79,6 +79,7 @@ async fn answer(
         (status, [("content-type", "application/json")], text).into_response()
     };
     match (method.as_str(), uri.path()) {
+        ("GET", path) if path.starts_with("/images/") => picture(path),
         ("GET", "/ws/2/release") => {
             json(StatusCode::OK, fixture("musicbrainz-release-search.json"))
         }
@@ -121,6 +122,30 @@ async fn answer(
     }
 }
 
+/// A PNG's signature and a little more: what the fake serves as Blade
+/// Runner's poster, though it says it is a JPEG.
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR-a-poster";
+/// A JPEG's start: what it serves as A Link to the Past's cover.
+const JPEG: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0, 0, 16, b'J', b'F', b'I', b'F'];
+
+/// The providers' image services, under `/images/`: Blade Runner's
+/// poster, Blade Runner 2049's as a page that is not an image, A Link to
+/// the Past's cover, and nothing else (the Cover Art Archive has no front
+/// for any release here).
+fn picture(path: &str) -> axum::response::Response {
+    let image = |kind: &'static str, bytes: &'static [u8]| {
+        (StatusCode::OK, [("content-type", kind)], bytes).into_response()
+    };
+    match path {
+        "/images/tmdb/w154/63N9uy8nd9j7Eog2axPQ8lbr3Wj.jpg" => image("image/jpeg", PNG),
+        "/images/tmdb/w154/gajva2L0rPYkEWjzgFlBXCAVBE5.jpg" => {
+            image("image/jpeg", b"<!doctype html><title>no</title>")
+        }
+        "/images/igdb/t_cover_small_2x/co1u6s.jpg" => image("image/jpeg", JPEG),
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 async fn fake() -> (SocketAddr, Shared) {
     let shared: Shared = Arc::new(Mutex::new(Vec::new()));
     let app = axum::Router::new()
@@ -159,6 +184,16 @@ async fn remove_providers(pool: &PgPool) {
 }
 
 async fn harness() -> Harness {
+    harness_with(false).await
+}
+
+/// A harness whose server shows thumbnails beside a search's results
+/// (ADR 0027), fetched from the fake's image services.
+async fn harness_with_thumbnails() -> Harness {
+    harness_with(true).await
+}
+
+async fn harness_with(thumbnails: bool) -> Harness {
     let turn = TURN
         .get_or_init(|| tokio::sync::Mutex::new(()))
         .lock()
@@ -182,13 +217,23 @@ async fn harness() -> Harness {
                 api: base("/v4/"),
                 token: base("/oauth2/token"),
             },
-            artwork: tangible_integrations::artwork::Endpoints::public(),
+            artwork: tangible_integrations::artwork::Endpoints {
+                tmdb_images: base("/images/tmdb/"),
+                cover_art_archive: base("/images/caa/"),
+                igdb_images: base("/images/igdb/"),
+                libretro: base("/images/libretro/"),
+            },
         },
     );
     let key = SecretKey::from_base64(&SecretKey::generate().unwrap()).unwrap();
     let state = ApiState::new(database)
         .with_secret_key(key)
         .with_metadata(metadata);
+    let state = if thumbnails {
+        state.with_thumbnails().unwrap()
+    } else {
+        state
+    };
     Harness {
         admin: support::administrator(&pool).await,
         pool,
@@ -223,6 +268,31 @@ impl Harness {
             status,
             serde_json::from_slice(&bytes).unwrap_or(Value::Null),
         )
+    }
+
+    /// `path` fetched as it comes, by `session` or by nobody signed in.
+    async fn fetch(
+        &self,
+        session: Option<&support::Session>,
+        path: &str,
+    ) -> (StatusCode, HeaderMap, Vec<u8>) {
+        let mut request = Request::builder().uri(path).body(Body::empty()).unwrap();
+        if let Some(session) = session {
+            session.apply(&mut request);
+        }
+        let response = router(self.state.clone()).oneshot(request).await.unwrap();
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = axum::body::to_bytes(response.into_body(), 4 << 20)
+            .await
+            .unwrap();
+        (status, headers, bytes.to_vec())
+    }
+
+    /// How many times the fake was asked for `path`.
+    fn times_asked(&self, path: &str) -> usize {
+        let what = format!("GET {path}");
+        self.asked().iter().filter(|a| a.what == what).count()
     }
 
     async fn search(&self, session: &support::Session, query: &str) -> (StatusCode, Value) {
@@ -363,6 +433,10 @@ async fn each_kind_asks_its_providers_and_answers_what_a_request_takes() {
         answer["candidates"][0]["refs"][0]["external_id"],
         "movie/78"
     );
+    assert!(
+        answer["candidates"][0]["thumbnail"].is_null(),
+        "this server fetches no pictures"
+    );
     for asked in harness.asked().iter().filter(|a| a.what.contains("/3/")) {
         assert!(
             !asked.what.contains(TMDB_TOKEN),
@@ -424,6 +498,112 @@ async fn each_kind_asks_its_providers_and_answers_what_a_request_takes() {
         refs[1],
         json!({ "provider": "imdb", "external_id": "tt0083658" })
     );
+    harness.done().await;
+}
+
+fn candidates<'a>(answer: &'a Value, provider: &str) -> Vec<&'a Value> {
+    answer["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|candidate| candidate["provider"] == provider)
+        .collect()
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn a_result_s_thumbnail_is_fetched_when_asked_for_and_served_by_tangible() {
+    let harness = harness_with_thumbnails().await;
+    harness.make_all().await;
+    let viewer = support::sign_in(&harness.pool, Role::Viewer).await;
+    let poster_at = "/images/tmdb/w154/63N9uy8nd9j7Eog2axPQ8lbr3Wj.jpg";
+
+    let (status, answer) = harness.search(&viewer, "q=blade+runner&kind=movie").await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let films = candidates(&answer, "tmdb");
+    assert_eq!(films.len(), 3);
+    let poster = films[0]["thumbnail"].as_str().unwrap();
+    let id = poster.strip_prefix("/api/v1/metadata/thumbnails/").unwrap();
+    assert_eq!(id.len(), 32);
+    assert!(
+        !poster.contains("63N9uy8nd9j7"),
+        "the address names no picture"
+    );
+    assert!(films[1]["thumbnail"].is_string());
+    assert!(films[2]["thumbnail"].is_null(), "its poster is null");
+    assert_eq!(
+        harness.times_asked(poster_at),
+        0,
+        "fetched only when asked for"
+    );
+
+    // Fetched, checked, and served as what its bytes are.
+    let (status, headers, bytes) = harness.fetch(Some(&viewer), poster).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(bytes, PNG);
+    assert_eq!(headers["content-type"], "image/png");
+    assert_eq!(headers["x-content-type-options"], "nosniff");
+    assert_eq!(headers["cache-control"], "private, max-age=3600");
+    // Asked for again, or found again, it is not fetched again.
+    harness.fetch(Some(&viewer), poster).await;
+    let (_, again) = harness.search(&viewer, "q=blade+runner&kind=movie").await;
+    assert_eq!(candidates(&again, "tmdb")[0]["thumbnail"], poster);
+    harness.fetch(Some(&viewer), poster).await;
+    assert_eq!(harness.times_asked(poster_at), 1);
+
+    // A page that is not an image is no thumbnail.
+    let (status, headers, _) = harness
+        .fetch(Some(&viewer), films[1]["thumbnail"].as_str().unwrap())
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_ne!(headers["content-type"], "text/html");
+
+    // Games: IGDB's cover, asked for in the search itself.
+    let (_, answer) = harness.search(&viewer, "q=zelda&kind=game").await;
+    let games = candidates(&answer, "igdb");
+    assert!(games[2]["thumbnail"].is_null(), "it has no cover");
+    let (status, headers, bytes) = harness
+        .fetch(Some(&viewer), games[0]["thumbnail"].as_str().unwrap())
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(bytes, JPEG);
+    assert_eq!(headers["content-type"], "image/jpeg");
+    let query = harness
+        .asked()
+        .into_iter()
+        .find(|a| a.what == "POST /v4/games")
+        .unwrap();
+    assert!(query.body.contains("cover.image_id"), "{}", query.body);
+
+    // Music: the Cover Art Archive's front, which it has not got.
+    let (_, answer) = harness
+        .search(&viewer, "q=pink+floyd+dark+side&kind=music")
+        .await;
+    let release = candidates(&answer, "musicbrainz")[0];
+    let (status, _, _) = harness
+        .fetch(Some(&viewer), release["thumbnail"].as_str().unwrap())
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let front = format!(
+        "/images/caa/release/{}/front-250",
+        release["refs"][0]["external_id"].as_str().unwrap()
+    );
+    assert_eq!(harness.times_asked(&front), 1);
+
+    // Only what a search named, and only for someone signed in.
+    let (status, _, _) = harness
+        .fetch(
+            Some(&viewer),
+            "/api/v1/metadata/thumbnails/0123456789abcdef0123456789abcdef",
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _, _) = harness
+        .fetch(Some(&viewer), "/api/v1/metadata/thumbnails/..%2F..%2Fetc")
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _, _) = harness.fetch(None, poster).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
     harness.done().await;
 }
 

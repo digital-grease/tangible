@@ -45,6 +45,7 @@ pub mod routes;
 pub mod secrets;
 pub mod source_removal;
 pub mod state;
+pub mod thumbnails;
 pub mod unpack;
 pub mod web;
 pub mod worker_auth;
@@ -220,6 +221,7 @@ pub const API_BASE: &str = "/api/v1";
         routes::request_releases::held_search,
         routes::request_releases::grab_release,
         routes::metadata::search_metadata,
+        routes::metadata::get_thumbnail,
         events::event_stream,
         deletion::request_artifact_deletion,
         deletion::keep_pending_artifact,

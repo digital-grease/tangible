@@ -13,7 +13,7 @@
 
 use serde::Deserialize;
 
-use super::{Candidate, MAX_CANDIDATES, Pace, query_of, year_of};
+use super::{Candidate, MAX_CANDIDATES, Pace, Picture, query_of, year_of};
 use crate::download::{ClientError, read_text_within};
 use crate::outbound::{OutboundClient, OutboundError, Url};
 use tangible_domain::RequestKind;
@@ -248,6 +248,9 @@ pub fn parse_releases(text: &str) -> Result<Vec<Candidate>, ClientError> {
         }
         candidate.reference(PROVIDER, id);
         candidate.link = Some(format!("https://musicbrainz.org/release/{id}"));
+        // A search does not say which releases have a cover: the Cover Art
+        // Archive answers 404 for one without.
+        candidate.picture = Some(Picture::Release(id.to_ascii_lowercase()));
         candidates.push(candidate);
     }
     Ok(candidates)
@@ -326,6 +329,28 @@ mod tests {
         let candidates = parse_releases(text).unwrap();
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].title, "Good");
+    }
+
+    #[test]
+    fn a_release_s_picture_is_its_front_cover_by_its_id() {
+        let text = r#"{"releases": [
+            {"id": "93C671D8-7765-4709-BBF0-FA899F5293A5", "title": "Good", "media": [{"format": "CD"}]}
+        ]}"#;
+        assert_eq!(
+            parse_releases(text).unwrap()[0].picture,
+            Some(Picture::Release(
+                "93c671d8-7765-4709-bbf0-fa899f5293a5".into()
+            ))
+        );
+        let candidates = parse_releases(&fixture("musicbrainz-release-search.json")).unwrap();
+        for candidate in &candidates {
+            assert_eq!(
+                candidate.picture,
+                Some(Picture::Release(
+                    candidate.refs[0].external_id.to_ascii_lowercase()
+                ))
+            );
+        }
     }
 
     #[test]

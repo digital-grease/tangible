@@ -591,6 +591,11 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
         "/api/v1/metadata/search",
         Signed(Permission::Request),
     ),
+    (
+        "GET",
+        "/api/v1/metadata/thumbnails/{thumbnail_id}",
+        Signed(Permission::Request),
+    ),
     ("GET", "/api/v1/requests", Signed(Permission::Request)),
     (
         "GET",

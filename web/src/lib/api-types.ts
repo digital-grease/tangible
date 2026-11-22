@@ -1716,6 +1716,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/metadata/thumbnails/{thumbnail_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A search result's thumbnail.
+         * @description The thumbnail of a metadata search's result, at the address the search answered (ADR 0027). Tangible fetches it from the provider's image service the first time it is asked for, keeps it only if it is a JPEG, PNG or WebP, and holds it in memory for an hour after the last search that named it. Served as its checked type and never sniffed. Only a picture a search named can be fetched. Anybody who may search.
+         */
+        get: operations["get_thumbnail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/physical-copies": {
         parameters: {
             query?: never;
@@ -5304,6 +5324,14 @@ export interface components {
             provider: string;
             /** @description Where it was found, as a request stores it. */
             refs: components["schemas"]["RequestRefView"][];
+            /**
+             * @description Where Tangible serves its thumbnail (ADR 0027): fetched from the
+             *     provider when it is first asked for, for an hour after the search.
+             *     Null when it has no picture, or this server fetches none
+             *     (`TANGIBLE_ARTWORK=false`). The provider may still have none, and
+             *     the address then answers 404.
+             */
+            thumbnail?: string | null;
             /** @description Its title. */
             title: string;
         };
@@ -10865,6 +10893,47 @@ export interface operations {
             };
             /** @description Too many from this account for now */
             429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_thumbnail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The thumbnail's identifier, from a search's answer */
+                thumbnail_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The image */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": unknown;
+                };
+            };
+            /** @description Not a thumbnail's identifier */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description None now: not named by a search in the last hour, none at the provider, or not fetched */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

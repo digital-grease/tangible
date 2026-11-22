@@ -78,6 +78,24 @@ pub struct Candidate {
     /// Its page at the provider: always `https`, always the provider's own
     /// site, built here rather than taken from the answer.
     pub link: Option<String>,
+    /// Where its picture is, for a thumbnail beside it (ADR 0027).
+    pub picture: Option<Picture>,
+}
+
+/// Where a candidate's picture is kept, as its provider names it. An address
+/// is built from this by [`crate::artwork::Endpoints::thumbnail`], at the
+/// provider's own image service; none is taken from an answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Picture {
+    /// A TMDB poster's path: `/` and a file name.
+    TmdbPoster(String),
+    /// An IGDB image's id: letters and digits.
+    IgdbImage(String),
+    /// A MusicBrainz release's id, whose front cover the Cover Art Archive
+    /// keeps, if it has one.
+    Release(String),
+    /// A DAT game's libretro key ([`crate::artwork::libretro_key`]).
+    Libretro(String),
 }
 
 impl Candidate {
@@ -91,6 +109,7 @@ impl Candidate {
             details: BTreeMap::new(),
             refs: Vec::new(),
             link: None,
+            picture: None,
         })
     }
 

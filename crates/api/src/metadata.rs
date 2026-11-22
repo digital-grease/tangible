@@ -414,6 +414,12 @@ impl Metadata {
         &self.inner.http
     }
 
+    /// Where the providers keep their images.
+    #[must_use]
+    pub fn artwork_endpoints(&self) -> &tangible_integrations::artwork::Endpoints {
+        &self.inner.endpoints.artwork
+    }
+
     /// Where the provider `source` keeps the cover of the item it calls
     /// `external_id` (ADR 0023): TMDB's poster, for a TMDB or IMDb id; the
     /// Cover Art Archive's front, for a MusicBrainz release; IGDB's cover,
@@ -823,6 +829,11 @@ async fn dats(context: &Context<'_>, kind: Option<RequestKind>) -> (SourceOutcom
                 candidate.detail("description", description);
             }
             candidate.reference(provider, &hit.name);
+            // libretro's box art, as a game matched exactly gets as its
+            // cover (ADR 0023 A4), for a thumbnail (ADR 0027).
+            candidate.picture =
+                tangible_integrations::artwork::libretro_key(&hit.dat_name, &hit.name)
+                    .map(tangible_integrations::metadata::Picture::Libretro);
             Some(candidate)
         })
         .collect();

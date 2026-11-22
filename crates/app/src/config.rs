@@ -311,8 +311,9 @@ pub struct ServeConfig {
     pub worker_credential_max_age_days: u32,
 
     /// Whether covers are fetched from the metadata providers and libretro
-    /// (ADR 0023). `false` fetches nothing; covers already fetched are still
-    /// shown.
+    /// (ADR 0023), and thumbnails for a metadata search's results (ADR
+    /// 0027). `false` fetches nothing; covers already fetched are still
+    /// shown, and a search's results have no thumbnails.
     #[arg(
         long,
         env = "TANGIBLE_ARTWORK",
