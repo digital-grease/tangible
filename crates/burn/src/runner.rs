@@ -1563,7 +1563,35 @@ impl<E: BurnEngine> WorkerRuntime<E> {
             },
             verification,
             medium: medium_body,
-            failure: None,
+            failure: self.write_failure(&write),
+        })
+    }
+
+    /// Why a write the engine reported as failed failed, for the server to
+    /// keep: the drive gone from the machine during it, said as such, or the
+    /// engine's own words. None for a write it reported complete, whose
+    /// disc the read-back judges.
+    fn write_failure(&self, write: &WriteReport) -> Option<FailureBody> {
+        if write.engine_reported_success {
+            return None;
+        }
+        if crate::connection::is_gone(std::path::Path::new(&self.settings.device_alias)) {
+            tracing::error!(
+                alias = %self.settings.device_alias,
+                "the drive went from this machine during the write: it was disconnected, or \
+                 reconnected as another device; restart the worker to find it again"
+            );
+            return Some(FailureBody {
+                code: DRIVE_DISCONNECTED.to_owned(),
+                detail: Some(format!(
+                    "{}; the disc may be partly written",
+                    crate::connection::gone_detail(&self.settings.device_alias)
+                )),
+            });
+        }
+        Some(FailureBody {
+            code: "WRITE_FAILED".to_owned(),
+            detail: (!write.diagnostics.is_empty()).then(|| write.diagnostics.join("\n")),
         })
     }
 
@@ -2103,6 +2131,41 @@ mod tests {
             CdReader::Corrected(_) => "redumper",
             CdReader::Unavailable => "unavailable",
         }
+    }
+
+    #[test]
+    fn a_write_the_engine_reported_failed_is_reported_with_its_words() {
+        let runtime = runtime_with(None);
+        let report = |success: bool, diagnostics: &[&str]| WriteReport {
+            engine_reported_success: success,
+            bytes_written: 0,
+            engine: "xorriso".to_owned(),
+            engine_version: "1.5.6".to_owned(),
+            finalized: false,
+            diagnostics: diagnostics.iter().map(|line| (*line).to_owned()).collect(),
+        };
+        let failed = runtime
+            .write_failure(&report(
+                false,
+                &["FAILURE : Burn run failed", "xorriso exited with status 5"],
+            ))
+            .expect("a failure");
+        assert_eq!(failed.code, "WRITE_FAILED");
+        assert_eq!(
+            failed.detail.as_deref(),
+            Some("FAILURE : Burn run failed\nxorriso exited with status 5")
+        );
+        // Nothing said is no detail, not an empty one.
+        assert_eq!(
+            runtime.write_failure(&report(false, &[])).unwrap().detail,
+            None
+        );
+        // A write reported complete is the read-back's to judge.
+        assert!(
+            runtime
+                .write_failure(&report(true, &["exited 1"]))
+                .is_none()
+        );
     }
 
     #[test]

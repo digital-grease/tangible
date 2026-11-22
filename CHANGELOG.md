@@ -38,6 +38,13 @@ may change between minor versions, and the release notes say how.
 
 ### Fixed
 
+- A burn whose write the burning tool reported as failed was recorded as
+  `WRITE_FAILED` with nothing of what the tool said, so the burn's page could
+  not tell why. The tool's own messages are now the attempt's detail, under
+  "What the worker said"; a write cut off because the drive dropped off the
+  machine is `ENGINE_DRIVE_DISCONNECTED`, saying the disc may be partly
+  written; and the page says the disc is probably unusable, and that a USB
+  drive resetting while it writes is often short of power.
 - A burn on a drive that had been unplugged, or plugged back in as another
   device, since its worker started failed as `ENGINE_DRIVE_UNAVAILABLE`,
   "drive /dev/sr0 is unavailable", which said nothing of why. The worker

@@ -301,8 +301,8 @@
                           label={attemptOutcomeLabel(attempt.state)}
                           pill
                         />
-                        {#if attemptAdvice(attempt.error_code)}
-                          <p class="advice">{attemptAdvice(attempt.error_code)}</p>
+                        {#if attemptAdvice(attempt.error_code, attempt.state)}
+                          <p class="advice">{attemptAdvice(attempt.error_code, attempt.state)}</p>
                         {/if}
                         {#if attempt.error_code}
                           <small><code>{attempt.error_code}</code></small>

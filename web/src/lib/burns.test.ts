@@ -315,6 +315,16 @@ describe('labels', () => {
     }
   });
 
+  it('says a disc is probably spoilt when the write itself failed, and why a drive may drop', () => {
+    const during = attemptAdvice('ENGINE_DRIVE_DISCONNECTED', 'write_failed') ?? '';
+    expect(during).toContain('during the write');
+    expect(during).toContain('short of power');
+    expect(during).toContain('new disc');
+    const before = attemptAdvice('ENGINE_DRIVE_DISCONNECTED', 'failed_before_write') ?? '';
+    expect(before).not.toContain('unusable');
+    expect(attemptAdvice('WRITE_FAILED', 'write_failed')).toContain('What the worker said');
+  });
+
   it('never claims a written disc was verified', () => {
     // The distinction the whole design rests on: a successful tool exit is
     // not verified media.

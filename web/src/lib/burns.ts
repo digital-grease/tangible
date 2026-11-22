@@ -402,12 +402,20 @@ export function attemptOutcomeLabel(state: string): string {
 /**
  * What a person can do about a failed attempt, in words, for the failures
  * they can act on; null for the rest, which the code and the worker's own
- * words describe.
+ * words describe. `state` tells a failure during the write, which has
+ * probably spoilt the disc, from one before it.
  */
-export function attemptAdvice(code: string | null | undefined): string | null {
+export function attemptAdvice(
+  code: string | null | undefined,
+  state?: string | null,
+): string | null {
   switch (code) {
     case 'ENGINE_DRIVE_DISCONNECTED':
-      return 'The drive was disconnected, or reconnected as another device, after the worker started. Restart the worker so it finds the drive again, then retry.';
+      return state === 'write_failed'
+        ? 'The drive dropped off during the write, so this disc is probably unusable. A USB drive that resets while writing is often short of power: connect it to the machine directly, or by its second USB plug if it has one. Restart the worker so it finds the drive again, then retry with a new disc.'
+        : 'The drive was disconnected, or reconnected as another device, after the worker started. Restart the worker so it finds the drive again, then retry.';
+    case 'WRITE_FAILED':
+      return 'The write did not finish, so this disc is probably unusable. What the worker said tells why; retry with a new disc.';
     case 'ENGINE_DRIVE_UNAVAILABLE':
       return 'The worker could not reach the drive. Check that it is connected and that nothing else on its machine is using it, then retry.';
     default:
