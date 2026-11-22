@@ -913,7 +913,11 @@ is an image, and serves it itself; your browser never contacts a provider.
 An artifact's cover can also be picked on its page ("Find cover art…"), and
 a game a loaded DAT matches exactly gets libretro's box art from
 `thumbnails.libretro.com`, which needs no key but learns the games' names.
-`TANGIBLE_ARTWORK=false` stops fetching.
+Searching for an item to ask for, or for an artifact's cover, shows a
+thumbnail beside each result, fetched the same way when it is first shown
+and held in memory for an hour, never stored; libretro then also learns the
+names of the DAT games a search finds. `TANGIBLE_ARTWORK=false` stops
+fetching, thumbnails included.
 
 Prowlarr's download links carry its API key: Tangible never shows, logs or
 audits them, and holds a search's links sealed with the secret key below,

@@ -26,6 +26,7 @@ const FOUND = {
         { provider: 'imdb', external_id: 'tt0113243' },
       ],
       link: null,
+      thumbnail: '/api/v1/metadata/thumbnails/0123456789abcdef0123456789abcdef',
     },
     // A DAT's game has no cover to fetch, so it is not offered.
     {
@@ -93,6 +94,10 @@ describe('Picking a cover', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     const list = await screen.findByRole('list', { name: 'What it might be' });
     expect(within(list).getAllByRole('listitem').length).toBe(1);
+    // Seen before it is picked, at Tangible's address.
+    expect(list.querySelector('img.thumbnail')?.getAttribute('src')).toBe(
+      FOUND.candidates[0]?.thumbnail,
+    );
     expect(await axeViolations(container)).toEqual([]);
     await fireEvent.click(screen.getByRole('button', { name: 'Use the cover of Hackers' }));
     await vi.waitFor(() => expect(onchanged).toHaveBeenCalled());

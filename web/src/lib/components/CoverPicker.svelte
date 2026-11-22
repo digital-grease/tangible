@@ -5,13 +5,15 @@
   // metadata providers as the request form does, and pick what the
   // artifact is. Tangible fetches the cover in the background, and a picked
   // cover comes before the cover of the request the artifact fulfilled.
-  // Operators and administrators pick; everyone sees where a cover came
-  // from.
+  // Each result shows its thumbnail (ADR 0027), so a cover is seen before
+  // it is picked. Operators and administrators pick; everyone sees where a
+  // cover came from.
   import { onDestroy } from 'svelte';
   import Button from './ui/Button.svelte';
   import Field from './ui/Field.svelte';
   import Select from './ui/Select.svelte';
   import StatusMark from './ui/StatusMark.svelte';
+  import Thumbnail from './ui/Thumbnail.svelte';
   import {
     coverSourceLabel,
     pickArtwork,
@@ -184,6 +186,7 @@
         <ul class="candidates" aria-label="What it might be">
           {#each usable as candidate, index (index)}
             <li>
+              <span class="picture"><Thumbnail url={candidate.thumbnail} /></span>
               <span class="title">{candidate.title}</span>
               <span class="quiet small">{candidateLine(candidate)}</span>
               <Button
@@ -243,18 +246,28 @@
   }
   .candidates li {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     gap: 0 var(--space-3);
     align-items: center;
     padding: var(--space-2) var(--space-3);
     border: 1px solid var(--line);
     border-radius: var(--radius);
   }
-  .candidates .small {
+  .picture {
+    display: flex;
     grid-column: 1;
+    grid-row: 1 / span 2;
+  }
+  .candidates .title {
+    grid-column: 2;
+    align-self: end;
+  }
+  .candidates .small {
+    grid-column: 2;
+    align-self: start;
   }
   .candidates :global(button) {
-    grid-column: 2;
+    grid-column: 3;
     grid-row: 1 / span 2;
   }
   .title {

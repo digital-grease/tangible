@@ -9,7 +9,9 @@
   //
   // The search is a field of the request's form, not a form of its own
   // (forms do not nest): its button is not a submit button, and Enter in it
-  // searches rather than asking.
+  // searches rather than asking. Each result shows its thumbnail, which
+  // Tangible fetches from the provider and serves (ADR 0027), so the right
+  // one can be told by sight.
   import { goto } from '$app/navigation';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import Button from '$lib/components/ui/Button.svelte';
@@ -20,6 +22,7 @@
   import Badge from '$lib/components/ui/Badge.svelte';
   import Select from '$lib/components/ui/Select.svelte';
   import StatusMark from '$lib/components/ui/StatusMark.svelte';
+  import Thumbnail from '$lib/components/ui/Thumbnail.svelte';
   import {
     ATTESTATION,
     DETAIL_FIELDS,
@@ -212,26 +215,29 @@
               <ul class="candidates" aria-label="What was found">
                 {#each found.candidates as candidate, index (index)}
                   <li>
+                    <Thumbnail url={candidate.thumbnail} />
                     <div class="candidate">
-                      <span class="candidate-title">{candidate.title}</span>
-                      <span class="sub">{candidateLine(candidate)}</span>
-                    </div>
-                    <div class="candidate-actions">
-                      {#if candidate.link}
-                        <a href={candidate.link} rel="noreferrer noopener" target="_blank"
-                          >See it at {providerLabel(candidate.provider)}<span
-                            class="visually-hidden"
+                      <div class="candidate-text">
+                        <span class="candidate-title">{candidate.title}</span>
+                        <span class="sub">{candidateLine(candidate)}</span>
+                      </div>
+                      <div class="candidate-actions">
+                        {#if candidate.link}
+                          <a href={candidate.link} rel="noreferrer noopener" target="_blank"
+                            >See it at {providerLabel(candidate.provider)}<span
+                              class="visually-hidden"
+                            >
+                              (opens a new tab)</span
+                            ></a
                           >
-                            (opens a new tab)</span
-                          ></a
+                        {/if}
+                        <Button
+                          size="sm"
+                          onclick={() => pick(candidate)}
+                          label={`Use this: ${candidate.title}, ${candidateLine(candidate)}`}
+                          >Use this</Button
                         >
-                      {/if}
-                      <Button
-                        size="sm"
-                        onclick={() => pick(candidate)}
-                        label={`Use this: ${candidate.title}, ${candidateLine(candidate)}`}
-                        >Use this</Button
-                      >
+                      </div>
                     </div>
                   </li>
                 {/each}
@@ -413,11 +419,12 @@
     display: grid;
     gap: var(--space-2);
   }
+  /* The thumbnail keeps its own column, so actions that wrap go under the
+     title rather than under the picture. */
   .candidates li {
     display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    gap: var(--space-2);
+    gap: var(--space-3);
+    align-items: center;
     padding: var(--space-2) 0;
     border-bottom: 1px solid var(--line-2);
   }
@@ -425,6 +432,16 @@
     border-bottom: 0;
   }
   .candidate {
+    flex: 1;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+    min-width: 0;
+  }
+  .candidate-text {
+    flex: 1 1 14rem;
     display: grid;
     min-width: 0;
   }

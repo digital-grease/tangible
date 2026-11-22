@@ -260,6 +260,42 @@ describe('Finding an item to ask for', () => {
     });
   });
 
+  it("shows each result's thumbnail from Tangible, and a disc where there is none", async () => {
+    const thumbnail = '/api/v1/metadata/thumbnails/0123456789abcdef0123456789abcdef';
+    const first = FOUND.candidates[0];
+    server({
+      '/api/v1/metadata/search?q=dark+side&kind=music': {
+        status: 200,
+        body: {
+          ...FOUND,
+          candidates: [
+            { ...first, thumbnail },
+            { ...first, title: 'Dark Side of the Moon (SACD)', thumbnail: null },
+          ],
+        },
+      },
+      '/api/v1/report-settings': SETTINGS,
+    });
+    const { container } = render(NewRequestPage);
+    await fireEvent.change(screen.getByRole('combobox', { name: 'Kind' }), {
+      target: { value: 'music' },
+    });
+    await fireEvent.input(screen.getByRole('searchbox', { name: /Find it/ }), {
+      target: { value: 'dark side' },
+    });
+    await fireEvent.click(screen.getByRole('button', { name: /^Search/ }));
+    const list = await screen.findByRole('list', { name: 'What was found' });
+    const [shown, none] = [...list.querySelectorAll('li')];
+    expect(shown?.querySelector('img.thumbnail')?.getAttribute('src')).toBe(thumbnail);
+    expect(none?.querySelector('img')).toBeNull();
+    expect(none?.querySelector('.thumbnail.none svg')).not.toBeNull();
+    expect(await axeViolations(container)).toEqual([]);
+    // The provider turns out to have none: a disc, not a broken image.
+    await fireEvent.error(shown?.querySelector('img') as HTMLImageElement);
+    expect(shown?.querySelector('img')).toBeNull();
+    expect(shown?.querySelector('.thumbnail.none')).not.toBeNull();
+  });
+
   it('says which sources did not answer, and that nothing was found', async () => {
     server({
       '/api/v1/metadata/search?q=nothing&kind=game': {

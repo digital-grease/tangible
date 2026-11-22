@@ -6,6 +6,19 @@ may change between minor versions, and the release notes say how.
 
 ## Unreleased
 
+### Added
+
+- Searching for an item to ask for shows a thumbnail beside each result, so
+  the right one can be told by sight: TMDB's poster, IGDB's cover, the Cover
+  Art Archive's front of a MusicBrainz release, or libretro's box art for a
+  DAT's game, and a drawing of a disc where there is none. Finding cover art
+  on an artifact's page shows them too. The server fetches each from the
+  provider when it is first shown and serves it itself, as it does covers,
+  so your browser never contacts a provider; thumbnails are held in memory
+  for an hour and never stored. `TANGIBLE_ARTWORK=false` turns them off with
+  covers. libretro now learns the names of the DAT games a search finds, not
+  only those of games in the library.
+
 ### Fixed
 
 - The web UI had no icon. Its pages linked a `favicon.png` that no build
