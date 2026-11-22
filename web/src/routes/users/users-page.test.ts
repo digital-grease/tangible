@@ -146,6 +146,39 @@ describe('Accounts page', () => {
     expect(asked).toContain('/api/v1/users/u4/enable');
   });
 
+  it('deletes an account that never signed in, after asking, and offers it for no other', async () => {
+    rememberSession({ username: 'admin', role: 'administrator' } as Parameters<
+      typeof rememberSession
+    >[0]);
+    const asked = server({
+      '/api/v1/users': {
+        status: 200,
+        body: {
+          items: [
+            { ...user(5), can_delete: true },
+            { ...user(6), can_delete: false, last_signed_in_at: '2026-11-20T10:00:00Z' },
+          ],
+          next_cursor: null,
+        },
+      },
+      '/api/v1/users/u5': { status: 204, body: null },
+    });
+    const { container } = render(UsersPage);
+    await screen.findByRole('rowheader', { name: 'user5' });
+    expect(screen.queryByRole('button', { name: 'Delete user6…' })).toBeNull();
+    expect(
+      screen.getByText(/Only an account that has never signed in can be deleted/),
+    ).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete user5…' }));
+    expect(screen.getByRole('heading', { name: 'Delete user5?' })).toBeTruthy();
+    expect(screen.getByText(/its name can be given to someone again/)).toBeTruthy();
+    expect(asked).not.toContain('/api/v1/users/u5');
+    expect(await axeViolations(container)).toEqual([]);
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete user5' }));
+    expect(await screen.findByText('Deleted user5.')).toBeTruthy();
+    expect(asked).toContain('/api/v1/users/u5');
+  });
+
   it("offers nothing against one's own account, and says why a change was refused", async () => {
     rememberSession({ username: 'user1', role: 'administrator' } as Parameters<
       typeof rememberSession

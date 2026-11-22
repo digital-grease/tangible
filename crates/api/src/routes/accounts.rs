@@ -15,14 +15,14 @@
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use tangible_db::accounts::{
-    AccountChange, CreateUserOutcome, UserRecord, count_users, create_first_administrator,
-    create_session, create_user, list_users, made_by_setup, record_failed_sign_in, revoke_session,
-    set_user_disabled, user_for_sign_in,
+    AccountChange, AccountDeletion, CreateUserOutcome, UserRecord, count_users,
+    create_first_administrator, create_session, create_user, delete_unused_user, list_users,
+    made_by_setup, record_failed_sign_in, revoke_session, set_user_disabled, user_for_sign_in,
 };
 use tangible_domain::auth::{MAX_PASSWORD_BYTES, check_new_password, normalize_username};
 use tangible_domain::{Role, SecretString};
@@ -77,6 +77,9 @@ pub struct UserView {
     pub last_signed_in_at: Option<String>,
     /// When it was created.
     pub created_at: String,
+    /// Whether it may be deleted: it has never signed in. One that has can
+    /// only be disabled, since it names the person behind what it did.
+    pub can_delete: bool,
     /// How it signs in: `password`; `provider` for an account an identity
     /// provider vouches for (ADR 0018); or `none` for a password account
     /// that cannot sign in at all, because this server lets only the account
@@ -93,6 +96,7 @@ impl From<UserRecord> for UserView {
             disabled: user.disabled,
             last_signed_in_at: user.last_signed_in_at.map(rfc3339),
             created_at: rfc3339(user.created_at),
+            can_delete: user.last_signed_in_at.is_none(),
             signs_in_with: "password".to_owned(),
         }
     }
@@ -573,6 +577,65 @@ async fn set_disabled(
     }
 }
 
+/// Delete an account that has never been used.
+///
+/// # Errors
+///
+/// `NOT_FOUND`; `CONFLICT` for your own account; `ACCOUNT_IN_USE`;
+/// `LAST_ADMINISTRATOR`.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/users/{user_id}",
+    tag = "accounts",
+    description = "Delete an account that has never been used: it never signed in, and has no \
+                   session, request or identity provider's link (`can_delete` says so). It goes \
+                   entirely, and its name may be given again; the audit log keeps `user.deleted` \
+                   with its username. An account that has been used names the person behind \
+                   what it did, and is disabled instead. Audited.",
+    params(("user_id" = String, Path, description = "Account identifier")),
+    responses(
+        (status = 204, description = "Deleted"),
+        (status = 404, description = "No such account", body = Problem),
+        (status = 409, description = "Your own account, one that has been used, or the only \
+                                      enabled administrator", body = Problem),
+    ),
+)]
+pub async fn delete_account(
+    State(state): State<ApiState>,
+    SignedIn(actor): SignedIn,
+    Path(raw): Path<String>,
+) -> Result<StatusCode, Problem> {
+    let id = account_id(&raw)?;
+    if id == actor.user_id {
+        return Err(Problem::new(
+            ErrorCode::Conflict,
+            "your own account cannot be deleted",
+        ));
+    }
+    let deletion = delete_unused_user(state.database().pool(), id, &actor.username)
+        .await
+        .map_err(|error| {
+            tracing::error!(error = ?error, "could not delete an account");
+            unavailable("the account could not be deleted")
+        })?;
+    match deletion {
+        AccountDeletion::Deleted(user) => {
+            tracing::info!(user = %user.username, by = %actor.username, "account deleted");
+            Ok(StatusCode::NO_CONTENT)
+        }
+        AccountDeletion::NoSuchAccount => Err(Problem::not_found("account", &raw)),
+        AccountDeletion::InUse => Err(Problem::new(
+            ErrorCode::AccountInUse,
+            "it has been used (it signed in, or asked for something), so it names someone in \
+             the audit log and on what they did: disable it instead",
+        )),
+        AccountDeletion::LastAdministrator => Err(Problem::new(
+            ErrorCode::LastAdministrator,
+            "it is the only enabled administrator: make or enable another administrator first",
+        )),
+    }
+}
+
 /// Disable an account.
 ///
 /// # Errors
@@ -705,6 +768,7 @@ pub fn router() -> Router<ApiState> {
             get(current_session).post(sign_in).delete(sign_out),
         )
         .route("/users", get(list_accounts).post(create_account))
+        .route("/users/{user_id}", delete(delete_account))
         .route("/users/{user_id}/disable", post(disable_account))
         .route("/users/{user_id}/enable", post(enable_account))
 }

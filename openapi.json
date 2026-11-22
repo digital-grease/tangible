@@ -8880,6 +8880,57 @@
         ]
       }
     },
+    "/api/v1/users/{user_id}": {
+      "delete": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Delete an account that has never been used.",
+        "description": "Delete an account that has never been used: it never signed in, and has no session, request or identity provider's link (`can_delete` says so). It goes entirely, and its name may be given again; the audit log keeps `user.deleted` with its username. An account that has been used names the person behind what it did, and is disabled instead. Audited.",
+        "operationId": "delete_account",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "Account identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "No such account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Your own account, one that has been used, or the only enabled administrator",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/users/{user_id}/disable": {
       "post": {
         "tags": [
@@ -18709,9 +18760,14 @@
           "role",
           "disabled",
           "created_at",
+          "can_delete",
           "signs_in_with"
         ],
         "properties": {
+          "can_delete": {
+            "type": "boolean",
+            "description": "Whether it may be deleted: it has never signed in. One that has can\nonly be disabled, since it names the person behind what it did."
+          },
           "created_at": {
             "type": "string",
             "description": "When it was created."

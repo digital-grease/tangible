@@ -861,6 +861,115 @@ async fn two_administrators_disabling_each_other_at_once_leave_one() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
+async fn only_an_account_never_used_is_deleted_and_its_name_is_free_again() {
+    let harness = harness().await;
+    let admin = support::administrator(&harness.pool).await;
+    let cookie = admin.cookie();
+    let call = |method: &'static str, uri: String, body: Option<serde_json::Value>| {
+        let router = harness.router.clone();
+        let cookie = admin.cookie();
+        let csrf = admin.csrf_token.clone();
+        async move { send(&router, method, &uri, Some(&cookie), Some(&csrf), body).await }
+    };
+
+    // Made and never used: deleted, audited, gone, and its name free.
+    let unused = account(&harness.pool, Role::Operator).await;
+    let listed_unused = listed(&harness.router, &cookie, &unused).await.unwrap();
+    assert_eq!(listed_unused["can_delete"], true);
+    let id = listed_unused["id"].as_str().unwrap().to_owned();
+    let deleted = call("DELETE", format!("/api/v1/users/{id}"), None).await;
+    assert_eq!(deleted.status, StatusCode::NO_CONTENT, "{}", deleted.body);
+    assert!(listed(&harness.router, &cookie, &unused).await.is_none());
+    assert_eq!(
+        audited(&harness.pool, &id).await,
+        ["user.created", "user.deleted"]
+    );
+    let (metadata,): (serde_json::Value,) = sqlx::query_as(
+        "SELECT metadata FROM audit_events WHERE target_id = $1 AND action = 'user.deleted'",
+    )
+    .bind(&id)
+    .fetch_one(&harness.pool)
+    .await
+    .unwrap();
+    assert_eq!(metadata["username"], unused.as_str());
+    let again = call(
+        "POST",
+        "/api/v1/users".to_owned(),
+        Some(json!({ "username": unused, "password": PASSWORD, "role": "viewer" })),
+    )
+    .await;
+    assert_eq!(again.status, StatusCode::CREATED, "{}", again.body);
+    assert_ne!(
+        again.body["id"],
+        id.as_str(),
+        "a new account, not the old one"
+    );
+    let gone = call("DELETE", format!("/api/v1/users/{id}"), None).await;
+    assert_eq!(gone.status, StatusCode::NOT_FOUND);
+
+    // Signed in once: it names someone, so it is disabled, not deleted.
+    let used = account(&harness.pool, Role::Viewer).await;
+    sign_in(&harness.router, &used, PASSWORD).await;
+    let listed_used = listed(&harness.router, &cookie, &used).await.unwrap();
+    assert_eq!(listed_used["can_delete"], false);
+    let refused = call(
+        "DELETE",
+        format!("/api/v1/users/{}", listed_used["id"].as_str().unwrap()),
+        None,
+    )
+    .await;
+    assert_eq!(refused.status, StatusCode::CONFLICT, "{}", refused.body);
+    assert_eq!(refused.body["code"], "ACCOUNT_IN_USE");
+    assert!(listed(&harness.router, &cookie, &used).await.is_some());
+
+    // Not your own, not a malformed id, and not by an operator.
+    let own = call("DELETE", format!("/api/v1/users/{}", admin.user.id), None).await;
+    assert_eq!(own.status, StatusCode::CONFLICT);
+    let malformed = call("DELETE", "/api/v1/users/not-an-id".to_owned(), None).await;
+    assert_eq!(malformed.status, StatusCode::BAD_REQUEST);
+    let operator = support::sign_in(&harness.pool, Role::Operator).await;
+    let forbidden = send(
+        &harness.router,
+        "DELETE",
+        &format!("/api/v1/users/{}", admin.user.id),
+        Some(&operator.cookie()),
+        Some(&operator.csrf_token),
+        None,
+    )
+    .await;
+    assert_eq!(forbidden.status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn the_only_enabled_administrator_is_not_deleted() {
+    use tangible_db::accounts::{AccountDeletion, delete_unused_user};
+    let fresh = FreshDatabase::create().await;
+    let pool = fresh.database.pool().clone();
+    let hash = hash_password(PASSWORD.to_owned()).await.unwrap();
+    let only =
+        tangible_db::accounts::create_user(&pool, "only", &hash, Role::Administrator, "test")
+            .await
+            .unwrap()
+            .unwrap();
+    assert_eq!(
+        delete_unused_user(&pool, only.id, "someone").await.unwrap(),
+        AccountDeletion::LastAdministrator
+    );
+    // Beside another administrator, it goes.
+    tangible_db::accounts::create_user(&pool, "other", &hash, Role::Administrator, "test")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        delete_unused_user(&pool, only.id, "other").await.unwrap(),
+        AccountDeletion::Deleted(_)
+    ));
+    fresh.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
 async fn a_worker_credential_opens_no_operator_route() {
     let harness = harness().await;
     for uri in ["/api/v1/artifacts", "/api/v1/burn-jobs", "/api/v1/users"] {

@@ -322,6 +322,80 @@ pub async fn set_user_disabled(
     Ok(AccountChange::Done(user))
 }
 
+/// What asking to delete an account came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccountDeletion {
+    /// Deleted; the account as it was.
+    Deleted(UserRecord),
+    /// No account has that identifier.
+    NoSuchAccount,
+    /// It has been used: it signed in, has a session or a link to an
+    /// identity provider, or asked for something.
+    InUse,
+    /// It is the only enabled administrator.
+    LastAdministrator,
+}
+
+/// Delete the account `id` as `actor`, only if it has never been used: it
+/// never signed in, and has no session, no request and no identity
+/// provider's link. A used account names the person behind what it did, so
+/// it is disabled instead (migration 0005). The row goes, so its name may be
+/// given again: the audit log names accounts by identifier, and keeps
+/// `user.deleted` with this one's username and role.
+///
+/// # Errors
+///
+/// [`DbError::Query`] on a database failure.
+pub async fn delete_unused_user(
+    pool: &PgPool,
+    id: uuid::Uuid,
+    actor: &str,
+) -> Result<AccountDeletion, DbError> {
+    let mut tx = pool.begin().await.map_err(DbError::Query)?;
+    let administrators = lock_administrators(&mut tx).await?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {USER_COLUMNS},
+                last_signed_in_at IS NOT NULL
+                OR EXISTS (SELECT 1 FROM user_sessions WHERE user_id = users.id)
+                OR EXISTS (SELECT 1 FROM requests WHERE requester_id = users.id)
+                OR EXISTS (SELECT 1 FROM user_identities WHERE user_id = users.id) AS used
+         FROM users WHERE id = $1 FOR UPDATE"
+    )))
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(DbError::Query)?;
+    let Some(row) = row else {
+        tx.rollback().await.map_err(DbError::Query)?;
+        return Ok(AccountDeletion::NoSuchAccount);
+    };
+    let user = user_from_row(&row)?;
+    let in_use: bool = row.try_get("used").map_err(DbError::Query)?;
+    if in_use {
+        tx.rollback().await.map_err(DbError::Query)?;
+        return Ok(AccountDeletion::InUse);
+    }
+    if administrators == [id] {
+        tx.rollback().await.map_err(DbError::Query)?;
+        return Ok(AccountDeletion::LastAdministrator);
+    }
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(DbError::Query)?;
+    audit(
+        &mut tx,
+        actor,
+        "user.deleted",
+        &id.to_string(),
+        serde_json::json!({ "username": user.username, "role": user.role.as_str() }),
+    )
+    .await?;
+    tx.commit().await.map_err(DbError::Query)?;
+    Ok(AccountDeletion::Deleted(user))
+}
+
 /// Which of `users` setup made: the accounts that may still sign in with a
 /// password when password sign-in is for setup's account alone
 /// (`TANGIBLE_PASSWORD_SIGN_IN=setup-only`).

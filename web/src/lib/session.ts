@@ -289,6 +289,11 @@ export function createUser(
   return apiCall(fetcher, '/api/v1/users', 'POST', request);
 }
 
+/** Delete an account that has never signed in (`can_delete`). */
+export function deleteUser(id: string, fetcher: typeof fetch = apiFetch): Promise<Result<null>> {
+  return apiCall(fetcher, `/api/v1/users/${encodeURIComponent(id)}`, 'DELETE');
+}
+
 /** Disable an account, ending its sessions, or enable it again. */
 export function setUserDisabled(
   id: string,

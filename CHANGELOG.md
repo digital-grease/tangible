@@ -24,6 +24,10 @@ may change between minor versions, and the release notes say how.
   is enabled; what it did stays in the audit log. Your own account and the
   only enabled administrator cannot be disabled. There was no way to do
   either before but in the database.
+- An account that has never signed in can be deleted on the Accounts page,
+  after a question: one made by mistake, say. It goes entirely and its name
+  can be given again. An account that has signed in names the person behind
+  what it did in the audit log, so it can only be disabled.
 
 ### Changed
 

@@ -209,6 +209,7 @@ pub const ACCESS_RULES: &[(&str, &str, Access)] = &[
     ("GET", "/api/v1/session/oidc/callback", Public),
     ("GET", "/api/v1/users", Signed(ManageUsers)),
     ("POST", "/api/v1/users", Signed(ManageUsers)),
+    ("DELETE", "/api/v1/users/{user_id}", Signed(ManageUsers)),
     (
         "POST",
         "/api/v1/users/{user_id}/disable",

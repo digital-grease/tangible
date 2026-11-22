@@ -128,6 +128,9 @@ pub enum ErrorCode {
     /// The change would leave no enabled administrator, and nobody could
     /// manage accounts or workers again.
     LastAdministrator,
+    /// The account has been used (signed in, or asked for something), so it
+    /// names someone in the audit log and is disabled, not deleted.
+    AccountInUse,
     /// The artifact is deleted, or pending deletion, so its bytes are not
     /// to be used (ADR 0020).
     ArtifactDeleted,
@@ -215,6 +218,7 @@ impl ErrorCode {
             Self::DatInvalid => "DAT_INVALID",
             Self::PasswordSignInOff => "PASSWORD_SIGN_IN_OFF",
             Self::LastAdministrator => "LAST_ADMINISTRATOR",
+            Self::AccountInUse => "ACCOUNT_IN_USE",
             Self::ArtifactDeleted => "ARTIFACT_DELETED",
             Self::ArtifactInUse => "ARTIFACT_IN_USE",
             Self::ArtifactRetained => "ARTIFACT_RETAINED",
@@ -285,6 +289,7 @@ impl ErrorCode {
             | Self::IntegrationMisconfigured
             | Self::IntegrationSecretUnreadable
             | Self::LastAdministrator
+            | Self::AccountInUse
             | Self::ArtifactDeleted
             | Self::ArtifactInUse
             | Self::ArtifactRetained
@@ -344,6 +349,7 @@ impl ErrorCode {
             Self::DatInvalid => "Not a DAT this server reads",
             Self::PasswordSignInOff => "Passwords are for the account setup made",
             Self::LastAdministrator => "The last administrator",
+            Self::AccountInUse => "The account has been used",
             Self::ArtifactDeleted => "The artifact is deleted, or is being deleted",
             Self::ArtifactInUse => "The artifact is in use",
             Self::ArtifactRetained => "The artifact is retained",
@@ -519,6 +525,7 @@ mod tests {
             ErrorCode::IntegrationAuthFailed,
             ErrorCode::IntegrationBadResponse,
             ErrorCode::LastAdministrator,
+            ErrorCode::AccountInUse,
             ErrorCode::ArtifactDeleted,
             ErrorCode::ArtifactInUse,
             ErrorCode::ArtifactRetained,

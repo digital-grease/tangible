@@ -2526,6 +2526,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete an account that has never been used.
+         * @description Delete an account that has never been used: it never signed in, and has no session, request or identity provider's link (`can_delete` says so). It goes entirely, and its name may be given again; the audit log keeps `user.deleted` with its username. An account that has been used names the person behind what it did, and is disabled instead. Audited.
+         */
+        delete: operations["delete_account"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/{user_id}/disable": {
         parameters: {
             query?: never;
@@ -6879,6 +6899,11 @@ export interface components {
         };
         /** @description An account, without anything that would sign anybody in. */
         UserView: {
+            /**
+             * @description Whether it may be deleted: it has never signed in. One that has can
+             *     only be disabled, since it names the person behind what it did.
+             */
+            can_delete: boolean;
             /** @description When it was created. */
             created_at: string;
             /** @description Whether the account has been disabled. */
@@ -12921,6 +12946,45 @@ export interface operations {
             };
             /** @description The username, password or role will not do */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    delete_account: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Account identifier */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such account */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Your own account, one that has been used, or the only enabled administrator */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

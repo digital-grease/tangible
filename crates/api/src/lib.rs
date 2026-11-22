@@ -92,6 +92,7 @@ pub const API_BASE: &str = "/api/v1";
         routes::accounts::sign_out,
         routes::accounts::list_accounts,
         routes::accounts::create_account,
+        routes::accounts::delete_account,
         routes::accounts::disable_account,
         routes::accounts::enable_account,
         routes::artifacts::list_artifacts,

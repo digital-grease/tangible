@@ -11,8 +11,10 @@
   // the page says how accounts are made there instead.
   //
   // An account is disabled, which signs it out and keeps it from signing in,
-  // after a question under the list; enabled again in one click. Not one's
-  // own: the server refuses that, so it is not offered.
+  // after a question under the list; enabled again in one click. One that
+  // has never signed in may be deleted instead, after a question too; one
+  // that has names someone in the audit log, so it is only disabled. Not
+  // one's own: the server refuses that, so it is not offered.
   import Badge from '$lib/components/ui/Badge.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import Callout from '$lib/components/ui/Callout.svelte';
@@ -32,6 +34,7 @@
     loadUsers,
     MIN_PASSWORD_CHARS,
     roleLabel,
+    deleteUser,
     sessionUsername,
     setUserDisabled,
     type OidcStatus,
@@ -59,8 +62,8 @@
   /** How people sign in here; unknown until it loads, or if it cannot. */
   let signIn = $state<OidcStatus | null>(null);
 
-  /** The account a question is being asked about, before it is disabled. */
-  let confirming = $state<UserView | null>(null);
+  /** The account a question is being asked about, and what would be done. */
+  let confirming = $state<{ user: UserView; action: 'disable' | 'delete' } | null>(null);
   let changing = $state(false);
   let changed = $state<string | null>(null);
   let changeProblem = $state<Problem | null>(null);
@@ -116,6 +119,28 @@
     confirming = null;
     changed = `${disabled ? 'Disabled' : 'Enabled'} ${user.username}.`;
     await refresh();
+  }
+
+  async function remove(user: UserView) {
+    if (changing) return;
+    changing = true;
+    changed = null;
+    changeProblem = null;
+    const result = await deleteUser(user.id);
+    changing = false;
+    if (result.kind === 'error') {
+      changeProblem = result.problem;
+      return;
+    }
+    confirming = null;
+    changed = `Deleted ${user.username}.`;
+    await refresh();
+  }
+
+  function ask(user: UserView, action: 'disable' | 'delete') {
+    confirming = { user, action };
+    changed = null;
+    changeProblem = null;
   }
 
   /** How an account signs in, in words. */
@@ -240,34 +265,56 @@
                   >
                 </td>
                 <td class="actions">
-                  {#if user.username === me}
-                    <span class="quiet">You</span>
-                  {:else if user.disabled}
-                    <Button
-                      size="sm"
-                      onclick={() => setDisabled(user, false)}
-                      disabled={changing}
-                      label={`Enable ${user.username}`}>Enable</Button
-                    >
-                  {:else}
-                    <Button
-                      size="sm"
-                      onclick={() => {
-                        confirming = user;
-                        changed = null;
-                        changeProblem = null;
-                      }}
-                      disabled={changing}
-                      label={`Disable ${user.username}…`}>Disable…</Button
-                    >
-                  {/if}
+                  <div class="row-actions">
+                    {#if user.username === me}
+                      <span class="quiet">You</span>
+                    {:else if user.disabled}
+                      <Button
+                        size="sm"
+                        onclick={() => setDisabled(user, false)}
+                        disabled={changing}
+                        label={`Enable ${user.username}`}>Enable</Button
+                      >
+                    {:else}
+                      <Button
+                        size="sm"
+                        onclick={() => ask(user, 'disable')}
+                        disabled={changing}
+                        label={`Disable ${user.username}…`}>Disable…</Button
+                      >
+                    {/if}
+                    {#if user.can_delete && user.username !== me}
+                      <Button
+                        size="sm"
+                        onclick={() => ask(user, 'delete')}
+                        disabled={changing}
+                        label={`Delete ${user.username}…`}>Delete…</Button
+                      >
+                    {/if}
+                  </div>
                 </td>
               </tr>
             {/each}
           </tbody>
         </Table>
-        {#if confirming}
-          {@const user = confirming}
+        {#if confirming?.action === 'delete'}
+          {@const user = confirming.user}
+          <div class="question">
+            <Confirm title={`Delete ${user.username}?`}>
+              <p>
+                It has never signed in, so nothing in Tangible names it but the record of its
+                making. It goes entirely, and its name can be given to someone again.
+              </p>
+              {#snippet actions()}
+                <Button variant="danger" onclick={() => remove(user)} disabled={changing}
+                  >{changing ? 'Deleting…' : `Delete ${user.username}`}</Button
+                >
+                <Button onclick={() => (confirming = null)}>Keep it</Button>
+              {/snippet}
+            </Confirm>
+          </div>
+        {:else if confirming}
+          {@const user = confirming.user}
           <div class="question">
             <Confirm title={`Disable ${user.username}?`}>
               <p>
@@ -291,6 +338,10 @@
           <p role="alert" class="problem changed">{changeProblem.detail}</p>
         {/if}
       </Panel>
+      <p class="quiet note">
+        Only an account that has never signed in can be deleted. Any other names who did what in the
+        audit log, so it is disabled instead.
+      </p>
       {#if view.users.some((user) => user.signs_in_with === 'none')}
         <p class="quiet note">
           An account that cannot sign in was made with a password, but only the account setup made
@@ -395,8 +446,10 @@
 </div>
 
 <style>
+  /* minmax(0, ...): a wide table scrolls inside its panel, never the page. */
   .columns {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-5);
     align-items: start;
   }
@@ -405,8 +458,12 @@
       grid-template-columns: minmax(0, 2fr) minmax(20rem, 1fr);
     }
   }
-  .actions {
-    text-align: right;
+  /* One above the other, so the column is one button wide. */
+  .row-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: var(--space-1);
     white-space: nowrap;
   }
   .question,
